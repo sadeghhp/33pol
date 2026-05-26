@@ -59,7 +59,7 @@ The upstream receives the **same path** as the client. Example: client `POST /v1
 | Metrics | prometheus-net.AspNetCore | 8.2.1 | `/metrics` scrape endpoint |
 | Logging | Serilog | 8.x | Structured JSON logs + custom sink |
 | Real-time admin | ASP.NET Core SignalR | (built-in) | WebSocket hub at `/hubs/admin` |
-| Database (optional) | EF Core + Npgsql | 8.0.11 | Persist logs and request metadata |
+| Database (optional, **v1 only**) | EF Core + Npgsql | 8.0.11 | v1: optional `LogsDb` for logs + request rows — **not in 33pol v2** |
 
 **Application version:** Hardcoded constant `1.2.0` in the host entry point.
 
@@ -197,9 +197,9 @@ Failure to read or parse on **first load** throws and prevents startup (except t
 | Singleton | `DynamicYarpConfigProvider` | YARP config; also `IProxyConfigProvider` |
 | Singleton | `ConfigReloadService` | File polling + manual reload; also `IHostedService` |
 | Singleton | `RequestEventService` | Recent requests ring buffer + events |
-| Singleton | `LogPersistenceService` | Only if `LogsDb` connection string is set; also `IHostedService` |
+| Singleton | `LogPersistenceService` | **v1 only** — if `LogsDb` set; not in v2 |
 | Hosted service | `RealTimeBroadcastService` | SignalR metrics/health broadcast loop |
-| Scoped | `LogDbContext` | EF Core context (optional) |
+| Scoped | `LogDbContext` | **v1 only** — EF Core for `LogsDb`; not in v2 |
 | HttpClient | Named `"HealthCheck"` | 10 second timeout |
 
 ### 5.2 Framework registrations
@@ -209,19 +209,12 @@ AddHttpForwarder()
 AddReverseProxy()                    // v1 only; not used for MapReverseProxy
 AddSignalR(EnableDetailedErrors = true)
 AddCors(...)                         // default + "SignalR" policy
-AddDbContext<LogDbContext>(...)      // conditional on LogsDb
+AddDbContext<LogDbContext>(...)      // v1 only; conditional on LogsDb — not in v2
 ```
 
-### 5.3 Conditional PostgreSQL
+### 5.3 Conditional PostgreSQL (**v1 only — removed in 33pol v2**)
 
-```text
-if ConnectionStrings:LogsDb is not null/empty:
-    register LogDbContext (Npgsql)
-    register LogPersistenceService + hosted service
-    log "PostgreSQL persistence enabled"
-else:
-    log warning "logs will not be persisted"
-```
+v1 optionally registered `LogDbContext` and `LogPersistenceService` when `ConnectionStrings:LogsDb` was set. **v2 does not persist application logs to PostgreSQL** (Serilog + OpenTelemetry export instead).
 
 ---
 
@@ -331,19 +324,9 @@ File format: JSON object with a `models` array.
 
 **Deployment:** In Docker, this file is typically **volume-mounted** read-only (e.g. `/app/models.json`), not baked into the image.
 
-### 8.3 Connection strings
+### 8.3 Connection strings (**v1 `LogsDb` — not in 33pol v2**)
 
-```json
-{
-  "ConnectionStrings": {
-    "LogsDb": "Host=localhost;Port=5432;Database=llmgateway;Username=llmgateway;Password=..."
-  }
-}
-```
-
-Override: `ConnectionStrings__LogsDb=...`
-
-If absent, the gateway runs without database persistence.
+v1 used optional `ConnectionStrings:LogsDb` for log/request persistence. v2 uses `ConnectionStrings:GatewayDb` for identity and usage only — see [implementation plan](../implementation-plan/01-solution-architecture.md).
 
 ### 8.4 Serilog
 

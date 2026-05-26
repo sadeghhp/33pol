@@ -1,0 +1,20 @@
+{
+  "smoke": {
+    "http_req_duration": ["p(95)<500"],
+    "http_req_failed": ["rate<0.01"]
+  },
+  "ga_inference_rps": {
+    "http_req_duration": ["p(99)<60000"],
+    "http_req_failed": ["rate<0.01"],
+    "checks": ["rate>0.99"]
+  },
+  "ga": {
+    "http_req_duration": ["p(99)<60000"],
+    "http_req_failed": ["rate<0.01"],
+    "checks": ["rate>0.99"]
+  },
+  "ga_streaming": {
+    "http_req_failed": ["rate<0.02"],
+    "checks": ["rate>0.99"]
+  }
+}

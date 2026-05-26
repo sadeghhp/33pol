@@ -1,0 +1,68 @@
+---
+description: Every code implementation must include unit tests; run tests before closing work
+alwaysApply: true
+---
+
+# Unit Test Coverage (33pol)
+
+**No production logic ships without matching unit tests.** Implementation and tests are one deliverable, not a follow-up.
+
+## When tests are required
+
+Add or update unit tests in the same change when you:
+
+- Add or change classes, methods, or functions with behavior
+- Fix a bug (add a regression test that fails without the fix)
+- Refactor logic (existing tests must still pass; add tests if coverage was missing)
+
+## When tests are not required
+
+Skip only for changes with no testable behavior, for example:
+
+- Pure config, CI, or documentation edits
+- Generated code (do not hand-edit generated files to add tests)
+- `Program.cs` entry wiring with no logic (prefer testing extracted types)
+
+If unsure, add a test.
+
+## .NET conventions (this repo)
+
+Solution layout matches [01-solution-architecture.md](../docs/implementation-plan/01-solution-architecture.md) and [02-testing-strategy.md](../docs/implementation-plan/02-testing-strategy.md):
+
+- **One test project per library:** `33pol.Core.Tests` → `33pol.Core`, `33pol.Registry.Tests` → `33pol.Registry`, etc.
+- **Cross-cutting:** `33pol.Integration.Tests` (HTTP surface), `33pol.Architecture.Tests` (NetArchTest)
+- **Host:** `33pol.App` has no dedicated test project; cover via integration tests
+- Test file mirrors source: `Services/FooService.cs` → `Services/FooServiceTests.cs`
+- Name tests clearly: `MethodName_State_ExpectedResult`
+- Use Arrange / Act / Assert; one logical assertion focus per test when practical
+- Prefer testing public API; use `internal` + `InternalsVisibleTo` only when necessary
+
+Until the multi-project solution exists (Phase 1), a single `33pol.Tests` referencing `33pol.csproj` is acceptable; migrate to per-library projects when Phase 1 creates the solution structure.
+
+## Coverage expectations
+
+- **Happy path** and **meaningful edge cases** (null, empty, invalid input, boundaries)
+- **Error paths** where the code throws or returns failure
+- Do not add tests that only assert constants or framework behavior
+- Do not mark Taiga tasks/issues done until `dotnet test` passes for the solution
+
+## Workflow
+
+1. Write or update production code.
+2. Add or update unit tests in the same session/PR.
+3. Run `dotnet test` from the repo root (or solution directory).
+4. Fix failures before requesting review or closing Taiga work.
+
+## Example
+
+```csharp
+// Production: Services/Calculator.cs (in 33pol.Core)
+public static int Add(int a, int b) => a + b;
+
+// Test: Services/CalculatorTests.cs (in 33pol.Core.Tests)
+[Fact]
+public void Add_TwoPositiveNumbers_ReturnsSum()
+{
+    Assert.Equal(5, Calculator.Add(2, 3));
+}
+```

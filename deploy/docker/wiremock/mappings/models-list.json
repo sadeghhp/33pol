@@ -1,0 +1,23 @@
+{
+  "request": {
+    "method": "GET",
+    "urlPath": "/v1/models"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "jsonBody": {
+      "object": "list",
+      "data": [
+        {
+          "id": "mock-gpt",
+          "object": "model",
+          "created": 1700000000,
+          "owned_by": "33pol-mock"
+        }
+      ]
+    }
+  }
+}

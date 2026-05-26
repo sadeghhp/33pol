@@ -1,0 +1,9 @@
+**/.git
+**/.vs
+**/bin
+**/obj
+**/.cursor
+**/docs
+**/perf
+**/*.md
+!deploy/docker/README.md

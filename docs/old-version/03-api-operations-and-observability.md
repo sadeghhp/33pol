@@ -366,7 +366,7 @@ On each log event ≥ configured minimum (Information):
 
 1. Build `RealTimeLog` (truncate properties to 10 keys).
 2. Fire-and-forget `Clients.All.SendAsync("ReceiveLog", log)`.
-3. `LogPersistenceService?.QueueLog(log)` if DB enabled.
+3. **(v1 only)** `LogPersistenceService?.QueueLog(log)` if `LogsDb` enabled — **not in 33pol v2**.
 4. Swallow all exceptions (logging must not break the app).
 
 ---
@@ -437,66 +437,15 @@ On each log event ≥ configured minimum (Information):
 
 ---
 
-## 11. PostgreSQL persistence (optional)
+## 11. PostgreSQL persistence (**v1 only — not in 33pol v2**)
 
-### 11.1 Activation
+v1 optionally persisted Serilog events and request metadata when `ConnectionStrings:LogsDb` was set (`LogDbContext`, `LogPersistenceService`, tables `logs` and `requests`).
 
-Connection string name: `LogsDb`.
+**33pol v2:**
 
-Registers:
-
-- `LogDbContext` (EF Core, Npgsql)
-- `LogPersistenceService` as singleton + hosted service
-
-### 11.2 Schema
-
-#### Table `logs`
-
-| Column | Type | Notes |
-|--------|------|-------|
-| `id` | BIGSERIAL PK | Auto-generated |
-| `level` | VARCHAR(20) | Required |
-| `message` | TEXT | Required |
-| `source` | VARCHAR(255) | Nullable |
-| `properties` | JSONB | Nullable serialized dict |
-| `timestamp` | TIMESTAMPTZ | Event time |
-| `created_at` | TIMESTAMPTZ | Default NOW() |
-
-Indexes: `timestamp DESC`, `level`.
-
-#### Table `requests`
-
-| Column | Type | Notes |
-|--------|------|-------|
-| `id` | UUID PK | See §11.4 |
-| `model` | VARCHAR(255) | Canonical id |
-| `endpoint` | VARCHAR(100) | |
-| `is_streaming` | BOOLEAN | |
-| `duration_ms` | DOUBLE PRECISION | |
-| `status_code` | INT | |
-| `success` | BOOLEAN | |
-| `error_type` | VARCHAR(100) | Nullable |
-| `timestamp` | TIMESTAMPTZ | |
-| `created_at` | TIMESTAMPTZ | Default NOW() |
-
-Indexes: `timestamp DESC`, `model`, `success`.
-
-### 11.3 `LogPersistenceService` behavior
-
-| Setting | Value |
-|---------|-------|
-| Channel capacity | 10,000 items |
-| Full mode | `DropOldest` |
-| Batch size | 100 items |
-| Batch timeout | 1 second |
-
-**Startup:** `EnsureCreatedAsync()`; on failure, execute raw `CREATE TABLE IF NOT EXISTS` SQL.
-
-**No read API** in v1 — data is written for external analytics or future admin features only.
-
-### 11.4 Request ID mapping quirk
-
-`RealTimeRequest.Id` is an 8-character string. Persistence uses `Guid.TryParse(request.Id)` which **usually fails**, so a **new random Guid** is stored per row.
+- **No** PostgreSQL storage of application logs (no `logs` table, no `LogsDb`, no `LogPersistenceService`).
+- Structured logs: Serilog → stdout + OpenTelemetry log export (platform log stack).
+- Request history for admin: in-memory ring buffer + `usage_events` in `GatewayDb` (see implementation plan), not v1’s `requests` table in `LogsDb`.
 
 ---
 
@@ -516,9 +465,9 @@ Document and standardize one port in v2.
 - Mounted read-only into container (e.g. `/app/models.json`).
 - Not copied into runtime image in compose setup.
 
-### 12.3 PostgreSQL in compose
+### 12.3 PostgreSQL in compose (**v1**)
 
-Gateway may `depends_on` Postgres `service_healthy` even though **proxying does not require DB** — only persistence does.
+v1 compose could include Postgres for optional `LogsDb`. v2 Compose uses Postgres for `GatewayDb` (identity/usage) only, not application log tables.
 
 ### 12.4 `host.docker.internal`
 
@@ -537,7 +486,7 @@ Compose may add `extra_hosts` so containers reach LLM backends on the host machi
 | Health unknown → treated healthy | Traffic before first probe |
 | Reload hash uses `GetHashCode()` | Possible missed updates (collision) |
 | Empty `models.json` on reload | Warning only; may leave stale registry |
-| Postgres write-only | No history API for admin |
+| Postgres write-only (v1 `LogsDb`) | No history API for admin — v2 drops log DB entirely |
 | `OnLogReceived` never fired | Dead subscription in broadcast service |
 | API keys empty → open admin reload | Security risk |
 | `DangerousAcceptAnyServerCertificate` in YARP cluster config | MITM risk if YARP ever used |
@@ -561,11 +510,11 @@ Compose may add `extra_hosts` so containers reach LLM backends on the host machi
 - [ ] `ConfigReloadService` + `/admin/reload` + `/admin/status`
 - [ ] Serilog request logging (no body)
 
-### 14.2 Optional layers (v1 parity)
+### 14.2 Optional layers (v1 parity — do not port log DB to v2)
 
-- [ ] SignalR hub + broadcast service
-- [ ] Serilog SignalR sink
-- [ ] PostgreSQL persistence service
+- [ ] SignalR hub + broadcast service (v1 only)
+- [ ] Serilog SignalR sink (v1 only)
+- [ ] ~~PostgreSQL log/request persistence (`LogsDb`)~~ — **excluded from v2**
 
 ### 14.3 Recommended v2 changes
 
@@ -574,7 +523,7 @@ Compose may add `extra_hosts` so containers reach LLM backends on the host machi
 - [ ] Wire request timeout to forwarder HTTP handler
 - [ ] JSON-based model rewrite (parse/serialize) instead of string replace
 - [ ] Separate admin API key from client API keys
-- [ ] Postgres read endpoints for historical logs/requests (if DB kept)
+- [ ] **Do not** add Postgres tables or APIs for application log history
 - [ ] Replace SignalR with polling or SSE for simpler admin UI
 
 ---
@@ -588,7 +537,7 @@ Replace SignalR payloads with REST equivalents:
 | `ReceiveMetrics` | `GET /admin/api/summary` |
 | `ReceiveHealthBatch` | `GET /admin/api/backends` |
 | `ReceiveRequest` / recent list | `GET /admin/api/requests?limit=50` |
-| `ReceiveLog` | `GET /admin/api/logs?level=&limit=` |
+| `ReceiveLog` | **No v2 equivalent** — use platform logs (OTel); not stored in Postgres |
 | `POST /admin/reload` | Keep or move to `POST /admin/api/config/reload` |
 | `GET /admin/status` | `GET /admin/api/config/status` |
 

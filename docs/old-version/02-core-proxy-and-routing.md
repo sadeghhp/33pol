@@ -473,5 +473,5 @@ Each HTTP request is processed independently on the thread pool. Hot reload does
 | Document | Contents |
 |----------|----------|
 | [01-overview-and-architecture.md](./01-overview-and-architecture.md) | Startup, DI, configuration, Kestrel, CORS |
-| [03-api-operations-and-observability.md](./03-api-operations-and-observability.md) | `/health`, `/stats`, `/metrics`, `/v1/models`, admin reload, SignalR, Postgres |
+| [03-api-operations-and-observability.md](./03-api-operations-and-observability.md) | `/health`, `/stats`, `/metrics`, `/v1/models`, admin reload, SignalR, v1 Postgres (reference) |
 | [README.md](./README.md) | Index and read order |
