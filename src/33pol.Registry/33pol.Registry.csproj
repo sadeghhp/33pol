@@ -8,4 +8,7 @@
   <ItemGroup>
     <ProjectReference Include="..\33pol.Core\33pol.Core.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="33pol.Registry.Tests" />
+  </ItemGroup>
 </Project>

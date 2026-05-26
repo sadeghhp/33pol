@@ -1,0 +1,144 @@
+using System.Net;
+using System.Net.Http.Json;
+using System.Text;
+using System.Text.Json;
+using Microsoft.AspNetCore.Mvc.Testing;
+using Pol33.Integration.Tests.Support;
+
+namespace Pol33.Integration.Tests.Proxy;
+
+[Trait("Category", "V1Parity")]
+public sealed class InferenceProxyEndpointTests
+{
+    [Fact]
+    public async Task PostChatCompletions_NonStream_Returns200FromMockUpstream()
+    {
+        var handler = new MockUpstreamHandler();
+        using var factory = GatewayWebApplicationFactory.Create(handler);
+        using var client = factory.CreateClient();
+
+        var response = await client.PostAsync(
+            "/v1/chat/completions",
+            JsonBody("""{"model":"gpt-local","stream":false}"""));
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        handler.SendCount.Should().Be(1);
+        handler.LastRequest!.RequestUri!.AbsoluteUri.Should().Be("http://localhost:8080/v1/chat/completions");
+
+        var body = await response.Content.ReadAsStringAsync();
+        body.Should().Contain("upstream-1");
+    }
+
+    [Fact]
+    public async Task PostChatCompletions_AliasModel_RewritesCanonicalIdForUpstream()
+    {
+        var handler = new MockUpstreamHandler();
+        using var factory = GatewayWebApplicationFactory.Create(handler);
+        using var client = factory.CreateClient();
+
+        await client.PostAsync(
+            "/v1/chat/completions",
+            JsonBody("""{"model":"gpt-local","stream":false}"""));
+
+        handler.LastRequestBody.Should().Contain("\"model\":\"local-mock\"");
+        handler.LastRequestBody.Should().NotContain("gpt-local");
+    }
+
+    [Fact]
+    public async Task PostChatCompletions_Stream_SetsSseResponseHeaders()
+    {
+        var handler = new MockUpstreamHandler();
+        using var factory = GatewayWebApplicationFactory.Create(handler);
+        using var client = factory.CreateClient();
+
+        var response = await client.PostAsync(
+            "/v1/chat/completions",
+            JsonBody("""{"model":"local-mock","stream":true}"""));
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        response.Headers.CacheControl?.ToString().Should().Be("no-cache");
+        response.Headers.Contains("X-Accel-Buffering").Should().BeTrue();
+
+        var body = await response.Content.ReadAsStringAsync();
+        body.Should().Contain("data:");
+    }
+
+    [Fact]
+    public async Task PostCompletions_ForwardsToBackendPath()
+    {
+        var handler = new MockUpstreamHandler();
+        using var factory = GatewayWebApplicationFactory.Create(handler);
+        using var client = factory.CreateClient();
+
+        var response = await client.PostAsync(
+            "/v1/completions",
+            JsonBody("""{"model":"local-mock","prompt":"hello"}"""));
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        handler.LastRequest!.RequestUri!.AbsolutePath.Should().Be("/v1/completions");
+    }
+
+    [Fact]
+    public async Task PostEmbeddings_ForwardsToBackendPath()
+    {
+        var handler = new MockUpstreamHandler();
+        using var factory = GatewayWebApplicationFactory.Create(handler);
+        using var client = factory.CreateClient();
+
+        var response = await client.PostAsync(
+            "/v1/embeddings",
+            JsonBody("""{"model":"local-mock","input":"hello"}"""));
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        handler.LastRequest!.RequestUri!.AbsolutePath.Should().Be("/v1/embeddings");
+    }
+
+    [Fact]
+    public async Task PostChatCompletions_UnknownModel_Returns404()
+    {
+        var handler = new MockUpstreamHandler();
+        using var factory = GatewayWebApplicationFactory.Create(handler);
+        using var client = factory.CreateClient();
+
+        var response = await client.PostAsync(
+            "/v1/chat/completions",
+            JsonBody("""{"model":"does-not-exist"}"""));
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        handler.SendCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task PostChatCompletions_UnhealthyBackend_Returns502()
+    {
+        var handler = new MockUpstreamHandler();
+        using var factory = GatewayWebApplicationFactory.Create(
+            handler,
+            new AlwaysUnhealthyBackendHealthStore());
+        using var client = factory.CreateClient();
+
+        var response = await client.PostAsync(
+            "/v1/chat/completions",
+            JsonBody("""{"model":"local-mock"}"""));
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadGateway);
+        handler.SendCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task GetMetrics_IsPassthrough_DoesNotInvokeUpstream()
+    {
+        var handler = new MockUpstreamHandler();
+        using var factory = GatewayWebApplicationFactory.Create(handler);
+        using var client = factory.CreateClient();
+
+        var response = await client.GetAsync("/metrics");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        handler.SendCount.Should().Be(0);
+        (await response.Content.ReadAsStringAsync()).Should().Contain("# HELP");
+    }
+
+    private static StringContent JsonBody(string json) =>
+        new(json, Encoding.UTF8, "application/json");
+}

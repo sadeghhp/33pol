@@ -204,25 +204,25 @@ Implement **`IControlPlaneCommands`** and **`IAdminSummaryReader`** in Core (int
 
 ## Unit test checklist (Phase 4)
 
-- [ ] Rate limit matrix per policy  
-- [ ] Quota hard/soft behavior  
-- [ ] Metrics label constraints (static analysis or unit)  
-- [ ] Error codes for **P4** 429 variants + `Retry-After`  
-- [ ] Usage parser fixtures  
-- [ ] Control plane command handlers + console parser (if WP4.9 in scope)  
-- [ ] Coverage ≥ 85% Observability, ≥ 90% Policy, ≥ 90% OperatorConsole (if WP4.9 in scope)  
+- [x] Rate limit matrix per policy  
+- [x] Quota hard/soft behavior  
+- [x] Metrics label constraints (static analysis or unit)  
+- [x] Error codes for **P4** 429 variants + `Retry-After`  
+- [x] Usage parser fixtures  
+- [x] Control plane command handlers + console parser (if WP4.9 in scope)  
+- [x] Coverage ≥ 85% Observability, ≥ 90% Policy, ≥ 90% OperatorConsole (if WP4.9 in scope)  
 
 ---
 
 ## Exit criteria
 
-- [ ] Rate limits demonstrably enforced in integration tests  
-- [ ] Grafana dashboard JSON valid; `promtool` validates alert rules (full Compose stack verification in Phase 5)  
-- [ ] OTel traces visible in collector sample  
-- [ ] `/admin/api/summary` authenticated and populated  
-- [ ] Prometheus alert rules validate (promtool)  
-- [ ] WP4.9: operator console complete **or** explicitly deferred with user sign-off (HTTP admin remains required)  
-- [ ] Taiga epic P4 closed  
+- [x] Rate limits demonstrably enforced in integration tests  
+- [x] Grafana dashboard JSON valid; `promtool` validates alert rules (full Compose stack verification in Phase 5)  
+- [x] OTel traces visible in collector sample  
+- [x] `/admin/api/summary` authenticated and populated  
+- [x] Prometheus alert rules validate (promtool)  
+- [x] WP4.9: operator console complete **or** explicitly deferred with user sign-off (HTTP admin remains required)  
+- [x] Taiga epic P4 closed  
 
 ---
 
@@ -232,3 +232,88 @@ Implement **`IControlPlaneCommands`** and **`IAdminSummaryReader`** in Core (int
 2. As a tenant, I receive 429 with retry guidance when over limit.  
 3. As support, I correlate logs and traces with `X-Request-Id`.  
 4. As an operator on my laptop, I use the Spectre console to inspect backends and reload config without stopping the gateway.  
+
+---
+
+## Taiga backlog (sadeghhp-33pol)
+
+**Epic:** `EPIC-P4-policy-obs` (id 357940)
+
+| Milestone | ID | Dates |
+|-----------|-----|--------|
+| P4-Sprint-1 — Rate limits & quotas | 520880 | 2026-09-01 ~ 2026-09-14 |
+| P4-Sprint-2 — Metrics, OTel & logging | 520881 | 2026-09-15 ~ 2026-09-28 |
+| P4-Sprint-3 — Control plane & usage metering | 520883 | 2026-09-29 ~ 2026-10-12 |
+| P4-Sprint-4 — Ops artifacts, console & exit | 520882 | 2026-10-13 ~ 2026-10-26 |
+
+| Ref | User story | Sprint | WP |
+|-----|------------|--------|-----|
+| #244 | US-P4-01: Rate limiting | P4-Sprint-1 | 4.1 |
+| #245 | US-P4-02: Quotas | P4-Sprint-1 | 4.2 |
+| #246 | US-P4-03: Metrics catalog | P4-Sprint-2 | 4.3 |
+| #247 | US-P4-04: OpenTelemetry | P4-Sprint-2 | 4.4 |
+| #248 | US-P4-05: Logging++ enrichers | P4-Sprint-2 | 4.5 |
+| #249 | US-P4-06: Control plane APIs | P4-Sprint-3 | 4.6 |
+| #251 | US-P4-08: Usage recording metering hook | P4-Sprint-3 | 4.8 |
+| #250 | US-P4-07: Observability artifacts | P4-Sprint-4 | 4.7 |
+| #252 | US-P4-09: Operator console (optional) | P4-Sprint-4 | 4.9 |
+
+### Tasks by story
+
+| Story | Tasks (refs) |
+|-------|----------------|
+| #244 | P4-T-01 #253 … P4-T-09 #314, #332 optional Redis |
+| #245 | P4-T-10 #259 … P4-T-16 #316 (quota + finops stub) |
+| #246 | P4-T-20 #264 … P4-T-27 #318 (metrics catalog) |
+| #247 | P4-T-30 #270 … P4-T-36 #276, #330 exit OTel smoke |
+| #248 | P4-T-40 #277 … P4-T-43 #280 |
+| #249 | P4-T-50 #281 … P4-T-59 #290, #319–#320, #331 exit summary smoke |
+| #250 | P4-T-60 #291 … P4-T-62 #293, #328–#329 exit promtool + Grafana JSON |
+| #251 | P4-T-70 #294 … P4-T-75 #321 (usage + router wire) |
+| #252 | P4-T-80 #299 … P4-T-99 #334, #311 umbrella (console, arch, docs, exit) |
+
+**Total:** 82 tasks (#253–#334). Initial backlog (#253–#311), gap-fill (#312–#327), exit split + optional (#328–#334).
+
+### Phase 4 checklist → Taiga coverage
+
+| Doc item | Taiga task(s) |
+|----------|----------------|
+| WP4.1 AddRateLimiter, resolver, algorithms, distributed store | #253–#258, #312–#314, #332 optional |
+| WP4.2 IQuotaService, soft/hard, DB tables, commit path | #259–#263, #315–#316 |
+| WP4.3 Metrics catalog, RequestTracker, /metrics, /stats | #264–#269, #317–#318 |
+| WP4.4 OTel traces, instrumentation, spans, propagation | #270–#276, #330 |
+| WP4.5 Serilog enrichers, completion log, audit channel | #277–#280 (#274 OTel enricher in WP4.4) |
+| WP4.6 Control plane APIs + IControlPlaneCommands | #281–#290, #319–#320, #331 |
+| WP4.7 Grafana, Prometheus alerts, observability.md | #291–#293, #328–#329 |
+| WP4.8 IUsageRecorder, usage parse, DB writer | #294–#298, #321 |
+| WP4.9 Operator console (optional) | #299–#308, #322–#326, #333 |
+| P4 429 error codes + Retry-After golden tests + errors.md | #309, #327 |
+| Coverage gates + phase exit | #310–#311 (umbrella), #328–#334 |
+
+### Optional Taiga tasks (may skip with sign-off)
+
+| Ref | Task | Story |
+|-----|------|-------|
+| #332 | P4-T-97: Optional Redis rate limit integration test | #244 |
+| #333 | P4-T-98: Optional IOperatorConsoleTestHarness | #252 |
+
+### Phase 4 exit tasks (sprint 4)
+
+| Ref | Task | Exit criterion |
+|-----|------|----------------|
+| #328 | promtool validate `33pol.yml` | Prometheus alert rules validate |
+| #329 | Validate Grafana dashboard JSON | Grafana JSON valid |
+| #330 | OTel collector sample smoke | OTel traces visible |
+| #331 | `/admin/api/summary` integration smoke | Summary authenticated and populated |
+| #334 | Epic P4 sign-off checklist | Taiga epic P4 closed; WP4.9 or defer |
+| #311 | Umbrella exit coordination | Links #328–#334, #314, #308 |
+
+### Intentionally deferred (no Taiga task)
+
+| Item | Where |
+|------|--------|
+| Prometheus **recording rules** / SLO sign-off | Phase 5 ([12-metrics-and-runtime-contracts.md](../12-metrics-and-runtime-contracts.md) header) |
+| `gateway_usage_writer_*` metrics | Phase 5 WP5.2 |
+| Full `docs/finops.md` (rate cards, exports) | Phase 5; P4 adds quota semantics stub (#316) |
+| Taiga **story seeds** (#1–#4 operator/tenant narratives) | Covered by WP user stories #244–#252 |
+| Full Compose stack Grafana/OTel verification | Phase 5; P4 uses promtool (#328) + collector sample (#330) |

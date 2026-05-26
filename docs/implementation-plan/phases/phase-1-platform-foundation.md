@@ -99,22 +99,22 @@ Implement in `33pol.Core` (no external deps):
 
 ## Unit test checklist (Phase 1)
 
-- [ ] `GatewayOptions` validation (invalid paths, negative intervals)  
-- [ ] `ErrorResult` serialization shape (golden JSON)  
-- [ ] NetArchTest: all dependency rules  
-- [ ] Options binding from configuration dictionary  
+- [x] `GatewayOptions` validation (invalid paths, negative intervals)  
+- [x] `ErrorResult` serialization shape (golden JSON)  
+- [x] NetArchTest: all dependency rules  
+- [x] Options binding from configuration dictionary  
 
 ---
 
 ## Exit criteria
 
-- [ ] `dotnet build` / `dotnet test` green  
-- [ ] All projects target `net10.0`  
-- [ ] `GET /health/live` integration test passes  
-- [ ] NetArchTest passes  
-- [ ] CI green on default branch  
-- [ ] No proxy, registry, or DB code beyond stubs  
-- [ ] Taiga epic P1 closed  
+- [x] `dotnet build` / `dotnet test` green  
+- [x] All projects target `net10.0`  
+- [x] `GET /health/live` integration test passes  
+- [x] NetArchTest passes  
+- [x] CI green on default branch  
+- [x] No proxy, registry, or DB code beyond stubs  
+- [x] Taiga epic P1 closed  
 
 ---
 

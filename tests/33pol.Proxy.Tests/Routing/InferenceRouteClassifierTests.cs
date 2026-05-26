@@ -36,4 +36,17 @@ public sealed class InferenceRouteClassifierTests
 
         InferenceRouteClassifier.IsRoutableInference(context).Should().BeFalse();
     }
+
+    [Theory]
+    [InlineData("/v1/completions")]
+    [InlineData("/v1/embeddings")]
+    [InlineData("/api/v1/chat/completions")]
+    public void IsRoutableInference_PostInferenceSuffixes_ReturnsTrue(string path)
+    {
+        var context = new DefaultHttpContext();
+        context.Request.Method = HttpMethods.Post;
+        context.Request.Path = path;
+
+        InferenceRouteClassifier.IsRoutableInference(context).Should().BeTrue();
+    }
 }

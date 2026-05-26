@@ -1,0 +1,19 @@
+groups:
+  - name: 33pol-gateway
+    rules:
+      - alert: GatewayHighErrorRate
+        expr: |
+          sum(rate(gateway_inference_errors_total[5m]))
+            / clamp_min(sum(rate(gateway_inference_requests_total[5m])), 1) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Gateway inference error rate above 5%
+      - alert: GatewayNoHealthyBackends
+        expr: max(gateway_backend_health) == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: No healthy backends registered

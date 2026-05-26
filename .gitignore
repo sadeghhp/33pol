@@ -6,5 +6,8 @@ deploy/docker/.env
 **/obj/**
 TestResults/
 
+# Local dev secrets (Postgres connection string)
+src/33pol.App/appsettings.Development.local.json
+
 # Local Compose overrides
 deploy/docker/.env

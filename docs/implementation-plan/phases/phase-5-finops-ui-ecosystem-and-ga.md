@@ -192,3 +192,71 @@ Execute [03-performance-and-load-testing.md](../03-performance-and-load-testing.
 1. As a finance user, I export monthly usage by cost center.  
 2. As an operator, I deploy with Helm and see ServiceMonitor scraped.  
 3. As a product owner, I sign GA checklist after load tests pass.  
+
+---
+
+## Taiga backlog (sadeghhp-33pol)
+
+**Epic:** `EPIC-P5-finops-ga` (id 357973)
+
+| Milestone | ID | Dates |
+|-----------|-----|--------|
+| P5-Sprint-1 — FinOps & usage writer | 520897 | 2026-10-27 ~ 2026-11-09 |
+| P5-Sprint-2 — Admin UI & integrations | 520898 | 2026-11-10 ~ 2026-11-23 |
+| P5-Sprint-3 — GA gates, docs & conformance | 520899 | 2026-11-24 ~ 2026-12-07 |
+
+### User stories (live — 2026-05-26)
+
+| Ref | User story | Sprint | WP |
+|-----|------------|--------|-----|
+| #336 | US-P5-01: FinOps & billing | P5-Sprint-1 (520897) | 5.1 |
+| #502 | US-P5-02: Usage writer hardening | P5-Sprint-1 (520897) | 5.2 |
+| #503 | US-P5-03: Admin UI | P5-Sprint-2 (520898) | 5.3 |
+| #504 | US-P5-04: Operator console extensions (optional) | P5-Sprint-2 (520898) | 5.3b |
+| #505 | US-P5-05: Integration & ecosystem | P5-Sprint-2 (520898) | 5.4 |
+| #506 | US-P5-06: Performance & load GA gates | P5-Sprint-3 (520899) | 5.5 |
+| #507 | US-P5-07: Documentation & GA checklist | P5-Sprint-3 (520899) | 5.6 |
+| #508 | US-P5-08: Security & compliance review | P5-Sprint-3 (520899) | 5.7 |
+| #509 | US-P5-09: Inference conformance suite | P5-Sprint-3 (520899) | 5.8 |
+
+All nine stories linked to epic **357973** (`EPIC-P5-finops-ga`).
+
+### Tasks by story (canonical refs #435–#501)
+
+| Story | WP | Task refs | Count |
+|-------|-----|-----------|-------|
+| #336 | 5.1 | P5-T-01 … T-13 → **#435–#447** | 13 |
+| #502 | 5.2 | P5-T-20 … T-26 → **#448–#454** | 7 |
+| #503 | 5.3 | P5-T-30 … T-40 → **#455–#465** | 11 |
+| #504 | 5.3b | P5-T-45 → **#466** | 1 |
+| #505 | 5.4 | P5-T-50 … T-57 → **#467–#474** | 8 |
+| #506 | 5.5 | P5-T-60 … T-65 → **#475–#480** | 6 |
+| #507 | 5.6 + exit | P5-T-70 … T-77, T-95 … T-98 → **#481–#488, #498–#501** | 12 |
+| #508 | 5.7 | P5-T-80 … T-83 → **#489–#492** | 4 |
+| #509 | 5.8 | P5-T-90 … T-94 → **#493–#497** | 5 |
+
+**Total:** 67 tasks. Use Taiga REST API for story/sprint/epic writes; MCP `createUserStory` and `linkStoryToEpic` are unreliable.
+
+### Phase 5 checklist → Taiga coverage
+
+| Doc item | Taiga task(s) |
+|----------|----------------|
+| WP5.1 Billing schema, rate cards, exports, webhooks | #435–#447 |
+| WP5.2 Usage writer hardening | #448–#454 |
+| WP5.3 Admin UI | #455–#465 |
+| WP5.3b Console keys list | #466 |
+| WP5.4 Compose, Helm, integrations | #467–#474 |
+| WP5.5 k6 GA suite | #475–#480 |
+| WP5.6 Docs + GA checklist | #481–#488 |
+| WP5.7 Security review | #489–#492 |
+| WP5.8 Conformance suite | #493–#497 |
+| GA exit (SDK smoke, export, SLO, runbooks) | #498–#501 |
+
+### Intentionally deferred (post-GA backlog)
+
+| Item | Where |
+|------|--------|
+| Stripe metered billing | phase-5 Post-GA section |
+| Anomaly detection | Post-GA |
+| Native AOT publish | Post-GA |
+| Multi-destination load balancing | Post-GA |

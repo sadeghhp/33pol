@@ -1,0 +1,1 @@
+{"error":{"message":"The circuit breaker is open for this backend.","type":"backend_error","code":"circuit_open"}}

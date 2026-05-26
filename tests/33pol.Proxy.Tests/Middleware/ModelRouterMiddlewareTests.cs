@@ -1,12 +1,17 @@
 using System.Text;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using Pol33.Proxy.Resilience;
 using NSubstitute;
-using Pol33.Core.Configuration;
-using Pol33.Registry.Health;
 using Pol33.Core.Abstractions;
+using Pol33.Core.Configuration;
+using Pol33.Core.Errors;
 using Pol33.Core.Models;
+using Pol33.Core.RateLimiting;
+using Pol33.Registry.Health;
+using Pol33.Proxy.Forwarding;
 using Pol33.Proxy.Middleware;
 using Yarp.ReverseProxy.Forwarder;
 
@@ -62,7 +67,7 @@ public sealed class ModelRouterMiddlewareTests
 
         context.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
         var body = await ReadResponseBodyAsync(context);
-        body.Should().Contain("model");
+        body.Should().Contain("missing_model");
     }
 
     [Fact]
@@ -129,6 +134,53 @@ public sealed class ModelRouterMiddlewareTests
     }
 
     [Fact]
+    public async Task InvokeAsync_HealthyModel_ForwardsToBackendUrl()
+    {
+        var configPath = Path.Combine(Path.GetTempPath(), $"33pol-mw-fwd-{Guid.NewGuid():N}.json");
+        await File.WriteAllTextAsync(configPath, """
+            { "models": [ { "id": "m1", "url": "http://backend:8000", "aliases": ["alias-m"] } ] }
+            """);
+
+        try
+        {
+            var registry = new Pol33.Registry.Services.ModelRegistryService(
+                NullLogger<Pol33.Registry.Services.ModelRegistryService>.Instance);
+            await registry.LoadModelsAsync(configPath);
+
+            var health = Substitute.For<IBackendHealthStore>();
+            health.IsBackendHealthy("m1").Returns(true);
+
+            var forwarder = Substitute.For<IHttpForwarder>();
+            forwarder.SendAsync(
+                    Arg.Any<HttpContext>(),
+                    Arg.Any<string>(),
+                    Arg.Any<HttpMessageInvoker>(),
+                    Arg.Any<ForwarderRequestConfig>(),
+                    Arg.Any<HttpTransformer>())
+                .Returns(ForwarderError.None);
+
+            var middleware = CreateMiddleware(registry: registry, healthStore: health, forwarder: forwarder);
+            var context = CreateContext(
+                HttpMethods.Post,
+                "/v1/chat/completions",
+                """{"model":"alias-m","stream":false}""");
+
+            await middleware.InvokeAsync(context);
+
+            await forwarder.Received(1).SendAsync(
+                Arg.Any<HttpContext>(),
+                "http://backend:8000",
+                Arg.Any<HttpMessageInvoker>(),
+                Arg.Any<ForwarderRequestConfig>(),
+                Arg.Any<StreamingHttpTransformer>());
+        }
+        finally
+        {
+            File.Delete(configPath);
+        }
+    }
+
+    [Fact]
     public async Task InvokeAsync_InvalidJson_Returns400()
     {
         var middleware = CreateMiddleware();
@@ -140,32 +192,8 @@ public sealed class ModelRouterMiddlewareTests
         await middleware.InvokeAsync(context);
 
         context.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
-    }
-
-    private static ModelRouterMiddleware CreateMiddleware(
-        RequestDelegate? next = null,
-        IModelRegistry? registry = null,
-        IBackendHealthStore? healthStore = null,
-        IHttpForwarder? forwarder = null)
-    {
-        next ??= _ => Task.CompletedTask;
-        registry ??= Substitute.For<IModelRegistry>();
-        if (healthStore is null)
-        {
-            var health = Substitute.For<IBackendHealthStore>();
-            health.IsBackendHealthy(Arg.Any<string>()).Returns(true);
-            healthStore = health;
-        }
-
-        forwarder ??= Substitute.For<IHttpForwarder>();
-
-        return new ModelRouterMiddleware(
-            next,
-            registry,
-            healthStore,
-            forwarder,
-            new HttpMessageInvoker(new HttpClientHandler()),
-            NullLogger<ModelRouterMiddleware>.Instance);
+        var body = await ReadResponseBodyAsync(context);
+        body.Should().Contain("invalid_json");
     }
 
     private static DefaultHttpContext CreateContext(string method, string path, string? body = null)
@@ -185,5 +213,107 @@ public sealed class ModelRouterMiddlewareTests
         context.Response.Body.Position = 0;
         using var reader = new StreamReader(context.Response.Body, Encoding.UTF8);
         return await reader.ReadToEndAsync();
+    }
+
+    [Fact]
+    public async Task InvokeAsync_RoutedInference_BeginsRequestTracking()
+    {
+        var registry = Substitute.For<IModelRegistry>();
+        registry.TryGetModel("local-mock", out Arg.Any<ModelConfig?>())
+            .Returns(call =>
+            {
+                call[1] = new ModelConfig { Id = "local-mock", Url = "http://backend:8000" };
+                return true;
+            });
+
+        var requestTracker = Substitute.For<IRequestTracker>();
+        requestTracker.BeginInferenceRequest(Arg.Any<string>(), Arg.Any<bool>())
+            .Returns(_ => new NoOpDisposable());
+
+        var middleware = CreateMiddleware(registry: registry, requestTracker: requestTracker);
+        var context = CreateContext(
+            HttpMethods.Post,
+            "/v1/chat/completions",
+            """{"model":"local-mock","stream":false}""");
+
+        await middleware.InvokeAsync(context);
+
+        requestTracker.Received(1).BeginInferenceRequest("local-mock", false);
+    }
+
+    private static ModelRouterMiddleware CreateMiddleware(
+        RequestDelegate? next = null,
+        IModelRegistry? registry = null,
+        IBackendHealthStore? healthStore = null,
+        IHttpForwarder? forwarder = null,
+        IErrorResponseWriter? errorWriter = null,
+        IRequestTracker? requestTracker = null,
+        IRecentRequestStore? recentRequestStore = null)
+    {
+        next ??= _ => Task.CompletedTask;
+        registry ??= Substitute.For<IModelRegistry>();
+        if (healthStore is null)
+        {
+            var health = Substitute.For<IBackendHealthStore>();
+            health.IsBackendHealthy(Arg.Any<string>()).Returns(true);
+            healthStore = health;
+        }
+
+        forwarder ??= Substitute.For<IHttpForwarder>();
+
+        var modelGrants = Substitute.For<IModelGrantService>();
+        modelGrants.IsModelAllowedAsync(Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+
+        var scopeFactory = Substitute.For<IServiceScopeFactory>();
+        var scope = Substitute.For<IServiceScope>();
+        var scopeProvider = Substitute.For<IServiceProvider>();
+        scopeFactory.CreateAsyncScope().Returns(scope);
+        scope.ServiceProvider.Returns(scopeProvider);
+        scopeProvider.GetService(typeof(IModelGrantService)).Returns(modelGrants);
+
+        var authState = Substitute.For<IGatewayAuthenticationState>();
+        authState.IsAuthenticationRequired.Returns(false);
+
+        errorWriter ??= new OpenAiErrorResponseWriter();
+        requestTracker ??= Substitute.For<IRequestTracker>();
+        requestTracker.BeginInferenceRequest(Arg.Any<string>(), Arg.Any<bool>())
+            .Returns(_ => new NoOpDisposable());
+        recentRequestStore ??= Substitute.For<IRecentRequestStore>();
+
+        var gatewayOptions = Options.Create(new GatewayOptions());
+        var circuitBreakers = new ModelCircuitBreakerRegistry(gatewayOptions);
+        var bulkhead = new BulkheadRegistry(gatewayOptions);
+        var rateLimitResolver = Substitute.For<IRateLimitPolicyResolver>();
+        rateLimitResolver.Resolve(Arg.Any<string?>(), Arg.Any<string?>())
+            .Returns(new RateLimitPolicy(10_000, 1_000, 1_000));
+        var rateLimitStore = Substitute.For<IDistributedRateLimitStore>();
+        rateLimitStore.TryAcquireStreamSlot(Arg.Any<string>(), Arg.Any<RateLimitPolicy>())
+            .Returns(new RateLimitAcquireResult(true));
+
+        return new ModelRouterMiddleware(
+            next,
+            registry,
+            healthStore,
+            scopeFactory,
+            authState,
+            errorWriter,
+            requestTracker,
+            recentRequestStore,
+            circuitBreakers,
+            bulkhead,
+            rateLimitResolver,
+            rateLimitStore,
+            forwarder,
+            new HttpMessageInvoker(new HttpClientHandler()),
+            gatewayOptions,
+            NullLogger<ModelRouterMiddleware>.Instance);
+    }
+
+    private sealed class NoOpDisposable : IDisposable
+    {
+        public void Dispose()
+        {
+        }
     }
 }

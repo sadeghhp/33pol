@@ -38,12 +38,13 @@ public sealed class GatewayOperationsEndpointTests : IClassFixture<WebApplicatio
     }
 
     [Fact]
-    public async Task GetMetrics_ReturnsPlaceholderText()
+    public async Task GetMetrics_ReturnsPrometheusExposition()
     {
         var response = await _client.GetAsync("/metrics");
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var body = await response.Content.ReadAsStringAsync();
-        body.Should().Contain("placeholder");
+        body.Should().Contain("# HELP");
+        body.Should().Contain("# TYPE");
     }
 }

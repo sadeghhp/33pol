@@ -5,6 +5,6 @@ public sealed class ProjectWiringTests
     [Fact]
     public void Assembly_Loads()
     {
-        typeof(Pol33.Security.ProjectStub).Assembly.GetName().Name.Should().Be("33pol.Security");
+        typeof(Pol33.Security.Services.ApiKeyValidator).Assembly.GetName().Name.Should().Be("33pol.Security");
     }
 }

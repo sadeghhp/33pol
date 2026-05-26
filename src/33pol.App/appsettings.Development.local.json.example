@@ -1,0 +1,5 @@
+{
+  "ConnectionStrings": {
+    "GatewayDb": "Host=localhost;Port=5432;Database=33pol_gateway;Username=postgres;Password=postgres"
+  }
+}

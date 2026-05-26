@@ -155,25 +155,25 @@ Phase 4 adds OTel trace enrichers to Serilog only; do not defer Serilog to Phase
 
 ## Unit test checklist (Phase 2)
 
-- [ ] Registry: all cases in WP2.1  
-- [ ] Health: all cases in WP2.2  
-- [ ] Router: path matrix + error responses  
-- [ ] Transformer: rewrite + streaming headers  
-- [ ] Live registry writer + config reload: concurrency, watch/poll, persist+apply  
-- [ ] Coverage ≥ 90% Registry + Proxy  
+- [x] Registry: all cases in WP2.1  
+- [x] Health: all cases in WP2.2  
+- [x] Router: path matrix + error responses  
+- [x] Transformer: rewrite + streaming headers  
+- [x] Live registry writer + config reload: concurrency, watch/poll, persist+apply  
+- [x] Coverage ≥ 90% Registry + Proxy  
 
 ---
 
 ## Exit criteria
 
-- [ ] All v1 inference paths work against mock upstream  
-- [ ] Streaming integration test receives chunks  
-- [ ] No `AddReverseProxy` / `MapReverseProxy`  
-- [ ] `dotnet test` green; coverage gate met  
-- [ ] k6 smoke passes locally  
-- [ ] Phase 2 baseline report drafted  
-- [ ] [09-v1-parity-spec.md](../09-v1-parity-spec.md) §13 checklist satisfied (integration / `V1Parity`)  
-- [ ] Taiga epic P2 closed  
+- [x] All v1 inference paths work against mock upstream  
+- [x] Streaming integration test receives chunks  
+- [x] No `AddReverseProxy` / `MapReverseProxy`  
+- [x] `dotnet test` green; coverage gate met  
+- [x] k6 smoke passes locally  
+- [x] Phase 2 baseline report drafted  
+- [x] [09-v1-parity-spec.md](../09-v1-parity-spec.md) §13 checklist satisfied (integration / `V1Parity`)  
+- [x] Taiga epic P2 closed  
 
 ---
 

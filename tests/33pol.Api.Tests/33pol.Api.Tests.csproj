@@ -1,5 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\..\src\33pol.Api\33pol.Api.csproj" />
     <ProjectReference Include="..\..\src\33pol.Core\33pol.Core.csproj" />
   </ItemGroup>

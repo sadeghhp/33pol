@@ -31,12 +31,17 @@ jobs:
           dotnet test 33pol.sln -c Release --no-build
           --collect:"XPlat Code Coverage"
           --results-directory ./TestResults
-          -- DataCollectionRunSettings.DataCollectors.DefaultSink.DataStore=CoverageReports
 
-      - name: Coverage threshold (placeholder)
+      - name: Coverage threshold
+        run: bash build/check-coverage.sh TestResults
+
+      - name: Validate Prometheus alert rules
         run: |
-          echo "Phase 1: coverage gate placeholder at 0% (raise in Phase 2)."
-          exit 0
+          if command -v promtool >/dev/null 2>&1; then
+            promtool check rules deploy/prometheus/alerts/33pol.yml
+          else
+            echo "promtool not installed; skipping alert rule validation"
+          fi
 
       - name: Upload coverage artifacts
         uses: actions/upload-artifact@v4

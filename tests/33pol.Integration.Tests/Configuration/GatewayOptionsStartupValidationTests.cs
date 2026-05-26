@@ -16,6 +16,7 @@ public sealed class GatewayOptionsStartupValidationTests
             {
                 config.AddInMemoryCollection(new Dictionary<string, string?>
                 {
+                    ["ConnectionStrings:GatewayDb"] = string.Empty,
                     ["Gateway:ConfigReloadIntervalSeconds"] = "-1",
                 });
             });

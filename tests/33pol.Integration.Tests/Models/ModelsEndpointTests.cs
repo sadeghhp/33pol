@@ -1,19 +1,31 @@
 using System.Net;
 using System.Text.Json;
-using Microsoft.AspNetCore.Mvc.Testing;
-using Microsoft.Extensions.DependencyInjection;
-using Pol33.Core.Abstractions;
-using Pol33.Core.Models;
+using Microsoft.Extensions.Configuration;
+using Pol33.Integration.Tests.Support;
 
 namespace Pol33.Integration.Tests.Models;
 
-public sealed class ModelsEndpointTests : IClassFixture<WebApplicationFactory<Program>>
+[Trait("Category", "V1Parity")]
+public sealed class ModelsEndpointTests
 {
-    private readonly HttpClient _client;
+    private readonly HttpClient _client = CreateModelsClient();
 
-    public ModelsEndpointTests(WebApplicationFactory<Program> factory)
+    private static HttpClient CreateModelsClient()
     {
-        _client = factory.CreateClient();
+        var configPath = Path.GetFullPath(Path.Combine(
+            AppContext.BaseDirectory,
+            "TestData",
+            "models-golden.json"));
+
+        return GatewayWebApplicationFactory.Create(
+            configureConfiguration: config =>
+            {
+                config.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["Gateway:ModelsConfigPath"] = configPath,
+                    ["Gateway:RegistryWatchEnabled"] = "false",
+                });
+            }).CreateClient();
     }
 
     [Fact]
@@ -36,14 +48,7 @@ public sealed class ModelsEndpointTests : IClassFixture<WebApplicationFactory<Pr
     [Fact]
     public async Task GetModels_WhenAllBackendsUnhealthy_ReturnsEmptyData()
     {
-        using var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
-        {
-            builder.ConfigureServices(services =>
-            {
-                services.AddSingleton<IBackendHealthStore, AlwaysUnhealthyBackendHealthStore>();
-            });
-        });
-
+        using var factory = GatewayWebApplicationFactory.Create(healthStore: new AlwaysUnhealthyBackendHealthStore());
         using var client = factory.CreateClient();
         var response = await client.GetAsync("/v1/models");
 
@@ -72,17 +77,5 @@ public sealed class ModelsEndpointTests : IClassFixture<WebApplicationFactory<Pr
         response.StatusCode.Should().Be(HttpStatusCode.NotFound);
         using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         json.RootElement.GetProperty("error").GetProperty("code").GetString().Should().Be("model_not_found");
-    }
-
-    private sealed class AlwaysUnhealthyBackendHealthStore : IBackendHealthStore
-    {
-        public bool IsBackendHealthy(string modelId) => false;
-
-        public BackendHealth? GetHealth(string modelId) => null;
-
-        public IReadOnlyDictionary<string, BackendHealth> GetAllHealth() =>
-            new Dictionary<string, BackendHealth>();
-
-        public void SetHealth(BackendHealth health) => throw new NotSupportedException();
     }
 }

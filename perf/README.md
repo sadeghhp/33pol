@@ -7,5 +7,6 @@ See [implementation-plan/03-performance-and-load-testing.md](../implementation-p
 | File | Status |
 |------|--------|
 | `k6/thresholds.json` | Threshold definitions (planning) |
-| `k6/scripts/` | k6 scripts (Phase 2+) |
+| `k6/scripts/smoke.js` | Phase 2 smoke (1 VU, 60s) |
+| `k6/lib/helpers.js` | Shared k6 helpers |
 | `reports/` | CI/staging run artifacts |

@@ -17,9 +17,9 @@ public sealed class GatewayOptionsValidationTests
     }
 
     [Fact]
-    public void Validate_NegativeReloadInterval_ReturnsError()
+    public void Validate_ReloadIntervalOutOfRange_ReturnsError()
     {
-        var options = new GatewayOptions { ConfigReloadIntervalSeconds = -1 };
+        var options = new GatewayOptions { ConfigReloadIntervalSeconds = 0 };
 
         var errors = GatewayOptionsValidation.Validate(options);
 
@@ -44,6 +44,26 @@ public sealed class GatewayOptionsValidationTests
         var errors = GatewayOptionsValidation.Validate(options);
 
         errors.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Validate_InvalidResilienceOptions_ReturnsErrors()
+    {
+        var options = new GatewayOptions
+        {
+            Resilience = new GatewayResilienceOptions
+            {
+                ForwardTimeoutSeconds = 0,
+                MaxRequestBodyBytes = 0,
+                MaxConcurrentForwardsPerModel = 0,
+                CircuitBreakerFailureThreshold = 0,
+                CircuitBreakerBreakDurationSeconds = 0,
+            },
+        };
+
+        var errors = GatewayOptionsValidation.Validate(options);
+
+        errors.Should().HaveCountGreaterThanOrEqualTo(5);
     }
 
     [Fact]

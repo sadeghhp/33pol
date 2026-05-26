@@ -125,15 +125,133 @@ public sealed class ConfigReloadServiceTests
         }
     }
 
-    private static ConfigReloadService CreateService(IModelRegistry registry, string configPath)
+    [Fact]
+    public async Task ScheduleDebouncedReload_FileChange_AppliesAfterDebounce()
+    {
+        var registry = new ModelRegistryService(NullLogger<ModelRegistryService>.Instance);
+        var path = await WriteTempConfigAsync("""
+            { "models": [ { "id": "first", "url": "http://a", "aliases": [] } ] }
+            """);
+
+        try
+        {
+            await registry.LoadModelsAsync(path);
+            var service = CreateService(registry, path);
+            await service.RefreshFileHashAsync(CancellationToken.None);
+
+            await File.WriteAllTextAsync(path, """
+                { "models": [
+                  { "id": "first", "url": "http://a", "aliases": [] },
+                  { "id": "watched", "url": "http://b", "aliases": [] }
+                ] }
+                """);
+
+            service.ScheduleDebouncedReload();
+            await Task.Delay(600);
+
+            registry.ModelExists("watched").Should().BeTrue();
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task ReloadAsync_ValidConfig_ReturnsSuccessAndUpdatesRegistry()
+    {
+        var registry = new ModelRegistryService(NullLogger<ModelRegistryService>.Instance);
+        var path = await WriteTempConfigAsync("""
+            { "models": [ { "id": "first", "url": "http://a", "aliases": [] } ] }
+            """);
+
+        try
+        {
+            await registry.LoadModelsAsync(path);
+            var service = CreateService(registry, path);
+
+            await File.WriteAllTextAsync(path, """
+                { "models": [
+                  { "id": "first", "url": "http://a", "aliases": [] },
+                  { "id": "second", "url": "http://b", "aliases": [] }
+                ] }
+                """);
+
+            var result = await service.ReloadAsync();
+
+            result.Status.Should().Be("success");
+            registry.GetAllModels().Should().HaveCount(2);
+            registry.ModelExists("second").Should().BeTrue();
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task ReloadFromDiskAsync_MissingFile_ReturnsError()
+    {
+        var registry = Substitute.For<IModelRegistry>();
+        registry.GetAllModels().Returns([]);
+        var missingPath = Path.Combine(Path.GetTempPath(), $"33pol-missing-{Guid.NewGuid():N}.json");
+        var service = CreateService(registry, missingPath);
+
+        var result = await service.ReloadFromDiskAsync();
+
+        result.Status.Should().Be("error");
+        result.Message.Should().Contain("not found");
+    }
+
+    [Fact]
+    public async Task RefreshFileHashAsync_MissingFile_AllowsPollWithoutThrowing()
+    {
+        var registry = Substitute.For<IModelRegistry>();
+        registry.GetAllModels().Returns([]);
+        var missingPath = Path.Combine(Path.GetTempPath(), $"33pol-missing-{Guid.NewGuid():N}.json");
+        var service = CreateService(registry, missingPath);
+
+        await service.RefreshFileHashAsync(CancellationToken.None);
+        await service.PollForChangesAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public void GetStatus_WatchDisabled_ReportsWatchEnabledFalse()
+    {
+        var registry = Substitute.For<IModelRegistry>();
+        registry.GetAllModels().Returns([]);
+        var service = CreateService(registry, "/tmp/models.json", registryWatchEnabled: false);
+
+        service.GetStatus().WatchEnabled.Should().BeFalse();
+    }
+
+    [Fact]
+    public void GetStatus_WatchEnabled_ReportsWatchEnabledTrue()
+    {
+        var registry = Substitute.For<IModelRegistry>();
+        registry.GetAllModels().Returns([]);
+        var service = CreateService(registry, "/tmp/models.json", registryWatchEnabled: true);
+
+        service.GetStatus().WatchEnabled.Should().BeTrue();
+    }
+
+    private static ConfigReloadService CreateService(
+        IModelRegistry registry,
+        string configPath,
+        bool registryWatchEnabled = false)
     {
         var options = Options.Create(new GatewayOptions
         {
             ModelsConfigPath = configPath,
-            ConfigReloadIntervalSeconds = 5,
+            ConfigReloadIntervalSeconds = 2,
+            RegistryWatchEnabled = registryWatchEnabled,
         });
 
-        return new ConfigReloadService(registry, options, NullLogger<ConfigReloadService>.Instance);
+        return new ConfigReloadService(
+            registry,
+            new RegistryGate(),
+            options,
+            NullLogger<ConfigReloadService>.Instance);
     }
 
     private static async Task<string> WriteTempConfigAsync(string json)

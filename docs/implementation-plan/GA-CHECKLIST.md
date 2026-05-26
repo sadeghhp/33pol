@@ -10,10 +10,10 @@
 | Phase | Exit criteria met | Sign-off | Date |
 |-------|-------------------|----------|------|
 | P1 Platform | [x] | Local `dotnet build`/`test`, NetArchTest, CI workflow; confirm GitHub Actions green on `main` | 2026-05-26 |
-| P2 Data plane | [ ] | | |
-| P3 Security & resilience | [ ] | | |
-| P4 Policy & observability | [ ] | | |
-| P5 FinOps & GA | [ ] | | |
+| P2 Data plane | [x] | V1 parity integration tests, live registry, k6 smoke script | 2026-05-26 |
+| P3 Security & resilience | [x] | Auth, Postgres, SDK errors, resilience, admin key CRUD | 2026-05-26 |
+| P4 Policy & observability | [x] | Rate limits, quotas, OTel, control plane APIs, deploy artifacts (SSE optional deferred) | 2026-05-26 |
+| P5 FinOps & GA | [ ] | In progress — see [implementation-plan-gap-report.md](../implementation-plan-gap-report.md) | |
 
 ---
 

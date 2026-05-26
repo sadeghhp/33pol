@@ -1,6 +1,9 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Options" />
+    <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\33pol.Core\33pol.Core.csproj" />
-    <ProjectReference Include="..\33pol.Security\33pol.Security.csproj" />
   </ItemGroup>
 </Project>

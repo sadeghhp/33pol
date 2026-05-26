@@ -3,12 +3,10 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Pol33.Core.Abstractions;
 using Pol33.Core.Models;
+using Pol33.Core.Security;
 
 namespace Pol33.Api.Endpoints;
 
-/// <summary>
-/// Phase 2: admin config routes are unauthenticated (security debt — secured in Phase 3).
-/// </summary>
 public static class ConfigAdminEndpoints
 {
     public static IEndpointRouteBuilder MapConfigAdminEndpoints(this IEndpointRouteBuilder endpoints)
@@ -19,17 +17,24 @@ public static class ConfigAdminEndpoints
     }
 
     private static async Task<IResult> ReloadAsync(
+        HttpContext httpContext,
         IConfigReload configReload,
+        IAuditLogger audit,
         CancellationToken cancellationToken)
     {
         var result = await configReload.ReloadAsync(cancellationToken).ConfigureAwait(false);
+        audit.LogAdminAction(
+            "config.reload",
+            new AuditLogEntry(
+                httpContext.User.FindFirst(GatewayAuthClaims.TenantId)?.Value,
+                httpContext.User.FindFirst(GatewayAuthClaims.ApiKeyId)?.Value,
+                new { result.Status }));
+
         return ToResult(result);
     }
 
-    private static IResult GetStatus(IConfigReload configReload)
-    {
-        return Results.Json(configReload.GetStatus());
-    }
+    private static IResult GetStatus(IConfigReload configReload) =>
+        Results.Json(configReload.GetStatus());
 
     private static IResult ToResult(ConfigReloadResult result) =>
         Results.Json(result, statusCode: result.SuggestedStatusCode);

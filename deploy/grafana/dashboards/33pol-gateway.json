@@ -1,0 +1,31 @@
+{
+  "title": "33pol Gateway",
+  "uid": "33pol-gateway",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Inference requests / s",
+      "targets": [
+        {
+          "expr": "rate(gateway_inference_requests_total[5m])",
+          "legendFormat": "{{model}} {{status}}"
+        }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Inference duration p99",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(gateway_inference_duration_seconds_bucket[5m])) by (le, model))",
+          "legendFormat": "{{model}}"
+        }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 }
+    }
+  ]
+}

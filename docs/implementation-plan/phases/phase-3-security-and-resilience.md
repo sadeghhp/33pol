@@ -162,26 +162,26 @@ Requires admin credential (WP3.6). Satisfies GA checklist “API key create/revo
 
 ## Unit test checklist (Phase 3)
 
-- [ ] Every **P3** `GatewayErrorCode` row has golden JSON test (P4 rows in Phase 4)  
-- [ ] Auth middleware matrix (keys on/off, paths)  
-- [ ] Circuit breaker state machine  
-- [ ] Repository tests (in-memory + Testcontainers)  
-- [ ] Coverage ≥ 90% Security  
-- [ ] Coverage ≥ 90% Proxy resilience (WP3.4)  
+- [x] Every **P3** `GatewayErrorCode` row has golden JSON test (P4 rows in Phase 4)  
+- [x] Auth middleware matrix (keys on/off, paths)  
+- [x] Circuit breaker state machine  
+- [x] Repository tests (in-memory + Testcontainers)  
+- [x] Coverage ≥ 90% Security  
+- [x] Coverage ≥ 90% Proxy resilience (WP3.4)  
 
 ---
 
 ## Exit criteria
 
-- [ ] Inference requires valid API key when configured  
-- [ ] Admin can create and revoke API keys (WP3.8)  
-- [ ] `X-Request-Id` present on all responses  
-- [ ] Admin mutations require admin credential  
-- [ ] No plaintext API keys in database  
-- [ ] Timeouts and circuit breaker integration tests pass  
-- [ ] `docs/errors.md` published  
-- [ ] Postgres migrations apply cleanly  
-- [ ] Taiga epic P3 closed  
+- [x] Inference requires valid API key when configured  
+- [x] Admin can create and revoke API keys (WP3.8)  
+- [x] `X-Request-Id` present on all responses  
+- [x] Admin mutations require admin credential  
+- [x] No plaintext API keys in database  
+- [x] Timeouts and circuit breaker integration tests pass  
+- [x] `docs/errors.md` published  
+- [x] Postgres migrations apply cleanly  
+- [x] Taiga epic P3 closed  
 
 ---
 
@@ -190,3 +190,56 @@ Requires admin credential (WP3.6). Satisfies GA checklist “API key create/revo
 1. As a tenant admin, I can create and revoke API keys.  
 2. As a client SDK, I receive stable error codes on failure.  
 3. As an operator, readiness fails when the gateway cannot serve traffic.  
+
+---
+
+## Taiga backlog (sadeghhp-33pol)
+
+**Epic:** `EPIC-P3-security` (id 357930)
+
+| Milestone | ID | Dates |
+|-----------|-----|--------|
+| P3-Sprint-1 — Postgres identity & repositories | 520861 | 2026-07-07 ~ 2026-07-20 |
+| P3-Sprint-2 — API key auth, grants & tenant context | 520862 | 2026-07-21 ~ 2026-08-03 |
+| P3-Sprint-3 — SDK errors & proxy resilience | 520863 | 2026-08-04 ~ 2026-08-17 |
+| P3-Sprint-4 — Health, secure admin, key CRUD & exit | 520864 | 2026-08-18 ~ 2026-08-31 |
+
+| Ref | User story | Sprint | WP |
+|-----|------------|--------|-----|
+| #187 | US-P3-01: Postgres identity and repositories | P3-Sprint-1 | 3.1 |
+| #188 | US-P3-02: API key auth, grants and tenant context | P3-Sprint-2 | 3.2 |
+| #189 | US-P3-03: SDK error catalog and request IDs | P3-Sprint-3 | 3.3 |
+| #190 | US-P3-04: Timeouts, circuit breaker, drain and body limits | P3-Sprint-3 | 3.4 |
+| #191 | US-P3-05: Readiness and aggregate health | P3-Sprint-4 | 3.5 |
+| #192 | US-P3-06: Secure admin routes and production CORS | P3-Sprint-4 | 3.6–3.7 |
+| #193 | US-P3-07: Admin key CRUD and Phase 3 exit | P3-Sprint-4 | 3.8 |
+
+### Tasks by story
+
+| Story | Tasks (refs) |
+|-------|----------------|
+| #187 | P3-T-01 #194 … P3-T-08 #232 (persistence scaffold, repos, bootstrap, tests) |
+| #188 | P3-T-09 #233, P3-T-10 #200 … P3-T-19 #234 (auth, grants, host wiring, matrix tests) |
+| #189 | P3-T-20 #209 … P3-T-25 #236 (request ID, errors, golden JSON, inference wiring) |
+| #190 | P3-T-30 #213 … P3-T-38 #238 (resilience + integration tests) |
+| #191 | P3-T-40 #220 … P3-T-43 #239 (ready, /health, /health/live, integration) |
+| #192 | P3-T-50 #223 … P3-T-54 #241 (admin auth, audit, CORS, secure config reload) |
+| #193 | P3-T-60 #226 … P3-T-65 #242 (key CRUD, exit checklist, phase integration) |
+
+### Phase 3 checklist → Taiga coverage
+
+| Doc item | Taiga task(s) |
+|----------|----------------|
+| WP3.1 `GatewayDbContext`, migrations, repos | #194–#196, #231 |
+| WP3.1 Testcontainers + in-memory tests | #198, #199 |
+| WP3.1 Bootstrap + ModelGrant policy | #197, #232 |
+| WP3.2 Auth handler, hashing, validator, grants | #200–#208, #233–#234 |
+| WP3.3 All 13 P3 error codes + `docs/errors.md` | #209–#212, #235–#236 |
+| WP3.4 Timeout, breaker, bulkhead, body, drain, TLS | #213–#238 |
+| WP3.5 `/health/ready`, `/health`, `/health/live` | #220–#222, #239 |
+| WP3.6 Secure `/admin/api/**` + `IAuditLogger` | #223–#224, #240 |
+| WP3.7 Production CORS | #225 |
+| WP3.8 Key create/list/revoke | #226–#229 |
+| Unit test checklist (matrix, breaker FSM, coverage) | #234, #237, #219, #230 |
+| Exit criteria + v1 parity integration | #242, #238 |
+| P2 debt: unauthenticated admin reload | #240 |

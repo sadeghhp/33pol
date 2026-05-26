@@ -7,13 +7,6 @@ namespace Pol33.Registry.Services;
 
 public sealed class ModelRegistryService : IModelRegistry
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        PropertyNameCaseInsensitive = true,
-        ReadCommentHandling = JsonCommentHandling.Skip,
-        AllowTrailingCommas = true,
-    };
-
     private readonly ILogger<ModelRegistryService> _logger;
     private readonly object _lock = new();
     private Dictionary<string, ModelConfig> _lookup = new(StringComparer.OrdinalIgnoreCase);
@@ -38,7 +31,7 @@ public sealed class ModelRegistryService : IModelRegistry
     {
         lock (_lock)
         {
-            return _models.ToList();
+            return _models.Select(ModelRegistryPersistence.CloneModel).ToList();
         }
     }
 
@@ -62,8 +55,7 @@ public sealed class ModelRegistryService : IModelRegistry
         ArgumentException.ThrowIfNullOrWhiteSpace(configPath);
 
         var json = await File.ReadAllTextAsync(configPath, cancellationToken).ConfigureAwait(false);
-        var config = JsonSerializer.Deserialize<ModelRegistryConfig>(json, JsonOptions)
-            ?? throw new JsonException("Model registry configuration deserialized to null.");
+        var config = ModelRegistryPersistence.Deserialize(json);
 
         if (config.Models is null || config.Models.Count == 0)
         {
@@ -71,41 +63,35 @@ public sealed class ModelRegistryService : IModelRegistry
             return;
         }
 
-        var lookup = new Dictionary<string, ModelConfig>(StringComparer.OrdinalIgnoreCase);
-        var models = new List<ModelConfig>(config.Models.Count);
+        ApplyModels(ModelRegistryPersistence.BuildLookup(config.Models));
+        _logger.LogInformation("Loaded {ModelCount} models from {ConfigPath}.", config.Models.Count, configPath);
+    }
 
-        foreach (var model in config.Models)
-        {
-            if (string.IsNullOrWhiteSpace(model.Id))
-            {
-                throw new JsonException("Model entry is missing required 'id'.");
-            }
-
-            if (string.IsNullOrWhiteSpace(model.Url))
-            {
-                throw new JsonException($"Model '{model.Id}' is missing required 'url'.");
-            }
-
-            models.Add(model);
-            lookup[model.Id] = model;
-
-            foreach (var alias in model.Aliases)
-            {
-                if (string.IsNullOrWhiteSpace(alias))
-                {
-                    continue;
-                }
-
-                lookup[alias] = model;
-            }
-        }
-
+    internal void ApplyModels((Dictionary<string, ModelConfig> Lookup, List<ModelConfig> Models) snapshot)
+    {
         lock (_lock)
         {
-            _lookup = lookup;
-            _models = models;
+            _lookup = snapshot.Lookup;
+            _models = snapshot.Models;
+        }
+    }
+
+    internal async Task PersistAndApplyAsync(
+        string configPath,
+        IReadOnlyList<ModelConfig> models,
+        CancellationToken cancellationToken)
+    {
+        if (models.Count == 0)
+        {
+            _logger.LogWarning(
+                "Persist skipped for {ConfigPath}: empty model list would clear registry; keeping in-memory state.",
+                configPath);
+            return;
         }
 
-        _logger.LogInformation("Loaded {ModelCount} models from {ConfigPath}.", models.Count, configPath);
+        var snapshot = ModelRegistryPersistence.BuildLookup(models);
+        await ModelRegistryPersistence.WriteAtomicAsync(configPath, snapshot.Models, cancellationToken)
+            .ConfigureAwait(false);
+        ApplyModels(snapshot);
     }
 }

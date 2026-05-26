@@ -1,5 +1,9 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\33pol.Core\33pol.Core.csproj" />
     <ProjectReference Include="..\33pol.Persistence\33pol.Persistence.csproj" />
   </ItemGroup>

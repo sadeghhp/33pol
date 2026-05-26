@@ -1,5 +1,9 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+    <PackageReference Include="Microsoft.Extensions.Logging" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\..\src\33pol.Registry\33pol.Registry.csproj" />
   </ItemGroup>
   <ItemGroup>

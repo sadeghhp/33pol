@@ -10,8 +10,8 @@ public static class GatewayOperationsEndpoints
     public static IEndpointRouteBuilder MapGatewayOperationsEndpoints(this IEndpointRouteBuilder endpoints)
     {
         endpoints.MapGet("/health", GetHealth);
+        endpoints.MapGet("/health/ready", GetReady);
         endpoints.MapGet("/stats", GetStats);
-        endpoints.MapGet("/metrics", GetMetrics);
         return endpoints;
     }
 
@@ -21,11 +21,12 @@ public static class GatewayOperationsEndpoints
         return Results.Json(body, statusCode: statusCode);
     }
 
+    private static IResult GetReady(GatewayReadinessService readinessService)
+    {
+        var (body, statusCode) = readinessService.GetReadiness();
+        return Results.Json(body, statusCode: statusCode);
+    }
+
     private static IResult GetStats(GatewayStatsService statsService) =>
         Results.Json(statsService.GetSnapshot());
-
-    private static IResult GetMetrics() =>
-        Results.Text(
-            "# LLM Gateway metrics placeholder (expanded in Phase 4)\n",
-            contentType: "text/plain; version=0.0.4; charset=utf-8");
 }

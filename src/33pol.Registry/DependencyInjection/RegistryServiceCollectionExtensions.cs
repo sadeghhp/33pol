@@ -10,8 +10,11 @@ public static class RegistryServiceCollectionExtensions
 {
     public static IServiceCollection AddGatewayRegistry(this IServiceCollection services)
     {
+        services.AddSingleton<RegistryGate>();
         services.AddSingleton<ModelRegistryService>();
         services.AddSingleton<IModelRegistry>(sp => sp.GetRequiredService<ModelRegistryService>());
+        services.AddSingleton<ModelRegistryWriter>();
+        services.AddSingleton<IModelRegistryWriter>(sp => sp.GetRequiredService<ModelRegistryWriter>());
         services.AddSingleton<BackendHealthStore>();
         services.AddSingleton<IBackendHealthStore>(sp => sp.GetRequiredService<BackendHealthStore>());
         services.AddHostedService<HealthCheckService>();

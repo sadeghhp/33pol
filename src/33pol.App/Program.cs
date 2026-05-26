@@ -1,29 +1,29 @@
-using Pol33.Api.Endpoints;
 using Pol33.App;
-using Pol33.Proxy.DependencyInjection;
+using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
+builder.ConfigureGatewayHost();
 
 builder.Services
-    .AddGatewayCore(builder.Configuration)
+    .AddGatewayCore(builder.Configuration, builder.Environment)
     .AddGatewayHealthChecks();
 
 builder.Services.AddOpenApi();
 
 var app = builder.Build();
+app.ConfigureGatewayPipeline();
 
-app.UseRouting();
-
-app.MapGet("/", GatewayEndpoints.GetRoot);
-app.MapHealthChecks("/health/live");
-app.MapConfigAdminEndpoints();
-app.MapModelsEndpoints();
-app.MapGatewayOperationsEndpoints();
-app.UseModelRouter();
-
-if (app.Environment.IsDevelopment())
+try
 {
-    app.MapOpenApi();
+    Log.Information("Starting 33pol gateway");
+    app.Run();
 }
-
-app.Run();
+catch (Exception ex)
+{
+    Log.Fatal(ex, "Gateway host terminated unexpectedly");
+    throw;
+}
+finally
+{
+    await Log.CloseAndFlushAsync();
+}

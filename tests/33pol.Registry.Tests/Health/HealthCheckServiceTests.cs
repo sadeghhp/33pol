@@ -13,6 +13,69 @@ namespace Pol33.Registry.Tests.Health;
 public sealed class HealthCheckServiceTests
 {
     [Fact]
+    public async Task CheckAllBackendsAsync_EmptyRegistry_DoesNotProbe()
+    {
+        var handler = new SequenceHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK));
+        var registry = Substitute.For<IModelRegistry>();
+        registry.GetAllModels().Returns([]);
+        var service = CreateService(handler, registry: registry);
+
+        await service.CheckAllBackendsAsync();
+
+        handler.RequestedPaths.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task CheckAllBackendsAsync_WithModels_ProbesEachBackend()
+    {
+        var handler = new SequenceHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK));
+        var registry = Substitute.For<IModelRegistry>();
+        registry.GetAllModels().Returns(
+        [
+            new ModelConfig { Id = "a", Url = "http://a:8000" },
+            new ModelConfig { Id = "b", Url = "http://b:8000" },
+        ]);
+        var service = CreateService(handler, registry: registry);
+
+        await service.CheckAllBackendsAsync();
+
+        handler.RequestedPaths.Where(p => p == "/health").Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task CheckBackendAsync_Unhealthy_StoresUnhealthyState()
+    {
+        var handler = new SequenceHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.ServiceUnavailable));
+        var healthStore = new BackendHealthStore(Options.Create(new GatewayOptions()));
+        var service = CreateService(handler, healthStore);
+
+        await service.CheckBackendAsync(new ModelConfig
+        {
+            Id = "model-a",
+            Url = "http://backend:8000",
+        });
+
+        healthStore.IsBackendHealthy("model-a").Should().BeFalse();
+        healthStore.GetHealth("model-a")!.Error.Should().Be("All probe endpoints failed");
+    }
+
+    [Fact]
+    public async Task ProbeBackendAsync_RequestExceptionThenSuccess_UsesFallbackPath()
+    {
+        var handler = new SequenceHttpMessageHandler(
+            _ => throw new HttpRequestException("connection refused"),
+            _ => new HttpResponseMessage(HttpStatusCode.OK));
+        var service = CreateService(handler);
+
+        var (isHealthy, statusCode, error) = await service.ProbeBackendAsync("http://backend:8000");
+
+        isHealthy.Should().BeTrue();
+        statusCode.Should().Be(200);
+        error.Should().BeNull();
+        handler.RequestedPaths.Should().Equal("/health", "/api/tags");
+    }
+
+    [Fact]
     public async Task ProbeBackendAsync_FirstEndpointSucceeds_StopsWithoutCallingLaterPaths()
     {
         var handler = new SequenceHttpMessageHandler(
@@ -68,12 +131,13 @@ public sealed class HealthCheckServiceTests
 
     private static HealthCheckService CreateService(
         HttpMessageHandler handler,
-        IBackendHealthStore? healthStore = null)
+        IBackendHealthStore? healthStore = null,
+        IModelRegistry? registry = null)
     {
-        var registry = Substitute.For<IModelRegistry>();
+        var modelRegistry = registry ?? Substitute.For<IModelRegistry>();
         var store = healthStore ?? new BackendHealthStore(Options.Create(new GatewayOptions()));
         return new HealthCheckService(
-            registry,
+            modelRegistry,
             store,
             Options.Create(new GatewayOptions { HealthCheckIntervalSeconds = 30 }),
             NullLogger<HealthCheckService>.Instance,

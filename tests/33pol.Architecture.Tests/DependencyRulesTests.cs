@@ -9,21 +9,21 @@ public sealed class DependencyRulesTests
     private static readonly Assembly RegistryAssembly = typeof(Pol33.Registry.Services.ModelRegistryService).Assembly;
     private static readonly Assembly ProxyAssembly = typeof(Pol33.Proxy.Middleware.ModelRouterMiddleware).Assembly;
     private static readonly Assembly ApiAssembly = typeof(Pol33.Api.Endpoints.ConfigAdminEndpoints).Assembly;
-    private static readonly Assembly OperatorConsoleAssembly = typeof(Pol33.OperatorConsole.ProjectStub).Assembly;
-    private static readonly Assembly PersistenceAssembly = typeof(Pol33.Persistence.ProjectStub).Assembly;
-    private static readonly Assembly ObservabilityAssembly = typeof(Pol33.Observability.ProjectStub).Assembly;
-    private static readonly Assembly BillingAssembly = typeof(Pol33.Billing.ProjectStub).Assembly;
+    private static readonly Assembly OperatorConsoleAssembly = typeof(Pol33.OperatorConsole.Commands.ConsoleCommandParser).Assembly;
+    private static readonly Assembly PersistenceAssembly = typeof(Pol33.Persistence.GatewayDbContext).Assembly;
+    private static readonly Assembly ObservabilityAssembly = typeof(Pol33.Observability.Runtime.GatewayRuntimeState).Assembly;
+    private static readonly Assembly BillingAssembly = typeof(Pol33.Billing.DependencyInjection.BillingServiceCollectionExtensions).Assembly;
 
     private static readonly Assembly[] FeatureAssemblies =
     [
         RegistryAssembly,
         ProxyAssembly,
         ApiAssembly,
-        typeof(Pol33.Policy.ProjectStub).Assembly,
+        typeof(Pol33.Policy.RateLimiting.RateLimitPolicyResolver).Assembly,
         ObservabilityAssembly,
         BillingAssembly,
         PersistenceAssembly,
-        typeof(Pol33.Security.ProjectStub).Assembly,
+        typeof(Pol33.Security.DependencyInjection.SecurityServiceCollectionExtensions).Assembly,
         OperatorConsoleAssembly,
     ];
 
@@ -106,7 +106,7 @@ public sealed class DependencyRulesTests
     [Fact]
     public void Policy_ShouldNotReferenceProxyOrRegistry()
     {
-        var result = Types.InAssembly(typeof(Pol33.Policy.ProjectStub).Assembly)
+        var result = Types.InAssembly(typeof(Pol33.Policy.RateLimiting.RateLimitPolicyResolver).Assembly)
             .Should()
             .NotHaveDependencyOnAny("33pol.Proxy", "33pol.Registry")
             .GetResult();
