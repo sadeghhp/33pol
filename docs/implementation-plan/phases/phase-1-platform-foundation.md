@@ -84,7 +84,7 @@ Implement in `33pol.Core` (no external deps):
 | xUnit + FluentAssertions + NSubstitute | All test projects |
 | `GlobalUsings` in tests | Common imports |
 | Sample unit test per project | Proves wiring |
-| NetArchTest | Core has no ASP.NET reference; Proxy no Persistence reference |
+| NetArchTest | Core has no ASP.NET reference; Proxy no Persistence reference; when `33pol.OperatorConsole` exists (Phase 4), it must not reference Proxy, Api, or ASP.NET |
 | Test data folder convention | Document in 02-testing-strategy |
 
 ### WP1.6 — Documentation & perf scaffold

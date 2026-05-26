@@ -22,6 +22,9 @@
 | — | SignalR → SSE | v1 admin transport migration in matrix + executive proposal §10 |
 | — | Broken doc links | `implementation-plan/README.md`, `unit-test-coverage.mdc` |
 | — | Conformance project | `33pol.Conformance.Tests` in solution layout |
+| D5 | Operator console (Spectre) | [08-operator-console.md](./08-operator-console.md); WP4.9; shared `IControlPlaneCommands`; production/Docker default off |
+| D6 | `IControlPlaneCommands` impl location | **Not** in `33pol.Api` — `ControlPlaneCommands` in `33pol.Observability`; HTTP mapping table in `08` §7; P6 clarified; GA/README updates |
+| — | Deep review P0/P1 | `09-v1-parity-spec`, `10-identity-data-model`, `11-ha-and-scaling`, `12-metrics-and-runtime-contracts` |
 
 ---
 
@@ -42,3 +45,6 @@
 | 2026-05-26 | Initial review: 24 findings; remediation in plan docs |
 | 2026-05-26 | Re-review: ready for Phase 1; deferred items documented |
 | 2026-05-26 | Second doc pass: closed D1–D4 and cross-doc consistency fixes |
+| 2026-05-26 | Operator console: `08-operator-console.md`; plan v1.1; architecture, matrix, phase-4 WP4.9 |
+| 2026-05-26 | Doc review remediations (D6): impl in Observability, HTTP equivalence, P6, Serilog mitigation, mermaid, harness |
+| 2026-05-26 | Deep review P0/P1: normative specs 09–12; phase cross-links |

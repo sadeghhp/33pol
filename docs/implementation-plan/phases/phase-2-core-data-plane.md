@@ -13,6 +13,8 @@ Deliver a **fully tested OpenAI-compatible inference proxy**: model registry, ro
 
 This phase produces a **deployable internal gateway** matching v1.2.0 proxy behavior with v2 fixes (JSON model rewrite, no unused YARP reverse proxy).
 
+**Normative acceptance:** [09-v1-parity-spec.md](../09-v1-parity-spec.md) — Phase 2 exit tests tagged `V1Parity`.
+
 ---
 
 ## Outcomes
@@ -67,7 +69,7 @@ This phase produces a **deployable internal gateway** matching v1.2.0 proxy beha
 
 | Task | Details |
 |------|---------|
-| `ModelRouterMiddleware` | Path classification, passthrough prefixes |
+| `ModelRouterMiddleware` | Path classification per [09-v1-parity-spec.md](../09-v1-parity-spec.md) §2–4 |
 | Body parsing | `model`, `stream` via `Utf8JsonReader` or `JsonDocument` |
 | `IHttpForwarder` + `HttpMessageInvoker` | SocketsHttpHandler settings per v1 spec |
 | `StreamingHttpTransformer` | SSE headers; JSON model rewrite (not string replace) |
@@ -162,6 +164,7 @@ Phase 4 adds OTel trace enrichers to Serilog only; do not defer Serilog to Phase
 - [ ] `dotnet test` green; coverage gate met  
 - [ ] k6 smoke passes locally  
 - [ ] Phase 2 baseline report drafted  
+- [ ] [09-v1-parity-spec.md](../09-v1-parity-spec.md) §13 checklist satisfied (integration / `V1Parity`)  
 - [ ] Taiga epic P2 closed  
 
 ---

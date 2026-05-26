@@ -45,6 +45,8 @@ Gateway: http://localhost:8080
 
 `host.docker.internal` is configured so backends running on the host machine are reachable from the gateway container.
 
+**Operator console:** The in-process Spectre.Console operator console is **disabled by default** in the gateway container (`Gateway:OperatorConsole:Enabled=false`). Production and Compose ops should use HTTP `/admin/api/*` and Grafana. For local experiments with a TTY only, see [docs/implementation-plan/08-operator-console.md](../../docs/implementation-plan/08-operator-console.md).
+
 ## Layout
 
 | Path | Purpose |

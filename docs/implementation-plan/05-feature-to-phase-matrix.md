@@ -31,6 +31,10 @@ Maps proposal capabilities to implementation phases. Use for Taiga tagging (`pha
 |---------|-------|
 | .NET 10 solution architecture | P1 |
 | Modular projects + NetArchTest | P1 |
+| Normative v1 parity spec | P2 ([09-v1-parity-spec.md](./09-v1-parity-spec.md)) |
+| Identity data model | P3 ([10-identity-data-model.md](./10-identity-data-model.md)) |
+| HA / scaling guide | P4–5 ([11-ha-and-scaling.md](./11-ha-and-scaling.md)) |
+| Metrics catalog + quota/SSE contracts | P4 ([12-metrics-and-runtime-contracts.md](./12-metrics-and-runtime-contracts.md)) |
 | Massive unit test coverage | P1–P5 (continuous) |
 | Hashed API keys + tenants | P3 |
 | API key create/revoke/list (admin) | P3 (WP3.8) |
@@ -40,6 +44,9 @@ Maps proposal capabilities to implementation phases. Use for Taiga tagging (`pha
 | Quotas | P4 |
 | Usage metering hooks | P4 |
 | Admin REST APIs | P4 |
+| Shared `IControlPlaneCommands` + `ControlPlaneCommands` in `33pol.Observability` (HTTP + console) | P4 |
+| Operator console (Spectre.Console, in-process) | P4 (WP4.9, optional) |
+| Operator console registry write (`models add`) | P5 (optional) |
 | Admin UI | P5 |
 
 ## Proposal additions
@@ -96,6 +103,10 @@ Maps proposal capabilities to implementation phases. Use for Taiga tagging (`pha
 | Grafana dashboards | P4 |
 | Alertmanager rules | P4 |
 | `/admin/api/summary` | P4 |
+| `IAdminSummaryReader` snapshot (HTTP + console) | P4 |
+| Operator console: `status`, `summary`, `watch summary`, `backends`, `requests`, `reload`, `models list` | P4 |
+| `Gateway:OperatorConsole` config + hosted service gate | P4 |
+| `docs/operator-console.md` | P4 |
 | SSE admin event stream | P4 (optional) → P5 (UI) |
 | SLO / Prometheus recording rules | P5 |
 | Audit logs | P3 (`IAuditLogger` interface) → P4 (admin channel wiring) → P5 (durable retention/export) |

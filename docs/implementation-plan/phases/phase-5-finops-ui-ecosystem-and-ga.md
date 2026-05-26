@@ -73,6 +73,7 @@ Complete **FinOps and advanced billing**, ship the **minimal admin UI**, deliver
 | Auth | Admin session cookie or token in localStorage (document threat model) |
 | Polling | Summary every 2s; optional SSE for requests |
 | Styling | Minimal modern CSS (no heavy framework) |
+| Operator console | Browser UI does not replace Spectre console; both use `/admin/api/*` or `IControlPlaneCommands` (console: [08-operator-console.md](../08-operator-console.md)) |
 
 **Manual test checklist:**
 
@@ -82,12 +83,21 @@ Complete **FinOps and advanced billing**, ship the **minimal admin UI**, deliver
 
 *UI E2E optional (Playwright) — not blocking if manual script signed.*
 
+### WP5.3b — Operator console extensions (optional)
+
+| Task | Details |
+|------|---------|
+| `models add` | Interactive registry entry with validation + `IAuditLogger` |
+| `keys list` | Read-only key prefixes via admin APIs — never print secrets |
+
+Defer if WP4.9 was deferred; not blocking GA if HTTP admin is complete.
+
 ### WP5.4 — Integration & ecosystem
 
 | Deliverable | Location |
 |-------------|----------|
 | Docker Compose | `deploy/docker/docker-compose.yml` — gateway, Postgres, Prometheus, Grafana, mock upstream |
-| Helm chart | `deploy/helm/33pol/` — Deployment, Service, HPA, ServiceMonitor, probes |
+| Helm chart | `deploy/helm/33pol/` — Deployment, Service, HPA, ServiceMonitor, probes ([11-ha-and-scaling.md](../11-ha-and-scaling.md)) |
 | OpenAI SDK guide | `docs/integrations.md` |
 | LangChain / LiteLLM notes | `docs/integrations.md` |
 | Ingress SSE guide | `docs/integrations.md` |

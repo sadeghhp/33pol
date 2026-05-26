@@ -30,6 +30,8 @@ Introduce **PostgreSQL** for identity (not yet full billing).
 
 ### WP3.1 — Persistence foundation (`33pol.Persistence`)
 
+**Schema:** [10-identity-data-model.md](../10-identity-data-model.md) (entities, roles, bootstrap, default grant policy).
+
 | Task | Details |
 |------|---------|
 | `GatewayDbContext` | Tenants, ApiKeys (hash, prefix, scopes), ModelGrants |

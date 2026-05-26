@@ -28,6 +28,7 @@
 - [ ] Rate limit returns 429 with stable `code`  
 - [ ] Quota enforcement (hard and/or soft)  
 - [ ] FinOps usage export  
+- [ ] (Optional) Operator console WP4.9 complete **or** explicitly deferred with sign-off — HTTP admin required either way ([08-operator-console.md](./08-operator-console.md))
 
 ---
 

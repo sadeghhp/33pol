@@ -9,6 +9,15 @@
 
 Load testing is **planned from Phase 2** (baselines) and **mandatory in Phase 5** (GA).
 
+### Operator console (Phase 4 optional)
+
+When WP4.9 is in scope, run a **smoke** alongside the Phase 2 proxy baseline:
+
+- **A:** k6 steady load, console **disabled** (production default).  
+- **B:** Same load, console enabled with `watch summary` at default `RefreshInterval` (1 Hz).  
+
+**Gate (guide):** Gateway overhead p99 delta (B − A) ≤ **1 ms** on `local-perf` with mock upstream. Full sign-off optional in Phase 5. See [08-operator-console.md](./08-operator-console.md) §6 (P7).
+
 ---
 
 ## Environments

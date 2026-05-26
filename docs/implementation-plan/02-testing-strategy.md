@@ -79,12 +79,22 @@ tests/33pol.Registry.Tests/ModelRegistryServiceTests.cs
 | Billing | Token aggregation, idempotency key, event mapping |
 | Health | Probe fallback order, optimistic vs strict |
 | Config reload | Semaphore, hash change detection |
+| Control plane commands | `ControlPlaneCommands` in `33pol.Observability` — reload, summary, backends (`IControlPlaneCommands` + fakes) |
+| Operator console | Command parser, option validation, refresh throttle; **not** Spectre markup |
 
 ### What to avoid testing
 
 - Framework behavior (Kestrel itself)  
 - Third-party library internals  
 - Trivial auto-properties with no logic  
+- Spectre.Console layout, colors, or `AnsiConsole.Live` frame rendering  
+
+### Operator console
+
+- Test **`IControlPlaneCommands`** and command tokenizer/parser with NSubstitute fakes — same bar as other libraries.
+- Assert **DTOs** passed to render helpers, not ANSI strings.
+- Integration host: `Gateway:OperatorConsole:Enabled` = `false` by default in `WebApplicationFactory`.
+- Optional: `IOperatorConsoleTestHarness` (`InternalsVisibleTo` integration tests) dispatches command strings without Spectre — see [08-operator-console.md](./08-operator-console.md) §10.
 
 ### `Program.cs` / DI
 
@@ -111,6 +121,7 @@ tests/33pol.Registry.Tests/ModelRegistryServiceTests.cs
 | `33pol.Billing` | ≥ 90% |
 | `33pol.Persistence` | ≥ 85% |
 | `33pol.Api` | Thin endpoints; covered via integration tests + no business logic in endpoints |
+| `33pol.OperatorConsole` | ≥ 90% on command handlers; Spectre rendering excluded |
 | `33pol.App` | N/A (composition); integration-covered |
 | `33pol.Integration.Tests` | N/A (test harness) |
 
@@ -136,7 +147,7 @@ dotnet test --collect:"XPlat Code Coverage"
 |-------|-----------|
 | 2 | POST chat completions → 200; unknown model → 404; unhealthy → 502; stream headers |
 | 3 | 401 without key; admin blocked; reload requires admin key |
-| 4 | 429 rate limit; metrics increment; trace header present |
+| 4 | 429 rate limit; metrics increment; trace header present; console disabled in test host |
 | 5 | Usage row written; export API returns CSV |
 
 ### Testcontainers (Phase 3+)
@@ -155,6 +166,8 @@ dotnet test --collect:"XPlat Code Coverage"
 | OpenAI error golden files | `tests/33pol.Integration.Tests/Fixtures/errors/` |
 
 Use **golden file** comparison for error JSON and `/v1/models` responses.
+
+**v1 parity:** Tag integration tests `[Trait("Category", "V1Parity")]` per [09-v1-parity-spec.md](./09-v1-parity-spec.md) §13.
 
 ---
 
@@ -184,7 +197,7 @@ Every bug fix includes a test that **fails without the fix**.
 | 1 | All test projects compile; sample test + NetArchTest pass |
 | 2 | Registry + Proxy unit tests; integration proxy suite |
 | 3 | Auth + resilience unit tests; DB integration tests |
-| 4 | Policy + metrics unit tests; OTel smoke integration |
+| 4 | Policy + metrics unit tests; OTel smoke integration; operator console handler tests |
 | 5 | Billing unit tests; k6 thresholds; inference conformance suite; full regression run |
 
 ---

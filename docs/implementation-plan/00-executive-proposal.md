@@ -3,7 +3,7 @@
 **Product:** 33pol — OpenAI-compatible, high-performance LLM gateway  
 **Platform:** .NET 10 (LTS), ASP.NET Core, YARP `IHttpForwarder`  
 **Baseline:** LLM Gateway v1.2.0 (`docs/old-version/`)  
-**Plan version:** 1.0  
+**Plan version:** 1.1  
 
 ---
 
@@ -19,7 +19,7 @@
 | Performance | Gateway overhead &lt; 5 ms p99 vs direct upstream (excl. cold policy cache) |
 | Reliability | Circuit breakers, probes, graceful drain; 99.9% SLO target |
 | Security | Hashed keys; no anonymous admin; separate control plane |
-| Operability | Prometheus + OTel + Grafana dashboards + alerts in repo |
+| Operability | Prometheus + OTel + Grafana; HTTP control plane (`/admin/api/*`); optional in-process **operator console** (Spectre.Console, local/on-box, disabled in production containers by default) |
 | Commercial | Per-tenant usage, quotas, rate cards, exports |
 | Quality | Unit tests on all logic; integration tests on HTTP surface; planned load tests |
 
@@ -51,6 +51,7 @@
 | **SDK-friendly error codes** | Stable `code` enum; `Retry-After`; `X-Request-Id`; documented catalog |
 | **FinOps & advanced billing** | Rate cards, plans, budgets, cost labels, billing events, exports, webhooks |
 | **Observability++** | OTel traces, SLO metrics, TTFT, exemplars, audit logs, SSE admin stream, runbooks |
+| **Operator console** | Optional Spectre.Console TUI in-process; same control-plane commands as HTTP admin; config-gated; no inference-path coupling (see [08-operator-console.md](./08-operator-console.md)) |
 | **Integration & ecosystem** | Helm, Compose, OpenAPI control plane, OpenAI/LangChain docs, ServiceMonitor, OTel collector samples |
 
 ## 5. Explicit non-goals (v2.0 GA)
@@ -60,6 +61,7 @@
 - Hosted SaaS control plane / Stripe billing (Phase 5 prepares exports; payment adapter optional post-GA)
 - Prompt/content logging in production default
 - PostgreSQL persistence of application / Serilog logs (use OTel + platform logging instead)
+- Mandatory interactive TTY in production containers (operator console is opt-in; HTTP admin + Grafana are the default ops path)
 
 ## 6. Five-phase delivery model
 
@@ -68,7 +70,7 @@ Implementation is split into **five phases** with strict ordering (see [04-phase
 1. **Platform foundation** — solution, CI, test projects, architecture skeleton  
 2. **Core data plane** — proxy parity (testable without DB)  
 3. **Security & resilience** — auth, persistence, hardening, error catalog  
-4. **Policy & observability** — limits, quotas, metrics, OTel, admin APIs  
+4. **Policy & observability** — limits, quotas, metrics, OTel, admin APIs, optional operator console  
 5. **FinOps, UI, ecosystem & GA** — billing, UI, deploy artifacts, load tests  
 
 **No implementation** of gateway features begins outside Phase 1’s scope until Phase 1 exit criteria are **met**.
@@ -88,6 +90,8 @@ Implementation is split into **five phases** with strict ordering (see [04-phase
 - [ ] Helm + Compose + Grafana + Alertmanager in repo  
 - [ ] FinOps export and rate-card attribution demonstrated  
 
+*Operator console (WP4.9) is **optional** for GA — required for GA: HTTP `/admin/api/*` control plane; console may be deferred with sign-off (see Phase 4 exit criteria).*
+
 ## 9. Documentation map (post-implementation)
 
 | Path | Content |
@@ -99,6 +103,7 @@ Implementation is split into **five phases** with strict ordering (see [04-phase
 | `docs/finops.md` | Billing and quotas |
 | `docs/integrations.md` | SDK, K8s, ingress |
 | `docs/security.md` | OWASP API checklist, threat model (Phase 5) |
+| `docs/operator-console.md` | Spectre operator console — config, commands, deployment (Phase 4) |
 
 *This executive proposal is the source for Taiga epics #1–#5 aligned to implementation phases.*
 
@@ -114,3 +119,5 @@ Operators upgrading from v1 (`docs/old-version/`) must update automation and scr
 All `/admin/api/**` routes require an admin API key from Phase 3 onward.
 
 **Real-time admin (breaking):** v1 used SignalR (`WebSocket /hubs/admin`). v2 uses optional **SSE** `GET /admin/api/events/stream` (Phase 4+) and polling against `/admin/api/summary`. Update dashboards and automation that depended on SignalR.
+
+**Operator console (new in v2):** Optional in-process terminal UI (Spectre.Console) for local/on-box ops — not a replacement for `/admin/api/*`. Disabled by default in Production and Docker. See [08-operator-console.md](./08-operator-console.md).

@@ -41,6 +41,7 @@ flowchart LR
 | PostgreSQL in Phase 1 | Slows proxy iteration; Phase 2 uses in-memory/fake stores |
 | Full Prometheus in Phase 2 | Needs stable routes and request lifecycle; Phase 4 completes catalog |
 | Admin UI in Phase 3 | Needs metrics/usage APIs from Phase 4; key CRUD available in Phase 3 (WP3.8) |
+| Operator console before admin APIs | Console requires `IControlPlaneCommands` + summary APIs (WP4.6 before WP4.9) |
 | Load tests before proxy works | Phase 2 establishes **baseline**; Phase 5 runs **GA gates** |
 | Billing before auth | Usage must attach to `tenant_id` / `api_key_id` |
 
@@ -53,7 +54,7 @@ flowchart LR
 | 1 | Platform foundation | 1–2 weeks | Solution + CI + test harness + host shell |
 | 2 | Core data plane | 2–3 weeks | OpenAI-compatible proxy (v1 parity) |
 | 3 | Security & resilience | 2–3 weeks | Auth, DB, hardening, SDK errors |
-| 4 | Policy & observability | 2–3 weeks | Limits, quotas, OTel, ops APIs |
+| 4 | Policy & observability | 2–3 weeks | Limits, quotas, OTel, ops APIs, optional Spectre operator console |
 | 5 | FinOps, UI, ecosystem & GA | 2–4 weeks | Billing, admin UI, Helm, load tests |
 
 *Durations are planning estimates for a small team; parallel work within a phase is noted in each phase doc.*
@@ -97,6 +98,7 @@ Every phase **must** satisfy before closure:
 - Rate limits and concurrency return 429 with stable codes  
 - Prometheus + OTel exported; Grafana dashboard JSON + promtool (Compose in P5)  
 - Admin REST APIs for config and operational summary  
+- Optional operator console (WP4.9): shared control-plane commands, disabled in CI/production defaults  
 
 ### Phase 5
 

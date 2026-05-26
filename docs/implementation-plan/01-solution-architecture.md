@@ -24,7 +24,8 @@
 │   ├── 33pol.Observability/          # Metrics, tracing, logging enrichers, RequestTracker
 │   ├── 33pol.Billing/                # Usage events, rate cards, writers
 │   ├── 33pol.Persistence/            # EF Core, entities, migrations
-│   └── 33pol.Api/                    # Minimal API endpoint groups (admin, health, models)
+│   ├── 33pol.Api/                    # Minimal API endpoint groups (admin, health, models)
+│   └── 33pol.OperatorConsole/        # Spectre.Console TUI + hosted service (Phase 4, optional)
 ├── tests/
 │   ├── 33pol.Core.Tests/
 │   ├── 33pol.Registry.Tests/
@@ -34,6 +35,7 @@
 │   ├── 33pol.Observability.Tests/
 │   ├── 33pol.Billing.Tests/
 │   ├── 33pol.Persistence.Tests/
+│   ├── 33pol.OperatorConsole.Tests/
 │   ├── 33pol.Integration.Tests/      # WebApplicationFactory, Testcontainers optional
 │   ├── 33pol.Architecture.Tests/     # NetArchTest dependency rules (Phase 1)
 │   └── 33pol.Conformance.Tests/      # Phase 5 GA — OpenAI shape / error golden tests
@@ -60,9 +62,11 @@
 ```text
 33pol.App
   → 33pol.Api, 33pol.Proxy, 33pol.Security, 33pol.Policy,
-     33pol.Observability, 33pol.Billing, 33pol.Persistence, 33pol.Registry
+     33pol.Observability, 33pol.Billing, 33pol.Persistence, 33pol.Registry,
+     33pol.OperatorConsole (optional reference; register only when enabled)
   → 33pol.Core
 
+33pol.OperatorConsole → 33pol.Core only
 33pol.Proxy → 33pol.Registry, 33pol.Core
 33pol.Security → 33pol.Core, 33pol.Persistence (Phase 3+)
 33pol.Policy → 33pol.Core, 33pol.Security
@@ -77,6 +81,8 @@
 
 - `33pol.Core` must not reference ASP.NET, EF, or YARP.
 - `33pol.Registry` must not reference HTTP pipeline types.
+- `33pol.OperatorConsole` must not reference ASP.NET, YARP, `33pol.Proxy`, or `33pol.Api`.
+- Spectre.Console package reference only in `33pol.OperatorConsole`.
 - Circular references between feature projects.
 
 Enforce with `33pol.Architecture.Tests` (NetArchTest) in Phase 1.
@@ -128,6 +134,7 @@ Logging → Routing → CORS → RequestId → Auth → RateLimit → Quota
 | `Observability` | `ObservabilityOptions` | 4 |
 | `Billing` | `BillingOptions` | 5 |
 | `ConnectionStrings:GatewayDb` | Identity + usage events (single DB default) | 3 |
+| `Gateway:OperatorConsole` | `OperatorConsoleOptions` (nested) | 4 |
 
 **Application logs are not stored in PostgreSQL.** Serilog writes to stdout; production uses OpenTelemetry log export to the platform log stack (Loki, CloudWatch, etc.). Admin UI does not query historical logs from the gateway database.
 
@@ -154,6 +161,32 @@ Use **Options pattern** + `IValidateOptions<T>` for fail-fast startup validation
 | Integration | `Microsoft.AspNetCore.Mvc.Testing` |
 | Containers | Testcontainers.PostgreSql (Phase 3+ integration) |
 | Load | k6 (Phase 2 baseline, Phase 5 GA) |
+| Operator console | Spectre.Console in `33pol.OperatorConsole` only; opt-in `IHostedService` |
+
+---
+
+## Control plane surfaces
+
+Operators manage the gateway **without** sending admin traffic through `ModelRouterMiddleware`. Three first-class surfaces share the same domain services:
+
+| Surface | Transport | Primary use | Phase | Production default |
+|---------|-----------|-------------|-------|---------------------|
+| Admin API | HTTP `/admin/api/*` | Automation, OpenAPI clients, remote ops | 3–4 | On (secured) |
+| Admin UI | Browser → same-origin `/admin/api/*` | Dashboards, FinOps views | 5 | On |
+| Operator console | stdin/stdout, Spectre.Console | Local dev, on-box troubleshooting | 4 (optional) | **Off** |
+| Metrics stack | `GET /metrics`, Grafana | SLOs, alerting | 4–5 | On |
+
+**Normative rule:** HTTP admin APIs are **canonical**. The operator console and browser UI are clients of `IControlPlaneCommands` / Core interfaces—not parallel implementations of reload, registry, or metrics logic.
+
+Full specification: [08-operator-console.md](./08-operator-console.md).
+
+### Operator console (summary)
+
+- **Host:** `OperatorConsoleHostedService` (`IHostedService`) in `33pol.OperatorConsole`, registered from `33pol.App` when `Gateway:OperatorConsole:Enabled` is `true`.
+- **Loop:** Dedicated long-running task for read/eval; **not** the Kestrel thread pool and not `Console.ReadLine` on the main host thread.
+- **Data access:** `IControlPlaneCommands` (implemented by `ControlPlaneCommands` in Observability), `IAdminSummaryReader`, and other Core services — same orchestration as minimal APIs.
+- **Performance:** Snapshot reads, throttled `AnsiConsole.Live` (default 1 Hz), atomic registry reload; see performance contract in [08-operator-console.md](./08-operator-console.md) §6.
+- **Deployment:** Disabled in Production and Docker Compose by default; Development may enable via `appsettings.Development.json`.
 
 ---
 
@@ -175,8 +208,10 @@ Define in `33pol.Core` early (Phase 1–2 stubs, Phase 3+ implementations):
 | `IConfigReload` | Trigger/status for `models.json` hot reload (`33pol.Registry` impl; admin API in `33pol.Api`) |
 | `IRecentRequestStore` | In-memory ring buffer for recent requests (`33pol.Observability`, Phase 4) |
 | `IAuditLogger` | Admin/security audit events (interface Phase 3; durable sink Phase 5) |
+| `IControlPlaneCommands` | Shared orchestration for admin HTTP + operator console — **`ControlPlaneCommands` in `33pol.Observability`** (Phase 4); registered in `33pol.App` |
+| `IAdminSummaryReader` | Read-only operational snapshot for `/admin/api/summary` and console (`33pol.Observability`, Phase 4) |
 
-Enables **in-memory fakes** in unit tests without HTTP. Admin endpoints in `33pol.Api` depend only on these Core interfaces (registered in `33pol.App`).
+Enables **in-memory fakes** in unit tests without HTTP. Admin endpoints in `33pol.Api` (thin) and commands in `33pol.OperatorConsole` depend only on these Core interfaces. **`33pol.Api` does not implement** `IControlPlaneCommands` (Api → Core only).
 
 ### Billing domain model (Plan vs Quota vs Budget vs Rate card)
 
@@ -187,7 +222,9 @@ Enables **in-memory fakes** in unit tests without HTTP. Admin endpoints in `33po
 | **Budget** | 5 | **FinOps spend cap:** alerts/webhooks and optional hard stop; does not replace `IQuotaService` unless explicitly configured to call it |
 | **Rate card** | 5 | Prices usage events for FinOps export (does not gate inference by default) |
 
-Phase 4 rate limiting may use `Tenant.PlanSlug` (string) without the full FinOps engine.
+Phase 4 rate limits resolve via `Tenant.PlanSlug` → `RateLimiting:Plans` in configuration until the `Plan` entity exists (Phase 5). See [10-identity-data-model.md](./10-identity-data-model.md) § Rate limit source.
+
+**Normative contracts:** [09-v1-parity-spec.md](./09-v1-parity-spec.md) (proxy), [10-identity-data-model.md](./10-identity-data-model.md) (identity), [11-ha-and-scaling.md](./11-ha-and-scaling.md) (replicas), [12-metrics-and-runtime-contracts.md](./12-metrics-and-runtime-contracts.md) (metrics/quota/SSE).
 
 ---
 
@@ -196,6 +233,21 @@ Phase 4 rate limiting may use `Tenant.PlanSlug` (string) without the full FinOps
 - Static files: `src/33pol.App/wwwroot/admin/`
 - Alpine.js (or Petite-Vue); no Blazor WASM requirement
 - Calls same-origin `/admin/api/*` only
+- Does **not** embed Spectre or terminal UI; browser only
+
+---
+
+## Operator console (`33pol.OperatorConsole`)
+
+See [08-operator-console.md](./08-operator-console.md) for commands, config, security, and exit criteria.
+
+| Concern | Decision |
+|---------|----------|
+| Library | Spectre.Console (presentation only) |
+| Activation | `Gateway:OperatorConsole:Enabled` (default `false`) |
+| Registration | `AddOperatorConsole()` extension; no-op when disabled |
+| Tests | `33pol.OperatorConsole.Tests` — handlers without TTY |
+| Phase | WP4.9 (after WP4.6 control-plane APIs) |
 
 ---
 
@@ -214,7 +266,7 @@ Phase 4 rate limiting may use `Tenant.PlanSlug` (string) without the full FinOps
 | Solution + projects + NetArchTest | 1 |
 | Registry, Proxy, basic host | 2 |
 | Security, Persistence, resilience | 3 |
-| Policy, Observability, Api endpoints | 4 |
+| Policy, Observability, Api endpoints, Operator console (optional) | 4 |
 | Billing, wwwroot, deploy/, perf/ | 5 |
 
 See phase documents for detailed work packages.

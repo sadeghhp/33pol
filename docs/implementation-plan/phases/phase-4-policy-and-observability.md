@@ -9,7 +9,7 @@
 
 ## Objective
 
-Enforce **rate limits and quotas** per tenant/key/model, complete **Prometheus metrics** and **OpenTelemetry** traces, expose **control-plane REST APIs** for operators, and deliver **Observability++** (SLO **metric hooks** for latency/error SLIs — Prometheus **recording rules** and sign-off in Phase 5; structured logs with trace correlation; admin summary; optional SSE event stream).
+Enforce **rate limits and quotas** per tenant/key/model, complete **Prometheus metrics** and **OpenTelemetry** traces, expose **control-plane REST APIs** for operators, deliver **Observability++** (SLO **metric hooks** for latency/error SLIs — Prometheus **recording rules** and sign-off in Phase 5; structured logs with trace correlation; admin summary; optional SSE event stream), and ship an **optional in-process operator console** (Spectre.Console) that shares control-plane logic with HTTP admin.
 
 Billing **metering hooks** are implemented here; FinOps **rate cards and exports** finalize in Phase 5.
 
@@ -23,6 +23,8 @@ See [01-solution-architecture.md](../01-solution-architecture.md) — **Billing 
 - Full Prometheus catalog + Grafana dashboard JSON  
 - OTel traces on inference path  
 - Admin APIs: summary, backends, recent requests  
+- Shared `IControlPlaneCommands` for HTTP admin and operator console  
+- Optional operator console (WP4.9): Spectre TUI, config-gated, off in Production/Docker/CI defaults  
 - Request UUID correlation across structured logs (stdout/OTel), metrics, and DB usage rows  
 - **85–90%+ unit coverage** on Policy + Observability  
 
@@ -32,10 +34,12 @@ See [01-solution-architecture.md](../01-solution-architecture.md) — **Billing 
 
 ### WP4.1 — Rate limiting (`33pol.Policy`)
 
+**Policy source (pre-`Plan` entity):** [10-identity-data-model.md](../10-identity-data-model.md) § Rate limit source. **Multi-replica:** [11-ha-and-scaling.md](../11-ha-and-scaling.md).
+
 | Task | Details |
 |------|---------|
 | ASP.NET Core `AddRateLimiter` | Global + per-policy |
-| `IRateLimitPolicyResolver` | From tenant + model + plan |
+| `IRateLimitPolicyResolver` | `Tenant.PlanSlug` → `RateLimiting:Plans` + defaults |
 | Algorithms | Fixed window + token bucket + **concurrency** limiter for streams |
 | Redis provider (optional) | Interface `IDistributedRateLimitStore` — in-memory default |
 | Response | 429 + `Retry-After` + error JSON |
@@ -49,12 +53,14 @@ See [01-solution-architecture.md](../01-solution-architecture.md) — **Billing 
 
 ### WP4.2 — Quotas (`33pol.Policy` + Persistence)
 
+**Semantics:** [12-metrics-and-runtime-contracts.md](../12-metrics-and-runtime-contracts.md) § Quota (check before forward; commit on completion; idempotent by `request_id`).
+
 | Task | Details |
 |------|---------|
 | `IQuotaService` | Monthly token/request budgets |
 | Soft vs hard | Warn header vs 429 `quota_exceeded` |
 | DB tables | `QuotaAllocation`, `QuotaUsage` rolling counters |
-| Hook after request | Decrement on usage event (async) |
+| Commit path | Sync check + commit per chosen option (document in `docs/finops.md`) |
 
 **Unit tests:**
 
@@ -63,7 +69,7 @@ See [01-solution-architecture.md](../01-solution-architecture.md) — **Billing 
 
 ### WP4.3 — Metrics (`33pol.Observability`)
 
-Implement catalog from executive proposal:
+Implement [12-metrics-and-runtime-contracts.md](../12-metrics-and-runtime-contracts.md) §2 index (v1 rename table §1):
 
 | Metric group | Examples |
 |--------------|----------|
@@ -116,18 +122,21 @@ Implement catalog from executive proposal:
 
 Implement `IRecentRequestStore` in `33pol.Observability` (in-memory ring buffer; not PostgreSQL).
 
+Implement **`IControlPlaneCommands`** and **`IAdminSummaryReader`** in Core (interfaces). Implement **`ControlPlaneCommands`** and summary reader in **`33pol.Observability`**; register in **`33pol.App`**. `33pol.Api` endpoints stay thin (delegate to `IControlPlaneCommands` only). Same implementation used by WP4.9 console — no duplicated reload or registry logic.
+
 | Endpoint | Purpose |
 |----------|---------|
-| `GET /admin/api/summary` | Metrics snapshot for UI |
+| `GET /admin/api/summary` | Metrics snapshot for UI / console |
 | `GET /admin/api/backends` | Health + registry |
 | `GET /admin/api/requests?limit=` | Recent in-memory ring buffer (`IRecentRequestStore`) |
-| `GET /admin/api/events/stream` | SSE live events (optional; metrics/requests, not log DB tail) |
+| `GET /admin/api/events/stream` | SSE per [12-metrics-and-runtime-contracts.md](../12-metrics-and-runtime-contracts.md) §5 (optional) |
 | OpenAPI | Document all admin routes |
 
 **Integration tests:**
 
 - Admin auth required  
 - Summary returns expected shape  
+- `IControlPlaneCommands` covered via HTTP (console uses same impl in unit tests)  
 
 ### WP4.7 — Observability artifacts
 
@@ -153,6 +162,43 @@ Implement `IRecentRequestStore` in `33pol.Observability` (in-memory ring buffer;
 - SSE last-chunk parse  
 - `usage_parse_failed` metric when missing  
 
+### WP4.9 — Operator console (`33pol.OperatorConsole`) — optional
+
+**Spec:** [08-operator-console.md](../08-operator-console.md)
+
+| Task | Details |
+|------|---------|
+| Project | `33pol.OperatorConsole` + `33pol.OperatorConsole.Tests`; package `Spectre.Console` in `Directory.Packages.props` |
+| Core interfaces | Consume `IControlPlaneCommands` from WP4.6 (`ControlPlaneCommands` in Observability — **not** in Api) |
+| Options | `OperatorConsoleOptions` nested under `Gateway`; `IValidateOptions` for `RefreshInterval` bounds |
+| Hosted service | `OperatorConsoleHostedService` — read/eval loop on dedicated task; respects `CancellationToken` |
+| Registration | `AddOperatorConsole()` in `33pol.OperatorConsole`; called from `33pol.App` only when `Enabled` |
+| Commands (MVP) | `help`, `exit`, `status`, `summary`, `watch summary`, `backends`, `requests [--limit N]`, `reload`, `models list` |
+| Spectre | Tables/panels for snapshots; `AnsiConsole.Live` for `watch summary` throttled by `RefreshInterval` |
+| Security | `RequireAdminApiKey` validates admin scope; no secrets in output; audit `reload` via `IAuditLogger` |
+| Logging | Serilog unchanged; no Spectre sink |
+| Docs | `docs/operator-console.md`; update `deploy/docker/README.md` (console off in Compose) |
+| Performance | Satisfy contract P1–P6 in [08-operator-console.md](../08-operator-console.md) §6; optional k6 smoke P7 |
+
+**Unit tests:**
+
+- `ControlPlaneCommands` in `33pol.Observability.Tests` with fakes (reload, summary, backends)  
+- Command parser in `33pol.OperatorConsole.Tests`: input string → intent  
+- `OperatorConsoleOptions` validation (refresh min/max)  
+- Console disabled → hosted service not registered (composition test or integration factory)  
+
+**Integration tests:**
+
+- Default test host: `Gateway:OperatorConsole:Enabled` = `false`  
+- HTTP admin still works when console enabled in a dedicated test class  
+
+**Exit criteria (WP4.9):**
+
+- [ ] Spectre reference only in `33pol.OperatorConsole`  
+- [ ] Development `appsettings` sample enables console; Production/CI samples disable  
+- [ ] Operator can run `watch summary` and `reload` locally without stopping inference (manual smoke)  
+- [ ] `docs/operator-console.md` complete  
+
 ---
 
 ## Unit test checklist (Phase 4)
@@ -162,7 +208,8 @@ Implement `IRecentRequestStore` in `33pol.Observability` (in-memory ring buffer;
 - [ ] Metrics label constraints (static analysis or unit)  
 - [ ] Error codes for **P4** 429 variants + `Retry-After`  
 - [ ] Usage parser fixtures  
-- [ ] Coverage ≥ 85% Observability, ≥ 90% Policy  
+- [ ] Control plane command handlers + console parser (if WP4.9 in scope)  
+- [ ] Coverage ≥ 85% Observability, ≥ 90% Policy, ≥ 90% OperatorConsole (if WP4.9 in scope)  
 
 ---
 
@@ -173,6 +220,7 @@ Implement `IRecentRequestStore` in `33pol.Observability` (in-memory ring buffer;
 - [ ] OTel traces visible in collector sample  
 - [ ] `/admin/api/summary` authenticated and populated  
 - [ ] Prometheus alert rules validate (promtool)  
+- [ ] WP4.9: operator console complete **or** explicitly deferred with user sign-off (HTTP admin remains required)  
 - [ ] Taiga epic P4 closed  
 
 ---
@@ -182,3 +230,4 @@ Implement `IRecentRequestStore` in `33pol.Observability` (in-memory ring buffer;
 1. As an operator, I see p99 latency and error rate in Grafana.  
 2. As a tenant, I receive 429 with retry guidance when over limit.  
 3. As support, I correlate logs and traces with `X-Request-Id`.  
+4. As an operator on my laptop, I use the Spectre console to inspect backends and reload config without stopping the gateway.  

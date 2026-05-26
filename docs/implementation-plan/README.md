@@ -18,6 +18,11 @@ This folder contains the **authoritative implementation plan** for 33pol LLM Gat
 | [05-feature-to-phase-matrix.md](./05-feature-to-phase-matrix.md) | Maps all proposal features to phases |
 | [06-sdk-error-catalog.md](./06-sdk-error-catalog.md) | Stable error codes (planning reference) |
 | [07-review-findings.md](./07-review-findings.md) | Plan review log (remediated items) |
+| [08-operator-console.md](./08-operator-console.md) | Spectre.Console operator console — design, commands, config, performance contract |
+| [09-v1-parity-spec.md](./09-v1-parity-spec.md) | Normative v1 proxy/registry/models API acceptance (Phase 2+) |
+| [10-identity-data-model.md](./10-identity-data-model.md) | Tenants, API keys, grants, Phase 4 rate-limit config source |
+| [11-ha-and-scaling.md](./11-ha-and-scaling.md) | Multi-replica semantics, Redis rate limits, HPA |
+| [12-metrics-and-runtime-contracts.md](./12-metrics-and-runtime-contracts.md) | Metric catalog, quota commit, SSE vs SignalR |
 | [GA-CHECKLIST.md](./GA-CHECKLIST.md) | Production release sign-off template |
 
 ## Phases (implementation order)
@@ -41,5 +46,8 @@ This folder contains the **authoritative implementation plan** for 33pol LLM Gat
 1. `00-executive-proposal.md` — what we are building  
 2. `04-phase-overview.md` — how phases connect  
 3. `01-solution-architecture.md` — where code will live  
-4. `02-testing-strategy.md` + `03-performance-and-load-testing.md` — quality bars  
-5. `phases/phase-1` … `phase-5` — detailed backlog per phase  
+4. `09-v1-parity-spec.md` + `10-identity-data-model.md` — normative contracts before proxy/auth work  
+5. `08-operator-console.md` — if implementing WP4.9 (Spectre TUI)  
+6. `02-testing-strategy.md` + `03-performance-and-load-testing.md` — quality bars  
+7. `11-ha-and-scaling.md` + `12-metrics-and-runtime-contracts.md` — before Phase 4–5 ops work  
+8. `phases/phase-1` … `phase-5` — detailed backlog per phase  
