@@ -1,0 +1,80 @@
+---
+description: Taiga agile workflow — plan in Taiga before coding; features as stories/tasks, bugs as issues
+alwaysApply: true
+---
+
+# Taiga Agile Workflow (Cursor Agents)
+
+Use the **user-taiga** MCP server for all project tracking. **Plan in Taiga before writing code.** Do not use internal todo lists when this rule applies — Taiga is the source of truth.
+
+## Resolve the Taiga project (every session)
+
+1. Derive the expected project name from the workspace:
+   - Folder basename (e.g. `33pol` from `.../projects/33pol`)
+   - Else the root `*.csproj` / `package.json` name (without extension)
+2. Call `taiga_list_projects` and pick the project whose **slug or name** matches (case-insensitive).
+3. Store `projectSlug` for all later calls. If no match exists, ask the user whether to create a Taiga project with that name — do not guess a different project.
+
+## Taiga item types (agile mapping)
+
+| Work type | Taiga entity | When |
+|-----------|--------------|------|
+| Large theme / multi-sprint initiative | **Epic** (`taiga_create_epic`) | Optional; only if the feature spans multiple stories |
+| User-facing capability or feature slice | **User story** (`taiga_create_story`) | Every non-trivial feature request |
+| Implementable step (≤ half day) | **Task** (`taiga_create_task`) | Child of a story via `userStoryId` |
+| Bug, defect, regression, broken behavior | **Issue** (`taiga_create_issue`) | Before fixing any bug — use `typeName: Bug` when available |
+
+## Mandatory order of operations
+
+### New feature or enhancement
+
+1. **Decompose** into a story (outcome) and tasks (concrete steps). Each task should be independently completable and verifiable.
+2. **Search first**: `taiga_search` with keywords from the request to avoid duplicates.
+3. **Create in Taiga**: epic (if needed) → story → tasks under that story (`userStoryId` from create response).
+4. **Brief the user**: list created refs (e.g. story #12, tasks #3–#5) and the implementation order.
+5. **Implement one task at a time**: set task `statusName` to in-progress equivalent → code → test → comment → mark done/closed.
+6. When all tasks are done, close the parent story.
+
+### Bug or issue fix
+
+1. **Create the issue first** (`taiga_create_issue`) with: clear subject, repro steps, expected vs actual, environment, and relevant file paths.
+2. Set priority/severity when obvious (`priorityName`, `severityName`).
+3. **Then fix** in the codebase.
+4. On completion: `taiga_comment_on_issue` with root cause + fix summary → `taiga_update_issue` to closed/done.
+
+### Skip Taiga only when
+
+- User explicitly says to skip Taiga for this change, **or**
+- Pure documentation/Q&A with no code change.
+
+## Task breakdown rules (good tasks)
+
+- **One concern per task** — one file/module or one vertical slice when possible.
+- **Testable done** — description includes acceptance criteria or how to verify.
+- **Sized small** — if a task needs more than ~4 hours of agent work, split it.
+- **Ordered** — dependencies first (models → API → UI).
+
+Example story + tasks for “Add user login”:
+
+- Story: *As a user I can sign in with email and password*
+- Task 1: Add auth models and password hashing
+- Task 2: Add login endpoint and validation
+- Task 3: Wire login UI and error states
+
+## MCP usage (agents)
+
+- Read tool schemas under `mcps/user-taiga/tools/` before `CallMcpTool`.
+- Prefer `projectSlug` + ref (`taskRef`, `issueRef`, `storyRef`) over internal IDs when updating.
+- Use `taiga_list_statuses` / `taiga_list_issue_types` if status or type labels are unknown.
+- After each meaningful step, **comment** on the active task/issue with what changed (files, approach, blockers).
+- Link work in comments: branch name, commit hash, or PR URL when available.
+
+## Status discipline
+
+- Move item to in-progress **before** editing code.
+- Do not leave items in-progress when switching to another Taiga item — update or park with a comment.
+- Close items only when the fix/feature is verified (build/tests pass when applicable).
+
+## User communication
+
+When starting implementation, always state: **Taiga project**, **refs being worked**, and **current task/issue**. When finishing, summarize what was closed in Taiga and what remains.
