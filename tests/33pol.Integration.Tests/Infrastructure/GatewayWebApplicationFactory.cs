@@ -17,17 +17,25 @@ public class GatewayWebApplicationFactory : WebApplicationFactory<Program>
     public GatewayWebApplicationFactory(
         bool registryWatchEnabled = false,
         string? modelsConfigPath = null,
-        bool deleteConfigOnDispose = true)
+        bool deleteConfigOnDispose = true,
+        IReadOnlyList<string>? inferenceApiKeys = null,
+        IReadOnlyList<string>? adminApiKeys = null)
     {
         RegistryWatchEnabled = registryWatchEnabled;
         _deleteConfigOnDispose = deleteConfigOnDispose;
         _modelsConfigPath = modelsConfigPath ?? CreateDefaultModelsConfig();
+        InferenceApiKeys = inferenceApiKeys;
+        AdminApiKeys = adminApiKeys;
         Upstream = new MockOpenAiUpstreamHandler();
     }
 
     public MockOpenAiUpstreamHandler Upstream { get; }
 
     public bool RegistryWatchEnabled { get; }
+
+    public IReadOnlyList<string>? InferenceApiKeys { get; }
+
+    public IReadOnlyList<string>? AdminApiKeys { get; }
 
     public string ModelsConfigPath => _modelsConfigPath;
 
@@ -38,12 +46,30 @@ public class GatewayWebApplicationFactory : WebApplicationFactory<Program>
     {
         builder.ConfigureAppConfiguration((_, config) =>
         {
-            config.AddInMemoryCollection(new Dictionary<string, string?>
+            var data = new Dictionary<string, string?>
             {
                 ["Gateway:ModelsConfigPath"] = _modelsConfigPath,
                 ["Gateway:RegistryWatchEnabled"] = RegistryWatchEnabled ? "true" : "false",
                 ["Gateway:ConfigReloadIntervalSeconds"] = "1",
-            });
+            };
+
+            if (InferenceApiKeys is not null)
+            {
+                for (var i = 0; i < InferenceApiKeys.Count; i++)
+                {
+                    data[$"Gateway:ApiKeys:{i}"] = InferenceApiKeys[i];
+                }
+            }
+
+            if (AdminApiKeys is not null)
+            {
+                for (var i = 0; i < AdminApiKeys.Count; i++)
+                {
+                    data[$"Gateway:AdminApiKeys:{i}"] = AdminApiKeys[i];
+                }
+            }
+
+            config.AddInMemoryCollection(data);
         });
 
         builder.ConfigureServices(services =>

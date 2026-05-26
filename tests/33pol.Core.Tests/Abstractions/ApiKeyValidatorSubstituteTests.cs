@@ -8,8 +8,9 @@ public sealed class ApiKeyValidatorSubstituteTests
     public void NSubstitute_CanMockCoreInterface()
     {
         var validator = Substitute.For<IApiKeyValidator>();
+        validator.Validate("key", Pol33.Core.Security.ApiKeyPolicy.Inference)
+            .Returns(Pol33.Core.Security.ApiKeyValidationResult.Success);
 
-        validator.Should().NotBeNull();
-        validator.Should().BeAssignableTo<IApiKeyValidator>();
+        validator.Validate("key", Pol33.Core.Security.ApiKeyPolicy.Inference).IsSuccess.Should().BeTrue();
     }
 }

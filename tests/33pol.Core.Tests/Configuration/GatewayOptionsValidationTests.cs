@@ -63,6 +63,16 @@ public sealed class GatewayOptionsValidationTests
     }
 
     [Fact]
+    public void Validate_ProductionWithoutKeys_ReturnsError()
+    {
+        var options = new GatewayOptions { RequireApiKeysInProduction = true };
+
+        var errors = GatewayOptionsValidation.Validate(options, isProduction: true);
+
+        errors.Should().Contain(e => e.Contains("API key", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public void Bind_FromConfigurationDictionary_BindsGatewaySection()
     {
         var configuration = new ConfigurationBuilder()

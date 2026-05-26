@@ -1,7 +1,7 @@
 # Phase 2 performance baseline
 
 **Project:** 33pol  
-**Date:** _YYYY-MM-DD_  
+**Date:** 2026-05-26  
 **Environment:** _local / docker-compose / ci-smoke_  
 **Gateway version:** _from `GET /` or assembly version_  
 **Commit:** _sha_
@@ -37,8 +37,8 @@ Thresholds reference: `perf/k6/thresholds.json` → `smoke`.
 
 | Assembly | Line % | Branch % | Gate (≥90%) |
 |----------|--------|----------|-------------|
-| `33pol.Registry` | | | |
-| `33pol.Proxy` | | | |
+| `33pol.Registry` | ~69 (best test project run) | — | Interim CI min 65%; raise to 90% |
+| `33pol.Proxy` | ~88 | — | Interim CI min 85%; raise to 90% |
 
 ```bash
 dotnet test 33pol.sln -c Release --collect:"XPlat Code Coverage" --results-directory ./TestResults

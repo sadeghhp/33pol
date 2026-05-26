@@ -10,7 +10,7 @@ public sealed class DependencyRulesTests
     private static readonly Assembly ProxyAssembly = typeof(Pol33.Proxy.Middleware.ModelRouterMiddleware).Assembly;
     private static readonly Assembly ApiAssembly = typeof(Pol33.Api.Endpoints.ConfigAdminEndpoints).Assembly;
     private static readonly Assembly OperatorConsoleAssembly = typeof(Pol33.OperatorConsole.ProjectStub).Assembly;
-    private static readonly Assembly PersistenceAssembly = typeof(Pol33.Persistence.ProjectStub).Assembly;
+    private static readonly Assembly PersistenceAssembly = typeof(Pol33.Persistence.GatewayDbContext).Assembly;
     private static readonly Assembly ObservabilityAssembly = typeof(Pol33.Observability.ProjectStub).Assembly;
     private static readonly Assembly BillingAssembly = typeof(Pol33.Billing.ProjectStub).Assembly;
 
@@ -23,7 +23,7 @@ public sealed class DependencyRulesTests
         ObservabilityAssembly,
         BillingAssembly,
         PersistenceAssembly,
-        typeof(Pol33.Security.ProjectStub).Assembly,
+        typeof(Pol33.Security.Authentication.ConfigApiKeyValidator).Assembly,
         OperatorConsoleAssembly,
     ];
 

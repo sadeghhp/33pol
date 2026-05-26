@@ -33,10 +33,9 @@ jobs:
           --results-directory ./TestResults
           -- DataCollectionRunSettings.DataCollectors.DefaultSink.DataStore=CoverageReports
 
-      - name: Coverage threshold (placeholder)
-        run: |
-          echo "Phase 1: coverage gate placeholder at 0% (raise in Phase 2)."
-          exit 0
+      - name: Phase 2 coverage gate (interim)
+        shell: pwsh
+        run: ./tools/verify-phase2-coverage.ps1 -ResultsDirectory ./TestResults
 
       - name: Upload coverage artifacts
         uses: actions/upload-artifact@v4
