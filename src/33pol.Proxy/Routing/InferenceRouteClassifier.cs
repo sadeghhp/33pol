@@ -1,3 +1,5 @@
+using Microsoft.AspNetCore.Http;
+
 namespace Pol33.Proxy.Routing;
 
 public static class InferenceRouteClassifier

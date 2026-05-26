@@ -1,5 +1,6 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
     <ProjectReference Include="..\..\src\33pol.Proxy\33pol.Proxy.csproj" />
+    <ProjectReference Include="..\..\src\33pol.Registry\33pol.Registry.csproj" />
   </ItemGroup>
 </Project>

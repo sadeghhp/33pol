@@ -1,5 +1,7 @@
 using System.Net;
+using System.Text.Json;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Logging;
 using Pol33.Core.Abstractions;
 using Pol33.Proxy.Errors;
 using Pol33.Proxy.Forwarding;

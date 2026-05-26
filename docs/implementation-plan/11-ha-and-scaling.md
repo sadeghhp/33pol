@@ -59,10 +59,14 @@
 
 ---
 
-## Config reload under scale
+## Live registry under scale
 
-- Each pod polls/reloads its own `models.json` (**MUST** stay consistent via shared volume or config map reload).
-- `POST /admin/api/config/reload` on one pod does **not** reload others unless orchestrated (e.g. Job, rollout restart). **SHOULD** document: “reload all replicas” = hit each pod or restart deployment.
+**Normative:** [13-live-model-registry.md](./13-live-model-registry.md) §9.
+
+- Each pod maintains its own in-memory registry, fed by a **shared** `models.json` (RWX volume) **or** per-pod admin API calls.
+- `POST /admin/api/models` on one pod updates **that pod only** unless all pods share the same writable file or an orchestrator fans out CRUD to every replica.
+- File watch/poll on a **read-only** ConfigMap does **not** allow in-pod file writes — use **admin API** for mutations in Kubernetes.
+- `POST /admin/api/config/reload` on one pod does **not** reload others unless orchestrated. **SHOULD** document runbook: “apply to all replicas” = fan-out admin API, shared volume + watch, or rolling reload job.
 
 ---
 

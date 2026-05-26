@@ -1,5 +1,10 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <PackageReference Include="Yarp.ReverseProxy" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\33pol.Registry\33pol.Registry.csproj" />
     <ProjectReference Include="..\33pol.Core\33pol.Core.csproj" />
   </ItemGroup>

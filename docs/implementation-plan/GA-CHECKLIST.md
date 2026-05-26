@@ -23,7 +23,11 @@
 - [ ] Streaming SSE chat completion  
 - [ ] Embeddings path  
 - [ ] Model aliases and canonical rewrite  
-- [ ] Hot reload `models.json` (authenticated)  
+- [ ] Live registry: add model via admin API without restart; visible on inference within 1 s  
+- [ ] Manual `models.json` edit picked up (watch or ≤2 s poll)  
+- [ ] Admin UI Models page: add/edit/delete (Phase 5)  
+- [ ] Operator console `models add/edit/remove` (Phase 4)  
+- [ ] File-only reload `POST /admin/api/config/reload` (authenticated)  
 - [ ] API key create/revoke (admin)  
 - [ ] Rate limit returns 429 with stable `code`  
 - [ ] Quota enforcement (hard and/or soft)  

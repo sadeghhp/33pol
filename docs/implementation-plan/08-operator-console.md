@@ -214,8 +214,11 @@ Syntax: interactive REPL with optional subcommands; `help` lists all.
 | `watch summary` | Live dashboard via `AnsiConsole.Live`; throttled | Admin | 4 |
 | `backends` | Table: model id, health, URL host (no secrets) | Admin | 4 |
 | `requests [--limit N]` | Recent ring buffer copy (`IRecentRequestStore`) | Admin | 4 |
-| `reload` | `IConfigReload.TriggerAsync()` | Admin | 4 |
+| `reload` | `IConfigReload.TriggerAsync()` (file-only) | Admin | 4 |
 | `models list` | Registry entries and aliases | Admin | 4 |
+| `models add` | `IModelRegistryWriter` via `IControlPlaneCommands` | Admin | 4 |
+| `models edit <id>` | Partial update | Admin | 4 |
+| `models remove <id>` | Delete with confirmation | Admin | 4 |
 
 ### HTTP equivalence (Phase 4)
 
@@ -228,8 +231,11 @@ Console commands call `IControlPlaneCommands` directly (no HTTP self-calls). The
 | `watch summary` | Poll `GET /admin/api/summary` (console uses reader, not HTTP) | Throttled live view |
 | `backends` | `GET /admin/api/backends` | |
 | `requests --limit N` | `GET /admin/api/requests?limit=N` | |
-| `reload` | `POST /admin/api/config/reload` | |
-| `models list` | `GET /admin/api/backends` or registry slice of same command | |
+| `reload` | `POST /admin/api/config/reload` | File-only; CRUD does not require reload |
+| `models list` | `GET /admin/api/models` or backends slice | |
+| `models add` | `POST /admin/api/models` | |
+| `models edit` | `PATCH /admin/api/models/{id}` | |
+| `models remove` | `DELETE /admin/api/models/{id}` | |
 
 Legacy `GET /stats` (Phase 2+) remains for v1 parity; console **prefers** `/admin/api/summary` in Phase 4.
 
@@ -237,8 +243,9 @@ Legacy `GET /stats` (Phase 2+) remains for v1 parity; console **prefers** `/admi
 
 | Command | Action | Notes |
 |---------|--------|-------|
-| `models add` | Interactive `TextPrompt` / validation | Writes `models.json` or defers to API; **audit** via `IAuditLogger` |
 | `keys list` | List key prefixes | Read-only; never print full secrets |
+
+Registry CRUD (`models add/edit/remove`) is **Phase 4** — [13-live-model-registry.md](./13-live-model-registry.md) §6.
 
 Destructive or write operations require confirmation prompt (`Spectre.Console` `ConfirmationPrompt`).
 
@@ -266,7 +273,7 @@ Destructive or write operations require confirmation prompt (`Spectre.Console` `
 | Admin key | When `RequireAdminApiKey` is true, validate against same store/scopes as HTTP admin (Phase 3+) |
 | Secrets | Never print API keys, upstream bearer tokens, or full connection strings |
 | Production | Console disabled by default; enabling in Production logs **warning** with reason |
-| Audit | `reload`, `models add` call `IAuditLogger` with actor `operator-console` |
+| Audit | `reload`, `models add/edit/remove` call `IAuditLogger` with actor `operator-console` |
 | Docker | Default image does not enable console; no expectation of TTY in orchestrators |
 
 ---
@@ -302,7 +309,7 @@ Do **not** assert ANSI markup in CI. Prefer testing `ControlPlaneCommands` in `3
 - [ ] `33pol.OperatorConsole` + tests; Spectre only in that project  
 - [ ] `ControlPlaneCommands` in `33pol.Observability` implements `IControlPlaneCommands` for HTTP admin and console  
 - [ ] Console disabled in CI/integration host; enabled in Development sample  
-- [ ] Commands: `help`, `status`, `summary`, `watch summary`, `backends`, `requests`, `reload`, `models list`, `exit`  
+- [ ] Commands: `help`, `status`, `summary`, `watch summary`, `backends`, `requests`, `reload`, `models list/add/edit/remove`, `exit`  
 - [ ] P1–P6 verified in code review checklist  
 - [ ] `docs/operator-console.md` published  
 - [ ] Taiga WP4.9 tasks closed or explicitly deferred with sign-off  
@@ -312,7 +319,8 @@ Do **not** assert ANSI markup in CI. Prefer testing `ControlPlaneCommands` in `3
 ## 13. Taiga story seeds
 
 1. As an operator on a dev machine, I open a rich terminal dashboard without stopping inference traffic.  
-2. As an operator, I trigger `models.json` reload from the console and see the same result as `POST /admin/api/config/reload`.  
+2. As an operator, I add a vLLM backend with `models add` and it is routable immediately (same as `POST /admin/api/models`).  
+3. As an operator, I trigger file-only `reload` from the console and see the same result as `POST /admin/api/config/reload`.  
 3. As security, production containers do not expose an interactive admin TTY by default.  
 
 ---

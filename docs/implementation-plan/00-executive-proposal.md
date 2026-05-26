@@ -27,7 +27,7 @@
 
 - `POST /v1/chat/completions`, `/v1/completions`, `/v1/embeddings`
 - `GET /v1/models`, `/v1/models/{model}`
-- `models.json` registry with aliases and hot reload
+- **Live** `models.json` registry — add/update/remove backends without restart; apply via file watch, admin API, console, or UI ([13-live-model-registry.md](./13-live-model-registry.md))
 - Backend health probes; health gating on inference
 - `GET /health`, `/stats`, `/metrics` (evolved in later phases)
 - `IHttpForwarder` only — **no** unused YARP `MapReverseProxy`
@@ -41,7 +41,7 @@
 - Database-backed API keys, tenants, scopes
 - Rate limiting and concurrency caps (especially streaming)
 - Usage metering and quotas
-- Minimal admin UI (`wwwroot/admin`)
+- Minimal admin UI (`wwwroot/admin`) including **Models** management (CRUD against live registry)
 
 ### Proposal additions
 

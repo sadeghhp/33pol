@@ -78,8 +78,9 @@ tests/33pol.Registry.Tests/ModelRegistryServiceTests.cs
 | Errors | Each `code` maps to correct HTTP + JSON shape |
 | Billing | Token aggregation, idempotency key, event mapping |
 | Health | Probe fallback order, optimistic vs strict |
-| Config reload | Semaphore, hash change detection |
-| Control plane commands | `ControlPlaneCommands` in `33pol.Observability` — reload, summary, backends (`IControlPlaneCommands` + fakes) |
+| Config reload | Semaphore, hash change detection, file watch debounce |
+| `IModelRegistryWriter` | Add/update/remove → file on disk + immediate lookup ([13-live-model-registry.md](./13-live-model-registry.md) §10) |
+| Control plane commands | `ControlPlaneCommands` — reload, summary, backends, **models CRUD** (`IControlPlaneCommands` + fakes) |
 | Operator console | Command parser, option validation, refresh throttle; **not** Spectre markup |
 
 ### What to avoid testing

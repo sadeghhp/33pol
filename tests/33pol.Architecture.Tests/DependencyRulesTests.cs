@@ -7,7 +7,7 @@ public sealed class DependencyRulesTests
 {
     private static readonly Assembly CoreAssembly = typeof(Pol33.Core.Configuration.GatewayOptions).Assembly;
     private static readonly Assembly RegistryAssembly = typeof(Pol33.Registry.Services.ModelRegistryService).Assembly;
-    private static readonly Assembly ProxyAssembly = typeof(Pol33.Proxy.ProjectStub).Assembly;
+    private static readonly Assembly ProxyAssembly = typeof(Pol33.Proxy.Middleware.ModelRouterMiddleware).Assembly;
     private static readonly Assembly ApiAssembly = typeof(Pol33.Api.Endpoints.ConfigAdminEndpoints).Assembly;
     private static readonly Assembly OperatorConsoleAssembly = typeof(Pol33.OperatorConsole.ProjectStub).Assembly;
     private static readonly Assembly PersistenceAssembly = typeof(Pol33.Persistence.ProjectStub).Assembly;

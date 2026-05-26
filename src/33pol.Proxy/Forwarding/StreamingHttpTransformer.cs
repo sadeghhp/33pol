@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Http;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
@@ -42,9 +43,9 @@ public sealed class StreamingHttpTransformer : HttpTransformer
         }
     }
 
-    public override async ValueTask TransformResponseAsync(
+    public override async ValueTask<bool> TransformResponseAsync(
         HttpContext httpContext,
-        HttpResponseMessage proxyResponse,
+        HttpResponseMessage? proxyResponse,
         CancellationToken cancellationToken)
     {
         if (_isStreaming)
@@ -54,10 +55,11 @@ public sealed class StreamingHttpTransformer : HttpTransformer
             httpContext.Response.Headers["X-Accel-Buffering"] = "no";
         }
 
-        await base.TransformResponseAsync(httpContext, proxyResponse, cancellationToken).ConfigureAwait(false);
+        return await base.TransformResponseAsync(httpContext, proxyResponse, cancellationToken)
+            .ConfigureAwait(false);
     }
 
-    internal static string RewriteModelProperty(string json, string canonicalModelId)
+    public static string RewriteModelProperty(string json, string canonicalModelId)
     {
         using var document = JsonDocument.Parse(json);
         using var stream = new MemoryStream();

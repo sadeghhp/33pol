@@ -18,7 +18,10 @@ Maps proposal capabilities to implementation phases. Use for Taiga tagging (`pha
 | Body-based model routing | P2 |
 | SSE streaming | P2 |
 | `models.json` registry + aliases | P2 |
-| Hot reload | P2 (unauthenticated) → P3 (secured) |
+| Live registry apply (persist + in-memory, watch/poll) | P2 ([13-live-model-registry.md](./13-live-model-registry.md)) |
+| `IModelRegistryWriter` | P2 |
+| File-only reload + status APIs | P2 (unauthenticated) → P3 (secured) |
+| Admin `GET/POST/PATCH/DELETE /admin/api/models` | P4 |
 | Backend health probes | P2 |
 | `GET /v1/models` | P2 |
 | `GET /health`, `/stats` | P2 (basic) → P3/P4 (expanded) |
@@ -46,7 +49,8 @@ Maps proposal capabilities to implementation phases. Use for Taiga tagging (`pha
 | Admin REST APIs | P4 |
 | Shared `IControlPlaneCommands` + `ControlPlaneCommands` in `33pol.Observability` (HTTP + console) | P4 |
 | Operator console (Spectre.Console, in-process) | P4 (WP4.9, optional) |
-| Operator console registry write (`models add`) | P5 (optional) |
+| Operator console registry write (`models add`, `edit`, `remove`) | P4 |
+| Admin UI Models CRUD page | P5 |
 | Admin UI | P5 |
 
 ## Proposal additions
@@ -104,7 +108,7 @@ Maps proposal capabilities to implementation phases. Use for Taiga tagging (`pha
 | Alertmanager rules | P4 |
 | `/admin/api/summary` | P4 |
 | `IAdminSummaryReader` snapshot (HTTP + console) | P4 |
-| Operator console: `status`, `summary`, `watch summary`, `backends`, `requests`, `reload`, `models list` | P4 |
+| Operator console: `status`, `summary`, `watch summary`, `backends`, `requests`, `reload`, `models list/add/edit/remove` | P4 |
 | `Gateway:OperatorConsole` config + hosted service gate | P4 |
 | `docs/operator-console.md` | P4 |
 | SSE admin event stream | P4 (optional) → P5 (UI) |

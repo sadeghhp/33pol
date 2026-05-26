@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Last updated** | 2026-05-26 |
+| **Last updated** | 2026-05-26 (live registry pass) |
 | **Scope** | `implementation-plan/`, `.cursor/rules/unit-test-coverage.mdc`, `perf/k6/thresholds.json`, `docs/old-version/` |
 | **Verdict** | **Ready to start Phase 1.** Doc review items below are **remediated** in plan files. |
 
@@ -25,6 +25,19 @@
 | D5 | Operator console (Spectre) | [08-operator-console.md](./08-operator-console.md); WP4.9; shared `IControlPlaneCommands`; production/Docker default off |
 | D6 | `IControlPlaneCommands` impl location | **Not** in `33pol.Api` — `ControlPlaneCommands` in `33pol.Observability`; HTTP mapping table in `08` §7; P6 clarified; GA/README updates |
 | — | Deep review P0/P1 | `09-v1-parity-spec`, `10-identity-data-model`, `11-ha-and-scaling`, `12-metrics-and-runtime-contracts` |
+| D7 | Live model registry | [13-live-model-registry.md](./13-live-model-registry.md); `IModelRegistryWriter`; watch/poll; `/admin/api/models` P4; UI Models page P5; console CRUD promoted to P4 |
+
+---
+
+## Live registry — closed decisions (2026-05-26)
+
+| Topic | Decision |
+|-------|----------|
+| Instant apply on admin/console/UI write | **MUST** persist + apply in one pipeline — no “reload required” |
+| Manual file edit | Debounced watch (dev) or 2 s poll (prod); optional force reload API |
+| v1 poll-only 5 s | Superseded for v2 default poll interval (2 s); watch preferred in Development |
+| K8s read-only ConfigMap | Mutations via admin API only; document in HA guide |
+| Performance | Atomic swap; no stream kill; load-test gate R5 in doc 13 |
 
 ---
 

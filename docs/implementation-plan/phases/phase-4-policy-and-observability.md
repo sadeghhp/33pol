@@ -128,6 +128,7 @@ Implement **`IControlPlaneCommands`** and **`IAdminSummaryReader`** in Core (int
 |----------|---------|
 | `GET /admin/api/summary` | Metrics snapshot for UI / console |
 | `GET /admin/api/backends` | Health + registry |
+| `GET/POST/PATCH/DELETE /admin/api/models` | Registry CRUD — [13-live-model-registry.md](../13-live-model-registry.md) §5; delegate to `IModelRegistryWriter` |
 | `GET /admin/api/requests?limit=` | Recent in-memory ring buffer (`IRecentRequestStore`) |
 | `GET /admin/api/events/stream` | SSE per [12-metrics-and-runtime-contracts.md](../12-metrics-and-runtime-contracts.md) §5 (optional) |
 | OpenAPI | Document all admin routes |
@@ -173,7 +174,7 @@ Implement **`IControlPlaneCommands`** and **`IAdminSummaryReader`** in Core (int
 | Options | `OperatorConsoleOptions` nested under `Gateway`; `IValidateOptions` for `RefreshInterval` bounds |
 | Hosted service | `OperatorConsoleHostedService` — read/eval loop on dedicated task; respects `CancellationToken` |
 | Registration | `AddOperatorConsole()` in `33pol.OperatorConsole`; called from `33pol.App` only when `Enabled` |
-| Commands (MVP) | `help`, `exit`, `status`, `summary`, `watch summary`, `backends`, `requests [--limit N]`, `reload`, `models list` |
+| Commands (MVP) | `help`, `exit`, `status`, `summary`, `watch summary`, `backends`, `requests [--limit N]`, `reload`, `models list`, `models add`, `models edit`, `models remove` |
 | Spectre | Tables/panels for snapshots; `AnsiConsole.Live` for `watch summary` throttled by `RefreshInterval` |
 | Security | `RequireAdminApiKey` validates admin scope; no secrets in output; audit `reload` via `IAuditLogger` |
 | Logging | Serilog unchanged; no Spectre sink |

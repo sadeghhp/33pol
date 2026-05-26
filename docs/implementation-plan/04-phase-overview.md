@@ -84,6 +84,7 @@ Every phase **must** satisfy before closure:
 
 - Inference POSTs forward to mock upstream with streaming  
 - Registry, aliases, health gating, `/v1/models` covered by tests  
+- **Live registry:** `IModelRegistryWriter` + watch/poll ([13-live-model-registry.md](./13-live-model-registry.md))  
 - Integration test suite for proxy paths  
 
 ### Phase 3
@@ -97,13 +98,13 @@ Every phase **must** satisfy before closure:
 
 - Rate limits and concurrency return 429 with stable codes  
 - Prometheus + OTel exported; Grafana dashboard JSON + promtool (Compose in P5)  
-- Admin REST APIs for config and operational summary  
+- Admin REST APIs for config, **`/admin/api/models` CRUD**, and operational summary  
 - Optional operator console (WP4.9): shared control-plane commands, disabled in CI/production defaults  
 
 ### Phase 5
 
 - Usage persistence and FinOps export APIs  
-- Admin UI operational against control plane  
+- Admin UI operational against control plane (**Models** page for live registry)  
 - Inference conformance suite; k6 load tests pass thresholds; GA checklist signed  
 
 ---

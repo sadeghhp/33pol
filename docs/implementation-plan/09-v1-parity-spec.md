@@ -159,6 +159,12 @@ When `stream: true`:
 
 **v2 improvement (SHOULD):** Hash via SHA256 for reload detection (not `GetHashCode()`).
 
+**Live registry (MUST — v2):** See [13-live-model-registry.md](./13-live-model-registry.md). Summary:
+
+- Admin/console/UI mutations **MUST** persist `models.json` and apply in-memory in one operation.
+- Manual file edits **MUST** be picked up via debounced file watch (when enabled) or poll (default interval **2 s** in Production).
+- Operators **MUST NOT** need a process restart for new backends to be routable.
+
 ---
 
 ## 8. `GET /v1/models` response (Phase 2)
@@ -174,7 +180,11 @@ Synthetic `permission` array (v1 parity) **SHOULD** be preserved for client comp
 
 ---
 
-## 9. Admin config reload (Phase 2 open → Phase 3 secured)
+## 9. Admin registry & config reload (Phase 2 open → Phase 3 secured)
+
+**Registry CRUD (Phase 4):** `GET/POST/PATCH/DELETE /admin/api/models` — normative contract in [13-live-model-registry.md](./13-live-model-registry.md) §5. Phase 2 delivers file reload/status and writer foundation only.
+
+### File reload & status (Phase 2+)
 
 ### v2 paths
 
@@ -223,6 +233,7 @@ v1 used 500 with message; v2 **MAY** use 409 — if so, mark **BREAKING** here.
 ```json
 {
   "hotReloadEnabled": true,
+  "watchEnabled": true,
   "lastReload": "2025-12-04T17:39:28Z",
   "modelCount": 4,
   "models": [
@@ -230,6 +241,8 @@ v1 used 500 with message; v2 **MAY** use 409 — if so, mark **BREAKING** here.
   ]
 }
 ```
+
+`watchEnabled` reflects `Gateway:RegistryWatchEnabled` (see [13-live-model-registry.md](./13-live-model-registry.md) §3.4).
 
 **Side effects:** Active streaming connections **MUST NOT** be terminated on reload.
 
@@ -268,6 +281,7 @@ Minimum **V1Parity** integration coverage:
 - [ ] Unknown model 404; unhealthy 502
 - [ ] `GET /v1/models` golden JSON; unhealthy omitted from list
 - [ ] Hot reload success/failure JSON shapes
+- [ ] `IModelRegistryWriter.AddModel` → immediate `TryGetModel` + file on disk ([13-live-model-registry.md](./13-live-model-registry.md) §10)
 - [ ] Passthrough: `/metrics`, `/health`, `/admin/api/config/status` not proxied
 
 See [02-testing-strategy.md](./02-testing-strategy.md) for harness details.

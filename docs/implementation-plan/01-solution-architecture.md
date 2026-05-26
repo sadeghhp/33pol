@@ -121,7 +121,8 @@ Logging → Routing → CORS → RequestId → Auth → RateLimit → Quota
 
 | Component | Owner |
 |-----------|--------|
-| `ConfigReloadService` | `33pol.Registry` |
+| `ConfigReloadService` | `33pol.Registry` — file watch (debounced) + poll fallback |
+| `ModelRegistryWriter` (`IModelRegistryWriter`) | `33pol.Registry` — validate, persist `models.json`, apply in-memory |
 | `HealthCheckService` | `33pol.Registry` |
 | `IModelGrantService` | `33pol.Security` (enforced in router after model resolve) |
 
@@ -129,7 +130,7 @@ Logging → Routing → CORS → RequestId → Auth → RateLimit → Quota
 
 | Section | Type | Phase |
 |---------|------|-------|
-| `Gateway` | `GatewayOptions` | 2 |
+| `Gateway` | `GatewayOptions` (`ModelsConfigPath`, `ConfigReloadIntervalSeconds`, `RegistryWatchEnabled`) | 2 |
 | `RateLimiting` | `RateLimitOptions` | 4 |
 | `Observability` | `ObservabilityOptions` | 4 |
 | `Billing` | `BillingOptions` | 5 |
@@ -196,7 +197,8 @@ Define in `33pol.Core` early (Phase 1–2 stubs, Phase 3+ implementations):
 
 | Interface | Responsibility |
 |-----------|----------------|
-| `IModelRegistry` | Model lookup, snapshots |
+| `IModelRegistry` | Model lookup, snapshots, load from file |
+| `IModelRegistryWriter` | Add/update/remove models — persist `models.json` + atomic in-memory apply ([13-live-model-registry.md](./13-live-model-registry.md)) |
 | `IBackendHealthStore` | Health state per model |
 | `IApiKeyValidator` | Validate key → `TenantContext` |
 | `IRateLimitPolicyResolver` | Limits for tenant/model |
@@ -205,7 +207,7 @@ Define in `33pol.Core` early (Phase 1–2 stubs, Phase 3+ implementations):
 | `IErrorResponseWriter` | OpenAI + SDK error envelope |
 | `IRequestTracker` | Metrics scope per request |
 | `IModelGrantService` | Validate model against `TenantContext` grants |
-| `IConfigReload` | Trigger/status for `models.json` hot reload (`33pol.Registry` impl; admin API in `33pol.Api`) |
+| `IConfigReload` | File-only reload trigger/status (`33pol.Registry`; distinct from CRUD writer) |
 | `IRecentRequestStore` | In-memory ring buffer for recent requests (`33pol.Observability`, Phase 4) |
 | `IAuditLogger` | Admin/security audit events (interface Phase 3; durable sink Phase 5) |
 | `IControlPlaneCommands` | Shared orchestration for admin HTTP + operator console — **`ControlPlaneCommands` in `33pol.Observability`** (Phase 4); registered in `33pol.App` |
@@ -224,7 +226,7 @@ Enables **in-memory fakes** in unit tests without HTTP. Admin endpoints in `33po
 
 Phase 4 rate limits resolve via `Tenant.PlanSlug` → `RateLimiting:Plans` in configuration until the `Plan` entity exists (Phase 5). See [10-identity-data-model.md](./10-identity-data-model.md) § Rate limit source.
 
-**Normative contracts:** [09-v1-parity-spec.md](./09-v1-parity-spec.md) (proxy), [10-identity-data-model.md](./10-identity-data-model.md) (identity), [11-ha-and-scaling.md](./11-ha-and-scaling.md) (replicas), [12-metrics-and-runtime-contracts.md](./12-metrics-and-runtime-contracts.md) (metrics/quota/SSE).
+**Normative contracts:** [09-v1-parity-spec.md](./09-v1-parity-spec.md) (proxy), [10-identity-data-model.md](./10-identity-data-model.md) (identity), [11-ha-and-scaling.md](./11-ha-and-scaling.md) (replicas), [12-metrics-and-runtime-contracts.md](./12-metrics-and-runtime-contracts.md) (metrics/quota/SSE), [13-live-model-registry.md](./13-live-model-registry.md) (live registry).
 
 ---
 

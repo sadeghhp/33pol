@@ -69,7 +69,7 @@ Complete **FinOps and advanced billing**, ship the **minimal admin UI**, deliver
 | Task | Details |
 |------|---------|
 | Stack | Alpine.js + fetch (or Petite-Vue) |
-| Pages | Dashboard, backends, keys (create/revoke via WP3.8 APIs), usage chart (no in-app log history — link to observability stack in `docs/observability.md`) |
+| Pages | Dashboard, **Models** (list/add/edit/delete via `/admin/api/models`), backends, keys (create/revoke via WP3.8 APIs), usage chart (no in-app log history — link to observability stack in `docs/observability.md`) |
 | Auth | Admin session cookie or token in localStorage (document threat model) |
 | Polling | Summary every 2s; optional SSE for requests |
 | Styling | Minimal modern CSS (no heavy framework) |
@@ -79,18 +79,20 @@ Complete **FinOps and advanced billing**, ship the **minimal admin UI**, deliver
 
 - Login / API key entry  
 - Dashboard shows live metrics from `/admin/api/summary`  
-- Config reload button calls API  
+- **Models:** add vLLM-style backend (id, url, aliases) → appears on `GET /v1/models` without gateway restart  
+- Config reload button calls API (file-only recovery)  
 
 *UI E2E optional (Playwright) — not blocking if manual script signed.*
+
+**Normative:** [13-live-model-registry.md](../13-live-model-registry.md) §7.
 
 ### WP5.3b — Operator console extensions (optional)
 
 | Task | Details |
 |------|---------|
-| `models add` | Interactive registry entry with validation + `IAuditLogger` |
 | `keys list` | Read-only key prefixes via admin APIs — never print secrets |
 
-Defer if WP4.9 was deferred; not blocking GA if HTTP admin is complete.
+Registry CRUD (`models add/edit/remove`) is **Phase 4** (WP4.9); not repeated here unless deferred from P4.
 
 ### WP5.4 — Integration & ecosystem
 

@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\33pol.Api\33pol.Api.csproj" />
+    <ProjectReference Include="..\..\src\33pol.Core\33pol.Core.csproj" />
+  </ItemGroup>
+</Project>

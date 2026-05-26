@@ -1,5 +1,7 @@
 using Microsoft.Extensions.Options;
+using Pol33.Api.DependencyInjection;
 using Pol33.Core.Configuration;
+using Pol33.Proxy.DependencyInjection;
 using Pol33.Registry.DependencyInjection;
 
 namespace Pol33.App;
@@ -15,6 +17,8 @@ public static class ServiceCollectionExtensions
 
         services.AddSingleton<IValidateOptions<GatewayOptions>, GatewayOptionsValidateOptions>();
         services.AddGatewayRegistry();
+        services.AddGatewayApi();
+        services.AddGatewayProxy();
 
         return services;
     }
