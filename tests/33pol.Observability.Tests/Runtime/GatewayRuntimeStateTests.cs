@@ -9,9 +9,30 @@ public sealed class GatewayRuntimeStateTests
     public void EnqueueRecent_ExceedsMax_TrimsOldest()
     {
         var runtime = new GatewayRuntimeState { MaxRecentRequests = 2 };
-        runtime.EnqueueRecent(new RecentRequestEntry { RequestId = "r1", ModelId = "m1", StatusCode = 200 });
-        runtime.EnqueueRecent(new RecentRequestEntry { RequestId = "r2", ModelId = "m1", StatusCode = 200 });
-        runtime.EnqueueRecent(new RecentRequestEntry { RequestId = "r3", ModelId = "m1", StatusCode = 200 });
+        runtime.EnqueueRecent(new RecentRequestEntry
+        {
+            RequestId = "r1",
+            Method = "POST",
+            Path = "/v1/chat/completions",
+            ModelId = "m1",
+            StatusCode = 200,
+        });
+        runtime.EnqueueRecent(new RecentRequestEntry
+        {
+            RequestId = "r2",
+            Method = "POST",
+            Path = "/v1/chat/completions",
+            ModelId = "m1",
+            StatusCode = 200,
+        });
+        runtime.EnqueueRecent(new RecentRequestEntry
+        {
+            RequestId = "r3",
+            Method = "POST",
+            Path = "/v1/chat/completions",
+            ModelId = "m1",
+            StatusCode = 200,
+        });
 
         var recent = runtime.GetRecent(10);
         recent.Should().HaveCount(2);
