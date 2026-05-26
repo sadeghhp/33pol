@@ -91,7 +91,7 @@
 - [x] `docs/observability.md`  
 - [x] `docs/finops.md`  
 - [x] `docs/security.md`  
-- [ ] `README.md` quick start — _verify against current host/DI_
+- [x] `README.md` quick start  
 
 ---
 

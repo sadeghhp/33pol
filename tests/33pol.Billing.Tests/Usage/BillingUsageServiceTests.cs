@@ -120,4 +120,18 @@ public sealed class BillingUsageServiceTests
         page.Events.Should().BeEmpty();
         await _events.Received(1).QueryAsync(query, Arg.Any<CancellationToken>());
     }
+
+    [Fact]
+    public async Task QueryEventsAsync_ClampsLimitToMaximum()
+    {
+        _events.QueryAsync(Arg.Any<BillingEventQuery>(), Arg.Any<CancellationToken>())
+            .Returns(Array.Empty<BillingEventRecord>());
+
+        var page = await _service.QueryEventsAsync(new BillingEventQuery(null, null, null, 9999));
+
+        page.Limit.Should().Be(5000);
+        await _events.Received(1).QueryAsync(
+            Arg.Is<BillingEventQuery>(q => q.Limit == 5000),
+            Arg.Any<CancellationToken>());
+    }
 }

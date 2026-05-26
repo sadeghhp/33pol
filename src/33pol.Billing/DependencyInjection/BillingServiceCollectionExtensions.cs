@@ -29,6 +29,7 @@ public static class BillingServiceCollectionExtensions
         services.AddSingleton<IDailyUsageRollupAggregator, DailyUsageRollupAggregator>();
         services.AddSingleton<BillingBudgetWarningTracker>();
         services.AddSingleton<BillingDailyUsageWebhookTracker>();
+        services.AddScoped<DailyUsageWebhookPublisher>();
         services.AddSingleton<IBudgetEnforcementService, NoOpBudgetEnforcementService>();
         services.AddSingleton<IBillingWebhookDispatcher, BillingWebhookDispatcher>();
         services.AddHostedService<DailyUsageWebhookHostedService>();

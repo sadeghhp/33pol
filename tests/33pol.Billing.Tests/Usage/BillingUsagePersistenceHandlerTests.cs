@@ -306,4 +306,44 @@ public sealed class BillingUsagePersistenceHandlerTests
             Arg.Any<object>(),
             Arg.Any<CancellationToken>());
     }
+
+    [Fact]
+    public async Task PersistBatchAsync_MultipleEvents_UpsertsEachRollup()
+    {
+        var billingEvents = Substitute.For<IBillingEventRepository>();
+        billingEvents.TryAppendAsync(Arg.Any<BillingEventRecord>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+
+        var rollups = Substitute.For<IDailyUsageRollupRepository>();
+        rollups.GetRollupsAsync(Arg.Any<DateOnly?>(), Arg.Any<DateOnly?>(), Arg.Any<Guid?>(), Arg.Any<CancellationToken>())
+            .Returns(Array.Empty<DailyUsageRollupRecord>());
+
+        var handler = CreateHandler(billingEvents, rollups);
+
+        await handler.PersistBatchAsync([
+            new UsageEvent
+            {
+                RequestId = "batch-1",
+                TenantId = Guid.NewGuid().ToString(),
+                ModelId = "gpt-4o",
+                PromptTokens = 1,
+                CompletionTokens = 1,
+                DurationMs = 1,
+            },
+            new UsageEvent
+            {
+                RequestId = "batch-2",
+                TenantId = Guid.NewGuid().ToString(),
+                ModelId = "gpt-4o-mini",
+                PromptTokens = 2,
+                CompletionTokens = 2,
+                DurationMs = 1,
+            },
+        ]);
+
+        await billingEvents.Received(2).TryAppendAsync(Arg.Any<BillingEventRecord>(), Arg.Any<CancellationToken>());
+        await rollups.Received(2).UpsertRollupsAsync(
+            Arg.Any<IReadOnlyList<DailyUsageRollupRecord>>(),
+            Arg.Any<CancellationToken>());
+    }
 }

@@ -64,7 +64,7 @@ Phases **1–4** are implemented. **Phase 5** has substantial code (billing pers
 | Redis `IDistributedRateLimitStore` | Low | In-memory store in use |
 | Durable `IAuditLogger` | Low | `NoOpAuditLogger` |
 | Usage retention background job | Low | Documented TTL only |
-| `33pol.Billing` 90% coverage gate | Low | Add to `check-coverage.sh` when stabilised |
+| `33pol.Billing` 90% coverage gate | Low | **85% in CI** now; raise toward 90% with more tests |
 | Broader conformance (OpenAI response shape) | Medium | Beyond error catalog goldens |
 | WP4.9 manual smoke + appsettings samples | Low | Operator-console exit bullets |
 
@@ -79,7 +79,7 @@ Phases **1–4** are implemented. **Phase 5** has substantial code (billing pers
 | WP5.3 Admin UI | Minimal viable | `wwwroot/admin/index.html` — dashboard, usage, models, keys |
 | WP5.4–5.5 Deploy & perf | Partial | Helm chart; k6 scripts; **CI smoke**; staging GA runs open |
 | WP5.6–5.7 Docs | Done | integrations, security, finops, observability, runbooks |
-| WP5.8 Conformance | Partial | Error catalog tests; response-shape suite open |
+| WP5.8 Conformance | Partial | Error goldens + chat/models list shape tests; embeddings optional |
 
 ---
 

@@ -67,6 +67,24 @@ public sealed class BillingWebhookDispatcherTests
         json.RootElement.GetProperty("data").GetProperty("spend").GetDecimal().Should().Be(80m);
     }
 
+    [Fact]
+    public async Task DispatchAsync_WhenServerReturnsError_DoesNotThrow()
+    {
+        var handler = new CapturingHttpMessageHandler(HttpStatusCode.InternalServerError);
+        var dispatcher = CreateDispatcher(
+            handler,
+            new BillingWebhookOptions
+            {
+                EndpointUrl = "https://hooks.example/33pol",
+                Secret = "test-secret",
+            });
+
+        var act = () => dispatcher.DispatchAsync("usage.daily", new { ok = true });
+
+        await act.Should().NotThrowAsync();
+        handler.Captured.Should().ContainSingle();
+    }
+
     private static BillingWebhookDispatcher CreateDispatcher(
         HttpMessageHandler handler,
         BillingWebhookOptions options)
@@ -83,6 +101,13 @@ public sealed class BillingWebhookDispatcherTests
 
     private sealed class CapturingHttpMessageHandler : HttpMessageHandler
     {
+        private readonly HttpStatusCode _statusCode;
+
+        public CapturingHttpMessageHandler(HttpStatusCode statusCode = HttpStatusCode.OK)
+        {
+            _statusCode = statusCode;
+        }
+
         public List<CapturedRequest> Captured { get; } = [];
 
         public List<HttpRequestMessage> Requests { get; } = [];
@@ -105,7 +130,7 @@ public sealed class BillingWebhookDispatcherTests
                 body,
                 signature));
 
-            return new HttpResponseMessage(HttpStatusCode.OK);
+            return new HttpResponseMessage(_statusCode);
         }
     }
 

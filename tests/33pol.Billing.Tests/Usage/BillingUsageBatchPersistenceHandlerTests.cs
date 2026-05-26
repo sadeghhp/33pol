@@ -57,6 +57,27 @@ public sealed class BillingUsageBatchPersistenceHandlerTests
         await billingEvents.Received(1).TryAppendAsync(Arg.Any<BillingEventRecord>(), Arg.Any<CancellationToken>());
     }
 
+    [Fact]
+    public async Task FlushLoop_FlushesAfterInterval()
+    {
+        var billingEvents = Substitute.For<IBillingEventRepository>();
+        billingEvents.TryAppendAsync(Arg.Any<BillingEventRecord>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+
+        var rollups = Substitute.For<IDailyUsageRollupRepository>();
+        rollups.GetRollupsAsync(Arg.Any<DateOnly?>(), Arg.Any<DateOnly?>(), Arg.Any<Guid?>(), Arg.Any<CancellationToken>())
+            .Returns(Array.Empty<DailyUsageRollupRecord>());
+
+        var handler = CreateHandler(billingEvents, rollups, batchSize: 100, flushIntervalMs: 50);
+
+        await handler.StartAsync(CancellationToken.None);
+        await handler.PersistAsync(CreateEvent("req-interval"));
+        await Task.Delay(250);
+        await handler.StopAsync(CancellationToken.None);
+
+        await billingEvents.Received(1).TryAppendAsync(Arg.Any<BillingEventRecord>(), Arg.Any<CancellationToken>());
+    }
+
     private static BillingUsageBatchPersistenceHandler CreateHandler(
         IBillingEventRepository billingEvents,
         IDailyUsageRollupRepository rollups,
