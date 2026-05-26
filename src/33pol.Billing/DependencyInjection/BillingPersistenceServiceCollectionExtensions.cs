@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Pol33.Billing.Forecast;
 using Pol33.Billing.Usage;
+using Pol33.Billing.Webhooks;
 using Pol33.Core.Abstractions;
 using Pol33.Persistence.DependencyInjection;
 
@@ -29,6 +30,8 @@ public static class BillingPersistenceServiceCollectionExtensions
         services.AddHostedService(sp => sp.GetRequiredService<BillingUsageBatchPersistenceHandler>());
         services.Replace(ServiceDescriptor.Singleton<IUsagePersistenceHandler, BillingUsageBatchPersistenceHandler>());
         services.Replace(ServiceDescriptor.Scoped<IBillingUsageService, BillingUsageService>());
+        services.AddScoped<DailyUsageWebhookPublisher>();
+        services.AddHostedService<DailyUsageWebhookHostedService>();
         return services;
     }
 }

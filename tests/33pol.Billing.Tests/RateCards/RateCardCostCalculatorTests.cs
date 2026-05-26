@@ -59,6 +59,19 @@ public sealed class RateCardCostCalculatorTests
     }
 
     [Fact]
+    public void CalculateLineCost_ZeroTokens_ReturnsZero()
+    {
+        RateCardCostCalculator.CalculateLineCost(0, 5m).Should().Be(0m);
+    }
+
+    [Fact]
+    public void Calculate_NullRateCard_Throws()
+    {
+        var act = () => _calculator.Calculate(null!, 1, 1);
+        act.Should().Throw<ArgumentNullException>();
+    }
+
+    [Fact]
     public void Calculate_FractionalMillionTokens_RoundsToSixDecimals()
     {
         var rateCard = Gpt4oRateCard with { InputPricePerMillionTokens = 0.50m };

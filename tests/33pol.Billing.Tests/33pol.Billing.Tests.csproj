@@ -5,6 +5,7 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\33pol.Billing\33pol.Billing.csproj" />
+    <ProjectReference Include="..\..\src\33pol.Persistence\33pol.Persistence.csproj" />
   </ItemGroup>
   <ItemGroup>
     <None Update="TestData\**\*">

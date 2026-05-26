@@ -22,8 +22,11 @@ public sealed class DailyUsageWebhookHostedService(
         {
             try
             {
-                await Task.Delay(TimeSpan.FromMinutes(15), stoppingToken).ConfigureAwait(false);
                 await using var scope = scopeFactory.CreateAsyncScope();
+                var billingOptions = scope.ServiceProvider.GetRequiredService<IOptions<BillingOptions>>().Value;
+                var pollSeconds = Math.Max(1, billingOptions.DailyWebhookPollIntervalSeconds);
+                await Task.Delay(TimeSpan.FromSeconds(pollSeconds), stoppingToken).ConfigureAwait(false);
+
                 var publisher = scope.ServiceProvider.GetRequiredService<DailyUsageWebhookPublisher>();
                 await publisher
                     .DispatchYesterdayAsync(DateTime.UtcNow, stoppingToken)

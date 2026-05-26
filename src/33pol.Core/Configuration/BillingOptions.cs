@@ -16,4 +16,7 @@ public sealed class BillingOptions
 
     /// <summary>UTC hour (0–23) when the scheduled <c>usage.daily</c> webhook runs for the previous day.</summary>
     public int DailyWebhookUtcHour { get; set; } = 1;
+
+    /// <summary>How often the background loop checks whether to send scheduled daily webhooks.</summary>
+    public int DailyWebhookPollIntervalSeconds { get; set; } = 900;
 }

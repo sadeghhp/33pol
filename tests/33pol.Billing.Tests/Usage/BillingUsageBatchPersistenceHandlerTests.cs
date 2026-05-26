@@ -38,6 +38,51 @@ public sealed class BillingUsageBatchPersistenceHandlerTests
     }
 
     [Fact]
+    public async Task PersistAsync_PeriodicFlush_FlushesAfterInterval()
+    {
+        var billingEvents = Substitute.For<IBillingEventRepository>();
+        billingEvents.TryAppendAsync(Arg.Any<BillingEventRecord>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+
+        var rollups = Substitute.For<IDailyUsageRollupRepository>();
+        rollups.GetRollupsAsync(Arg.Any<DateOnly?>(), Arg.Any<DateOnly?>(), Arg.Any<Guid?>(), Arg.Any<CancellationToken>())
+            .Returns(Array.Empty<DailyUsageRollupRecord>());
+
+        var handler = CreateHandler(billingEvents, rollups, batchSize: 100, flushIntervalMs: 50);
+
+        await handler.StartAsync(CancellationToken.None);
+        await handler.PersistAsync(CreateEvent("req-timer"));
+        await Task.Delay(120);
+        await handler.StopAsync(CancellationToken.None);
+
+        await billingEvents.Received(1).TryAppendAsync(Arg.Any<BillingEventRecord>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task PersistAsync_WhenPersistenceThrows_LogsWithoutPropagating()
+    {
+        var services = new ServiceCollection();
+        services.AddScoped<BillingUsagePersistenceHandler>(_ =>
+            throw new InvalidOperationException("persist failed"));
+        services.AddSingleton(Options.Create(new BillingOptions
+        {
+            UsageWriterBatchSize = 1,
+            UsageWriterFlushIntervalMs = 60_000,
+        }));
+        var provider = services.BuildServiceProvider();
+
+        var handler = new BillingUsageBatchPersistenceHandler(
+            provider.GetRequiredService<IServiceScopeFactory>(),
+            provider.GetRequiredService<IOptions<BillingOptions>>(),
+            NullLogger<BillingUsageBatchPersistenceHandler>.Instance);
+
+        await handler.StartAsync(CancellationToken.None);
+        var act = async () => await handler.PersistAsync(CreateEvent("req-fail"));
+        await act.Should().NotThrowAsync();
+        await handler.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
     public async Task StopAsync_FlushesPendingEvents()
     {
         var billingEvents = Substitute.For<IBillingEventRepository>();

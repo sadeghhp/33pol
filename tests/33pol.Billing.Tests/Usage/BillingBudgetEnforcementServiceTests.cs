@@ -90,6 +90,18 @@ public sealed class BillingBudgetEnforcementServiceTests
     }
 
     [Fact]
+    public async Task CheckBeforeForwardAsync_WhenRepositoriesNotRegistered_ReturnsAllowed()
+    {
+        var services = new ServiceCollection();
+        var provider = services.BuildServiceProvider();
+        var service = new BillingBudgetEnforcementService(provider.GetRequiredService<IServiceScopeFactory>());
+
+        var result = await service.CheckBeforeForwardAsync(Guid.NewGuid().ToString());
+
+        result.IsAllowed.Should().BeTrue();
+    }
+
+    [Fact]
     public async Task CheckBeforeForwardAsync_HardStopUnderLimit_ReturnsAllowed()
     {
         var tenantId = Guid.NewGuid();

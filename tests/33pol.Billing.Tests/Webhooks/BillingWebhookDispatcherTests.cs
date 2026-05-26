@@ -85,6 +85,22 @@ public sealed class BillingWebhookDispatcherTests
         handler.Captured.Should().ContainSingle();
     }
 
+    [Fact]
+    public async Task DispatchAsync_WhenHttpThrows_DoesNotThrow()
+    {
+        var dispatcher = CreateDispatcher(
+            new ThrowingHttpMessageHandler(),
+            new BillingWebhookOptions
+            {
+                EndpointUrl = "https://hooks.example/33pol",
+                Secret = "test-secret",
+            });
+
+        var act = () => dispatcher.DispatchAsync("usage.daily", new { ok = true });
+
+        await act.Should().NotThrowAsync();
+    }
+
     private static BillingWebhookDispatcher CreateDispatcher(
         HttpMessageHandler handler,
         BillingWebhookOptions options)
@@ -139,4 +155,12 @@ public sealed class BillingWebhookDispatcherTests
         string Uri,
         string Body,
         string Signature);
+
+    private sealed class ThrowingHttpMessageHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken) =>
+            throw new HttpRequestException("network down");
+    }
 }

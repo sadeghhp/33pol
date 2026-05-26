@@ -20,6 +20,29 @@ public sealed class NoOpBillingServicesTests
     }
 
     [Fact]
+    public void NoOpBillingUsageService_ExportRollups_ReturnsFormattedCsv()
+    {
+        var service = new NoOpBillingUsageService();
+        var rollups = new[]
+        {
+            new DailyUsageRollupRecord(
+                new DateOnly(2026, 5, 26),
+                Guid.NewGuid(),
+                "gpt-4o",
+                null,
+                1,
+                1,
+                0m,
+                1),
+        };
+
+        var export = service.ExportRollups(rollups, "csv");
+
+        export.ContentType.Should().Be("text/csv");
+        export.Body.Should().Contain("gpt-4o");
+    }
+
+    [Fact]
     public async Task NoOpBudgetEnforcementService_AlwaysAllows()
     {
         var service = new NoOpBudgetEnforcementService();
