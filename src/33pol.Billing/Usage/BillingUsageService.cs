@@ -4,7 +4,9 @@ using Pol33.Core.Models;
 
 namespace Pol33.Billing.Usage;
 
-public sealed class BillingUsageService(IDailyUsageRollupRepository rollups) : IBillingUsageService
+public sealed class BillingUsageService(
+    IDailyUsageRollupRepository rollups,
+    IBillingEventRepository billingEvents) : IBillingUsageService
 {
     public async Task<UsageReportResponse> GetUsageReportAsync(
         UsageReportRequest request,
@@ -33,4 +35,15 @@ public sealed class BillingUsageService(IDailyUsageRollupRepository rollups) : I
         IReadOnlyList<DailyUsageRollupRecord> rollups,
         string format) =>
         UsageExportFormatter.Format(rollups, format);
+
+    public async Task<BillingEventsPage> QueryEventsAsync(
+        BillingEventQuery query,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        var limit = Math.Clamp(query.Limit, 1, 5000);
+        var normalized = query with { Limit = limit };
+        var events = await billingEvents.QueryAsync(normalized, cancellationToken).ConfigureAwait(false);
+        return new BillingEventsPage { Events = events, Limit = limit };
+    }
 }

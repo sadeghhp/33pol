@@ -12,4 +12,8 @@ public interface IBillingUsageService
     UsageExportResult ExportRollups(
         IReadOnlyList<DailyUsageRollupRecord> rollups,
         string format);
+
+    Task<BillingEventsPage> QueryEventsAsync(
+        BillingEventQuery query,
+        CancellationToken cancellationToken = default);
 }

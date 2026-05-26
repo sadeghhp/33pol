@@ -4,23 +4,40 @@ OpenAI-compatible, high-performance LLM gateway for .NET 10.
 
 ## Status
 
-**Phase 1 complete** — solution skeleton, core stubs, host, CI (GitHub Actions), test pyramid + NetArchTest. **Next: Phase 2** (registry, proxy, data plane). Implementation plan:
+**Phases 1–4 complete**; **Phase 5** (FinOps, admin UI, Helm, GA gates) in progress. See [docs/implementation-plan/README.md](./docs/implementation-plan/README.md) and [GA checklist](./docs/implementation-plan/GA-CHECKLIST.md).
 
-- [docs/implementation-plan/README.md](./docs/implementation-plan/README.md)
-- [Phase 1 — platform foundation](./docs/implementation-plan/phases/phase-1-platform-foundation.md)
+## Quick start (local)
+
+```bash
+dotnet build 33pol.sln
+dotnet test 33pol.sln -c Release
+
+# Terminal 1 — mock upstream
+python3 perf/scripts/mock-upstream.py
+
+# Terminal 2 — gateway (no DB → auth off for local smoke)
+export ASPNETCORE_ENVIRONMENT=Development
+export Gateway__ModelsConfigPath=config/models.ci.json
+export Gateway__OperatorConsole__Enabled=false
+export ConnectionStrings__GatewayDb=
+dotnet run --project src/33pol.App --urls http://localhost:8080
+
+# Terminal 3 — smoke test (requires [k6](https://grafana.com/docs/k6/latest/set-up/install-k6/))
+bash perf/ci/run-smoke.sh
+```
+
+- Health: `GET http://localhost:8080/health/live`
+- Admin UI: `http://localhost:8080/admin` (set `Gateway:Bootstrap:AdminApiKey` when using Postgres)
+- CI: `build-test` + `k6-smoke` jobs in [.github/workflows/ci.yml](./.github/workflows/ci.yml)
 
 ## Build and test
 
 ```bash
 dotnet build 33pol.sln
-dotnet test 33pol.sln
+dotnet test 33pol.sln -c Release
 dotnet test 33pol.sln -c Release --collect:"XPlat Code Coverage"
-dotnet run --project src/33pol.App
+bash build/check-coverage.sh TestResults
 ```
-
-Health: `GET http://localhost:5080/health/live`
-
-CI runs on push/PR to `main` (see [.github/workflows/ci.yml](./.github/workflows/ci.yml)).
 
 ## Local stack (Docker Compose)
 

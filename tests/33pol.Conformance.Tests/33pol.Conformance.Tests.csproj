@@ -1,5 +1,9 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\33pol.App\33pol.App.csproj" />
     <ProjectReference Include="..\..\src\33pol.Core\33pol.Core.csproj" />
   </ItemGroup>
   <ItemGroup>

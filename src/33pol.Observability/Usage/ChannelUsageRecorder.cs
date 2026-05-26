@@ -14,12 +14,16 @@ public sealed class ChannelUsageRecorder : IUsageRecorder, IHostedService
     private const int ChannelCapacity = 10_000;
 
     private readonly Channel<UsageEvent> _channel = Channel.CreateBounded<UsageEvent>(
-        new BoundedChannelOptions(ChannelCapacity) { FullMode = BoundedChannelFullMode.Wait });
+        new BoundedChannelOptions(ChannelCapacity)
+        {
+            FullMode = BoundedChannelFullMode.DropOldest,
+            SingleReader = true,
+            SingleWriter = false,
+        });
 
     private readonly IQuotaService _quotaService;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<ChannelUsageRecorder> _logger;
-    private int _pendingCount;
     private Task? _worker;
 
     public ChannelUsageRecorder(
@@ -34,24 +38,26 @@ public sealed class ChannelUsageRecorder : IUsageRecorder, IHostedService
 
     public void Enqueue(UsageEvent usageEvent)
     {
-        var depth = Interlocked.Increment(ref _pendingCount);
-        if (depth > ChannelCapacity)
-        {
-            Interlocked.Decrement(ref _pendingCount);
-            GatewayMeters.UsageWriterDropped.Add(1);
-            _logger.LogWarning("Usage event dropped for request {RequestId}", usageEvent.RequestId);
-            return;
-        }
+        var wasFull = _channel.Reader.CanCount && _channel.Reader.Count >= ChannelCapacity;
 
         if (!_channel.Writer.TryWrite(usageEvent))
         {
-            Interlocked.Decrement(ref _pendingCount);
             GatewayMeters.UsageWriterDropped.Add(1);
             _logger.LogWarning("Usage event dropped for request {RequestId}", usageEvent.RequestId);
             return;
         }
 
-        GatewayMeters.UsageWriterQueueDepth.Add(1);
+        if (wasFull)
+        {
+            GatewayMeters.UsageWriterDropped.Add(1);
+            _logger.LogWarning(
+                "Usage queue saturated; dropped oldest event while enqueueing {RequestId}",
+                usageEvent.RequestId);
+        }
+        else
+        {
+            GatewayMeters.UsageWriterQueueDepth.Add(1);
+        }
     }
 
     public Task StartAsync(CancellationToken cancellationToken)
@@ -74,7 +80,6 @@ public sealed class ChannelUsageRecorder : IUsageRecorder, IHostedService
         await foreach (var usage in _channel.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
         {
             GatewayMeters.UsageWriterQueueDepth.Add(-1);
-            Interlocked.Decrement(ref _pendingCount);
 
             var totalTokens = usage.PromptTokens + usage.CompletionTokens;
             var partition = usage.TenantId ?? "anonymous";

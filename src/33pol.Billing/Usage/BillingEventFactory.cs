@@ -12,6 +12,11 @@ public static class BillingEventFactory
     {
         ArgumentNullException.ThrowIfNull(usageEvent);
 
+        if (string.IsNullOrWhiteSpace(usageEvent.RequestId))
+        {
+            throw new ArgumentException("RequestId is required for idempotent usage events.", nameof(usageEvent));
+        }
+
         Guid? tenantId = Guid.TryParse(usageEvent.TenantId, out var parsedTenantId)
             ? parsedTenantId
             : null;

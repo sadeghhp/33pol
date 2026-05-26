@@ -11,12 +11,18 @@ public sealed class QuotaMiddleware
 {
     private readonly RequestDelegate _next;
     private readonly IQuotaService _quotaService;
+    private readonly IBudgetEnforcementService _budgetEnforcement;
     private readonly IErrorResponseWriter _errors;
 
-    public QuotaMiddleware(RequestDelegate next, IQuotaService quotaService, IErrorResponseWriter errors)
+    public QuotaMiddleware(
+        RequestDelegate next,
+        IQuotaService quotaService,
+        IBudgetEnforcementService budgetEnforcement,
+        IErrorResponseWriter errors)
     {
         _next = next;
         _quotaService = quotaService;
+        _budgetEnforcement = budgetEnforcement;
         _errors = errors;
     }
 
@@ -30,6 +36,18 @@ public sealed class QuotaMiddleware
 
         var partitionKey = ResolvePartitionKey(context);
         var modelHint = context.Request.Query.TryGetValue("model", out var q) ? q.ToString() : string.Empty;
+
+        var budgetCheck = await _budgetEnforcement
+            .CheckBeforeForwardAsync(partitionKey == "anonymous" ? null : partitionKey, context.RequestAborted)
+            .ConfigureAwait(false);
+        if (!budgetCheck.IsAllowed)
+        {
+            await context.WriteGatewayErrorAsync(
+                _errors.Write(GatewayErrorCode.QuotaExceeded),
+                context.RequestAborted).ConfigureAwait(false);
+            return;
+        }
+
         var check = _quotaService.CheckBeforeForward(partitionKey, modelHint);
         if (!check.IsAllowed)
         {

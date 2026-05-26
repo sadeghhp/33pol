@@ -1,5 +1,7 @@
+using Microsoft.Extensions.Options;
 using Pol33.Core.Abstractions;
 using Pol33.Core.Billing;
+using Pol33.Core.Configuration;
 using Pol33.Core.Models;
 
 namespace Pol33.Billing.Usage;
@@ -12,10 +14,14 @@ public sealed class BillingUsagePersistenceHandler(
     IRateCardCostCalculator costCalculator,
     IBudgetRepository budgets,
     IBillingWebhookDispatcher webhooks,
-    BillingBudgetWarningTracker warningTracker) : IUsagePersistenceHandler
+    BillingBudgetWarningTracker warningTracker,
+    BillingDailyUsageWebhookTracker dailyWebhookTracker,
+    IOptions<BillingOptions> billingOptions) : IUsagePersistenceHandler
 {
-    public ValueTask PersistAsync(UsageEvent usageEvent, CancellationToken cancellationToken = default) =>
-        PersistBatchAsync([usageEvent], cancellationToken);
+    public async ValueTask PersistAsync(UsageEvent usageEvent, CancellationToken cancellationToken = default)
+    {
+        await PersistBatchAsync([usageEvent], cancellationToken).ConfigureAwait(false);
+    }
 
     public async Task PersistBatchAsync(
         IReadOnlyList<UsageEvent> usageEvents,
@@ -23,13 +29,25 @@ public sealed class BillingUsagePersistenceHandler(
     {
         ArgumentNullException.ThrowIfNull(usageEvents);
 
+        var updatedDays = new HashSet<(Guid TenantId, DateOnly UsageDate)>();
         foreach (var usageEvent in usageEvents)
         {
-            await PersistOneAsync(usageEvent, cancellationToken).ConfigureAwait(false);
+            var updated = await PersistOneAsync(usageEvent, cancellationToken).ConfigureAwait(false);
+            if (updated is not null)
+            {
+                updatedDays.Add(updated.Value);
+            }
+        }
+
+        foreach (var (tenantId, usageDate) in updatedDays)
+        {
+            await DispatchDailyUsageAsync(tenantId, usageDate, cancellationToken).ConfigureAwait(false);
         }
     }
 
-    private async Task PersistOneAsync(UsageEvent usageEvent, CancellationToken cancellationToken)
+    private async Task<(Guid TenantId, DateOnly UsageDate)?> PersistOneAsync(
+        UsageEvent usageEvent,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(usageEvent);
 
@@ -52,7 +70,7 @@ public sealed class BillingUsagePersistenceHandler(
         var record = BillingEventFactory.FromUsageEvent(usageEvent, costs);
         if (!await billingEvents.TryAppendAsync(record, cancellationToken).ConfigureAwait(false))
         {
-            return;
+            return null;
         }
 
         var usageDate = DateOnly.FromDateTime(record.RecordedAt.UtcDateTime);
@@ -82,10 +100,47 @@ public sealed class BillingUsagePersistenceHandler(
 
         await rollups.UpsertRollupsAsync([merged], cancellationToken).ConfigureAwait(false);
 
-        if (record.TenantId is Guid tenantId)
+        if (record.TenantId is not Guid tenantId)
         {
-            await CheckBudgetWarningsAsync(tenantId, cancellationToken).ConfigureAwait(false);
+            return null;
         }
+
+        await CheckBudgetWarningsAsync(tenantId, cancellationToken).ConfigureAwait(false);
+        return (tenantId, usageDate);
+    }
+
+    private async Task DispatchDailyUsageAsync(
+        Guid tenantId,
+        DateOnly usageDate,
+        CancellationToken cancellationToken)
+    {
+        if (!dailyWebhookTracker.TryMarkSent(tenantId, usageDate))
+        {
+            return;
+        }
+
+        var dayRollups = await rollups
+            .GetRollupsAsync(usageDate, usageDate, tenantId, cancellationToken)
+            .ConfigureAwait(false);
+
+        if (dayRollups.Count == 0)
+        {
+            return;
+        }
+
+        await webhooks.DispatchAsync(
+            "usage.daily",
+            new
+            {
+                tenantId,
+                usageDate = usageDate.ToString("O"),
+                promptTokens = dayRollups.Sum(r => r.PromptTokens),
+                completionTokens = dayRollups.Sum(r => r.CompletionTokens),
+                totalCost = dayRollups.Sum(r => r.TotalCost),
+                requestCount = dayRollups.Sum(r => r.RequestCount),
+                currency = billingOptions.Value.DefaultCurrency,
+            },
+            cancellationToken).ConfigureAwait(false);
     }
 
     private async Task CheckBudgetWarningsAsync(Guid tenantId, CancellationToken cancellationToken)
@@ -133,7 +188,7 @@ public sealed class BillingUsagePersistenceHandler(
         }
     }
 
-    internal static DateOnly GetPeriodStart(DateOnly today, int periodStartDay)
+    public static DateOnly GetPeriodStart(DateOnly today, int periodStartDay)
     {
         var day = Math.Clamp(periodStartDay, 1, 28);
         var candidate = new DateOnly(today.Year, today.Month, Math.Min(day, DateTime.DaysInMonth(today.Year, today.Month)));

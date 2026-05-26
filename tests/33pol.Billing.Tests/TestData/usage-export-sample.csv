@@ -1,0 +1,2 @@
+usage_date,tenant_id,model_id,cost_center,prompt_tokens,completion_tokens,total_cost,request_count
+2026-05-26,aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee,gpt-4o,eng,100,50,0.15,2

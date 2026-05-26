@@ -2,7 +2,7 @@
 set -euo pipefail
 
 RESULTS_DIR="${1:-TestResults}"
-THRESHOLDS="${COVERAGE_THRESHOLDS:-33pol.Registry=90,33pol.Proxy=90,33pol.Security=85,33pol.Policy=85,33pol.Observability=85}"
+THRESHOLDS="${COVERAGE_THRESHOLDS:-33pol.Registry=90,33pol.Proxy=90,33pol.Security=85,33pol.Policy=85,33pol.Observability=85,33pol.Billing=90}"
 
 if [[ ! -d "$RESULTS_DIR" ]]; then
   echo "Coverage results directory not found: $RESULTS_DIR" >&2

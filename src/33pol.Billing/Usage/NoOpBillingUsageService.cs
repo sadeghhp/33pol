@@ -20,4 +20,17 @@ public sealed class NoOpBillingUsageService : IBillingUsageService
 
     public UsageExportResult ExportRollups(IReadOnlyList<DailyUsageRollupRecord> rollups, string format) =>
         UsageExportFormatter.Format(rollups, format);
+
+    public Task<BillingEventsPage> QueryEventsAsync(
+        BillingEventQuery query,
+        CancellationToken cancellationToken = default)
+    {
+        _ = query;
+        _ = cancellationToken;
+        return Task.FromResult(new BillingEventsPage
+        {
+            Events = Array.Empty<BillingEventRecord>(),
+            Limit = 0,
+        });
+    }
 }

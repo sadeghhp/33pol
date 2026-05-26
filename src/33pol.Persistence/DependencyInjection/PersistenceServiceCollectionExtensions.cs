@@ -45,6 +45,8 @@ public static class PersistenceServiceCollectionExtensions
         services.AddScoped<IModelGrantRepository, ModelGrantRepository>();
         services.AddScoped<IDailyUsageRollupRepository, DailyUsageRollupRepository>();
         services.AddScoped<IBillingEventRepository, BillingEventRepository>();
+        services.AddScoped<IRateCardRepository, RateCardRepository>();
+        services.AddScoped<IBudgetRepository, BudgetRepository>();
         services.AddScoped<GatewayDbBootstrap>();
         services.AddHostedService<GatewayDbInitializer>();
 

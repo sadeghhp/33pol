@@ -1,0 +1,12 @@
+[
+  {
+    "usageDate": "2026-05-26",
+    "tenantId": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+    "modelId": "gpt-4o",
+    "costCenter": "eng",
+    "promptTokens": 100,
+    "completionTokens": 50,
+    "totalCost": 0.15,
+    "requestCount": 2
+  }
+]

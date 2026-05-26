@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 using Pol33.Core.Abstractions;
 using Pol33.Core.Billing;
 using Pol33.Persistence.Mapping;
@@ -13,6 +14,11 @@ public sealed class BillingEventRepository(GatewayDbContext dbContext) : IBillin
     {
         ArgumentNullException.ThrowIfNull(record);
 
+        if (string.IsNullOrWhiteSpace(record.RequestId))
+        {
+            throw new ArgumentException("RequestId is required for idempotent billing events.", nameof(record));
+        }
+
         var exists = await dbContext.BillingEvents
             .AsNoTracking()
             .AnyAsync(e => e.RequestId == record.RequestId, cancellationToken)
@@ -24,8 +30,16 @@ public sealed class BillingEventRepository(GatewayDbContext dbContext) : IBillin
         }
 
         dbContext.BillingEvents.Add(BillingEntityMapper.ToEntity(record));
-        await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
-        return true;
+
+        try
+        {
+            await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            return true;
+        }
+        catch (DbUpdateException ex) when (IsDuplicateRequestId(ex))
+        {
+            return false;
+        }
     }
 
     public async Task<IReadOnlyList<BillingEventRecord>> QueryAsync(
@@ -61,5 +75,17 @@ public sealed class BillingEventRepository(GatewayDbContext dbContext) : IBillin
             .ConfigureAwait(false);
 
         return entities.Select(BillingEntityMapper.ToRecord).ToList();
+    }
+
+    private static bool IsDuplicateRequestId(DbUpdateException exception)
+    {
+        if (exception.InnerException is PostgresException postgres)
+        {
+            return postgres.SqlState == "23505";
+        }
+
+        var message = exception.InnerException?.Message ?? exception.Message;
+        return message.Contains("unique", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("duplicate", StringComparison.OrdinalIgnoreCase);
     }
 }

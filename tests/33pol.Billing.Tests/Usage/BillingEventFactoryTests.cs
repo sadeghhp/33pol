@@ -2,6 +2,7 @@ using Pol33.Billing.RateCards;
 using Pol33.Billing.Usage;
 using Pol33.Core.Billing;
 using Pol33.Core.Identity;
+using Pol33.Core.Models;
 using Pol33.Core.Usage;
 
 namespace Pol33.Billing.Tests.Usage;
@@ -49,5 +50,22 @@ public sealed class BillingEventFactoryTests
         billingEvent.TenantId.Should().Be(tenantId);
         billingEvent.ApiKeyId.Should().Be(apiKeyId);
         billingEvent.TotalCost.Should().Be(costs.TotalCost);
+    }
+
+    [Fact]
+    public void FromUsageEvent_EmptyRequestId_Throws()
+    {
+        var invalid = new UsageEvent
+        {
+            RequestId = "  ",
+            ModelId = "gpt-4o",
+            PromptTokens = 1,
+            CompletionTokens = 1,
+            DurationMs = 1,
+        };
+
+        var act = () => BillingEventFactory.FromUsageEvent(invalid);
+
+        act.Should().Throw<ArgumentException>();
     }
 }

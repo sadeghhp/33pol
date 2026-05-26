@@ -1,0 +1,10 @@
+{
+  "models": [
+    {
+      "id": "local-mock",
+      "url": "http://127.0.0.1:18080",
+      "maxContextLength": 8192,
+      "aliases": ["mock", "gpt-local"]
+    }
+  ]
+}

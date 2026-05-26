@@ -8,11 +8,12 @@ namespace Pol33.Billing.Tests.Usage;
 public sealed class BillingUsageServiceTests
 {
     private readonly IDailyUsageRollupRepository _rollups = Substitute.For<IDailyUsageRollupRepository>();
+    private readonly IBillingEventRepository _events = Substitute.For<IBillingEventRepository>();
     private readonly BillingUsageService _service;
 
     public BillingUsageServiceTests()
     {
-        _service = new BillingUsageService(_rollups);
+        _service = new BillingUsageService(_rollups, _events);
     }
 
     [Fact]
@@ -99,5 +100,24 @@ public sealed class BillingUsageServiceTests
         result.ContentType.Should().Be("text/csv");
         result.Body.Should().Contain("gpt-4o");
         result.FileName.Should().StartWith("usage-export-").And.EndWith(".csv");
+    }
+
+    [Fact]
+    public async Task QueryEventsAsync_DelegatesToRepository()
+    {
+        var query = new BillingEventQuery(
+            new DateOnly(2026, 5, 1),
+            new DateOnly(2026, 5, 31),
+            Guid.NewGuid(),
+            50);
+
+        _events.QueryAsync(query, Arg.Any<CancellationToken>())
+            .Returns(Array.Empty<BillingEventRecord>());
+
+        var page = await _service.QueryEventsAsync(query);
+
+        page.Limit.Should().Be(50);
+        page.Events.Should().BeEmpty();
+        await _events.Received(1).QueryAsync(query, Arg.Any<CancellationToken>());
     }
 }

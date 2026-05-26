@@ -6,4 +6,9 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\33pol.Billing\33pol.Billing.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <None Update="TestData\**\*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
 </Project>

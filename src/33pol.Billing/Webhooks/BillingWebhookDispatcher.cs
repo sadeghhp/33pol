@@ -59,7 +59,7 @@ public sealed class BillingWebhookDispatcher(
         }
     }
 
-    internal static string ComputeSignature(string body, string secret)
+    public static string ComputeSignature(string body, string secret)
     {
         var key = Encoding.UTF8.GetBytes(secret);
         var data = Encoding.UTF8.GetBytes(body);

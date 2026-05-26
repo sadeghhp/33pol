@@ -13,4 +13,7 @@ public sealed class BillingOptions
     public int UsageWriterBatchSize { get; set; } = 100;
 
     public int UsageWriterFlushIntervalMs { get; set; } = 1000;
+
+    /// <summary>UTC hour (0–23) when the scheduled <c>usage.daily</c> webhook runs for the previous day.</summary>
+    public int DailyWebhookUtcHour { get; set; } = 1;
 }

@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Pol33.Billing.Forecast;
 using Pol33.Billing.Usage;
 using Pol33.Core.Abstractions;
 using Pol33.Persistence.DependencyInjection;
@@ -21,7 +22,12 @@ public static class BillingPersistenceServiceCollectionExtensions
 
         services.AddScoped<BillingUsagePersistenceHandler>();
         services.AddScoped<BillingUsageService>();
-        services.Replace(ServiceDescriptor.Scoped<IUsagePersistenceHandler, BillingUsagePersistenceHandler>());
+        services.AddScoped<IBillingForecastService, BillingForecastService>();
+        services.Replace(ServiceDescriptor.Singleton<IBudgetEnforcementService, BillingBudgetEnforcementService>());
+
+        services.AddSingleton<BillingUsageBatchPersistenceHandler>();
+        services.AddHostedService(sp => sp.GetRequiredService<BillingUsageBatchPersistenceHandler>());
+        services.Replace(ServiceDescriptor.Singleton<IUsagePersistenceHandler, BillingUsageBatchPersistenceHandler>());
         services.Replace(ServiceDescriptor.Scoped<IBillingUsageService, BillingUsageService>());
         return services;
     }

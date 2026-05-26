@@ -1,3 +1,4 @@
+using System.Threading.Channels;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
@@ -42,21 +43,25 @@ public sealed class ChannelUsageRecorderTests
     }
 
     [Fact]
-    public async Task Enqueue_WhenChannelFull_IncrementsDroppedMetric()
+    public async Task Enqueue_WhenSaturated_DropsOldestAndProcessesLatest()
     {
         var quota = Substitute.For<IQuotaService>();
         var persistence = Substitute.For<IUsagePersistenceHandler>();
+        persistence.PersistAsync(Arg.Any<UsageEvent>(), Arg.Any<CancellationToken>())
+            .Returns(ValueTask.CompletedTask);
+
         var scope = Substitute.For<IServiceScope>();
         var scopeProvider = Substitute.For<IServiceProvider>();
         scope.ServiceProvider.Returns(scopeProvider);
         scopeProvider.GetService(typeof(IUsagePersistenceHandler)).Returns(persistence);
+
         var scopeFactory = Substitute.For<IServiceScopeFactory>();
         scopeFactory.CreateAsyncScope().Returns(scope);
 
         var recorder = new ChannelUsageRecorder(quota, scopeFactory, NullLogger<ChannelUsageRecorder>.Instance);
         await recorder.StartAsync(CancellationToken.None);
 
-        for (var i = 0; i < 10_002; i++)
+        for (var i = 0; i < 10_001; i++)
         {
             recorder.Enqueue(new UsageEvent
             {
@@ -68,10 +73,12 @@ public sealed class ChannelUsageRecorderTests
             });
         }
 
-        await Task.Delay(100);
+        await Task.Delay(500);
         await recorder.StopAsync(CancellationToken.None);
 
-        await persistence.Received().PersistAsync(Arg.Any<UsageEvent>(), Arg.Any<CancellationToken>());
+        await persistence.Received().PersistAsync(
+            Arg.Is<UsageEvent>(e => e.RequestId == "req-10000"),
+            Arg.Any<CancellationToken>());
     }
 
     [Fact]

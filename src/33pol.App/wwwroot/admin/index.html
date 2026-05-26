@@ -7,15 +7,20 @@
   <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
   <style>
     :root { font-family: system-ui, sans-serif; color-scheme: light dark; }
-    body { margin: 0; padding: 1.5rem; max-width: 960px; }
+    body { margin: 0; padding: 1.5rem; max-width: 1100px; }
     h1 { margin-top: 0; }
+    nav { margin-bottom: 1rem; }
+    nav button { margin-right: 0.35rem; }
+    nav button.active { font-weight: bold; text-decoration: underline; }
     .card { border: 1px solid #8884; border-radius: 8px; padding: 1rem; margin-bottom: 1rem; }
     label { display: block; margin-bottom: 0.5rem; }
-    input { width: 100%; padding: 0.4rem; margin-bottom: 0.75rem; }
+    input, select { width: 100%; padding: 0.4rem; margin-bottom: 0.75rem; box-sizing: border-box; }
     button { margin-right: 0.5rem; padding: 0.4rem 0.8rem; cursor: pointer; }
     table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
     th, td { text-align: left; padding: 0.35rem 0.5rem; border-bottom: 1px solid #8883; }
     .error { color: #c00; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
+    @media (max-width: 700px) { .grid { grid-template-columns: 1fr; } }
   </style>
 </head>
 <body x-data="adminApp()" x-init="init()">
@@ -27,19 +32,31 @@
     <p class="error" x-show="error" x-text="error"></p>
   </div>
 
-  <div class="card" x-show="apiKey">
+  <nav x-show="apiKey">
+    <button type="button" :class="{ active: tab === 'dashboard' }" @click="tab = 'dashboard'">Dashboard</button>
+    <button type="button" :class="{ active: tab === 'usage' }" @click="tab = 'usage'">Usage</button>
+    <button type="button" :class="{ active: tab === 'models' }" @click="tab = 'models'; loadModels()">Models</button>
+    <button type="button" :class="{ active: tab === 'keys' }" @click="tab = 'keys'; loadKeys()">API keys</button>
+  </nav>
+
+  <div class="card" x-show="apiKey && tab === 'dashboard'">
     <h2>Dashboard</h2>
     <p><strong>Uptime:</strong> <span x-text="summary?.uptime ?? '—'"></span></p>
     <p><strong>Inference requests:</strong> <span x-text="summary?.totalInferenceRequests ?? 0"></span></p>
     <p><strong>Errors:</strong> <span x-text="summary?.totalErrors ?? 0"></span></p>
-    <button @click="loadSummary()">Refresh summary</button>
+    <button type="button" @click="loadSummary()">Refresh summary</button>
   </div>
 
-  <div class="card" x-show="apiKey">
-    <h2>Usage (daily rollups)</h2>
-    <button @click="loadUsage()">Load usage</button>
+  <div class="card" x-show="apiKey && tab === 'usage'">
+    <h2>Usage &amp; forecast</h2>
+    <button type="button" @click="loadUsage()">Load usage</button>
+    <button type="button" @click="loadForecast()">Load forecast</button>
     <button type="button" @click="downloadExport('json')">Export JSON</button>
     <button type="button" @click="downloadExport('csv')">Export CSV</button>
+    <p x-show="forecast"><strong>Projected monthly cost:</strong>
+      <span x-text="forecast?.projectedMonthlyCost"></span>
+      (<span x-text="forecast?.currency"></span>, trailing <span x-text="forecast?.trailingDays"></span> days)
+    </p>
     <table x-show="usage?.rollups?.length">
       <thead>
         <tr>
@@ -61,17 +78,76 @@
     </table>
   </div>
 
+  <div class="card" x-show="apiKey && tab === 'models'">
+    <h2>Models</h2>
+    <button type="button" @click="loadModels()">Refresh</button>
+    <table x-show="models?.length">
+      <thead><tr><th>ID</th><th>Backend</th><th>Enabled</th><th></th></tr></thead>
+      <tbody>
+        <template x-for="m in models ?? []" :key="m.id">
+          <tr>
+            <td x-text="m.id"></td>
+            <td x-text="m.backendId"></td>
+            <td x-text="m.enabled"></td>
+            <td><button type="button" @click="removeModel(m.id)">Remove</button></td>
+          </tr>
+        </template>
+      </tbody>
+    </table>
+    <h3>Add model</h3>
+    <div class="grid">
+      <label>Model ID <input x-model="newModel.id" /></label>
+      <label>Backend ID <input x-model="newModel.backendId" /></label>
+    </div>
+    <button type="button" @click="addModel()">Add model</button>
+  </div>
+
+  <div class="card" x-show="apiKey && tab === 'keys'">
+    <h2>API keys</h2>
+    <button type="button" @click="loadKeys()">Refresh</button>
+    <table x-show="keys?.length">
+      <thead><tr><th>Name</th><th>Prefix</th><th>Role</th><th></th></tr></thead>
+      <tbody>
+        <template x-for="k in keys ?? []" :key="k.id">
+          <tr>
+            <td x-text="k.name"></td>
+            <td x-text="k.keyPrefix"></td>
+            <td x-text="k.role"></td>
+            <td><button type="button" @click="revokeKey(k.id)">Revoke</button></td>
+          </tr>
+        </template>
+      </tbody>
+    </table>
+    <h3>Create key</h3>
+    <label>Name <input x-model="newKey.name" /></label>
+    <label>Role
+      <select x-model="newKey.role">
+        <option value="User">User</option>
+        <option value="Admin">Admin</option>
+      </select>
+    </label>
+    <button type="button" @click="createKey()">Create key</button>
+    <p x-show="createdKey"><strong>New key (copy now):</strong> <code x-text="createdKey"></code></p>
+  </div>
+
   <script>
     function adminApp() {
       return {
         apiKey: localStorage.getItem('33pol-admin-key') || '',
+        tab: 'dashboard',
         summary: null,
         usage: null,
+        forecast: null,
+        models: [],
+        keys: [],
+        newModel: { id: '', backendId: 'openai' },
+        newKey: { name: 'dev-key', role: 'User' },
+        createdKey: '',
         error: '',
         init() {
           if (this.apiKey) {
             this.loadSummary();
-            this.poll = setInterval(() => this.loadSummary(), 2000);
+            this.poll = setInterval(() => { if (this.tab === 'dashboard') this.loadSummary(); }, 2000);
           }
         },
         saveKey() {
@@ -80,13 +156,14 @@
           this.loadSummary();
         },
         headers() {
-          return { 'X-API-Key': this.apiKey };
+          return { 'X-API-Key': this.apiKey, 'Content-Type': 'application/json' };
         },
         async loadSummary() {
           try {
             const res = await fetch('/admin/api/summary', { headers: this.headers() });
             if (!res.ok) throw new Error(res.status + ' ' + res.statusText);
             this.summary = await res.json();
+            this.error = '';
           } catch (e) {
             this.error = String(e);
           }
@@ -96,6 +173,90 @@
             const res = await fetch('/admin/api/usage', { headers: this.headers() });
             if (!res.ok) throw new Error(res.status + ' ' + res.statusText);
             this.usage = await res.json();
+            this.error = '';
+          } catch (e) {
+            this.error = String(e);
+          }
+        },
+        async loadForecast() {
+          try {
+            const res = await fetch('/admin/api/usage/forecast?days=7', { headers: this.headers() });
+            if (!res.ok) throw new Error(res.status + ' ' + res.statusText);
+            this.forecast = await res.json();
+            this.error = '';
+          } catch (e) {
+            this.error = String(e);
+          }
+        },
+        async loadModels() {
+          try {
+            const res = await fetch('/admin/api/models', { headers: this.headers() });
+            if (!res.ok) throw new Error(res.status + ' ' + res.statusText);
+            this.models = await res.json();
+            this.error = '';
+          } catch (e) {
+            this.error = String(e);
+          }
+        },
+        async addModel() {
+          try {
+            const res = await fetch('/admin/api/models', {
+              method: 'POST',
+              headers: this.headers(),
+              body: JSON.stringify({ id: this.newModel.id, backendId: this.newModel.backendId, enabled: true })
+            });
+            if (!res.ok) throw new Error(res.status + ' ' + res.statusText);
+            this.newModel.id = '';
+            await this.loadModels();
+          } catch (e) {
+            this.error = String(e);
+          }
+        },
+        async removeModel(id) {
+          try {
+            const res = await fetch('/admin/api/models/' + encodeURIComponent(id), {
+              method: 'DELETE',
+              headers: this.headers()
+            });
+            if (!res.ok) throw new Error(res.status + ' ' + res.statusText);
+            await this.loadModels();
+          } catch (e) {
+            this.error = String(e);
+          }
+        },
+        async loadKeys() {
+          try {
+            const res = await fetch('/admin/api/keys', { headers: this.headers() });
+            if (!res.ok) throw new Error(res.status + ' ' + res.statusText);
+            this.keys = await res.json();
+            this.error = '';
+          } catch (e) {
+            this.error = String(e);
+          }
+        },
+        async createKey() {
+          try {
+            const res = await fetch('/admin/api/keys', {
+              method: 'POST',
+              headers: this.headers(),
+              body: JSON.stringify({ name: this.newKey.name, role: this.newKey.role })
+            });
+            if (!res.ok) throw new Error(res.status + ' ' + res.statusText);
+            const body = await res.json();
+            this.createdKey = body.plaintextKey || body.key || '';
+            await this.loadKeys();
+          } catch (e) {
+            this.error = String(e);
+          }
+        },
+        async revokeKey(id) {
+          try {
+            const res = await fetch('/admin/api/keys/' + id + '/revoke', {
+              method: 'POST',
+              headers: this.headers()
+            });
+            if (!res.ok) throw new Error(res.status + ' ' + res.statusText);
+            await this.loadKeys();
           } catch (e) {
             this.error = String(e);
           }

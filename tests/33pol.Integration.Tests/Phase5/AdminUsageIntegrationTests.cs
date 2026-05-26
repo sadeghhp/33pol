@@ -71,6 +71,60 @@ public sealed class AdminUsageIntegrationTests
     }
 
     [Fact]
+    public async Task GetForecast_WithoutAdminKey_ReturnsUnauthorized()
+    {
+        await using var factory = GatewayWebApplicationFactory.CreateWithInMemoryDatabase();
+        await GatewayWebApplicationFactory.EnsureAuthReadyAsync(factory);
+
+        var client = factory.CreateClient();
+        var response = await client.GetAsync("/admin/api/usage/forecast?days=7");
+
+        response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+    }
+
+    [Fact]
+    public async Task GetEvents_WithSeededBillingEvent_ReturnsRow()
+    {
+        await using var factory = GatewayWebApplicationFactory.CreateWithInMemoryDatabase();
+        await GatewayWebApplicationFactory.EnsureAuthReadyAsync(factory);
+
+        var tenantId = Guid.NewGuid();
+        await SeedBillingEventAsync(factory, tenantId);
+
+        var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Add("X-API-Key", "sk-33pol-integration-admin-key");
+
+        var response = await client.GetAsync($"/admin/api/usage/events?tenantId={tenantId}&limit=10");
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var page = await response.Content.ReadFromJsonAsync<BillingEventsPageDto>();
+        page.Should().NotBeNull();
+        page!.Events.Should().HaveCount(1);
+        page.Events![0].ModelId.Should().Be("gpt-4o");
+    }
+
+    [Fact]
+    public async Task GetForecast_WithSeededRollups_ReturnsProjection()
+    {
+        await using var factory = GatewayWebApplicationFactory.CreateWithInMemoryDatabase();
+        await GatewayWebApplicationFactory.EnsureAuthReadyAsync(factory);
+
+        var tenantId = Guid.NewGuid();
+        await SeedRollupsAsync(factory, tenantId);
+
+        var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Add("X-API-Key", "sk-33pol-integration-admin-key");
+
+        var response = await client.GetAsync($"/admin/api/usage/forecast?tenantId={tenantId}&days=7");
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var forecast = await response.Content.ReadFromJsonAsync<UsageForecastDto>();
+        forecast.Should().NotBeNull();
+        forecast!.TrailingTotalCost.Should().Be(0.15m);
+        forecast.ProjectedMonthlyCost.Should().BeGreaterThan(0m);
+    }
+
+    [Fact]
     public async Task ExportUsage_Json_ReturnsSeededRollups()
     {
         await using var factory = GatewayWebApplicationFactory.CreateWithInMemoryDatabase();
@@ -91,13 +145,36 @@ public sealed class AdminUsageIntegrationTests
         body.Should().Contain("\"costCenter\": \"eng\"");
     }
 
-    private static async Task SeedRollupsAsync(WebApplicationFactory<Program> factory, Guid tenantId)
+    private static async Task SeedBillingEventAsync(WebApplicationFactory<Program> factory, Guid tenantId)
+    {
+        await using var scope = factory.Services.CreateAsyncScope();
+        var events = scope.ServiceProvider.GetRequiredService<IBillingEventRepository>();
+        await events.TryAppendAsync(new BillingEventRecord(
+            Guid.NewGuid(),
+            "req-seed-events",
+            tenantId,
+            null,
+            "gpt-4o",
+            "eng",
+            10,
+            5,
+            null,
+            null,
+            0.01m,
+            100,
+            DateTimeOffset.UtcNow));
+    }
+
+    private static async Task SeedRollupsAsync(
+        WebApplicationFactory<Program> factory,
+        Guid tenantId,
+        DateOnly? usageDate = null)
     {
         await using var scope = factory.Services.CreateAsyncScope();
         var rollups = scope.ServiceProvider.GetRequiredService<IDailyUsageRollupRepository>();
         await rollups.UpsertRollupsAsync([
             new DailyUsageRollupRecord(
-                new DateOnly(2026, 5, 26),
+                usageDate ?? DateOnly.FromDateTime(DateTime.UtcNow),
                 tenantId,
                 "gpt-4o",
                 "eng",
@@ -124,5 +201,26 @@ public sealed class AdminUsageIntegrationTests
         public decimal TotalCost { get; init; }
 
         public int TotalRequests { get; init; }
+    }
+
+    private sealed class UsageForecastDto
+    {
+        public int TrailingDays { get; init; }
+
+        public decimal TrailingTotalCost { get; init; }
+
+        public decimal ProjectedMonthlyCost { get; init; }
+    }
+
+    private sealed class BillingEventsPageDto
+    {
+        public List<BillingEventDto>? Events { get; init; }
+
+        public int Limit { get; init; }
+    }
+
+    private sealed class BillingEventDto
+    {
+        public string? ModelId { get; init; }
     }
 }
