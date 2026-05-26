@@ -1,0 +1,6 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\33pol.Registry\33pol.Registry.csproj" />
+    <ProjectReference Include="..\33pol.Core\33pol.Core.csproj" />
+  </ItemGroup>
+</Project>

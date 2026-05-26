@@ -1,0 +1,9 @@
+{
+  "profiles": {
+    "33pol.App": {
+      "commandName": "Project",
+      "launchBrowser": false,
+      "applicationUrl": "http://localhost:5080"
+    }
+  }
+}

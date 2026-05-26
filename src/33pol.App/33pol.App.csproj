@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.OpenApi" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\33pol.Api\33pol.Api.csproj" />
+    <ProjectReference Include="..\33pol.Proxy\33pol.Proxy.csproj" />
+    <ProjectReference Include="..\33pol.Security\33pol.Security.csproj" />
+    <ProjectReference Include="..\33pol.Policy\33pol.Policy.csproj" />
+    <ProjectReference Include="..\33pol.Observability\33pol.Observability.csproj" />
+    <ProjectReference Include="..\33pol.Billing\33pol.Billing.csproj" />
+    <ProjectReference Include="..\33pol.Persistence\33pol.Persistence.csproj" />
+    <ProjectReference Include="..\33pol.Registry\33pol.Registry.csproj" />
+    <ProjectReference Include="..\33pol.OperatorConsole\33pol.OperatorConsole.csproj" />
+    <ProjectReference Include="..\33pol.Core\33pol.Core.csproj" />
+  </ItemGroup>
+</Project>

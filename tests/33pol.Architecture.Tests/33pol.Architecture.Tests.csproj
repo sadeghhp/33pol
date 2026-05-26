@@ -1,0 +1,28 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+  </ItemGroup>
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\33pol.App\33pol.App.csproj" />
+    <ProjectReference Include="..\..\src\33pol.Core\33pol.Core.csproj" />
+    <ProjectReference Include="..\..\src\33pol.Api\33pol.Api.csproj" />
+    <ProjectReference Include="..\..\src\33pol.Proxy\33pol.Proxy.csproj" />
+    <ProjectReference Include="..\..\src\33pol.Security\33pol.Security.csproj" />
+    <ProjectReference Include="..\..\src\33pol.Policy\33pol.Policy.csproj" />
+    <ProjectReference Include="..\..\src\33pol.Observability\33pol.Observability.csproj" />
+    <ProjectReference Include="..\..\src\33pol.Billing\33pol.Billing.csproj" />
+    <ProjectReference Include="..\..\src\33pol.Persistence\33pol.Persistence.csproj" />
+    <ProjectReference Include="..\..\src\33pol.Registry\33pol.Registry.csproj" />
+    <ProjectReference Include="..\..\src\33pol.OperatorConsole\33pol.OperatorConsole.csproj" />
+  </ItemGroup>
+</Project>

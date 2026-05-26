@@ -1,13 +1,19 @@
 ---
-description: Taiga is mandatory for ideation, planning, and all implementation — use user-taiga MCP (tasks, issues, sprints)
+description: Taiga is mandatory for ideation, planning, and all implementation — sync every step and task via Taiga MCP
 alwaysApply: true
 ---
 
 # Taiga-First Development (33pol)
 
-**All ideation, planning, development, and implementation for this project go through Taiga.** Use the **user-taiga** MCP server only — not internal todo lists, not ad-hoc markdown backlogs.
+**All ideation, planning, development, and implementation for this project go through Taiga.** Use the **🚀TaigaMCPServer** MCP (`CallMcpTool` server: `user-🚀TaigaMCPServer`) only — not internal todo lists, not ad-hoc markdown backlogs.
 
-Read tool schemas under `mcps/user-taiga/tools/` before each `CallMcpTool`. Prefer `projectSlug` + refs (`taskRef`, `issueRef`, `storyRef`) over internal IDs.
+Read tool schemas under `mcps/user-TaigaMCPServer/tools/` before each `CallMcpTool`. Prefer project slug `sadeghhp-33pol` + refs (`#2`, `#8`) in user-facing text; use **internal numeric IDs** for `addComment` (`itemId`).
+
+## Session start (before any write)
+
+1. `listProjects` → confirm **33pol** / `sadeghhp-33pol`.
+2. **`authenticate`** if not already authenticated this session (required for status updates and comments).
+3. `listUserStories` / `listMilestones` → note current sprint and refs.
 
 ## Resolve project (every session)
 
@@ -15,51 +21,52 @@ Read tool schemas under `mcps/user-taiga/tools/` before each `CallMcpTool`. Pref
 2. `taiga_list_projects` → match slug/name (case-insensitive) → store `projectSlug`.
 3. No match → ask user to create a Taiga project; do not pick another project.
 
-## Core MCP tools (use these)
+## Core MCP tools (actual server)
 
-### Sprints (= milestones in Taiga API)
+### Sprints (= milestones)
 
 | Action | Tool |
 |--------|------|
-| List | `taiga_list_milestones` |
-| Read | `taiga_get_milestone` |
-| Create | `taiga_create_milestone` (`name`, `slug`, `estimatedStart`, `estimatedFinish`) |
-| Update | `taiga_update_milestone` |
+| List | `listMilestones` |
+| Read | `getMilestone`, `getMilestoneStats`, `getIssuesByMilestone` |
+| Create | `createMilestone` |
+| Assign story | `assignUserStoryToSprint` |
 
-Assign work to a sprint via `milestoneSlug` or `milestoneId` on stories/tasks/issues. Reorder backlog: `taiga_update_story_sprint_order`.
+### User stories
+
+| Action | Tool |
+|--------|------|
+| List | `listUserStories` |
+| Read | `getUserStory` (internal id) |
+| Status | `updateUserStoryStatus` — use **internal id** from `getMilestone` raw JSON (e.g. `9289067` for ref `#2`), not board ref alone; `status`: `In progress` / `Done` |
+| Comment | `addComment` (`itemType`: `user_story`, `itemId`: **internal** id, `projectIdentifier`) |
+| Create | `createUserStory`, `batchCreateUserStories` |
+| Epic link | `linkStoryToEpic`, `unlinkStoryFromEpic` |
 
 ### Tasks
 
 | Action | Tool |
 |--------|------|
-| List | `taiga_list_tasks` |
-| Read | `taiga_get_task`, `taiga_get_task_history` |
-| Create | `taiga_create_task` (link with `userStoryId`) |
-| Update | `taiga_update_task` (`statusName`, assignee, milestone, etc.) |
-| Comment | `taiga_comment_on_task` |
-| Close/remove | `taiga_archive_task`, `taiga_delete_task` |
+| Create | `createTask`, `batchCreateTasks` (`userStoryRef`: `#2`) |
+| Search | `advancedSearch` (`type`: `tasks`) |
+| Comment | `addComment` (`itemType`: `task`, `itemId`: **internal** id) |
 
-### Issues (bugs, defects, questions)
+**Note:** This MCP has **no `updateTask`**. To close tasks, use Taiga REST API (`PATCH /tasks/{id}` with `status` = Closed id from `/task-statuses?project=…`) or comment on the story (`#8 Done — …`). Resolve internal ids via `getMilestone` → `user_stories[].id` and `tasks?user_story={id}`.
+
+### Issues
 
 | Action | Tool |
 |--------|------|
-| List | `taiga_list_issues` |
-| Read | `taiga_get_issue`, `taiga_get_issue_history` |
-| Create | `taiga_create_issue` (`typeName: Bug` when applicable) |
-| Update | `taiga_update_issue` |
-| Comment | `taiga_comment_on_issue` |
-| Close/remove | `taiga_archive_issue`, `taiga_delete_issue` |
+| List | `listIssues` |
+| Read | `getIssue` |
+| Create | `createIssue` |
+| Status | `updateIssueStatus` |
+| Comment | `addComment` (`itemType`: `issue`) |
+| Sprint | `addIssueToSprint` |
 
-Helpers: `taiga_list_statuses`, `taiga_list_issue_types`, `taiga_search` (dedupe before create).
+### Search & helpers
 
-### Stories & epics (feature planning)
-
-| Entity | Create | Update | Comment |
-|--------|--------|--------|---------|
-| User story | `taiga_create_story` | `taiga_update_story` | `taiga_comment_on_story` |
-| Epic | `taiga_create_epic` | `taiga_update_epic` | `taiga_comment_on_epic` |
-
-List: `taiga_list_user_stories`, `taiga_list_epics`.
+`advancedSearch`, `queryHelp`, `validateQuery`, `listComments`, `addComment`, `getProject`, `listProjects`, `authenticate`.
 
 ## When to use Taiga
 
@@ -67,7 +74,7 @@ List: `taiga_list_user_stories`, `taiga_list_epics`.
 |-------|----------------|
 | **Ideation** | Search existing items; capture ideas as story/epic + comments; create milestone if new sprint |
 | **Planning** | Decompose story → tasks; set sprint, status, acceptance criteria in descriptions |
-| **Implementation** | One task/issue in progress; comment progress; close when verified |
+| **Implementation** | **One Taiga task in progress**; update Taiga **before and after each task**; comment with test output; close when verified |
 | **Bugs** | `taiga_create_issue` first → fix → comment root cause → close issue |
 
 Skip Taiga only if the user explicitly says so, or pure Q&A with no project work.
@@ -79,8 +86,12 @@ Skip Taiga only if the user explicitly says so, or pure Q&A with no project work
 1. `taiga_search` → avoid duplicates.
 2. Epic (if multi-sprint) → story → tasks (`userStoryId`).
 3. Brief user: project slug, story/task refs, order.
-4. Per task: `taiga_update_task` in-progress → code → test → `taiga_comment_on_task` → done.
-5. Close story when all tasks done.
+4. **Per task (mandatory loop)** — never skip; never batch-close without doing this for each ref:
+   1. `updateUserStoryStatus` → **In progress** (or comment on story: `#N In progress`).
+   2. Implement + run focused tests.
+   3. `addComment` on story (or task when id known): `#N Done` + 1–2 lines + `dotnet test` excerpt.
+   4. If task status API unavailable, mirror done state in comment; do not start `#N+1` until `#N` is recorded in Taiga.
+5. When all tasks for a story are done: `updateUserStoryStatus` → **Done** + final comment with full test summary.
 
 ### Bug fix
 
@@ -101,11 +112,18 @@ Skip Taiga only if the user explicitly says so, or pure Q&A with no project work
 
 ## Status discipline
 
-- In-progress in Taiga **before** editing code.
-- Park or close when switching items; never leave stale in-progress.
-- Close only after build/tests pass when applicable.
+- **Taiga first, code second** — update status/comment **before** the first file edit for each task.
+- **Taiga last** — update status/comment **after** tests pass; never tell the user a task is complete if Taiga still shows New.
+- One task **In progress** at a time; park or close when switching.
+- **Implementation state must match Taiga** — if the repo is ahead of the board, stop and sync Taiga (or report MCP failure; do not proceed silently).
+
+## When MCP writes fail
+
+1. Call `authenticate` and retry once.
+2. If still failing: tell the user which ref failed, paste the error, and provide a short manual update list — **do not claim the step is finished**.
+3. After MCP is fixed: retro-sync stories/tasks in plan order (#8 → #9 → …).
 
 ## User communication
 
-Start: **Taiga project**, **refs**, **current task/issue/sprint**.  
-Finish: what was closed in Taiga and what remains.
+Start: **Taiga project** (`sadeghhp-33pol`), **story/task refs**, **current task** (e.g. `#8 In progress`).  
+Finish: **each ref closed in Taiga** (or explicit MCP blocker) and what remains.

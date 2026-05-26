@@ -1,5 +1,9 @@
-bin/*
-obj/*
+# Local Compose overrides
+deploy/docker/.env
+
+# Build artifacts
+**/bin/**
+**/obj/**
 
 # Local Compose overrides
 deploy/docker/.env
