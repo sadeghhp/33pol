@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "33pol.fullname" . }}
+  labels:
+    {{- include "33pol.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "33pol.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "33pol.selectorLabels" . | nindent 8 }}
+    spec:
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      containers:
+        - name: gateway
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: ASPNETCORE_URLS
+              value: http://+:8080
+            - name: Gateway__ModelsConfigPath
+              value: {{ .Values.gateway.modelsConfigPath | quote }}
+            - name: Gateway__OperatorConsole__Enabled
+              value: {{ .Values.gateway.operatorConsole.enabled | quote }}
+            {{- if .Values.postgresql.enabled }}
+            - name: ConnectionStrings__GatewayDb
+              value: >-
+                Host={{ .Values.postgresql.host }};
+                Port={{ .Values.postgresql.port }};
+                Database={{ .Values.postgresql.database }};
+                Username={{ .Values.postgresql.username }};
+                Password=$(POSTGRES_PASSWORD)
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ required "postgresql.existingSecret required when postgresql.enabled" .Values.postgresql.existingSecret }}
+                  key: {{ .Values.postgresql.secretKey }}
+            {{- end }}
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.probes.livenessPath }}
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.probes.readinessPath }}
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}

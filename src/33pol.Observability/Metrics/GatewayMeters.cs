@@ -31,4 +31,10 @@ public static class GatewayMeters
 
     public static readonly Counter<long> UsageParseFailures =
         Meter.CreateCounter<long>("gateway_usage_parse_failures_total");
+
+    public static readonly UpDownCounter<long> UsageWriterQueueDepth =
+        Meter.CreateUpDownCounter<long>("gateway_usage_writer_queue_depth");
+
+    public static readonly Counter<long> UsageWriterDropped =
+        Meter.CreateCounter<long>("gateway_usage_writer_dropped_total");
 }

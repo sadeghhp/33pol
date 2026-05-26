@@ -1,0 +1,55 @@
+replicaCount: 1
+
+image:
+  repository: 33pol-gateway
+  tag: latest
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 8080
+
+ingress:
+  enabled: false
+  className: ""
+  hosts: []
+  tls: []
+
+resources:
+  limits:
+    cpu: "2"
+    memory: 2Gi
+  requests:
+    cpu: 500m
+    memory: 512Mi
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 70
+
+serviceMonitor:
+  enabled: false
+  interval: 30s
+  path: /metrics
+
+gateway:
+  modelsConfigPath: /app/config/models.json
+  operatorConsole:
+    enabled: false
+
+postgresql:
+  enabled: false
+  host: ""
+  port: 5432
+  database: gateway
+  username: gateway
+  existingSecret: ""
+  secretKey: password
+
+probes:
+  livenessPath: /health/live
+  readinessPath: /health/ready
+
+terminationGracePeriodSeconds: 60

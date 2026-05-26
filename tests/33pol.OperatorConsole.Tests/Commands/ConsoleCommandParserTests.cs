@@ -19,4 +19,15 @@ public sealed class ConsoleCommandParserTests
     {
         ConsoleCommandParser.Parse("requests --limit 25").Limit.Should().Be(25);
     }
+
+    [Theory]
+    [InlineData("models add", ConsoleCommandKind.ModelsAdd)]
+    [InlineData("models edit my-model", ConsoleCommandKind.ModelsEdit, "my-model")]
+    [InlineData("models remove other", ConsoleCommandKind.ModelsRemove, "other")]
+    public void Parse_ModelMutations_ReturnsExpectedKind(string input, ConsoleCommandKind expected, string? modelId = null)
+    {
+        var intent = ConsoleCommandParser.Parse(input);
+        intent.Kind.Should().Be(expected);
+        intent.ModelId.Should().Be(modelId);
+    }
 }

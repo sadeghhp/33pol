@@ -12,9 +12,15 @@ public enum ConsoleCommandKind
     Requests,
     Reload,
     ModelsList,
+    ModelsAdd,
+    ModelsEdit,
+    ModelsRemove,
 }
 
-public sealed record ConsoleCommandIntent(ConsoleCommandKind Kind, int Limit = 50);
+public sealed record ConsoleCommandIntent(
+    ConsoleCommandKind Kind,
+    int Limit = 50,
+    string? ModelId = null);
 
 public static class ConsoleCommandParser
 {
@@ -41,6 +47,12 @@ public static class ConsoleCommandParser
             "reload" => new ConsoleCommandIntent(ConsoleCommandKind.Reload),
             "models" when parts.Length > 1 && parts[1].Equals("list", StringComparison.OrdinalIgnoreCase)
                 => new ConsoleCommandIntent(ConsoleCommandKind.ModelsList),
+            "models" when parts.Length > 1 && parts[1].Equals("add", StringComparison.OrdinalIgnoreCase)
+                => new ConsoleCommandIntent(ConsoleCommandKind.ModelsAdd),
+            "models" when parts.Length > 2 && parts[1].Equals("edit", StringComparison.OrdinalIgnoreCase)
+                => new ConsoleCommandIntent(ConsoleCommandKind.ModelsEdit, ModelId: parts[2]),
+            "models" when parts.Length > 2 && parts[1].Equals("remove", StringComparison.OrdinalIgnoreCase)
+                => new ConsoleCommandIntent(ConsoleCommandKind.ModelsRemove, ModelId: parts[2]),
             _ => new ConsoleCommandIntent(ConsoleCommandKind.Unknown),
         };
     }

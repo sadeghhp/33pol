@@ -150,7 +150,7 @@ These are process/metadata problems, not missing features:
 | Planned command | Repo |
 |-----------------|------|
 | `models list` | Done |
-| `models add`, `models edit`, `models remove` | **Not in parser** (`ConsoleCommandParser.cs`) |
+| `models add`, `models edit`, `models remove` | **Implemented** (interactive Spectre prompts) |
 | `keys list` | P5 (5.3b) — N/A |
 
 **Coverage gap:**
@@ -171,13 +171,13 @@ These are process/metadata problems, not missing features:
 | Work package | Status | Notes |
 |--------------|--------|-------|
 | WP5.1 FinOps & billing | **Started** | Schema + `RateCardCostCalculator` + migrations; **no** `/admin/api/usage`, export, forecast, webhooks |
-| WP5.2 Usage writer hardening | **Partial** | Channel queue exists; no PG writer, no `33pol-writer.yml` alerts, no paginated history API |
-| WP5.3 Admin UI | **Not started** | No `wwwroot/admin` |
-| WP5.4 Integrations | **Partial** | `deploy/docker/docker-compose.yml` exists; **no** `deploy/helm/33pol/` |
-| WP5.5 Perf GA gates | **Not started** | Only `smoke.js`; missing `inference-rps.js`, `streaming-concurrent.js`, `rate-limit-storm.js`, soak |
-| WP5.6 Documentation | **Partial** | `errors.md`, `observability.md`, `finops.md` (quota stub), `operator-console.md`; missing `integrations.md`, `security.md`, `runbooks/` |
-| WP5.7 Security review | **Not started** | No `docs/security.md` |
-| WP5.8 Conformance suite | **Stub** | `33pol.Conformance.Tests` — `Assembly_Loads` only; no OpenAI shape/golden suite |
+| WP5.2 Usage writer hardening | **Partial** | PG persistence + `33pol-writer.yml` alerts + `gateway_usage_writer_*` metrics; batching TBD |
+| WP5.3 Admin UI | **Minimal** | `wwwroot/admin/index.html` (summary + usage); not full Models/keys pages |
+| WP5.4 Integrations | **Partial** | Compose + **`deploy/helm/33pol/`** chart added |
+| WP5.5 Perf GA gates | **Scripts added** | `inference-rps.js`, `streaming-concurrent.js`, `rate-limit-storm.js`; soak not automated |
+| WP5.6 Documentation | **Partial** | `integrations.md`, `security.md`, `runbooks/high-error-rate.md` added |
+| WP5.7 Security review | **Started** | `docs/security.md` baseline |
+| WP5.8 Conformance suite | **Partial** | Golden error catalog tests (16 codes) |
 
 **Billing test gap:** 7 tests vs plan “90%+ Billing” and webhook/export golden requirements.
 

@@ -30,6 +30,8 @@ Query params: `from`, `to` (dates), `tenantId` (optional).
 2. Quota commit runs in-process (in-memory or future PG-backed quota).
 3. When `ConnectionStrings:GatewayDb` is set, `BillingUsagePersistenceHandler` appends `billing_events` (idempotent by `request_id`) and upserts `daily_usage_rollups`.
 
+Prometheus metrics: `gateway_usage_writer_queue_depth`, `gateway_usage_writer_dropped_total`.
+
 Admin UI: `/admin` (static Alpine.js dashboard).
 
 ## Soft quota

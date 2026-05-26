@@ -39,6 +39,7 @@ jobs:
         run: |
           if command -v promtool >/dev/null 2>&1; then
             promtool check rules deploy/prometheus/alerts/33pol.yml
+            promtool check rules deploy/prometheus/alerts/33pol-writer.yml
           else
             echo "promtool not installed; skipping alert rule validation"
           fi

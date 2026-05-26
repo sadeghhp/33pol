@@ -42,6 +42,39 @@ public sealed class ChannelUsageRecorderTests
     }
 
     [Fact]
+    public async Task Enqueue_WhenChannelFull_IncrementsDroppedMetric()
+    {
+        var quota = Substitute.For<IQuotaService>();
+        var persistence = Substitute.For<IUsagePersistenceHandler>();
+        var scope = Substitute.For<IServiceScope>();
+        var scopeProvider = Substitute.For<IServiceProvider>();
+        scope.ServiceProvider.Returns(scopeProvider);
+        scopeProvider.GetService(typeof(IUsagePersistenceHandler)).Returns(persistence);
+        var scopeFactory = Substitute.For<IServiceScopeFactory>();
+        scopeFactory.CreateAsyncScope().Returns(scope);
+
+        var recorder = new ChannelUsageRecorder(quota, scopeFactory, NullLogger<ChannelUsageRecorder>.Instance);
+        await recorder.StartAsync(CancellationToken.None);
+
+        for (var i = 0; i < 10_002; i++)
+        {
+            recorder.Enqueue(new UsageEvent
+            {
+                RequestId = $"req-{i}",
+                ModelId = "m1",
+                PromptTokens = 1,
+                CompletionTokens = 0,
+                DurationMs = 1,
+            });
+        }
+
+        await Task.Delay(100);
+        await recorder.StopAsync(CancellationToken.None);
+
+        await persistence.Received().PersistAsync(Arg.Any<UsageEvent>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public void TryParseUsage_InvalidJson_ReturnsFalse()
     {
         UsageJsonParser.TryParseUsage("{not-json"u8.ToArray(), out _, out _).Should().BeFalse();

@@ -25,7 +25,10 @@ Default: **off** in Production and Docker; **on** in Development sample.
 | `backends` | Model registry + health |
 | `requests [--limit N]` | Recent requests |
 | `reload` | Config reload |
-| `models list` | List models |
+| `models list` | List models (full config) |
+| `models add` | Interactive add (persist + apply) |
+| `models edit <id>` | Interactive edit |
+| `models remove <id>` | Remove with confirmation |
 | `exit` | Stop console loop |
 
 Commands delegate to `IControlPlaneCommands` (same as HTTP admin).

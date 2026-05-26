@@ -13,6 +13,7 @@ public sealed class OperatorConsoleHostedService(
     IOptions<OperatorConsoleOptions> options,
     ILogger<OperatorConsoleHostedService> logger) : BackgroundService
 {
+    private readonly ModelRegistryConsoleInteractor _registryConsole = new(commands);
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         if (!options.Value.Enabled)
@@ -53,7 +54,9 @@ public sealed class OperatorConsoleHostedService(
         switch (intent.Kind)
         {
             case ConsoleCommandKind.Help:
-                AnsiConsole.MarkupLine("[yellow]Commands:[/] help, exit, status, summary, watch summary, backends, requests [--limit N], reload, models list");
+                AnsiConsole.MarkupLine(
+                    "[yellow]Commands:[/] help, exit, status, summary, watch summary, backends, " +
+                    "requests [--limit N], reload, models list|add|edit <id>|remove <id>");
                 break;
             case ConsoleCommandKind.Status:
             case ConsoleCommandKind.Summary:
@@ -79,7 +82,28 @@ public sealed class OperatorConsoleHostedService(
                 AnsiConsole.MarkupLine($"[cyan]Reload:[/] {Markup.Escape(reload.Status)}");
                 break;
             case ConsoleCommandKind.ModelsList:
-                RenderBackends(commands.ListBackends());
+                RenderModels(commands.ListModels());
+                break;
+            case ConsoleCommandKind.ModelsAdd:
+                await _registryConsole.AddModelAsync(cancellationToken).ConfigureAwait(false);
+                break;
+            case ConsoleCommandKind.ModelsEdit:
+                if (string.IsNullOrWhiteSpace(intent.ModelId))
+                {
+                    AnsiConsole.MarkupLine("[red]Usage: models edit <id>[/]");
+                    break;
+                }
+
+                await _registryConsole.EditModelAsync(intent.ModelId, cancellationToken).ConfigureAwait(false);
+                break;
+            case ConsoleCommandKind.ModelsRemove:
+                if (string.IsNullOrWhiteSpace(intent.ModelId))
+                {
+                    AnsiConsole.MarkupLine("[red]Usage: models remove <id>[/]");
+                    break;
+                }
+
+                await _registryConsole.RemoveModelAsync(intent.ModelId, cancellationToken).ConfigureAwait(false);
                 break;
             default:
                 AnsiConsole.MarkupLine("[red]Unknown command.[/] Type 'help'.");
@@ -105,6 +129,23 @@ public sealed class OperatorConsoleHostedService(
         table.AddRow("Rate limit rejections", summary.RateLimitRejections.ToString());
         table.AddRow("Quota rejections", summary.QuotaRejections.ToString());
         return table;
+    }
+
+    private static void RenderModels(IReadOnlyList<Core.Models.ModelConfig> models)
+    {
+        var table = new Table().Title("Models");
+        table.AddColumn("Id");
+        table.AddColumn("URL");
+        table.AddColumn("Aliases");
+        foreach (var model in models)
+        {
+            table.AddRow(
+                model.Id,
+                model.Url,
+                model.Aliases.Count > 0 ? string.Join(", ", model.Aliases) : "-");
+        }
+
+        AnsiConsole.Write(table);
     }
 
     private static void RenderBackends(IReadOnlyList<Core.Models.BackendAdminDto> backends)
