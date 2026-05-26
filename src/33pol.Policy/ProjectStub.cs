@@ -1,4 +1,4 @@
-﻿namespace Pol33.Policy;
+namespace Pol33.Policy;
 
-internal static class ProjectStub { }
+public static class ProjectStub { }
 

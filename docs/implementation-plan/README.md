@@ -2,7 +2,7 @@
 
 This folder contains the **authoritative implementation plan** for 33pol LLM Gateway version 2.0. It translates the product proposal into **five ordered phases**, a **modern .NET 10 solution architecture**, a **unit-test-first quality bar**, and a **performance/load testing program**.
 
-**Status:** Planning authoritative; **Phase 1 not started** for the multi-project gateway. Repo may contain early scaffold only (placeholder `33pol.csproj`, `deploy/docker/`, `perf/k6/thresholds.json`).
+**Status:** Planning authoritative; **Phase 1 platform foundation complete** (multi-project solution, core stubs, host, CI, NetArchTest). **Phase 2** (data plane) is next. See [phases/phase-1-platform-foundation.md](./phases/phase-1-platform-foundation.md).
 
 **Logging:** Application logs are **not** stored in PostgreSQL (Serilog + OpenTelemetry export only). See [01-solution-architecture.md](./01-solution-architecture.md).
 

@@ -9,7 +9,7 @@
 
 | Phase | Exit criteria met | Sign-off | Date |
 |-------|-------------------|----------|------|
-| P1 Platform | [ ] | | |
+| P1 Platform | [x] | Local `dotnet build`/`test`, NetArchTest, CI workflow; confirm GitHub Actions green on `main` | 2026-05-26 |
 | P2 Data plane | [ ] | | |
 | P3 Security & resilience | [ ] | | |
 | P4 Policy & observability | [ ] | | |

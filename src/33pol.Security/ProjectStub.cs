@@ -1,4 +1,4 @@
-﻿namespace Pol33.Security;
+namespace Pol33.Security;
 
-internal static class ProjectStub { }
+public static class ProjectStub { }
 

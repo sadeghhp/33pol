@@ -159,11 +159,15 @@ dotnet test --collect:"XPlat Code Coverage"
 
 ## Test data and fixtures
 
+**Convention:** mirror production namespaces under each test project; commit small JSON/SSE/text fixtures; load via `File.ReadAllText` or `EmbeddedResource` — never hard-code large payloads in test methods.
+
 | Asset | Location |
 |-------|----------|
 | `models.json` samples | `tests/33pol.Registry.Tests/TestData/` |
+| Registry edge cases | `tests/33pol.Registry.Tests/TestData/` (invalid JSON, empty file) |
 | SSE streams | `tests/33pol.Integration.Tests/Fixtures/*.sse` |
 | OpenAI error golden files | `tests/33pol.Integration.Tests/Fixtures/errors/` |
+| Shared constants (optional) | `tests/33pol.Core.Tests/TestData/` |
 
 Use **golden file** comparison for error JSON and `/v1/models` responses.
 

@@ -3,6 +3,9 @@
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" />
   </ItemGroup>
   <ItemGroup>
+    <None Include="..\..\config\models.json" Link="config\models.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\33pol.Api\33pol.Api.csproj" />
     <ProjectReference Include="..\33pol.Proxy\33pol.Proxy.csproj" />
     <ProjectReference Include="..\33pol.Security\33pol.Security.csproj" />

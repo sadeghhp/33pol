@@ -17,6 +17,11 @@ public static class GatewayOptionsValidation
             errors.Add($"{nameof(GatewayOptions.ConfigReloadIntervalSeconds)} must be zero or positive.");
         }
 
+        if (options.HealthCheckIntervalSeconds < 1)
+        {
+            errors.Add($"{nameof(GatewayOptions.HealthCheckIntervalSeconds)} must be at least 1 second.");
+        }
+
         return errors;
     }
 

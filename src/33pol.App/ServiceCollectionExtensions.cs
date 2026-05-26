@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Options;
 using Pol33.Core.Configuration;
+using Pol33.Registry.DependencyInjection;
 
 namespace Pol33.App;
 
@@ -13,6 +14,7 @@ public static class ServiceCollectionExtensions
             .ValidateOnStart();
 
         services.AddSingleton<IValidateOptions<GatewayOptions>, GatewayOptionsValidateOptions>();
+        services.AddGatewayRegistry();
 
         return services;
     }

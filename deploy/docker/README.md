@@ -1,6 +1,6 @@
 # Docker Compose — local 33pol stack
 
-Runs **Postgres**, **Prometheus**, **Grafana**, and a **WireMock** OpenAI-compatible mock upstream. The **gateway** service is optional until the ASP.NET host is implemented (Phase 2+).
+Runs **Postgres**, **Prometheus**, **Grafana**, and a **WireMock** OpenAI-compatible mock upstream. The optional **gateway** profile builds `33pol.App` (Phase 1 host: `/health/live`, `/`; OpenAI proxy routing is Phase 2+).
 
 ## Prerequisites
 
@@ -34,7 +34,7 @@ curl -s -X POST http://localhost:18080/v1/chat/completions \
 
 ## Gateway profile
 
-When `33pol.App` exposes HTTP on port 8080 (including `GET /health/live` and `GET /metrics`):
+When the Phase 1 host is enough (health + root metadata; `/metrics` and inference in later phases):
 
 ```bash
 docker compose --profile gateway up -d --build

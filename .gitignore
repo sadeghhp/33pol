@@ -4,6 +4,7 @@ deploy/docker/.env
 # Build artifacts
 **/bin/**
 **/obj/**
+TestResults/
 
 # Local Compose overrides
 deploy/docker/.env

@@ -1,4 +1,4 @@
-﻿namespace Pol33.OperatorConsole;
+namespace Pol33.OperatorConsole;
 
-internal static class ProjectStub { }
+public static class ProjectStub { }
 

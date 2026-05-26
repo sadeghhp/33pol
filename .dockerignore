@@ -5,5 +5,7 @@
 **/.cursor
 **/docs
 **/perf
+**/tests
+**/TestResults
 **/*.md
 !deploy/docker/README.md

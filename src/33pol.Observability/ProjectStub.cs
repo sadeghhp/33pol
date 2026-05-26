@@ -1,4 +1,4 @@
-﻿namespace Pol33.Observability;
+namespace Pol33.Observability;
 
-internal static class ProjectStub { }
+public static class ProjectStub { }
 

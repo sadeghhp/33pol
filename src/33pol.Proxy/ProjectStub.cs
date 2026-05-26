@@ -1,4 +1,4 @@
-﻿namespace Pol33.Proxy;
+namespace Pol33.Proxy;
 
-internal static class ProjectStub { }
+public static class ProjectStub { }
 

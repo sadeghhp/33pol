@@ -7,4 +7,11 @@ public sealed class GatewayOptions
     public string ModelsConfigPath { get; set; } = "config/models.json";
 
     public int ConfigReloadIntervalSeconds { get; set; } = 30;
+
+    public int HealthCheckIntervalSeconds { get; set; } = 30;
+
+    /// <summary>
+    /// When false (default), backends are treated as healthy until the first probe completes.
+    /// </summary>
+    public bool HealthCheckStrictMode { get; set; }
 }

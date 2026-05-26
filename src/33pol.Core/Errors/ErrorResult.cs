@@ -38,8 +38,10 @@ public sealed class ErrorBody
     public required string Code { get; init; }
 
     [JsonPropertyName("param")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Param { get; init; }
 
     [JsonPropertyName("details")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public IReadOnlyDictionary<string, object>? Details { get; init; }
 }

@@ -1,0 +1,16 @@
+{
+  "models": [
+    {
+      "id": "canonical-a",
+      "url": "http://backend-a:8000",
+      "maxContextLength": 4096,
+      "aliases": ["alias-a", "ALIAS-A"]
+    },
+    {
+      "id": "canonical-b",
+      "url": "http://backend-b:8000",
+      "maxContextLength": 8192,
+      "aliases": []
+    }
+  ]
+}

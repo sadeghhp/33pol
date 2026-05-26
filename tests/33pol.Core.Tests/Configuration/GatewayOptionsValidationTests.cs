@@ -27,6 +27,16 @@ public sealed class GatewayOptionsValidationTests
     }
 
     [Fact]
+    public void Validate_ZeroHealthCheckInterval_ReturnsError()
+    {
+        var options = new GatewayOptions { HealthCheckIntervalSeconds = 0 };
+
+        var errors = GatewayOptionsValidation.Validate(options);
+
+        errors.Should().Contain(e => e.Contains(nameof(GatewayOptions.HealthCheckIntervalSeconds), StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Validate_ValidOptions_ReturnsNoErrors()
     {
         var options = new GatewayOptions();

@@ -1,4 +1,4 @@
-﻿namespace Pol33.Billing;
+namespace Pol33.Billing;
 
-internal static class ProjectStub { }
+public static class ProjectStub { }
 

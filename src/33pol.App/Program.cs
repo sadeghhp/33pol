@@ -1,3 +1,4 @@
+using Pol33.Api.Endpoints;
 using Pol33.App;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -14,6 +15,7 @@ app.UseRouting();
 
 app.MapGet("/", GatewayEndpoints.GetRoot);
 app.MapHealthChecks("/health/live");
+app.MapConfigAdminEndpoints();
 
 if (app.Environment.IsDevelopment())
 {
