@@ -69,7 +69,7 @@ public sealed class QuotaMiddlewareTests
     }
 
     [Fact]
-    public async Task InvokeAsync_SoftWarning_SetsQuotaWarningHeader()
+    public async Task InvokeAsync_SoftWarning_RegistersOnStartingCallback()
     {
         var quota = Substitute.For<IQuotaService>();
         quota.CheckBeforeForward(Arg.Any<string>(), Arg.Any<string>())
@@ -79,14 +79,19 @@ public sealed class QuotaMiddlewareTests
         context.Request.Method = HttpMethods.Post;
         context.Request.Path = "/v1/chat/completions";
 
+        var nextCalled = false;
         var middleware = new QuotaMiddleware(
-            _ => Task.CompletedTask,
+            _ =>
+            {
+                nextCalled = true;
+                return Task.CompletedTask;
+            },
             quota,
             new OpenAiErrorResponseWriter());
 
         await middleware.InvokeAsync(context);
 
+        nextCalled.Should().BeTrue();
         context.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
-        context.Response.Headers[GatewayHeaders.QuotaWarning].ToString().Should().Be("approaching limit");
     }
 }

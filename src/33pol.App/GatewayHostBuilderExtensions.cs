@@ -49,11 +49,15 @@ public static class GatewayHostBuilderExtensions
         app.UseGatewaySecurity(app.Configuration);
 
         app.MapGet("/", GatewayEndpoints.GetRoot);
+        app.MapGet("/admin", () => Results.Redirect("/admin/index.html"));
         app.MapHealthChecks("/health/live");
         app.MapConfigAdminEndpoints();
         app.MapAdminKeyEndpoints();
         app.MapAdminControlPlaneEndpoints();
+        app.MapAdminUsageEndpoints();
         app.MapModelsEndpoints();
+        app.UseDefaultFiles();
+        app.UseStaticFiles();
         app.MapGatewayOperationsEndpoints();
         app.UseInferenceResilience();
         app.UseGatewayRateLimiting();

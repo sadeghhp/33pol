@@ -1,3 +1,4 @@
+using Pol33.Billing.Aggregates;
 using Pol33.Core.Billing;
 
 namespace Pol33.Billing.Tests.Aggregates;

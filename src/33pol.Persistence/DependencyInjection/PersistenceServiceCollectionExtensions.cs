@@ -44,6 +44,7 @@ public static class PersistenceServiceCollectionExtensions
         services.AddScoped<IApiKeyRepository, ApiKeyRepository>();
         services.AddScoped<IModelGrantRepository, ModelGrantRepository>();
         services.AddScoped<IDailyUsageRollupRepository, DailyUsageRollupRepository>();
+        services.AddScoped<IBillingEventRepository, BillingEventRepository>();
         services.AddScoped<GatewayDbBootstrap>();
         services.AddHostedService<GatewayDbInitializer>();
 

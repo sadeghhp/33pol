@@ -1,6 +1,6 @@
-# FinOps — Quota Semantics (Phase 4)
+# FinOps — Quota & Usage (Phase 4–5)
 
-Phase 4 implements **quota gating** on the inference hot path. Full rate cards and exports are Phase 5.
+Phase 4 implements **quota gating** on the inference hot path. Phase 5 adds **billing event persistence**, **daily rollups**, and **admin usage APIs**.
 
 ## Quota vs rate limit
 
@@ -13,7 +13,24 @@ Phase 4 implements **quota gating** on the inference hot path. Full rate cards a
 
 - **Check:** synchronous `IQuotaService.CheckBeforeForward` in `QuotaMiddleware`
 - **Commit:** `IUsageRecorder` queue commits tokens idempotently by `request_id`
-- **Storage:** in-memory counters per tenant partition (PostgreSQL tables in Phase 5)
+- **Storage:** in-memory counters per tenant partition when no database; PostgreSQL `billing_events` + `daily_usage_rollups` when configured
+
+## Usage APIs (Phase 5)
+
+| Endpoint | Purpose |
+|----------|---------|
+| `GET /admin/api/usage` | Daily rollup report + summary (admin auth) |
+| `GET /admin/api/usage/export?format=csv\|json` | Download rollups |
+
+Query params: `from`, `to` (dates), `tenantId` (optional).
+
+## Persistence pipeline
+
+1. `IUsageRecorder` enqueues `UsageEvent` after inference.
+2. Quota commit runs in-process (in-memory or future PG-backed quota).
+3. When `ConnectionStrings:GatewayDb` is set, `BillingUsagePersistenceHandler` appends `billing_events` (idempotent by `request_id`) and upserts `daily_usage_rollups`.
+
+Admin UI: `/admin` (static Alpine.js dashboard).
 
 ## Soft quota
 

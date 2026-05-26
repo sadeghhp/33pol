@@ -1,5 +1,8 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\..\src\33pol.Observability\33pol.Observability.csproj" />
   </ItemGroup>
 </Project>

@@ -11,3 +11,4 @@ src/33pol.App/appsettings.Development.local.json
 
 # Local Compose overrides
 deploy/docker/.env
+TestResults-*

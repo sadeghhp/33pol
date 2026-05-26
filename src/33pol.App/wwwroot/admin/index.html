@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>33pol Admin</title>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+  <style>
+    :root { font-family: system-ui, sans-serif; color-scheme: light dark; }
+    body { margin: 0; padding: 1.5rem; max-width: 960px; }
+    h1 { margin-top: 0; }
+    .card { border: 1px solid #8884; border-radius: 8px; padding: 1rem; margin-bottom: 1rem; }
+    label { display: block; margin-bottom: 0.5rem; }
+    input { width: 100%; padding: 0.4rem; margin-bottom: 0.75rem; }
+    button { margin-right: 0.5rem; padding: 0.4rem 0.8rem; cursor: pointer; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+    th, td { text-align: left; padding: 0.35rem 0.5rem; border-bottom: 1px solid #8883; }
+    .error { color: #c00; }
+  </style>
+</head>
+<body x-data="adminApp()" x-init="init()">
+  <h1>33pol Gateway Admin</h1>
+
+  <div class="card">
+    <label>Admin API key</label>
+    <input type="password" x-model="apiKey" placeholder="sk-..." @change="saveKey()" />
+    <p class="error" x-show="error" x-text="error"></p>
+  </div>
+
+  <div class="card" x-show="apiKey">
+    <h2>Dashboard</h2>
+    <p><strong>Uptime:</strong> <span x-text="summary?.uptime ?? '—'"></span></p>
+    <p><strong>Inference requests:</strong> <span x-text="summary?.totalInferenceRequests ?? 0"></span></p>
+    <p><strong>Errors:</strong> <span x-text="summary?.totalErrors ?? 0"></span></p>
+    <button @click="loadSummary()">Refresh summary</button>
+  </div>
+
+  <div class="card" x-show="apiKey">
+    <h2>Usage (daily rollups)</h2>
+    <button @click="loadUsage()">Load usage</button>
+    <button type="button" @click="downloadExport('json')">Export JSON</button>
+    <button type="button" @click="downloadExport('csv')">Export CSV</button>
+    <table x-show="usage?.rollups?.length">
+      <thead>
+        <tr>
+          <th>Date</th><th>Model</th><th>Prompt</th><th>Completion</th><th>Cost</th><th>Requests</th>
+        </tr>
+      </thead>
+      <tbody>
+        <template x-for="row in usage?.rollups ?? []" :key="row.usageDate + row.modelId">
+          <tr>
+            <td x-text="row.usageDate"></td>
+            <td x-text="row.modelId"></td>
+            <td x-text="row.promptTokens"></td>
+            <td x-text="row.completionTokens"></td>
+            <td x-text="row.totalCost"></td>
+            <td x-text="row.requestCount"></td>
+          </tr>
+        </template>
+      </tbody>
+    </table>
+  </div>
+
+  <script>
+    function adminApp() {
+      return {
+        apiKey: localStorage.getItem('33pol-admin-key') || '',
+        summary: null,
+        usage: null,
+        error: '',
+        init() {
+          if (this.apiKey) {
+            this.loadSummary();
+            this.poll = setInterval(() => this.loadSummary(), 2000);
+          }
+        },
+        saveKey() {
+          localStorage.setItem('33pol-admin-key', this.apiKey);
+          this.error = '';
+          this.loadSummary();
+        },
+        headers() {
+          return { 'X-API-Key': this.apiKey };
+        },
+        async loadSummary() {
+          try {
+            const res = await fetch('/admin/api/summary', { headers: this.headers() });
+            if (!res.ok) throw new Error(res.status + ' ' + res.statusText);
+            this.summary = await res.json();
+          } catch (e) {
+            this.error = String(e);
+          }
+        },
+        async loadUsage() {
+          try {
+            const res = await fetch('/admin/api/usage', { headers: this.headers() });
+            if (!res.ok) throw new Error(res.status + ' ' + res.statusText);
+            this.usage = await res.json();
+          } catch (e) {
+            this.error = String(e);
+          }
+        },
+        async downloadExport(format) {
+          try {
+            const res = await fetch('/admin/api/usage/export?format=' + format, { headers: this.headers() });
+            if (!res.ok) throw new Error(res.status + ' ' + res.statusText);
+            const blob = await res.blob();
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'usage-export.' + (format === 'csv' ? 'csv' : 'json');
+            a.click();
+            URL.revokeObjectURL(url);
+          } catch (e) {
+            this.error = String(e);
+          }
+        }
+      };
+    }
+  </script>
+</body>
+</html>

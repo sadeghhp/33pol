@@ -1,4 +1,5 @@
 using System.Threading.Channels;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Pol33.Core.Abstractions;
@@ -14,12 +15,17 @@ public sealed class ChannelUsageRecorder : IUsageRecorder, IHostedService
         new BoundedChannelOptions(10_000) { FullMode = BoundedChannelFullMode.DropOldest });
 
     private readonly IQuotaService _quotaService;
+    private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<ChannelUsageRecorder> _logger;
     private Task? _worker;
 
-    public ChannelUsageRecorder(IQuotaService quotaService, ILogger<ChannelUsageRecorder> logger)
+    public ChannelUsageRecorder(
+        IQuotaService quotaService,
+        IServiceScopeFactory scopeFactory,
+        ILogger<ChannelUsageRecorder> logger)
     {
         _quotaService = quotaService;
+        _scopeFactory = scopeFactory;
         _logger = logger;
     }
 
@@ -53,6 +59,10 @@ public sealed class ChannelUsageRecorder : IUsageRecorder, IHostedService
             var totalTokens = usage.PromptTokens + usage.CompletionTokens;
             var partition = usage.TenantId ?? "anonymous";
             _quotaService.CommitUsage(partition, usage.ModelId, totalTokens, usage.RequestId);
+
+            await using var scope = _scopeFactory.CreateAsyncScope();
+            var persistence = scope.ServiceProvider.GetRequiredService<IUsagePersistenceHandler>();
+            await persistence.PersistAsync(usage, cancellationToken).ConfigureAwait(false);
 
             GatewayMeters.TokensTotal.Add(
                 totalTokens,

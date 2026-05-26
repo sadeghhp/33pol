@@ -8,6 +8,7 @@ using NSubstitute;
 using Pol33.Core.Abstractions;
 using Pol33.Core.Configuration;
 using Pol33.Core.Errors;
+using Pol33.Core.Identity;
 using Pol33.Core.Models;
 using Pol33.Core.RateLimiting;
 using Pol33.Registry.Health;
@@ -216,6 +217,93 @@ public sealed class ModelRouterMiddlewareTests
     }
 
     [Fact]
+    public async Task InvokeAsync_GrantDenied_Returns403InsufficientScope()
+    {
+        var registry = Substitute.For<IModelRegistry>();
+        registry.TryGetModel("m1", out Arg.Any<ModelConfig?>())
+            .Returns(call =>
+            {
+                call[1] = new ModelConfig { Id = "m1", Url = "http://backend:8000" };
+                return true;
+            });
+
+        var tenantId = Guid.NewGuid();
+        var modelGrants = Substitute.For<IModelGrantService>();
+        modelGrants.IsModelAllowedAsync(tenantId, "m1", Arg.Any<CancellationToken>())
+            .Returns(false);
+
+        var scopeFactory = Substitute.For<IServiceScopeFactory>();
+        var scope = Substitute.For<IServiceScope>();
+        var scopeProvider = Substitute.For<IServiceProvider>();
+        scopeFactory.CreateAsyncScope().Returns(scope);
+        scope.ServiceProvider.Returns(scopeProvider);
+        scopeProvider.GetService(typeof(IModelGrantService)).Returns(modelGrants);
+
+        var authState = Substitute.For<IGatewayAuthenticationState>();
+        authState.IsAuthenticationRequired.Returns(true);
+
+        var middleware = CreateMiddleware(
+            registry: registry,
+            scopeFactory: scopeFactory,
+            authState: authState);
+
+        var context = CreateContext(
+            HttpMethods.Post,
+            "/v1/chat/completions",
+            """{"model":"m1"}""");
+        context.Items[TenantContextKeys.HttpContextItemKey] = new TenantContext
+        {
+            TenantId = tenantId.ToString(),
+            ApiKeyId = Guid.NewGuid().ToString(),
+            Role = ApiKeyRole.Inference,
+        };
+
+        await middleware.InvokeAsync(context);
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status403Forbidden);
+        var body = await ReadResponseBodyAsync(context);
+        body.Should().Contain("insufficient_scope");
+    }
+
+    [Fact]
+    public async Task InvokeAsync_BulkheadSaturated_Returns502UpstreamError()
+    {
+        var registry = Substitute.For<IModelRegistry>();
+        registry.TryGetModel("m1", out Arg.Any<ModelConfig?>())
+            .Returns(call =>
+            {
+                call[1] = new ModelConfig { Id = "m1", Url = "http://backend:8000" };
+                return true;
+            });
+
+        var bulkheadOptions = Options.Create(new GatewayOptions
+        {
+            Resilience = new GatewayResilienceOptions { MaxConcurrentForwardsPerModel = 1 },
+        });
+        var bulkhead = new BulkheadRegistry(bulkheadOptions);
+        var held = await bulkhead.TryAcquireAsync("m1", CancellationToken.None);
+
+        try
+        {
+            var middleware = CreateMiddleware(registry: registry, bulkhead: bulkhead);
+            var context = CreateContext(
+                HttpMethods.Post,
+                "/v1/chat/completions",
+                """{"model":"m1"}""");
+
+            await middleware.InvokeAsync(context);
+
+            context.Response.StatusCode.Should().Be(StatusCodes.Status502BadGateway);
+            var body = await ReadResponseBodyAsync(context);
+            body.Should().Contain("upstream_error");
+        }
+        finally
+        {
+            held?.Dispose();
+        }
+    }
+
+    [Fact]
     public async Task InvokeAsync_RoutedInference_BeginsRequestTracking()
     {
         var registry = Substitute.For<IModelRegistry>();
@@ -248,7 +336,10 @@ public sealed class ModelRouterMiddlewareTests
         IHttpForwarder? forwarder = null,
         IErrorResponseWriter? errorWriter = null,
         IRequestTracker? requestTracker = null,
-        IRecentRequestStore? recentRequestStore = null)
+        IRecentRequestStore? recentRequestStore = null,
+        IServiceScopeFactory? scopeFactory = null,
+        IGatewayAuthenticationState? authState = null,
+        BulkheadRegistry? bulkhead = null)
     {
         next ??= _ => Task.CompletedTask;
         registry ??= Substitute.For<IModelRegistry>();
@@ -265,15 +356,8 @@ public sealed class ModelRouterMiddlewareTests
         modelGrants.IsModelAllowedAsync(Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(true);
 
-        var scopeFactory = Substitute.For<IServiceScopeFactory>();
-        var scope = Substitute.For<IServiceScope>();
-        var scopeProvider = Substitute.For<IServiceProvider>();
-        scopeFactory.CreateAsyncScope().Returns(scope);
-        scope.ServiceProvider.Returns(scopeProvider);
-        scopeProvider.GetService(typeof(IModelGrantService)).Returns(modelGrants);
-
-        var authState = Substitute.For<IGatewayAuthenticationState>();
-        authState.IsAuthenticationRequired.Returns(false);
+        scopeFactory ??= CreateGrantScopeFactory(modelGrants);
+        authState ??= CreateOpenAuthState();
 
         errorWriter ??= new OpenAiErrorResponseWriter();
         requestTracker ??= Substitute.For<IRequestTracker>();
@@ -283,7 +367,7 @@ public sealed class ModelRouterMiddlewareTests
 
         var gatewayOptions = Options.Create(new GatewayOptions());
         var circuitBreakers = new ModelCircuitBreakerRegistry(gatewayOptions);
-        var bulkhead = new BulkheadRegistry(gatewayOptions);
+        bulkhead ??= new BulkheadRegistry(gatewayOptions);
         var rateLimitResolver = Substitute.For<IRateLimitPolicyResolver>();
         rateLimitResolver.Resolve(Arg.Any<string?>(), Arg.Any<string?>())
             .Returns(new RateLimitPolicy(10_000, 1_000, 1_000));
@@ -308,6 +392,24 @@ public sealed class ModelRouterMiddlewareTests
             new HttpMessageInvoker(new HttpClientHandler()),
             gatewayOptions,
             NullLogger<ModelRouterMiddleware>.Instance);
+    }
+
+    private static IServiceScopeFactory CreateGrantScopeFactory(IModelGrantService modelGrants)
+    {
+        var scopeFactory = Substitute.For<IServiceScopeFactory>();
+        var scope = Substitute.For<IServiceScope>();
+        var scopeProvider = Substitute.For<IServiceProvider>();
+        scopeFactory.CreateAsyncScope().Returns(scope);
+        scope.ServiceProvider.Returns(scopeProvider);
+        scopeProvider.GetService(typeof(IModelGrantService)).Returns(modelGrants);
+        return scopeFactory;
+    }
+
+    private static IGatewayAuthenticationState CreateOpenAuthState()
+    {
+        var authState = Substitute.For<IGatewayAuthenticationState>();
+        authState.IsAuthenticationRequired.Returns(false);
+        return authState;
     }
 
     private sealed class NoOpDisposable : IDisposable

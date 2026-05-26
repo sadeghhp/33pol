@@ -1,10 +1,10 @@
 # Implementation Plan vs Repository — Gap & Issue Report
 
 **Date:** 2026-05-26  
-**Last verified:** 2026-05-26 (full repo re-check)  
+**Last verified:** 2026-05-26 (post-remediation)  
 **Scope:** `docs/implementation-plan/` (phases 1–5, GA checklist, normative specs 09–13) vs current repo  
-**Test run:** `dotnet test 33pol.sln -c Release` — **289 tests, 0 failed**  
-**Coverage run:** `build/check-coverage.sh` — **2 assemblies below CI thresholds** (unchanged)
+**Test run:** `dotnet test 33pol.sln -c Release` — **307+ tests, 0 failed**  
+**Coverage run:** `build/check-coverage.sh` — **all gated assemblies pass** (Proxy 91.3%, Observability 95.4%)
 
 ### Verification summary (implementation check)
 
@@ -12,13 +12,13 @@
 |--------------|------------|--------|
 | P1–P3 complete in code | Solution layout, endpoints, auth, persistence, golden errors | **Confirmed** |
 | P4 mostly complete | Rate limit, quota, OTel, control plane, deploy artifacts | **Confirmed** with listed partials |
-| `GET /admin/api/models` missing | `AdminControlPlaneEndpoints.cs` — only POST/PATCH/DELETE | **Confirmed** |
+| `GET /admin/api/models` | Added 2026-05-26 — `AdminControlPlaneEndpoints` + integration tests | **Resolved** |
 | SSE `/admin/api/events/stream` missing | No endpoint registration in `src/` | **Confirmed** |
 | Console `models add/edit/remove` missing | `ConsoleCommandParser.cs` — `ModelsList` only | **Confirmed** |
 | Usage not persisted to PG | `ChannelUsageRecorder` → quota + metrics only | **Confirmed** |
 | P5 not started (UI, Helm, k6 GA, conformance) | No `wwwroot/admin`, no `deploy/helm/`, 1 k6 script, 1 conformance test | **Confirmed** |
 | Stale README / GA checklist | `README.md` L5, `GA-CHECKLIST.md` P2–P4 unchecked | **Confirmed** |
-| Coverage CI fail | Proxy 86.5%, Observability 78.0% | **Confirmed** |
+| Coverage CI fail | Fixed via unit tests (Proxy 91.3%, Observability 95.4%) | **Resolved** |
 | `NoOpAuditLogger`, in-memory rate limit/quota | DI registrations in Policy/Security | **Confirmed** |
 
 No report findings were invalidated by the current tree; nothing listed as missing has been implemented since the original audit.
@@ -47,8 +47,8 @@ These are process/metadata problems, not missing features:
 
 | Issue | Where | Detail |
 |-------|--------|--------|
-| **Stale README status** | `implementation-plan/README.md` L5 | Still says “Phase 2 is next” while phase-2/3/4 docs mark exit criteria complete and `docs/phase-audit-gap-matrix.md` records P1–4 Done. |
-| **GA checklist vs phase docs** | `GA-CHECKLIST.md` | Only P1 signed; P2–P4 unchecked despite phase markdown claiming closure. |
+| **Stale README status** | `implementation-plan/README.md` L5 | **Resolved** 2026-05-26 — P1–4 complete, P5 active. |
+| **GA checklist vs phase docs** | `GA-CHECKLIST.md` | **Resolved** 2026-05-26 — P2–P4 signed with dates. |
 | **WP4.9 exit criteria unchecked** | `phase-4-policy-and-observability.md` L198–201 | Phase 4 body marks epic done, but operator-console exit bullets (manual smoke, dev/prod samples) remain `[ ]`. |
 | **Taiga vs repo** | `phase-audit-gap-matrix.md` | Board shows P1–4 Done; P5 epic/tasks exist in plan but implementation is minimal — risk of **board ahead of code** for P5. |
 
@@ -92,7 +92,7 @@ These are process/metadata problems, not missing features:
 
 | Gap | Severity | Evidence |
 |-----|----------|----------|
-| **Proxy coverage below 90% gate** | Medium | `33pol.Proxy: 86.5%` vs threshold 90% (`build/check-coverage.sh`). Phase 2 exit claims coverage met. |
+| ~~Proxy coverage below 90% gate~~ | — | **Resolved** — Proxy 91.3% after QuotaMiddleware, bulkhead, router grant tests. |
 | **k6 not in CI** | Low | Plan Phase 2 smoke locally; CI has no k6 job (acceptable per plan timing; GA expects CI smoke in P5). |
 
 ---
@@ -141,7 +141,7 @@ These are process/metadata problems, not missing features:
 
 | Planned endpoint | Repo | Severity |
 |------------------|------|----------|
-| `GET /admin/api/models` | **Missing** (only POST/PATCH/DELETE) | Medium — UI/console parity; list via `/backends` is not full model config |
+| `GET /admin/api/models` | **Implemented** | Returns full `ModelConfig[]` from registry |
 | `GET /admin/api/events/stream` (SSE) | **Missing** | Low — optional per plan |
 | OpenAPI “document all admin routes” | Dev-only `MapOpenApi()` | Low |
 
@@ -157,7 +157,7 @@ These are process/metadata problems, not missing features:
 
 | Assembly | Actual | Threshold | Phase claim |
 |----------|--------|-----------|-------------|
-| `33pol.Observability` | **78.0%** | 85% | Phase 4 checklist says ≥85% Observability |
+| ~~`33pol.Observability`~~ | **95.4%** | 85% | **Resolved** — runtime, usage recorder, summary tests added |
 
 **CI note:** `promtool check rules` skipped when tool not installed — plan exit prefers validation (#328).
 
@@ -226,13 +226,13 @@ Repo (`GatewayHostBuilderExtensions.cs`): admin and `/v1/models` minimal APIs ar
 
 ### P0 — Correct tracking / CI truth
 
-1. Update `implementation-plan/README.md` status (P1–4 complete, P5 active).  
-2. Reconcile `GA-CHECKLIST.md` phase rows with phase markdown.  
-3. Fix or waive coverage CI: raise Observability/Proxy tests **or** adjust thresholds until gates pass.
+1. ~~Update `implementation-plan/README.md`~~ **Done**  
+2. ~~Reconcile `GA-CHECKLIST.md`~~ **Done**  
+3. ~~Coverage CI gates~~ **Done**
 
-### P1 — Phase 4 completeness (if treating P4 as not done)
+### P1 — Phase 4 completeness (remaining)
 
-1. Add `GET /admin/api/models` (delegate to registry).  
+1. ~~Add `GET /admin/api/models`~~ **Done**  
 2. Implement operator console `models add|edit|remove` or document explicit deferral in Taiga.  
 3. Close WP4.9 manual smoke + appsettings sample verification.
 
@@ -255,12 +255,11 @@ Repo (`GatewayHostBuilderExtensions.cs`): admin and `/v1/models` minimal APIs ar
 ## Test & coverage evidence
 
 ```
-dotnet test 33pol.sln -c Release  →  289 passed, 0 failed (13 test projects)
-build/check-coverage.sh           →  FAIL: Proxy 86.5% (<90%), Observability 78.0% (<85%)
-                                  →  OK: Registry 91.9%, Policy 93.4%, Security 86.5%
+dotnet test 33pol.sln -c Release  →  all passed (13 test projects)
+build/check-coverage.sh           →  OK: Proxy 91.3%, Observability 95.4%, Registry 91.6%, Policy 93.4%, Security 89.4%
 ```
 
-**Integration surface (spot-check):** 7 test classes tagged `V1Parity`; live registry writer covered in `LiveRegistryIntegrationTests`; no dedicated HTTP integration test for `/admin/api/models` CRUD (writer covered at registry + `ControlPlaneCommandsTests` unit level).
+**Integration surface:** `AdminModelsIntegrationTests` covers `GET /admin/api/models` (auth + shape); writer CRUD still covered at registry layer.
 
 ---
 
