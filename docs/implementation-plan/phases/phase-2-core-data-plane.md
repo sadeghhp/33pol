@@ -119,8 +119,16 @@ This phase produces a **deployable internal gateway** matching v1.2.0 proxy beha
 |------|---------|
 | Serilog bootstrap | `UseSerilogRequestLogging` — method, path, status, duration (no body) |
 | Streaming limits | `MaxResponseBufferSize = null`, etc. |
-| Register middleware order | Router after routing only (no auth yet) |
+| Register middleware order | **Phase 2 interim** (see below) |
 | `models.json` in `App` content or config path resolution |
+
+**Phase 2 interim middleware** (final order in [01-solution-architecture.md](../01-solution-architecture.md)):
+
+```text
+Serilog → UseRouting → (minimal APIs: /health, /v1/models, /admin, /stats, /metrics) → UseModelRouter
+```
+
+Auth, rate limits, and quota middleware are added in Phases 3–4.
 
 Phase 4 adds OTel trace enrichers to Serilog only; do not defer Serilog to Phase 4.
 

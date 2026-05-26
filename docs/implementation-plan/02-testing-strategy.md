@@ -27,7 +27,8 @@ This document defines **what** to test, **how** to structure tests, and **when**
 | **Unit** | `33pol.*.Tests` per library | Classes, pure logic, middleware isolated | Every PR |
 | **Integration** | `33pol.Integration.Tests` | HTTP pipeline, mock upstream | Phase 2+ |
 | **Architecture** | `33pol.Architecture.Tests` | Dependency rules | Phase 1+ |
-| **Contract** | Inside Integration | OpenAI response shapes, error JSON | Phase 3+ |
+| **Conformance** | `33pol.Conformance.Tests` | OpenAI shapes, error golden files | Phase 5 (GA) |
+| **Contract** | Integration or Conformance | OpenAI response shapes, error JSON | Phase 3+ |
 | **Load** | `perf/k6` | RPS, latency, TTFT | Phase 2 baseline, Phase 5 GA |
 
 ---

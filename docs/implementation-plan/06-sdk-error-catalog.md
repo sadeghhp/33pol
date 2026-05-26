@@ -45,8 +45,16 @@ Stable machine-readable codes for client SDKs. **Implement in Phase 3–4**; pub
 | 503 | `service_unavailable` | `gateway_draining` | P3 |
 | 503 | `service_unavailable` | `not_ready` | P3 |
 
+### Code selection (grant vs policy)
+
+| Situation | HTTP | `code` |
+|-----------|------|--------|
+| API key lacks **model grant** for the resolved model | 403 | `insufficient_scope` |
+| Model blocked by **plan/feature/policy** (not scope) | 400 | `model_not_allowed` |
+
 ## Unit test requirement
 
 - **Phase 1:** Every defined `GatewayErrorCode` enum value serializes to a stable string (catalog grows later).
-- **Phase 3+:** Each row in this catalog requires a **golden JSON integration test** and a **unit test** on `ErrorResponseWriter` before the phase containing it is closed.
+- **Phase 3:** Golden JSON + unit tests for every row marked **P3** in the catalog table above.
+- **Phase 4:** Same for **P4** rows (429 codes) plus `Retry-After` header tests.
 - **Phase 4:** `Retry-After` header tests apply to 429 codes only.

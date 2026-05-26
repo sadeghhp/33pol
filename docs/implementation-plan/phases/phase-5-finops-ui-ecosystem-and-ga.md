@@ -28,6 +28,8 @@ Complete **FinOps and advanced billing**, ship the **minimal admin UI**, deliver
 
 ### WP5.1 — FinOps & billing (`33pol.Billing`)
 
+**Budget vs Quota:** `IQuotaService` (Phase 4) gates inference (429 `quota_exceeded`). **Budget** is FinOps spend tracking — webhooks, forecasts, optional hard stop that may call into quota only when explicitly enabled (see [01-solution-architecture.md](../01-solution-architecture.md)).
+
 | Task | Details |
 |------|---------|
 | Schema | `RateCard`, `Plan`, `Budget`, `BillingEvent` |
@@ -117,17 +119,6 @@ Execute [03-performance-and-load-testing.md](../03-performance-and-load-testing.
 | `docs/runbooks/` | High error rate, all backends down, writer backlog |
 | `implementation-plan/GA-CHECKLIST.md` | Sign-off template |
 
-### WP5.8 — Inference conformance suite
-
-| Task | Details |
-|------|---------|
-| Project | `tests/33pol.Conformance/` or tagged tests in `33pol.Integration.Tests` |
-| Scope | OpenAI request/response shapes for chat, completions, embeddings, models list |
-| Fixtures | Golden files for error JSON per `06-sdk-error-catalog.md` |
-| CI | Runs on `main`; required for GA (executive proposal §8) |
-
-**Tests:** Each official SDK smoke scenario documented in `docs/integrations.md`; suite passes against mock upstream and optional staging vLLM.
-
 ### WP5.7 — Security & compliance review
 
 | Task | Details |
@@ -136,6 +127,17 @@ Execute [03-performance-and-load-testing.md](../03-performance-and-load-testing.
 | OWASP API checklist | Document in `docs/security.md` |
 | Secret scanning | No keys in repo |
 | Pen test | Optional external — document scope |
+
+### WP5.8 — Inference conformance suite
+
+| Task | Details |
+|------|---------|
+| Project | `tests/33pol.Conformance.Tests/` (see solution layout in `01-solution-architecture.md`) |
+| Scope | OpenAI request/response shapes for chat, completions, embeddings, models list |
+| Fixtures | Golden files for error JSON per `06-sdk-error-catalog.md` |
+| CI | Runs on `main`; required for GA (executive proposal §8) |
+
+**Tests:** Each official SDK smoke scenario documented in `docs/integrations.md`; suite passes against mock upstream and optional staging vLLM.
 
 ---
 

@@ -9,7 +9,7 @@
 
 ## Objective
 
-Secure the gateway with **hashed API keys and tenants**, **production resilience** (timeouts, circuit breakers, limits on body size, graceful shutdown), **split control/data plane auth**, and the full **SDK-friendly error catalog**.
+Secure the gateway with **hashed API keys and tenants**, **production resilience** (timeouts, circuit breakers, limits on body size, graceful shutdown), **split control/data plane auth**, and **SDK error codes for all P3 rows** in [06-sdk-error-catalog.md](../06-sdk-error-catalog.md) (P4 429 codes are Phase 4).
 
 Introduce **PostgreSQL** for identity (not yet full billing).
 
@@ -20,8 +20,8 @@ Introduce **PostgreSQL** for identity (not yet full billing).
 - API key authentication on inference and admin (separate policies)  
 - EF Core migrations for tenants, keys, scopes  
 - Resilience policies active on forward path  
-- All router/auth errors use stable `code` values  
-- `/health/live`, `/health/ready`, legacy `/health`  
+- All P3 catalog error codes implemented with stable `code` values  
+- `/health/live` (since P1), `/health/ready` (readiness semantics), legacy `/health`  
 - **90%+ unit coverage** on Security; **90%+** on Proxy resilience components  
 
 ---
@@ -49,7 +49,7 @@ Introduce **PostgreSQL** for identity (not yet full billing).
 | `ApiKeyAuthenticationHandler` or middleware | Bearer + `X-API-Key` |
 | Key hashing | HMAC or PasswordHasher + pepper from config |
 | `IApiKeyValidator` | Cache with `IMemoryCache`, TTL 1–5 min |
-| Public paths | `/health`, `/metrics`, `/stats` only when keys configured |
+| Public paths (when keys configured) | `/health`, `/health/live`, `/health/ready`, `/metrics`, `/stats` — required for probes and v1 parity |
 | Admin policy | Separate scheme or role `Admin` |
 | `TenantContext` middleware | Populate `HttpContext` |
 
@@ -57,7 +57,7 @@ Introduce **PostgreSQL** for identity (not yet full billing).
 
 - Valid key → success  
 - Invalid, expired, revoked → 401 with `invalid_api_key` / `expired_api_key`  
-- Model not in grant → 403 `model_not_allowed`  
+- Model not in grant → 403 `insufficient_scope` (see catalog grant vs policy table)  
 - Cache invalidation on revoke  
 
 **Model grant enforcement:** After registry resolves the model alias, `IModelGrantService` validates against `TenantContext` before forward (in `ModelRouterMiddleware` or middleware immediately before router).
@@ -71,12 +71,13 @@ Introduce **PostgreSQL** for identity (not yet full billing).
 
 ### WP3.3 — SDK error catalog (`33pol.Core` + `IErrorResponseWriter`)
 
-Implement full catalog from executive proposal:
+Implement all **P3** rows in [06-sdk-error-catalog.md](../06-sdk-error-catalog.md) (not P4 429 codes):
 
 | Codes | HTTP |
 |-------|------|
-| `invalid_json`, `missing_model`, `model_not_found`, … | 400/404 |
-| `invalid_api_key`, `expired_api_key`, `insufficient_scope` | 401/403 |
+| `invalid_json`, `missing_model`, `model_not_allowed`, `model_not_found`, `request_too_large`, … | 400/404 |
+| `invalid_api_key`, `expired_api_key` | 401 |
+| `insufficient_scope` | 403 |
 | `backend_unhealthy`, `upstream_error`, `circuit_open` | 502 |
 | `gateway_draining`, `not_ready` | 503 |
 
@@ -112,9 +113,11 @@ Implement full catalog from executive proposal:
 
 ### WP3.5 — Health endpoints
 
+`GET /health/live` exists since Phase 1 (always 200). This WP adds readiness semantics and v1-compatible aggregate health.
+
 | Task | Details |
 |------|---------|
-| `GET /health/live` | Liveness |
+| `GET /health/live` | Confirm liveness unchanged; must stay on public allowlist (WP3.2) |
 | `GET /health/ready` | Registry loaded + policy (≥1 healthy backend optional) |
 | Update `GET /health` | Keep v1 JSON compatibility |
 
@@ -157,7 +160,7 @@ Requires admin credential (WP3.6). Satisfies GA checklist “API key create/revo
 
 ## Unit test checklist (Phase 3)
 
-- [ ] Every `GatewayErrorCode` has golden JSON test  
+- [ ] Every **P3** `GatewayErrorCode` row has golden JSON test (P4 rows in Phase 4)  
 - [ ] Auth middleware matrix (keys on/off, paths)  
 - [ ] Circuit breaker state machine  
 - [ ] Repository tests (in-memory + Testcontainers)  

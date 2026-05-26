@@ -2,7 +2,7 @@
 
 This folder contains the **authoritative implementation plan** for 33pol LLM Gateway version 2.0. It translates the product proposal into **five ordered phases**, a **modern .NET 10 solution architecture**, a **unit-test-first quality bar**, and a **performance/load testing program**.
 
-**Status:** Planning only — no application implementation has started per this plan.
+**Status:** Planning authoritative; **Phase 1 not started** for the multi-project gateway. Repo may contain early scaffold only (placeholder `33pol.csproj`, `deploy/docker/`, `perf/k6/thresholds.json`).
 
 **Logging:** Application logs are **not** stored in PostgreSQL (Serilog + OpenTelemetry export only). See [01-solution-architecture.md](./01-solution-architecture.md).
 
@@ -17,6 +17,7 @@ This folder contains the **authoritative implementation plan** for 33pol LLM Gat
 | [04-phase-overview.md](./04-phase-overview.md) | Why five phases, dependencies, exit criteria summary |
 | [05-feature-to-phase-matrix.md](./05-feature-to-phase-matrix.md) | Maps all proposal features to phases |
 | [06-sdk-error-catalog.md](./06-sdk-error-catalog.md) | Stable error codes (planning reference) |
+| [07-review-findings.md](./07-review-findings.md) | Plan review log (remediated items) |
 | [GA-CHECKLIST.md](./GA-CHECKLIST.md) | Production release sign-off template |
 
 ## Phases (implementation order)
@@ -31,8 +32,8 @@ This folder contains the **authoritative implementation plan** for 33pol LLM Gat
 
 ## Related references
 
-- v1 behavior spec: [`../docs/old-version/`](../docs/old-version/)
-- Workspace test rule: [`.cursor/rules/unit-test-coverage.mdc`](../.cursor/rules/unit-test-coverage.mdc)
+- v1 behavior spec: [`../old-version/`](../old-version/)
+- Workspace test rule: [`../../.cursor/rules/unit-test-coverage.mdc`](../../.cursor/rules/unit-test-coverage.mdc)
 - Taiga tracking: project **33pol** (epics should map 1:1 to phases)
 
 ## Read order

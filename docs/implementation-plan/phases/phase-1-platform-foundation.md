@@ -34,7 +34,8 @@ Establish a **modern .NET 10 solution skeleton**, dependency boundaries, CI pipe
 | Create solution | `dotnet new sln -n 33pol` |
 | App host | `33pol.App` — `net10.0`, `Microsoft.NET.Sdk.Web` |
 | Libraries | `33pol.Core`, `33pol.Registry`, `33pol.Proxy`, … (empty or minimal) |
-| Test projects | One test project per library + `Integration` + `Architecture` |
+| Test projects | One test project per library (including `33pol.Persistence.Tests`) + `Integration` + `Architecture` |
+| Namespaces | Assembly-aligned `RootNamespace` on new projects (replace legacy `_33pol` from placeholder `33pol.csproj`) |
 | Central package management | `Directory.Packages.props` for version pinning |
 | EditorConfig | `.editorconfig`, analyzers (`EnableNETAnalyzers`) |
 

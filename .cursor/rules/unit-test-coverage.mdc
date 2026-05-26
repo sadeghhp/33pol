@@ -27,7 +27,7 @@ If unsure, add a test.
 
 ## .NET conventions (this repo)
 
-Solution layout matches [01-solution-architecture.md](../docs/implementation-plan/01-solution-architecture.md) and [02-testing-strategy.md](../docs/implementation-plan/02-testing-strategy.md):
+Solution layout matches [01-solution-architecture.md](../../docs/implementation-plan/01-solution-architecture.md) and [02-testing-strategy.md](../../docs/implementation-plan/02-testing-strategy.md):
 
 - **One test project per library:** `33pol.Core.Tests` → `33pol.Core`, `33pol.Registry.Tests` → `33pol.Registry`, etc.
 - **Cross-cutting:** `33pol.Integration.Tests` (HTTP surface), `33pol.Architecture.Tests` (NetArchTest)

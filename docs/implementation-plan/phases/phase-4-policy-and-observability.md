@@ -9,7 +9,7 @@
 
 ## Objective
 
-Enforce **rate limits and quotas** per tenant/key/model, complete **Prometheus metrics** and **OpenTelemetry** traces, expose **control-plane REST APIs** for operators, and deliver **Observability++** (SLO-oriented metrics, structured logs with trace correlation, admin summary, optional SSE event stream).
+Enforce **rate limits and quotas** per tenant/key/model, complete **Prometheus metrics** and **OpenTelemetry** traces, expose **control-plane REST APIs** for operators, and deliver **Observability++** (SLO **metric hooks** for latency/error SLIs — Prometheus **recording rules** and sign-off in Phase 5; structured logs with trace correlation; admin summary; optional SSE event stream).
 
 Billing **metering hooks** are implemented here; FinOps **rate cards and exports** finalize in Phase 5.
 
@@ -110,7 +110,7 @@ Implement catalog from executive proposal:
 | Serilog enrichers | `trace_id`, `span_id` from OTel (request ID from WP3.3) |
 | Structured completion log | tenant, model, duration, status, tokens if known |
 | No body logging | Enforced by policy test |
-| Audit logs | Admin actions to separate channel |
+| Audit logs | Wire `IAuditLogger` (P3) to structured admin channel (stdout/OTel); durable retention/export in Phase 5 |
 
 ### WP4.6 — Control plane APIs (`33pol.Api`)
 
@@ -160,7 +160,7 @@ Implement `IRecentRequestStore` in `33pol.Observability` (in-memory ring buffer;
 - [ ] Rate limit matrix per policy  
 - [ ] Quota hard/soft behavior  
 - [ ] Metrics label constraints (static analysis or unit)  
-- [ ] Error codes for 429 variants  
+- [ ] Error codes for **P4** 429 variants + `Retry-After`  
 - [ ] Usage parser fixtures  
 - [ ] Coverage ≥ 85% Observability, ≥ 90% Policy  
 

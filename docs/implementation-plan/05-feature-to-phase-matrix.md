@@ -8,6 +8,7 @@ Maps proposal capabilities to implementation phases. Use for Taiga tagging (`pha
 |---------|---------|-------|
 | `POST /admin/reload` | `POST /admin/api/config/reload` | P2 (open) → P3 (secured) |
 | `GET /admin/status` | `GET /admin/api/config/status` | P2 → P3 |
+| WebSocket `GET /hubs/admin` (SignalR) | `GET /admin/api/events/stream` (SSE, optional) | P4 → P5 (UI) |
 
 ## v1 parity
 
@@ -63,7 +64,7 @@ Maps proposal capabilities to implementation phases. Use for Taiga tagging (`pha
 
 | Feature | Phase |
 |---------|-------|
-| `GatewayErrorCode` enum | P1 (stub) → P3 (full) |
+| `GatewayErrorCode` enum | P1 (all codes as stable strings) → P3 (P3 rows) → P4 (429 rows) |
 | OpenAI error envelope + `details` | P3 |
 | `X-Request-Id`, `X-33pol-Error-Code` | P3 |
 | `Retry-After` on 429 | P4 |
@@ -91,12 +92,13 @@ Maps proposal capabilities to implementation phases. Use for Taiga tagging (`pha
 | OpenTelemetry traces | P4 |
 | TTFT histogram | P4 |
 | Serilog trace correlation | P4 |
+| SLO metric hooks (latency/error SLIs) | P4 |
 | Grafana dashboards | P4 |
 | Alertmanager rules | P4 |
 | `/admin/api/summary` | P4 |
 | SSE admin event stream | P4 (optional) → P5 (UI) |
-| SLO / recording rules | P5 |
-| Audit logs | P3 (interface) → P5 (full) |
+| SLO / Prometheus recording rules | P5 |
+| Audit logs | P3 (`IAuditLogger` interface) → P4 (admin channel wiring) → P5 (durable retention/export) |
 | Application logs in PostgreSQL | **Not in v2** — Serilog + OTel export only |
 | Request history read API | P5 |
 
@@ -106,7 +108,7 @@ Maps proposal capabilities to implementation phases. Use for Taiga tagging (`pha
 |---------|-------|
 | `perf/k6` smoke | P2 |
 | k6 GA suite | P5 |
-| Inference conformance suite | P5 (WP5.8) |
+| Inference conformance suite | P5 (WP5.8, `33pol.Conformance.Tests`) |
 | Docker Compose stack | P5 |
 | Helm chart | P5 |
 | OpenAPI control plane | P4 (start) → P5 (publish) |

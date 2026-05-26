@@ -33,21 +33,25 @@
 │   ├── 33pol.Policy.Tests/
 │   ├── 33pol.Observability.Tests/
 │   ├── 33pol.Billing.Tests/
+│   ├── 33pol.Persistence.Tests/
 │   ├── 33pol.Integration.Tests/      # WebApplicationFactory, Testcontainers optional
-│   └── 33pol.Architecture.Tests/     # NetArchTest dependency rules (Phase 1)
+│   ├── 33pol.Architecture.Tests/     # NetArchTest dependency rules (Phase 1)
+│   └── 33pol.Conformance.Tests/      # Phase 5 GA — OpenAI shape / error golden tests
 ├── deploy/
 │   ├── docker/
-│   ├── helm/33pol/
-│   ├── grafana/dashboards/
-│   ├── prometheus/alerts/
-│   └── otel-collector/
+│   ├── helm/33pol/                   # Phase 5
+│   ├── grafana/
+│   │   ├── provisioning/             # datasources, dashboard provider (scaffold early)
+│   │   └── dashboards/               # e.g. 33pol-gateway.json (Phase 4)
+│   ├── prometheus/alerts/            # Phase 4–5
+│   └── otel-collector/               # Phase 4 sample, Phase 5 compose
 ├── perf/
 │   ├── k6/
 │   └── benchmarks/                   # BenchmarkDotNet (optional)
 └── docs/
 ```
 
-**Migration note:** Current repo has single `33pol.csproj` console app — Phase 1 replaces with solution structure above without implementing proxy logic.
+**Migration note:** Current repo has single `33pol.csproj` console app (`RootNamespace` `_33pol`) — Phase 1 replaces with the solution structure above without implementing proxy logic. Use assembly-aligned namespaces (not legacy `_33pol`) on new projects.
 
 ---
 
@@ -143,7 +147,7 @@ Use **Options pattern** + `IValidateOptions<T>` for fail-fast startup validation
 | Validation | `AddValidation()` + data annotations (admin APIs) |
 | OpenAPI | `Microsoft.AspNetCore.OpenApi` 3.1 (control plane) |
 | ORM | EF Core 10 + Npgsql |
-| Metrics | OpenTelemetry Prometheus exporter **or** prometheus-net (pick one in Phase 4) |
+| Metrics | OpenTelemetry Prometheus exporter **or** prometheus-net — **pick one in Phase 4; do not register both** |
 | Traces | OpenTelemetry.Extensions.Hosting |
 | Logging | Serilog.AspNetCore + enrichers |
 | Unit tests | xUnit + FluentAssertions + NSubstitute |
@@ -168,15 +172,19 @@ Define in `33pol.Core` early (Phase 1–2 stubs, Phase 3+ implementations):
 | `IErrorResponseWriter` | OpenAI + SDK error envelope |
 | `IRequestTracker` | Metrics scope per request |
 | `IModelGrantService` | Validate model against `TenantContext` grants |
+| `IConfigReload` | Trigger/status for `models.json` hot reload (`33pol.Registry` impl; admin API in `33pol.Api`) |
+| `IRecentRequestStore` | In-memory ring buffer for recent requests (`33pol.Observability`, Phase 4) |
+| `IAuditLogger` | Admin/security audit events (interface Phase 3; durable sink Phase 5) |
 
-Enables **in-memory fakes** in unit tests without HTTP.
+Enables **in-memory fakes** in unit tests without HTTP. Admin endpoints in `33pol.Api` depend only on these Core interfaces (registered in `33pol.App`).
 
-### Billing domain model (Plan vs Quota vs Rate card)
+### Billing domain model (Plan vs Quota vs Budget vs Rate card)
 
 | Concept | Phase | Role |
 |---------|-------|------|
 | **Plan** | 5 | Defines tenant tier limits (RPM, quotas, features); stored as `Plan` entity |
-| **Quota** | 4 | Enforces monthly token/request budgets via `IQuotaService` |
+| **Quota** | 4 | **Inference gate:** monthly token/request budgets via `IQuotaService` → 429 `quota_exceeded` |
+| **Budget** | 5 | **FinOps spend cap:** alerts/webhooks and optional hard stop; does not replace `IQuotaService` unless explicitly configured to call it |
 | **Rate card** | 5 | Prices usage events for FinOps export (does not gate inference by default) |
 
 Phase 4 rate limiting may use `Tenant.PlanSlug` (string) without the full FinOps engine.

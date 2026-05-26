@@ -112,3 +112,5 @@ Operators upgrading from v1 (`docs/old-version/`) must update automation and scr
 | `GET /admin/status` | `GET /admin/api/config/status` |
 
 All `/admin/api/**` routes require an admin API key from Phase 3 onward.
+
+**Real-time admin (breaking):** v1 used SignalR (`WebSocket /hubs/admin`). v2 uses optional **SSE** `GET /admin/api/events/stream` (Phase 4+) and polling against `/admin/api/summary`. Update dashboards and automation that depended on SignalR.
