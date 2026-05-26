@@ -27,6 +27,22 @@ public sealed class GatewayOptionsValidationTests
     }
 
     [Fact]
+    public void Validate_ReloadIntervalAbove300_ReturnsError()
+    {
+        var options = new GatewayOptions { ConfigReloadIntervalSeconds = 301 };
+
+        var errors = GatewayOptionsValidation.Validate(options);
+
+        errors.Should().Contain(e => e.Contains(nameof(GatewayOptions.ConfigReloadIntervalSeconds), StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Default_ConfigReloadInterval_IsTwoSeconds()
+    {
+        new GatewayOptions().ConfigReloadIntervalSeconds.Should().Be(2);
+    }
+
+    [Fact]
     public void Validate_ZeroHealthCheckInterval_ReturnsError()
     {
         var options = new GatewayOptions { HealthCheckIntervalSeconds = 0 };

@@ -12,9 +12,9 @@ public static class GatewayOptionsValidation
             errors.Add($"{nameof(GatewayOptions.ModelsConfigPath)} must be a non-empty path.");
         }
 
-        if (options.ConfigReloadIntervalSeconds < 0)
+        if (options.ConfigReloadIntervalSeconds is < 0 or > 300)
         {
-            errors.Add($"{nameof(GatewayOptions.ConfigReloadIntervalSeconds)} must be zero or positive.");
+            errors.Add($"{nameof(GatewayOptions.ConfigReloadIntervalSeconds)} must be between 0 and 300 seconds.");
         }
 
         if (options.HealthCheckIntervalSeconds < 1)

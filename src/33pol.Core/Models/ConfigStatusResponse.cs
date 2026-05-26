@@ -4,6 +4,8 @@ public sealed class ConfigStatusResponse
 {
     public bool HotReloadEnabled { get; init; }
 
+    public bool WatchEnabled { get; init; }
+
     public DateTimeOffset? LastReload { get; init; }
 
     public int ModelCount { get; init; }

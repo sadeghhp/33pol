@@ -6,7 +6,12 @@ public sealed class GatewayOptions
 
     public string ModelsConfigPath { get; set; } = "config/models.json";
 
-    public int ConfigReloadIntervalSeconds { get; set; } = 30;
+    public int ConfigReloadIntervalSeconds { get; set; } = 2;
+
+    /// <summary>
+    /// When null, enabled in Development and disabled otherwise.
+    /// </summary>
+    public bool? RegistryWatchEnabled { get; set; }
 
     public int HealthCheckIntervalSeconds { get; set; } = 30;
 

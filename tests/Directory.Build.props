@@ -7,6 +7,9 @@
     <IsTestProject>true</IsTestProject>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="$(MSBuildThisFileDirectory)FluentAssertionsLicenseAcknowledgment.cs" Link="FluentAssertionsLicenseAcknowledgment.cs" />
+  </ItemGroup>
+  <ItemGroup>
     <PackageReference Include="coverlet.collector" />
     <PackageReference Include="FluentAssertions" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />

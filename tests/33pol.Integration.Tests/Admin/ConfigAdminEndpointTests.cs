@@ -22,6 +22,7 @@ public sealed class ConfigAdminEndpointTests : IClassFixture<WebApplicationFacto
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         json.RootElement.GetProperty("hotReloadEnabled").GetBoolean().Should().BeTrue();
+        json.RootElement.TryGetProperty("watchEnabled", out _).Should().BeTrue();
         json.RootElement.GetProperty("modelCount").GetInt32().Should().BeGreaterThanOrEqualTo(0);
         json.RootElement.GetProperty("models").GetArrayLength().Should().BeGreaterThanOrEqualTo(0);
     }
