@@ -31,6 +31,12 @@ function adminApp() {
     showAdvancedModel: false,
     keysDrawerOpen: false,
     keysCreatedAck: false,
+    keyAccessDrawerOpen: false,
+    keyAccessEdit: null,
+    keyAccessRestricted: false,
+    keyAccessSelected: [],
+    tenantGrantRestricted: false,
+    tenantGrantSelected: [],
     keys: [],
     keysFilter: 'active',
     requests: [],
@@ -343,6 +349,10 @@ function adminApp() {
         else this.loadModels();
       }
       if (name === 'keys') this.loadKeys();
+      if (name === 'settings') {
+        if (!this.models?.length) this.fetchModels();
+        this.loadTenantGrants();
+      }
       if (name === 'settings') this.loadConfigStatus();
     },
 
@@ -432,6 +442,7 @@ function adminApp() {
         else if (this.revokeConfirmId) this.cancelRevoke();
         else if (this.modelTestDialog) this.closeModelTestDialog();
         else if (this.modelDrawerOpen) this.closeModelDrawer();
+        else if (this.keyAccessDrawerOpen) this.closeKeyAccessDrawer();
         else if (this.keysDrawerOpen) this.closeKeysDrawer();
       }
     },
@@ -487,6 +498,76 @@ function adminApp() {
       if (this.createdKey && !this.keysCreatedAck) return;
       this.keysDrawerOpen = false;
       this.createdKey = '';
+    },
+
+    async openKeyAccess(key) {
+      if (!key?.id || key.role === 'Admin') return;
+      this.keyAccessEdit = key;
+      this.keyAccessDrawerOpen = true;
+      this.keyAccessRestricted = false;
+      this.keyAccessSelected = [];
+      if (!this.models?.length) await this.fetchModels();
+      await this.runApi('keys', 'Loading model access…', async () => {
+        const body = await this.apiJson('/admin/api/keys/' + key.id + '/model-grants');
+        const ids = body?.modelIds ?? [];
+        this.keyAccessRestricted = ids.length > 0;
+        this.keyAccessSelected = [...ids];
+      });
+    },
+
+    closeKeyAccessDrawer() {
+      this.keyAccessDrawerOpen = false;
+      this.keyAccessEdit = null;
+    },
+
+    toggleKeyAccessModel(id) {
+      const set = new Set(this.keyAccessSelected);
+      if (set.has(id)) set.delete(id);
+      else set.add(id);
+      this.keyAccessSelected = [...set];
+    },
+
+    async saveKeyAccess() {
+      const key = this.keyAccessEdit;
+      if (!key?.id) return;
+      const modelIds = this.keyAccessRestricted ? this.keyAccessSelected : [];
+      await this.runApi('keys', 'Saving model access…', async () => {
+        await this.apiJson('/admin/api/keys/' + key.id + '/model-grants', {
+          method: 'PUT',
+          body: JSON.stringify({ modelIds })
+        });
+        this.toast('Model access updated.');
+        this.closeKeyAccessDrawer();
+        await this.loadKeys();
+      });
+    },
+
+    async loadTenantGrants() {
+      if (!this.apiKey) return;
+      await this.runApi('settings', 'Loading tenant model access…', async () => {
+        const body = await this.apiJson('/admin/api/tenant/model-grants');
+        const ids = body?.modelIds ?? [];
+        this.tenantGrantRestricted = ids.length > 0;
+        this.tenantGrantSelected = [...ids];
+      });
+    },
+
+    toggleTenantGrantModel(id) {
+      const set = new Set(this.tenantGrantSelected);
+      if (set.has(id)) set.delete(id);
+      else set.add(id);
+      this.tenantGrantSelected = [...set];
+    },
+
+    async saveTenantGrants() {
+      const modelIds = this.tenantGrantRestricted ? this.tenantGrantSelected : [];
+      await this.runApi('settings', 'Saving tenant model access…', async () => {
+        await this.apiJson('/admin/api/tenant/model-grants', {
+          method: 'PUT',
+          body: JSON.stringify({ modelIds })
+        });
+        this.toast('Tenant model access updated.');
+      });
     },
 
     applyModelTemplate(kind) {

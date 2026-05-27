@@ -13,7 +13,7 @@ public static class GatewayApiServiceCollectionExtensions
     {
         services.AddSingleton<IErrorResponseWriter, OpenAiErrorResponseWriter>();
         services.AddSingleton<GatewayProcessClock>();
-        services.AddSingleton<ModelsApiService>();
+        services.AddScoped<ModelsApiService>();
         services.AddSingleton<GatewayHealthService>();
         services.AddSingleton<GatewayReadinessService>();
         services.AddSingleton<GatewayStatsService>();

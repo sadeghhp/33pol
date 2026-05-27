@@ -139,7 +139,11 @@ public sealed class ModelRouterMiddleware
         {
             await using var scope = _scopeFactory.CreateAsyncScope();
             var modelGrants = scope.ServiceProvider.GetRequiredService<IModelGrantService>();
-            if (!await modelGrants.IsModelAllowedAsync(tenantId, modelConfig.Id, context.RequestAborted).ConfigureAwait(false))
+            var apiKeyId = Guid.TryParse(tenantContext.ApiKeyId, out var parsedKeyId)
+                ? parsedKeyId
+                : Guid.Empty;
+            if (!await modelGrants.IsModelAllowedAsync(tenantId, apiKeyId, modelConfig.Id, context.RequestAborted)
+                    .ConfigureAwait(false))
         {
                 await context.WriteGatewayErrorAsync(
                     _errors.Write(

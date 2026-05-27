@@ -35,7 +35,8 @@ Files under `src/33pol.App/wwwroot/admin/` (served at `/admin/`):
 | Overview | `#/dashboard` | Metrics (2s poll while active + visible), health chips, recent requests |
 | Usage | `#/usage` | Date presets, unified **Apply range**, rollups, events, forecast, export |
 | Routing | `#/routing` | **Models** (registry, quick-add drawer) and **Backends** (health table) |
-| API keys | `#/keys` | List, create (drawer), revoke (modal) |
+| API keys | `#/keys` | List, create (drawer), per-key model access (drawer), revoke (modal) |
+| Settings | `#/settings` | Config reload; tenant-wide model allowlist |
 | Settings | `#/settings` | Config status, reload from disk, observability links |
 
 ## Errors and feedback
@@ -58,7 +59,8 @@ GET requests retry once on network failure. Usage export uses `downloadBlob` wit
 | Usage | `GET /admin/api/usage`, `/usage/events`, `/usage/forecast`, `GET /usage/export` |
 | Routing — Models | `GET/POST/PATCH/DELETE /admin/api/models` (write body: `{ model, apiKey?, clearApiKey? }`; GET returns `{ model, hasUpstreamCredential }`) |
 | Routing — Backends | `GET /admin/api/backends` |
-| API keys | `GET/POST /admin/api/keys`, `POST …/revoke` |
+| API keys | `GET/POST /admin/api/keys`, `POST …/revoke`, `GET/PUT …/keys/{id}/model-grants` |
+| Tenant model access | `GET/PUT /admin/api/tenant/model-grants` |
 | Settings | `GET /admin/api/config/status`, `POST /admin/api/config/reload` |
 
 After adding or editing a model, verify **`GET /v1/models`** (link on Routing → Models).

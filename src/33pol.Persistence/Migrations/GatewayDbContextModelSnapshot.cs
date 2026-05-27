@@ -71,6 +71,33 @@ namespace Pol33.Persistence.Migrations
                     b.ToTable("api_keys", (string)null);
                 });
 
+            modelBuilder.Entity("Pol33.Persistence.Entities.ApiKeyModelGrantEntity", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("ApiKeyId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Effect")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
+                    b.Property<string>("ModelPattern")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ApiKeyId", "ModelPattern")
+                        .IsUnique();
+
+                    b.ToTable("api_key_model_grants", (string)null);
+                });
+
             modelBuilder.Entity("Pol33.Persistence.Entities.BillingEventEntity", b =>
                 {
                     b.Property<Guid>("Id")
@@ -418,6 +445,17 @@ namespace Pol33.Persistence.Migrations
                         .IsRequired();
 
                     b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("Pol33.Persistence.Entities.ApiKeyModelGrantEntity", b =>
+                {
+                    b.HasOne("Pol33.Persistence.Entities.ApiKeyEntity", "ApiKey")
+                        .WithMany()
+                        .HasForeignKey("ApiKeyId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("ApiKey");
                 });
 
             modelBuilder.Entity("Pol33.Persistence.Entities.ModelGrantEntity", b =>

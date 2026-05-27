@@ -5,6 +5,12 @@
       "url": "http://localhost:8080",
       "maxContextLength": 8192,
       "aliases": ["mock", "gpt-local"]
+    },
+    {
+      "id": "other-mock",
+      "url": "http://localhost:8080",
+      "maxContextLength": 8192,
+      "aliases": []
     }
   ]
 }

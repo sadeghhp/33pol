@@ -230,7 +230,7 @@ public sealed class ModelRouterMiddlewareTests
 
         var tenantId = Guid.NewGuid();
         var modelGrants = Substitute.For<IModelGrantService>();
-        modelGrants.IsModelAllowedAsync(tenantId, "m1", Arg.Any<CancellationToken>())
+        modelGrants.IsModelAllowedAsync(tenantId, Arg.Any<Guid>(), "m1", Arg.Any<CancellationToken>())
             .Returns(false);
 
         var scopeFactory = Substitute.For<IServiceScopeFactory>();
@@ -354,7 +354,7 @@ public sealed class ModelRouterMiddlewareTests
         forwarder ??= Substitute.For<IHttpForwarder>();
 
         var modelGrants = Substitute.For<IModelGrantService>();
-        modelGrants.IsModelAllowedAsync(Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+        modelGrants.IsModelAllowedAsync(Arg.Any<Guid>(), Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(true);
 
         scopeFactory ??= CreateGrantScopeFactory(modelGrants);

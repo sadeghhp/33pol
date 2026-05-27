@@ -94,6 +94,26 @@ Failure → 403 `insufficient_scope` ([06-sdk-error-catalog.md](./06-sdk-error-c
 
 ---
 
+## ApiKeyModelGrant (per inference key)
+
+| Column / field | Type | Notes |
+|----------------|------|-------|
+| `Id` | `uuid` PK | |
+| `ApiKeyId` | FK → ApiKey | CASCADE on key delete |
+| `ModelPattern` | string | Canonical registry model id (exact match) |
+| `Effect` | enum | `Allow` (default) |
+
+**Evaluation with tenant grants (MUST):**
+
+1. Apply tenant rules from `ModelGrant` (see above).
+2. If API key has **no** `api_key_model_grants` rows → inherit tenant result only.
+3. If API key has **≥1** row → model must match key allowlist **and** tenant rules (intersection).
+4. Admin `PUT` key grants validates each id exists in registry and is allowed by tenant policy.
+
+Admin API: `GET`/`PUT /admin/api/tenant/model-grants`, `GET`/`PUT /admin/api/keys/{id}/model-grants` (inference keys only).
+
+---
+
 ## Rate limit source (Phase 4, before `Plan` entity)
 
 Until Phase 5 `Plan` table drives limits, resolve RPM / concurrency / burst from **first match**:

@@ -20,7 +20,10 @@ public sealed class ModelsApiServiceTests
         health.IsBackendHealthy("healthy-a").Returns(true);
         health.IsBackendHealthy("sick-b").Returns(false);
 
-        var service = new ModelsApiService(registry, health);
+        var grants = Substitute.For<IModelGrantService>();
+        grants.IsModelAllowedAsync(Arg.Any<Guid>(), Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+        var service = new ModelsApiService(registry, health, grants);
 
         var list = service.ListHealthyModels();
 
@@ -50,7 +53,10 @@ public sealed class ModelsApiServiceTests
         var health = Substitute.For<IBackendHealthStore>();
         health.IsBackendHealthy("canonical/id").Returns(false);
 
-        var service = new ModelsApiService(registry, health);
+        var grants = Substitute.For<IModelGrantService>();
+        grants.IsModelAllowedAsync(Arg.Any<Guid>(), Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+        var service = new ModelsApiService(registry, health, grants);
 
         var (response, error) = service.TryGetModel("alias-name");
 
@@ -67,7 +73,10 @@ public sealed class ModelsApiServiceTests
         registry.TryGetModel("missing", out Arg.Any<ModelConfig?>()).Returns(false);
 
         var health = Substitute.For<IBackendHealthStore>();
-        var service = new ModelsApiService(registry, health);
+        var grants = Substitute.For<IModelGrantService>();
+        grants.IsModelAllowedAsync(Arg.Any<Guid>(), Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+        var service = new ModelsApiService(registry, health, grants);
 
         var (response, error) = service.TryGetModel("missing");
 

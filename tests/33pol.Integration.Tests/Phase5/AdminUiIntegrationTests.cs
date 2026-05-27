@@ -20,7 +20,9 @@ public sealed class AdminUiIntegrationTests
         body.Should().Contain("src=\"admin-icons.js?v=7\"");
         body.Should().Contain("src=\"admin-errors.js?v=7\"");
         body.Should().Contain("src=\"admin-store.js?v=7\"");
-        body.Should().Contain("src=\"admin-app.js?v=8\"");
+        body.Should().Contain("src=\"admin-app.js?v=9\"");
+        body.Should().Contain("openKeyAccess");
+        body.Should().Contain("Tenant model access");
         body.Should().Contain("testModel(");
         body.Should().Contain("model-test-title");
         body.Should().Contain("Hello world");

@@ -14,14 +14,16 @@ public sealed class GatewayApiServiceCollectionExtensionsTests
         var services = new ServiceCollection();
         services.AddSingleton(Substitute.For<IModelRegistry>());
         services.AddSingleton(Substitute.For<IBackendHealthStore>());
+        services.AddScoped(_ => Substitute.For<IModelGrantService>());
         services.AddSingleton(Substitute.For<IConfigReload>());
         services.AddSingleton(Substitute.For<IGatewayDrainState>());
         services.AddSingleton(Substitute.For<IAdminSummaryReader>());
         services.AddGatewayApi();
 
         using var provider = services.BuildServiceProvider();
+        using var scope = provider.CreateScope();
 
-        provider.GetRequiredService<ModelsApiService>().Should().NotBeNull();
+        scope.ServiceProvider.GetRequiredService<ModelsApiService>().Should().NotBeNull();
         provider.GetRequiredService<GatewayHealthService>().Should().NotBeNull();
         provider.GetRequiredService<GatewayReadinessService>().Should().NotBeNull();
         provider.GetRequiredService<GatewayStatsService>().Should().NotBeNull();

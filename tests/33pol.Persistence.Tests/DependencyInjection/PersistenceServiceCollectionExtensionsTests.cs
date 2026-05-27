@@ -35,5 +35,6 @@ public sealed class PersistenceServiceCollectionExtensionsTests
         services.Any(d => d.ServiceType == typeof(ITenantRepository)).Should().BeTrue();
         services.Any(d => d.ServiceType == typeof(IApiKeyRepository)).Should().BeTrue();
         services.Any(d => d.ServiceType == typeof(IModelGrantRepository)).Should().BeTrue();
+        services.Any(d => d.ServiceType == typeof(IApiKeyModelGrantRepository)).Should().BeTrue();
     }
 }

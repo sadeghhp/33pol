@@ -39,7 +39,7 @@ Admin mutations invoke `IAuditLogger` (structured logs). Durable audit retention
 |---|------|----------------|
 | API1 | Broken object level authorization | Tenant-scoped API keys; admin APIs require admin role |
 | API2 | Broken authentication | Hashed keys, pepper, expiry/revoke |
-| API3 | Broken object property level authorization | Model grants (`IModelGrantService`); admin vs inference roles |
+| API3 | Broken object property level authorization | Tenant + per-key model grants (`IModelGrantService`); admin vs inference roles |
 | API4 | Unrestricted resource consumption | Rate limits, concurrency, quotas, request body size cap |
 | API5 | Broken function level authorization | `GatewayAuthPolicies.Admin` on `/admin/api/**` |
 | API6 | Unrestricted access to sensitive business flows | Admin UI/console documented; audit logs on mutations |

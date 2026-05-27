@@ -11,8 +11,35 @@ public static class ModelGrantEvaluator
             return true;
         }
 
-        return grants.Any(g =>
+        return MatchesAllowGrant(grants.Select(g => (g.Effect, g.ModelPattern)), canonicalModelId);
+    }
+
+    public static bool IsModelAllowed(
+        IReadOnlyList<ModelGrantRecord> tenantGrants,
+        IReadOnlyList<ApiKeyModelGrantRecord> apiKeyGrants,
+        string canonicalModelId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(canonicalModelId);
+
+        if (!IsModelAllowed(tenantGrants, canonicalModelId))
+        {
+            return false;
+        }
+
+        if (apiKeyGrants.Count == 0)
+        {
+            return true;
+        }
+
+        return MatchesAllowGrant(
+            apiKeyGrants.Select(g => (g.Effect, g.ModelPattern)),
+            canonicalModelId);
+    }
+
+    private static bool MatchesAllowGrant(
+        IEnumerable<(GrantEffect Effect, string ModelPattern)> grants,
+        string canonicalModelId) =>
+        grants.Any(g =>
             g.Effect == GrantEffect.Allow
             && string.Equals(g.ModelPattern, canonicalModelId, StringComparison.OrdinalIgnoreCase));
-    }
 }

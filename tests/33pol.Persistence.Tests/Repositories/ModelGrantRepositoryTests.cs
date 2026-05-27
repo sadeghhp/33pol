@@ -27,4 +27,22 @@ public sealed class ModelGrantRepositoryTests
 
         grants.Should().ContainSingle(g => g.ModelPattern == "gpt-4");
     }
+
+    [Fact]
+    public async Task ReplaceForTenantAsync_ReplacesAllowlist()
+    {
+        await using var db = PersistenceTestDbContextFactory.CreateInMemory(nameof(ReplaceForTenantAsync_ReplacesAllowlist));
+        var tenantRepo = new TenantRepository(db);
+        var sut = new ModelGrantRepository(db);
+        var now = DateTimeOffset.UtcNow;
+        var tenantId = Guid.NewGuid();
+
+        await tenantRepo.CreateAsync(new TenantRecord(tenantId, "t1", "Tenant 1", null, null, true, now, now));
+        await sut.AddAsync(new ModelGrantRecord(Guid.NewGuid(), tenantId, "old-model", GrantEffect.Allow));
+
+        await sut.ReplaceForTenantAsync(tenantId, ["new-model"]);
+
+        var grants = await sut.ListByTenantAsync(tenantId);
+        grants.Should().ContainSingle(g => g.ModelPattern == "new-model");
+    }
 }

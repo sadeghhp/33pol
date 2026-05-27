@@ -45,6 +45,7 @@ public static class SecurityServiceCollectionExtensions
         {
             services.AddSingleton<IApiKeyValidator, NullApiKeyValidator>();
             services.AddSingleton<IModelGrantService, NullModelGrantService>();
+            services.AddSingleton<IModelGrantAdminService, NullModelGrantAdminService>();
             services.AddSingleton<IAdminKeyService, NullAdminKeyService>();
             services.AddSingleton<IAuditLogger, NoOpAuditLogger>();
             return services;
@@ -59,6 +60,7 @@ public static class SecurityServiceCollectionExtensions
         services.AddSingleton<IAuditLogger, NoOpAuditLogger>();
         services.AddScoped<IApiKeyValidator, ApiKeyValidator>();
         services.AddScoped<IModelGrantService, ModelGrantService>();
+        services.AddScoped<IModelGrantAdminService, ModelGrantAdminService>();
         services.AddScoped<IAdminKeyService, AdminKeyService>();
         services.AddHostedService<GatewayAuthenticationInitializer>();
 
@@ -93,8 +95,48 @@ internal sealed class NullApiKeyValidator : IApiKeyValidator
 
 internal sealed class NullModelGrantService : IModelGrantService
 {
-    public Task<bool> IsModelAllowedAsync(Guid tenantId, string canonicalModelId, CancellationToken cancellationToken = default) =>
+    public Task<bool> IsModelAllowedAsync(
+        Guid tenantId,
+        Guid apiKeyId,
+        string canonicalModelId,
+        CancellationToken cancellationToken = default) =>
         Task.FromResult(true);
+
+    public void InvalidateTenantGrants(Guid tenantId)
+    {
+    }
+
+    public void InvalidateApiKeyGrants(Guid apiKeyId)
+    {
+    }
+}
+
+internal sealed class NullModelGrantAdminService : IModelGrantAdminService
+{
+    private static InvalidOperationException NotConfigured() =>
+        new("Model grant administration requires ConnectionStrings:GatewayDb.");
+
+    public Task<ModelGrantsResponse> GetTenantGrantsAsync(Guid tenantId, CancellationToken cancellationToken = default) =>
+        throw NotConfigured();
+
+    public Task<ModelGrantsResponse> ReplaceTenantGrantsAsync(
+        Guid tenantId,
+        ReplaceModelGrantsRequest request,
+        CancellationToken cancellationToken = default) =>
+        throw NotConfigured();
+
+    public Task<ModelGrantsResponse> GetApiKeyGrantsAsync(
+        Guid tenantId,
+        Guid apiKeyId,
+        CancellationToken cancellationToken = default) =>
+        throw NotConfigured();
+
+    public Task<ModelGrantsResponse> ReplaceApiKeyGrantsAsync(
+        Guid tenantId,
+        Guid apiKeyId,
+        ReplaceModelGrantsRequest request,
+        CancellationToken cancellationToken = default) =>
+        throw NotConfigured();
 }
 
 internal sealed class NullAdminKeyService : IAdminKeyService

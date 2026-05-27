@@ -13,7 +13,7 @@
   <script defer src="admin-icons.js?v=7"></script>
   <script defer src="admin-errors.js?v=7"></script>
   <script defer src="admin-store.js?v=7"></script>
-  <script defer src="admin-app.js?v=8"></script>
+  <script defer src="admin-app.js?v=9"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.9/dist/cdn.min.js"></script>
 </head>
 <body x-data="adminApp()" x-init="init()" x-cloak :class="{ dark: darkMode }" @keydown.window="onModalKeydown($event)">
@@ -430,7 +430,7 @@
                   <th class="sortable" @click="sortToggle('keys','keyPrefix')">Prefix<span x-html="sortIndicator('keys','keyPrefix')"></span></th>
                   <th>Role</th>
                   <th class="sortable" @click="sortToggle('keys','createdAt')">Created<span x-html="sortIndicator('keys','createdAt')"></span></th>
-                  <th>Status</th><th></th>
+                  <th>Status</th><th>Access</th><th></th>
                 </tr>
               </thead>
               <tbody>
@@ -440,6 +440,10 @@
                     <td x-text="formatTime(k.createdAt)"></td>
                     <td>
                       <span class="status-chip" :class="k.isRevoked ? 'fail' : 'ok'" x-text="k.isRevoked ? 'Revoked' : 'Active'"></span>
+                    </td>
+                    <td>
+                      <button type="button" class="action secondary" x-show="!k.isRevoked && k.role !== 'Admin'"
+                        @click="openKeyAccess(k)">Models</button>
                     </td>
                     <td>
                       <button type="button" class="action danger" x-show="!k.isRevoked" @click="confirmRevoke(k.id)">Revoke</button>
@@ -470,6 +474,29 @@
           </p>
           <div class="toolbar">
             <button type="button" class="action" @click="confirmReloadConfig()" :disabled="isLoading('settings')">Reload config from disk</button>
+          </div>
+          <div class="card" style="margin-top: 1rem">
+            <h3>Tenant model access</h3>
+            <p class="hint">Restrict which registry models inference keys may use. Keys can further limit models within this ceiling.</p>
+            <label class="checkbox">
+              <input type="checkbox" x-model="tenantGrantRestricted" @change="if (!tenantGrantRestricted) tenantGrantSelected = []" />
+              Restrict tenant to selected models (empty = all registry models)
+            </label>
+            <template x-if="tenantGrantRestricted">
+              <div class="model-grant-list" style="margin-top: 0.75rem; max-height: 14rem; overflow: auto">
+                <template x-for="m in models" :key="m.id">
+                  <label class="checkbox">
+                    <input type="checkbox" :value="m.id" :checked="tenantGrantSelected.includes(m.id)"
+                      @change="toggleTenantGrantModel(m.id)" />
+                    <span x-text="m.id"></span>
+                  </label>
+                </template>
+              </div>
+            </template>
+            <div class="toolbar" style="margin-top: 0.75rem">
+              <button type="button" class="action" @click="saveTenantGrants()" :disabled="isLoading('settings')">Save tenant access</button>
+              <button type="button" class="action secondary" @click="loadTenantGrants()" :disabled="isLoading('settings')">Reload</button>
+            </div>
           </div>
           <p class="hint">Observability (opens in new tab):</p>
           <div class="toolbar">
@@ -552,6 +579,38 @@
         <p class="field-error" x-show="modelFieldError" x-text="modelFieldError"></p>
         <button type="button" class="action" @click="saveModel()" :disabled="isLoading('routingModels')"
           x-text="editModel._existing ? 'Save changes' : 'Add model'" style="width:100%"></button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Key model access drawer -->
+  <div class="drawer-backdrop" x-show="keyAccessDrawerOpen" x-transition.opacity @click.self="closeKeyAccessDrawer()" role="presentation">
+    <div class="drawer" role="dialog" aria-modal="true" aria-labelledby="key-access-title" @click.stop>
+      <div class="drawer-header">
+        <h3 id="key-access-title">Model access</h3>
+        <button type="button" class="icon-btn" @click="closeKeyAccessDrawer()" aria-label="Close">
+          <span class="icon" x-html="icon('x')"></span>
+        </button>
+      </div>
+      <p class="hint" x-show="keyAccessEdit">Key <code x-text="keyAccessEdit?.keyPrefix"></code></p>
+      <label class="checkbox">
+        <input type="checkbox" x-model="keyAccessRestricted" @change="if (!keyAccessRestricted) keyAccessSelected = []" />
+        Restrict this key to selected models (off = tenant default)
+      </label>
+      <template x-if="keyAccessRestricted">
+        <div class="model-grant-list" style="margin-top: 0.75rem; max-height: 14rem; overflow: auto">
+          <template x-for="m in models" :key="m.id">
+            <label class="checkbox">
+              <input type="checkbox" :value="m.id" :checked="keyAccessSelected.includes(m.id)"
+                @change="toggleKeyAccessModel(m.id)" />
+              <span x-text="m.id"></span>
+            </label>
+          </template>
+        </div>
+      </template>
+      <div class="toolbar" style="margin-top: 1rem">
+        <button type="button" class="action" @click="saveKeyAccess()" :disabled="isLoading('keys')">Save</button>
+        <button type="button" class="action secondary" @click="closeKeyAccessDrawer()">Cancel</button>
       </div>
     </div>
   </div>
