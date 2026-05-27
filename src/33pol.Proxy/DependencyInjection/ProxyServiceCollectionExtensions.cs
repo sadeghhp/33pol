@@ -8,7 +8,6 @@ using Pol33.Core.Configuration;
 using Pol33.Proxy.Hosting;
 using Pol33.Proxy.Middleware;
 using Pol33.Proxy.Resilience;
-using Pol33.Proxy.Tracking;
 using Yarp.ReverseProxy.Forwarder;
 
 namespace Pol33.Proxy.DependencyInjection;

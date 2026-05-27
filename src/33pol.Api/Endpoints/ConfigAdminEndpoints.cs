@@ -11,8 +11,10 @@ public static class ConfigAdminEndpoints
 {
     public static IEndpointRouteBuilder MapConfigAdminEndpoints(this IEndpointRouteBuilder endpoints)
     {
-        endpoints.MapPost("/admin/api/config/reload", ReloadAsync);
-        endpoints.MapGet("/admin/api/config/status", GetStatus);
+        endpoints.MapPost("/admin/api/config/reload", ReloadAsync)
+            .RequireAuthorization(GatewayAuthPolicies.Admin);
+        endpoints.MapGet("/admin/api/config/status", GetStatus)
+            .RequireAuthorization(GatewayAuthPolicies.Admin);
         return endpoints;
     }
 

@@ -16,9 +16,9 @@ public sealed class AdminUiIntegrationTests
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var body = await response.Content.ReadAsStringAsync();
         body.Should().Contain("33pol Gateway Admin");
-        body.Should().Contain("href=\"admin.css\"");
-        body.Should().Contain("src=\"admin-store.js\"");
-        body.Should().Contain("src=\"admin.js\"");
+        body.Should().Contain("href=\"admin.css?v=2\"");
+        body.Should().Contain("src=\"admin-store.js?v=2\"");
+        body.Should().Contain("src=\"admin.js?v=2\"");
         body.Should().Contain("x-cloak");
         body.Should().NotContain("function adminApp()");
     }

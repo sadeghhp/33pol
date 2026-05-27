@@ -67,15 +67,16 @@ public static class SecurityServiceCollectionExtensions
 
     public static IApplicationBuilder UseGatewaySecurity(this IApplicationBuilder app, IConfiguration configuration)
     {
-        var connectionString = configuration.GetConnectionString(PersistenceServiceCollectionExtensions.ConnectionStringName);
-        if (string.IsNullOrWhiteSpace(connectionString))
-        {
-            return app;
-        }
-
+        // Required for endpoint RequireAuthorization even when the database is disabled (handler allows all).
         app.UseAuthentication();
         app.UseAuthorization();
-        app.UseMiddleware<Middleware.GatewayAuthorizationMiddleware>();
+
+        var connectionString = configuration.GetConnectionString(PersistenceServiceCollectionExtensions.ConnectionStringName);
+        if (!string.IsNullOrWhiteSpace(connectionString))
+        {
+            app.UseMiddleware<Middleware.GatewayAuthorizationMiddleware>();
+        }
+
         return app;
     }
 }

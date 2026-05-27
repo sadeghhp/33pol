@@ -84,6 +84,31 @@ public sealed class ModelRegistryWriterTests
     }
 
     [Fact]
+    public async Task AddModelAsync_SecretUpstreamEnvVar_ReturnsFailure()
+    {
+        var (writer, registry, path) = await CreateWriterWithSeedAsync();
+
+        try
+        {
+            var result = await writer.AddModelAsync(new ModelConfig
+            {
+                Id = "bad-auth",
+                Url = "https://openrouter.ai/api",
+                Aliases = [],
+                UpstreamAuth = new UpstreamAuthConfig { Type = "bearer", EnvVar = "sk-or-v1-abcdef0123456789" }
+            });
+
+            result.Success.Should().BeFalse();
+            result.Message.Should().Contain("not the API key");
+            registry.ModelExists("bad-auth").Should().BeFalse();
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public async Task AddModelAsync_MissingUrl_ReturnsFailure()
     {
         var (writer, registry, path) = await CreateWriterWithSeedAsync();

@@ -39,17 +39,44 @@ Epic: **EPIC-post-ga** (358079).
 
 ### Admin UI enhancements
 
-Story: **#613 US-admin-enhance** — UX, navigation, usage events, `admin-store.js`, docs. Tasks: create/close in Taiga when MCP sync works (8 tasks: UX, navigation, usage, dashboard, models/backends, keys modal, modular JS, tests/docs).
+**US-P5-10 — error UX, env var validation, provider models POST** (2026-05-27)
 
-### Quality / hygiene epic (G-18–G-23)
+| Item | Taiga | Notes |
+|------|-------|--------|
+| User story | **#624** `US-P5-10: Admin error UX, env var validation, provider models POST` | Created in backlog (verify in Taiga UI). Older dupes **#621–#623** may exist — close if empty. |
+| Tasks (implementation order) | **#625–#630** on **#503** | MCP could not attach tasks to #624 without internal story id; **move tasks to #624** in Taiga when convenient. |
+| Prior umbrella | **#613 US-admin-enhance** | Broader UX/navigation; US-P5-10 is a focused slice for provider discovery reliability. |
 
-Epic: **EPIC-quality-hygiene** (358084).
+**Problem:** Operators paste API secrets into the “API key env var” field → `GET …/models?envVar=sk-…` → 400; errors only show in the top API-key card (far from Fetch models).
 
-| Gap | Story |
-|-----|-------|
-| G-18 | #544 US-hygiene-01 CI coverage gates |
-| G-19 | #545 US-hygiene-02 BenchmarkDotNet (optional) |
-| G-20 | #546 US-hygiene-03 Playwright E2E (optional) |
-| G-21 | #547 US-hygiene-04 usage retention |
-| G-22 | #548 US-hygiene-05 RequestTracker cleanup |
-| G-23 | #549 US-hygiene-06 doc sync after GA |
+**Acceptance:** Visible errors on Models tab; client + server reject secret-like env var names; POST discovery (no secrets in URL); `dotnet test` green.
+
+| Task | Ref | Layer |
+|------|-----|--------|
+| EnvVarNameValidator | #625 | Core + unit tests |
+| POST provider models API | #626 | Api + integration tests |
+| Global toast + ProblemDetails | #627 | admin-store, css, html |
+| Inline provider errors + runApi | #628 | admin.js, html |
+| Client validation + POST fetch | #629 | admin.js |
+| docs/admin-ui.md | #630 | Docs |
+
+**Implement in order:** #625 → #626 → #627 → #628 → #629 → #630 (one task In progress at a time per Taiga workflow).
+
+**Status (2026-05-27):** Implemented in repo; `dotnet test` green. Story comment on #503 documents completion — **manually close tasks #625–#630** in Taiga (MCP has no `updateTask`; internal task IDs not exposed).
+
+Story: **#613 US-admin-enhance** — UX, navigation, usage events, `admin-store.js`, docs (broader; separate from US-P5-10).
+
+### Phase 6 — quality review (G-18–G-23 absorbed)
+
+Epic: **EPIC-P6-quality-review** (see [phase-6-production-quality-review.md](./implementation-plan/phases/phase-6-production-quality-review.md)). Supersedes **EPIC-quality-hygiene** (358084) for tracking.
+
+| Gap | Story | P6 status |
+|-----|-------|-----------|
+| G-18 | #544 US-hygiene-01 CI coverage gates | Documented exclusion (F-P6-018); expand gates = P2 |
+| G-19 | #545 US-hygiene-02 BenchmarkDotNet (optional) | P2 open |
+| G-20 | #546 US-hygiene-03 Playwright E2E (optional) | P2 open |
+| G-21 | #547 US-hygiene-04 usage retention | P2 open |
+| G-22 | #548 US-hygiene-05 RequestTracker cleanup | **Closed** in P6 (file removed) |
+| G-23 | #549 US-hygiene-06 doc sync after GA | **Closed** — six-phase docs, findings register |
+
+Findings: [16-phase6-findings.md](./implementation-plan/16-phase6-findings.md). User stories **#632–#645** (US-P6-01 … US-P6-14) on epic **358106**. Sprints: **521199** (audit), **521200** (P0), **521201** (P1/sign-off).

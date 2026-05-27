@@ -21,11 +21,25 @@ document.addEventListener('alpine:init', () => {
       this.errorTitle = title || 'Error';
       this.error = message || 'Something went wrong.';
       this.errorDetail = detail || '';
+      this.scrollToAlert();
+    },
+
+    dismissError() {
+      this.clearMessages();
     },
 
     setSuccess(message) {
       this.clearMessages();
       this.successMessage = message;
+    },
+
+    scrollToAlert() {
+      requestAnimationFrame(() => {
+        const el = document.getElementById('global-alert');
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+      });
     },
 
     parseJsonBody(text) {
@@ -43,7 +57,8 @@ document.addEventListener('alpine:init', () => {
         };
       }
       if (json?.title && json?.detail) {
-        return { title: json.title, message: json.detail, detail: text };
+        const detailText = json.detail === json.title ? null : text;
+        return { title: json.title, message: json.detail, detail: detailText };
       }
       const raw = (text || '').trim();
       const isHtml = raw.startsWith('<') || raw.includes('<!DOCTYPE');

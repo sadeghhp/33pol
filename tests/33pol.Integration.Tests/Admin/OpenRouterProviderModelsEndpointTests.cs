@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Headers;
+using System.Net.Http.Json;
 using System.Text;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -11,7 +12,7 @@ namespace Pol33.Integration.Tests.Admin;
 public sealed class OpenRouterProviderModelsEndpointTests
 {
     [Fact]
-    public async Task GetOpenRouterModels_WithAdminKey_ReturnsList()
+    public async Task PostOpenRouterModels_WithAdminKey_ReturnsList()
     {
         const string adminKey = "sk-33pol-openrouter-admin";
 
@@ -35,7 +36,9 @@ public sealed class OpenRouterProviderModelsEndpointTests
         using var client = factory.CreateClient();
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", adminKey);
 
-        var response = await client.GetAsync("/admin/api/providers/openrouter/models");
+        var response = await client.PostAsJsonAsync(
+            "/admin/api/providers/openrouter/models",
+            new { envVar = "OPENROUTER_API_KEY" });
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var json = await response.Content.ReadAsStringAsync();
@@ -44,14 +47,16 @@ public sealed class OpenRouterProviderModelsEndpointTests
     }
 
     [Fact]
-    public async Task GetOpenRouterModels_WithoutKey_Returns401()
+    public async Task PostOpenRouterModels_WithoutKey_Returns401()
     {
         const string adminKey = "sk-33pol-openrouter-admin-2";
         using var factory = GatewayWebApplicationFactory.CreateWithInMemoryDatabase(adminApiKey: adminKey);
         await GatewayWebApplicationFactory.EnsureAuthReadyAsync(factory);
 
         using var client = factory.CreateClient();
-        var response = await client.GetAsync("/admin/api/providers/openrouter/models");
+        var response = await client.PostAsJsonAsync(
+            "/admin/api/providers/openrouter/models",
+            new { envVar = "OPENROUTER_API_KEY" });
 
         response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
     }

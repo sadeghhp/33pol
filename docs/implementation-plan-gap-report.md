@@ -138,10 +138,25 @@ Epics and stories planned in Taiga 2026-05-27. Full index: [post-ga-backlog.md](
 
 ---
 
+## Phase 6 — quality review (2026-05-27)
+
+| Item | Status |
+|------|--------|
+| Phase 6 plan docs | Added `phase-6`, `16-phase6-findings`, `17-phase6-review-rubric` |
+| Assembly audit | All 11 `src` projects + admin UI — rubric signed |
+| Open P0 findings | **None** |
+| P1 remediations | F-P6-015 admin `RequireAuthorization`; F-P6-022 removed Proxy `RequestTracker`; F-P6-018/G-23 docs |
+| P2 | Transferred to post-GA (G-12–G-21, G-19–G-20) |
+
+See [implementation-plan/16-phase6-findings.md](./implementation-plan/16-phase6-findings.md).
+
+---
+
 ## Related artifacts
 
 - [GA-CHECKLIST.md](./implementation-plan/GA-CHECKLIST.md)  
 - [ga-signoff.md](./ga-signoff.md)  
 - [phase-audit-gap-matrix.md](./phase-audit-gap-matrix.md)  
+- [16-phase6-findings.md](./implementation-plan/16-phase6-findings.md)  
 - [perf/reports/ga-2026-05-26.md](../perf/reports/ga-2026-05-26.md)  
 - [perf/reports/ga-local-2026-05-27.md](../perf/reports/ga-local-2026-05-27.md) (local verification)

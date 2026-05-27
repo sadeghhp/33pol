@@ -4,9 +4,9 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>33pol Admin</title>
-  <link rel="stylesheet" href="admin.css" />
-  <script defer src="admin-store.js"></script>
-  <script defer src="admin.js"></script>
+  <link rel="stylesheet" href="admin.css?v=2" />
+  <script defer src="admin-store.js?v=2"></script>
+  <script defer src="admin.js?v=2"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.9/dist/cdn.min.js"></script>
 </head>
 <body x-data="adminApp()" x-init="init()" x-cloak>
@@ -19,6 +19,23 @@
 
   <p class="loading-banner" x-show="loading" x-text="loadingMessage || 'Loading…'"></p>
 
+  <div id="global-alert" class="global-alert error-banner" role="alert" aria-live="assertive"
+    x-show="error" x-transition.opacity>
+    <div class="global-alert-header">
+      <div class="error">
+        <strong x-text="errorTitle || 'Error'"></strong>
+        <p x-text="error"></p>
+        <details x-show="errorDetail">
+          <summary>Technical details</summary>
+          <pre x-text="errorDetail"></pre>
+        </details>
+      </div>
+      <button type="button" class="action secondary dismiss" @click="clearMessages()">Dismiss</button>
+    </div>
+  </div>
+  <p class="global-alert success-banner" role="status" aria-live="polite"
+    x-show="successMessage && !error" x-text="successMessage" x-transition.opacity></p>
+
   <div class="card">
     <label for="apiKey">Admin API key</label>
     <div class="key-row">
@@ -29,15 +46,6 @@
       <button type="button" class="action" @click="saveKey()" :disabled="loading">Save</button>
       <button type="button" class="action secondary" @click="clearSession()" x-show="apiKey">Sign out</button>
     </div>
-    <div class="error" x-show="error" x-transition.opacity>
-      <strong x-text="errorTitle || 'Error'"></strong>
-      <p x-text="error"></p>
-      <details x-show="errorDetail">
-        <summary>Technical details</summary>
-        <pre x-text="errorDetail"></pre>
-      </details>
-    </div>
-    <p class="success" x-show="successMessage" x-text="successMessage" x-transition.opacity></p>
   </div>
 
   <nav x-show="apiKey" role="tablist">
@@ -228,9 +236,13 @@
           </template>
         </select>
       </label>
-      <label>API key env var
-        <input x-model="providerEnvVar" placeholder="OPENROUTER_API_KEY" :disabled="!selectedProviderRequiresAuth()" />
+      <label>API key env var (name on gateway)
+        <input x-model="providerEnvVar" placeholder="OPENROUTER_API_KEY" :disabled="!selectedProviderRequiresAuth()"
+          @input="clearProviderError()" />
       </label>
+      <p class="hint" x-show="selectedProviderRequiresAuth()">
+        Enter the <strong>environment variable name</strong> configured on the gateway (e.g. <code>OPENROUTER_API_KEY</code>), not the secret key value.
+      </p>
       <label>Filter <input x-model="providerFilter" placeholder="claude, gpt, qwen..." /></label>
       <label x-show="selectedProviderId === 'custom'">Models list URL
         <input x-model="customModelsUrl" placeholder="https://api.example.com/v1/models" />
@@ -244,6 +256,14 @@
         x-text="providerLoading ? 'Fetching…' : 'Fetch models'"></button>
       <button type="button" class="action secondary" @click="loadProviders()" :disabled="loading">Reload providers</button>
     </p>
+    <div id="provider-fetch-alert" class="error" role="alert" x-show="providerError" x-transition.opacity>
+      <strong x-text="providerErrorTitle || 'Could not fetch models'"></strong>
+      <p x-text="providerError"></p>
+      <details x-show="providerErrorDetail">
+        <summary>Technical details</summary>
+        <pre x-text="providerErrorDetail"></pre>
+      </details>
+    </div>
     <div class="table-wrap">
       <table x-show="(filteredProviderModels()?.length || 0) > 0">
         <thead><tr><th>ID</th><th>Name</th><th>Context</th><th></th></tr></thead>
@@ -279,9 +299,12 @@
         Upstream bearer auth (OpenRouter, etc.)
       </label>
       <label x-show="editModel.useUpstreamAuth">
-        Auth env var
-        <input x-model="editModel.upstreamAuthEnvVar" placeholder="OPENROUTER_API_KEY" />
+        Auth env var (name on gateway)
+        <input x-model="editModel.upstreamAuthEnvVar" placeholder="OPENROUTER_API_KEY" @input="clearProviderError()" />
       </label>
+      <p class="hint" x-show="editModel.useUpstreamAuth">
+        Variable name only — set the provider secret in gateway environment / Docker <code>.env</code>, not here.
+      </p>
     </div>
     <p class="warn-inline" x-show="urlLooksLocalhost()">localhost/127.0.0.1 may fail from Docker — prefer host.docker.internal.</p>
     <p class="hint">

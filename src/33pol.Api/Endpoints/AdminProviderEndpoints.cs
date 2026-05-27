@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.Configuration;
 using Pol33.Api.Services;
@@ -16,11 +17,13 @@ public static class AdminProviderEndpoints
             .RequireAuthorization(GatewayAuthPolicies.Admin);
 
         group.MapGet("/catalog", ListProviders);
-        group.MapGet("/{providerId}/models", ListProviderModels);
-        group.MapGet("/models", ListCustomProviderModels);
-
-        // Backward compatibility
-        group.MapGet("/openrouter/models", ListOpenRouterModelsLegacy);
+        // Provider model discovery is POST-only so env var names never appear in URLs or access logs.
+        group.MapPost("/{providerId}/models", PostProviderModels);
+        group.MapGet("/{providerId}/models", ProviderModelsGetNotAllowed);
+        group.MapPost("/models", PostCustomProviderModels);
+        group.MapGet("/models", ProviderModelsGetNotAllowed);
+        group.MapPost("/openrouter/models", PostOpenRouterModelsLegacy);
+        group.MapGet("/openrouter/models", ProviderModelsGetNotAllowed);
 
         return endpoints;
     }
@@ -43,6 +46,11 @@ public static class AdminProviderEndpoints
         return Results.Json(new { data = providers });
     }
 
+    private static IResult ProviderModelsGetNotAllowed() =>
+        Results.Problem(
+            detail: "Provider model discovery requires POST with a JSON body. Do not pass envVar or API keys in query strings.",
+            statusCode: StatusCodes.Status405MethodNotAllowed);
+
     private static object ToProviderListDto(ProviderDefinition p) => new
     {
         id = p.Id,
@@ -53,7 +61,15 @@ public static class AdminProviderEndpoints
         requiresUpstreamAuth = p.RequiresUpstreamAuth,
     };
 
-    private static async Task<IResult> ListProviderModels(
+    private static Task<IResult> PostProviderModels(
+        string providerId,
+        [FromBody] ProviderModelsDiscoveryRequest? body,
+        IConfiguration configuration,
+        OpenAiCompatibleProviderModelsClient client,
+        CancellationToken cancellationToken) =>
+        DiscoverProviderModelsAsync(providerId, configuration, client, body?.EnvVar, cancellationToken);
+
+    private static async Task<IResult> DiscoverProviderModelsAsync(
         string providerId,
         IConfiguration configuration,
         OpenAiCompatibleProviderModelsClient client,
@@ -63,7 +79,7 @@ public static class AdminProviderEndpoints
         if (string.Equals(providerId, ProviderCatalog.CustomProviderId, StringComparison.OrdinalIgnoreCase))
         {
             return Results.Problem(
-                detail: "Use GET /admin/api/providers/models with modelsUrl for custom providers.",
+                detail: "Use POST /admin/api/providers/models with modelsUrl for custom providers.",
                 statusCode: StatusCodes.Status400BadRequest);
         }
 
@@ -74,12 +90,21 @@ public static class AdminProviderEndpoints
                 statusCode: StatusCodes.Status404NotFound);
         }
 
-        var resolvedEnvVar = string.IsNullOrWhiteSpace(envVar)
-            ? definition.DefaultEnvVar
-            : envVar.Trim();
+        string? resolvedEnvVar;
+        if (string.IsNullOrWhiteSpace(envVar))
+        {
+            resolvedEnvVar = definition.DefaultEnvVar;
+        }
+        else if (!EnvVarNameValidator.TryValidate(envVar, out var normalized, out var validationError))
+        {
+            return Results.Problem(detail: validationError, statusCode: StatusCodes.Status400BadRequest);
+        }
+        else
+        {
+            resolvedEnvVar = normalized;
+        }
 
-        if (definition.RequiresUpstreamAuth &&
-            string.IsNullOrWhiteSpace(resolvedEnvVar))
+        if (definition.RequiresUpstreamAuth && string.IsNullOrWhiteSpace(resolvedEnvVar))
         {
             return Results.Problem(
                 detail: $"Provider '{definition.DisplayName}' requires an envVar for the upstream API key.",
@@ -112,32 +137,40 @@ public static class AdminProviderEndpoints
         });
     }
 
-    private static async Task<IResult> ListCustomProviderModels(
+    private static Task<IResult> PostCustomProviderModels(
+        [FromBody] CustomProviderModelsDiscoveryRequest? body,
+        IConfiguration configuration,
+        OpenAiCompatibleProviderModelsClient client,
+        CancellationToken cancellationToken) =>
+        DiscoverCustomProviderModelsAsync(
+            configuration,
+            client,
+            body?.ModelsUrl,
+            body?.EnvVar,
+            cancellationToken);
+
+    private static async Task<IResult> DiscoverCustomProviderModelsAsync(
         IConfiguration configuration,
         OpenAiCompatibleProviderModelsClient client,
         string? modelsUrl,
         string? envVar,
         CancellationToken cancellationToken)
     {
-        if (!ProviderModelsListUrlValidator.TryValidate(modelsUrl, out var modelsListUri, out var validationError))
+        if (!ProviderModelsListUrlValidator.TryValidate(modelsUrl, out var modelsListUri, out var urlError))
         {
-            return Results.Problem(
-                detail: validationError,
-                statusCode: StatusCodes.Status400BadRequest);
+            return Results.Problem(detail: urlError, statusCode: StatusCodes.Status400BadRequest);
         }
 
-        if (string.IsNullOrWhiteSpace(envVar))
+        if (!EnvVarNameValidator.TryValidate(envVar, out var resolvedEnvVar, out var envError))
         {
-            return Results.Problem(
-                detail: "envVar is required for custom provider model discovery.",
-                statusCode: StatusCodes.Status400BadRequest);
+            return Results.Problem(detail: envError, statusCode: StatusCodes.Status400BadRequest);
         }
 
-        var token = ResolveBearerToken(configuration, envVar);
+        var token = ResolveBearerToken(configuration, resolvedEnvVar);
         if (string.IsNullOrWhiteSpace(token))
         {
             return Results.Problem(
-                detail: $"Missing API token. Set environment variable '{envVar.Trim()}'.",
+                detail: $"Missing API token. Set environment variable '{resolvedEnvVar}'.",
                 statusCode: StatusCodes.Status400BadRequest);
         }
 
@@ -153,14 +186,14 @@ public static class AdminProviderEndpoints
         });
     }
 
-    private static Task<IResult> ListOpenRouterModelsLegacy(
+    private static Task<IResult> PostOpenRouterModelsLegacy(
+        [FromBody] ProviderModelsDiscoveryRequest? body,
         IConfiguration configuration,
         OpenAiCompatibleProviderModelsClient client,
-        string? envVar,
         CancellationToken cancellationToken) =>
-        ListProviderModels("openrouter", configuration, client, envVar, cancellationToken);
+        DiscoverProviderModelsAsync("openrouter", configuration, client, body?.EnvVar, cancellationToken);
 
-    private static string? ResolveBearerToken(IConfiguration configuration, string envVar)
+    private static string? ResolveBearerToken(IConfiguration configuration, string? envVar)
     {
         if (string.IsNullOrWhiteSpace(envVar))
         {
@@ -186,4 +219,8 @@ public static class AdminProviderEndpoints
         var builder = new UriBuilder(modelsListUri.Scheme, modelsListUri.Host, modelsListUri.Port, path);
         return builder.Uri.ToString().TrimEnd('/');
     }
+
+    public sealed record ProviderModelsDiscoveryRequest(string? EnvVar);
+
+    public sealed record CustomProviderModelsDiscoveryRequest(string? ModelsUrl, string? EnvVar);
 }

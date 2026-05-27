@@ -58,7 +58,17 @@ public static class GatewayHostBuilderExtensions
         app.MapAdminUsageEndpoints();
         app.MapModelsEndpoints();
         app.UseDefaultFiles();
-        app.UseStaticFiles();
+        app.UseStaticFiles(new StaticFileOptions
+        {
+            OnPrepareResponse = ctx =>
+            {
+                if (ctx.Context.Request.Path.StartsWithSegments("/admin", StringComparison.OrdinalIgnoreCase))
+                {
+                    ctx.Context.Response.Headers.CacheControl = "no-store, no-cache, must-revalidate";
+                    ctx.Context.Response.Headers.Pragma = "no-cache";
+                }
+            }
+        });
         app.MapGatewayOperationsEndpoints();
         app.UseInferenceResilience();
         app.UseGatewayRateLimiting();

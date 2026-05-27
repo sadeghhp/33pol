@@ -42,6 +42,11 @@ public sealed class ModelRegistryWriter : IModelRegistryWriter
                 return RegistryMutationResult.Fail("Model id and url are required.");
             }
 
+            if (!ModelConfigValidation.TryValidate(model, out var validationError))
+            {
+                return RegistryMutationResult.Fail(validationError!);
+            }
+
             if (_registry.ModelExists(model.Id))
             {
                 return RegistryMutationResult.Fail($"Model '{model.Id}' already exists.", 409);
@@ -81,6 +86,11 @@ public sealed class ModelRegistryWriter : IModelRegistryWriter
             if (!_registry.TryGetModel(id, out var existing) || existing is null)
             {
                 return RegistryMutationResult.Fail($"Model '{id}' was not found.", 404);
+            }
+
+            if (!ModelConfigValidation.TryValidate(model, out var validationError))
+            {
+                return RegistryMutationResult.Fail(validationError!);
             }
 
             var canonicalId = existing.Id;
@@ -174,6 +184,14 @@ public sealed class ModelRegistryWriter : IModelRegistryWriter
                 return RegistryMutationResult.Fail(
                     "Cannot replace registry with an empty model list.",
                     400);
+            }
+
+            foreach (var model in models)
+            {
+                if (!ModelConfigValidation.TryValidate(model, out var validationError))
+                {
+                    return RegistryMutationResult.Fail(validationError!);
+                }
             }
 
             var cloned = models.Select(ModelRegistryPersistence.CloneModel).ToList();

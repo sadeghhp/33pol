@@ -1,13 +1,13 @@
-# Phase Overview — Five-Phase Implementation Order
+# Phase Overview — Six-Phase Implementation Order
 
 ## Why this order?
 
-Phases are ordered so each layer **depends only on completed layers**, tests can run **without optional infrastructure** early, and **risk is front-loaded** into testable pure logic before distributed concerns.
+Phases are ordered so each layer **depends only on completed layers**, tests can run **without optional infrastructure** early, and **risk is front-loaded** into testable pure logic before distributed concerns. **Phase 6** runs a production-quality review **in parallel** with P5 GA ops (staging k6, approvals).
 
 ```text
-Phase 1 ──► Phase 2 ──► Phase 3 ──► Phase 4 ──► Phase 5
- Platform     Data        Security     Policy       FinOps
- & tests       plane       & resilience & obs        UI & GA
+Phase 1 ──► Phase 2 ──► Phase 3 ──► Phase 4 ──► Phase 5 ──► Phase 6
+ Platform     Data        Security     Policy       FinOps        Quality
+ & tests       plane       & resilience & obs        UI & GA       review
 ```
 
 ### Dependency graph
@@ -19,11 +19,15 @@ flowchart LR
   P3[Phase 3: Security]
   P4[Phase 4: Policy + Obs]
   P5[Phase 5: FinOps + GA]
+  P6[Phase 6: Quality review]
 
   P1 --> P2
   P2 --> P3
   P3 --> P4
   P4 --> P5
+  P5 --> P6
+  P5 -.->|GA ops parallel| GA[GA sign-off]
+  P6 -.->|P0 only| GA
 ```
 
 | Phase | Depends on | Enables |
@@ -32,7 +36,8 @@ flowchart LR
 | 2 | 1 | Working OpenAI proxy without auth DB |
 | 3 | 2 | Authenticated, hardened gateway |
 | 4 | 3 | Rate limits tied to identity; full metrics |
-| 5 | 4 | Billing on usage events; production release |
+| 5 | 4 | Billing on usage events; GA release candidate |
+| 6 | 5 code complete | Production confidence; remediated P0/P1 |
 
 ### What is deliberately *not* reordered
 
@@ -56,6 +61,7 @@ flowchart LR
 | 3 | Security & resilience | 2–3 weeks | Auth, DB, hardening, SDK errors |
 | 4 | Policy & observability | 2–3 weeks | Limits, quotas, OTel, ops APIs, optional Spectre operator console |
 | 5 | FinOps, UI, ecosystem & GA | 2–4 weeks | Billing, admin UI, Helm, load tests |
+| 6 | Production quality review | 2–4 weeks | Full `src/` audit, findings, remediation waves |
 
 *Durations are planning estimates for a small team; parallel work within a phase is noted in each phase doc.*
 
@@ -107,6 +113,13 @@ Every phase **must** satisfy before closure:
 - Admin UI operational against control plane (**Models** page for live registry)  
 - Inference conformance suite; k6 load tests pass thresholds; GA checklist signed  
 
+### Phase 6
+
+- All `src` assemblies reviewed per [17-phase6-review-rubric.md](./17-phase6-review-rubric.md)  
+- [16-phase6-findings.md](./16-phase6-findings.md): zero Open **P0** (or explicit GA waiver)  
+- P1 remediation merged; P2 transferred to post-GA backlog  
+- Gap report and operator docs refreshed  
+
 ---
 
 ## Taiga mapping (recommended)
@@ -118,5 +131,6 @@ Every phase **must** satisfy before closure:
 | `EPIC-P3-security` | [phase-3-security-and-resilience.md](./phases/phase-3-security-and-resilience.md) |
 | `EPIC-P4-policy-obs` | [phase-4-policy-and-observability.md](./phases/phase-4-policy-and-observability.md) |
 | `EPIC-P5-finops-ga` | [phase-5-finops-ui-ecosystem-and-ga.md](./phases/phase-5-finops-ui-ecosystem-and-ga.md) |
+| `EPIC-P6-quality-review` | [phase-6-production-quality-review.md](./phases/phase-6-production-quality-review.md) |
 
 Decompose each epic into user stories using the **Work packages** sections inside phase documents.

@@ -49,8 +49,8 @@
 |--------|------|--------|-------|
 | `gateway_backend_health` | Gauge | `model` | 4 |
 | `gateway_config_reload_total` | Counter | `result` | 4 |
-| `gateway_circuit_breaker_state` | Gauge | `model` (0=closed, 1=half_open, 2=open) | post-GA |
-| `gateway_circuit_breaker_transitions_total` | Counter | `model`, `to_state` | post-GA |
+| `gateway_circuit_breaker_state` | Gauge | `model` (0=closed, 1=half_open, 2=open) | 4–5 (implemented; Phase 6 verified) |
+| `gateway_circuit_breaker_transitions_total` | Counter | `model`, `to_state` | 4–5 (implemented) |
 | `gateway_bulkhead_rejections_total` | Counter | `model` | post-GA |
 | `gateway_bulkhead_inflight` | UpDownCounter | `model` | post-GA |
 | `gateway_inference_route_total` | Counter | `model`, `route`, `stream` | post-GA |

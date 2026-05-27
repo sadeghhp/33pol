@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Headers;
+using System.Net.Http.Json;
 using System.Text;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -30,7 +31,7 @@ public sealed class ProviderModelsEndpointTests
     }
 
     [Fact]
-    public async Task GetTogetherModels_WithAdminKey_ReturnsList()
+    public async Task PostTogetherModels_WithAdminKey_ReturnsList()
     {
         const string adminKey = "sk-33pol-together-admin";
         using var factory = GatewayWebApplicationFactory.CreateWithInMemoryDatabase(
@@ -50,7 +51,9 @@ public sealed class ProviderModelsEndpointTests
         using var client = factory.CreateClient();
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", adminKey);
 
-        var response = await client.GetAsync("/admin/api/providers/together/models");
+        var response = await client.PostAsJsonAsync(
+            "/admin/api/providers/together/models",
+            new { envVar = "TOGETHER_API_KEY" });
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var json = await response.Content.ReadAsStringAsync();

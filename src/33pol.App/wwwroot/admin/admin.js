@@ -20,6 +20,9 @@ function adminApp() {
     providerModels: [],
     providerFilter: '',
     providerLoading: false,
+    providerError: '',
+    providerErrorTitle: '',
+    providerErrorDetail: '',
     providerDiscoveryUpstreamUrl: '',
     providerDiscoveryRequiresAuth: true,
     customModelsUrl: '',
@@ -114,6 +117,52 @@ function adminApp() {
       this.setError(e.title || 'Error', e.message || String(e), e.detail);
     },
 
+    clearProviderError() {
+      this.providerError = '';
+      this.providerErrorTitle = '';
+      this.providerErrorDetail = '';
+    },
+
+    setProviderError(title, message, detail) {
+      this.providerErrorTitle = title || 'Could not fetch models';
+      this.providerError = message || 'Something went wrong.';
+      this.providerErrorDetail = detail || '';
+      requestAnimationFrame(() => {
+        const el = document.getElementById('provider-fetch-alert');
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+      });
+    },
+
+    looksLikeEnvVarSecret(value) {
+      const v = (value || '').trim();
+      if (!v) return false;
+      if (/^sk-/i.test(v) || /^Bearer\s+/i.test(v)) return true;
+      return v.length >= 32 && !v.includes('_');
+    },
+
+    validateProviderEnvVar() {
+      if (!this.selectedProviderRequiresAuth()) {
+        return true;
+      }
+      const envVar = (this.providerEnvVar || '').trim();
+      if (!envVar) {
+        const msg = 'Enter the environment variable name (e.g. OPENROUTER_API_KEY).';
+        this.setProviderError('Validation', msg);
+        this.setError('Validation', msg);
+        return false;
+      }
+      if (this.looksLikeEnvVarSecret(envVar)) {
+        const msg =
+          'This looks like an API key secret. Enter the variable name configured on the gateway (e.g. OPENROUTER_API_KEY), then set the secret in Docker or host environment.';
+        this.setProviderError('Invalid env var', msg);
+        this.setError('Invalid env var', msg);
+        return false;
+      }
+      return true;
+    },
+
     async runApi(label, fn) {
       try {
         return await this.store.withLoading(label, fn);
@@ -195,6 +244,8 @@ function adminApp() {
       this.models = [];
       this.keys = [];
       this.requests = [];
+      this.createdKey = '';
+      this.clearProviderError();
       this.clearMessages();
       this.setSuccess('Signed out — API key cleared from this browser.');
     },
@@ -392,6 +443,7 @@ function adminApp() {
     },
 
     onProviderChanged() {
+      this.clearProviderError();
       const p = this.getSelectedProvider();
       if (p?.defaultEnvVar) {
         this.providerEnvVar = p.defaultEnvVar;
@@ -442,18 +494,25 @@ function adminApp() {
     },
 
     async fetchProviderModels() {
+      if (!this.validateProviderEnvVar()) {
+        return;
+      }
+      this.clearProviderError();
       try {
         this.providerLoading = true;
-        const envVar = encodeURIComponent((this.providerEnvVar || '').trim());
+        const envVar = (this.providerEnvVar || '').trim();
         let body;
         if (this.selectedProviderId === 'custom') {
-          const modelsUrl = encodeURIComponent((this.customModelsUrl || '').trim());
-          body = await this.apiJson(
-            '/admin/api/providers/models?modelsUrl=' + modelsUrl + '&envVar=' + envVar);
+          const modelsUrl = (this.customModelsUrl || '').trim();
+          body = await this.apiJson('/admin/api/providers/models', {
+            method: 'POST',
+            body: JSON.stringify({ modelsUrl, envVar })
+          });
           this.providerDiscoveryUpstreamUrl = (this.customUpstreamBaseUrl || body?.upstreamBaseUrl || '').trim();
         } else {
           body = await this.apiJson(
-            '/admin/api/providers/' + encodeURIComponent(this.selectedProviderId) + '/models?envVar=' + envVar);
+            '/admin/api/providers/' + encodeURIComponent(this.selectedProviderId) + '/models',
+            { method: 'POST', body: JSON.stringify({ envVar }) });
           this.providerDiscoveryUpstreamUrl = body?.upstreamBaseUrl || this.getSelectedProvider()?.upstreamBaseUrl || '';
         }
         this.providerModels = body?.data || [];
@@ -461,6 +520,7 @@ function adminApp() {
         const name = this.getSelectedProvider()?.displayName || this.selectedProviderId;
         this.setSuccess('Fetched models from ' + name + '.');
       } catch (e) {
+        this.setProviderError(e.title || 'Error', e.message || String(e), e.detail);
         this.handleCatch(e);
       } finally {
         this.providerLoading = false;
@@ -504,10 +564,37 @@ function adminApp() {
       };
     },
 
+    validateModelUpstreamEnvVar() {
+      if (!this.editModel.useUpstreamAuth) {
+        return true;
+      }
+      const envVar = (this.editModel.upstreamAuthEnvVar || '').trim();
+      if (!envVar) {
+        this.setError('Validation', 'Upstream auth env var name is required (e.g. OPENROUTER_API_KEY).');
+        return false;
+      }
+      if (this.looksLikeEnvVarSecret(envVar)) {
+        this.setError(
+          'Invalid env var',
+          'Auth env var must be the variable name on the gateway, not the API key secret.');
+        return false;
+      }
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(envVar)) {
+        this.setError(
+          'Invalid env var',
+          'Use a valid environment variable name (letters, digits, underscore).');
+        return false;
+      }
+      return true;
+    },
+
     async saveModel() {
       const payload = this.modelPayload();
       if (!payload.id || !payload.url) {
         this.setError('Validation', 'Model id and url are required.');
+        return;
+      }
+      if (!this.validateModelUpstreamEnvVar()) {
         return;
       }
       if (/localhost|127\.0\.0\.1/.test(payload.url)) {

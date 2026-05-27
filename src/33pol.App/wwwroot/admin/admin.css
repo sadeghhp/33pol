@@ -34,6 +34,31 @@ h3 { font-size: 1rem; margin-bottom: 0.5rem; }
   color: var(--muted);
   margin-bottom: 0.75rem;
 }
+.global-alert {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  margin-bottom: 0.75rem;
+  padding: 0.65rem 0.85rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: Canvas;
+  box-shadow: 0 2px 8px color-mix(in srgb, CanvasText 8%, transparent);
+}
+.global-alert.error-banner { border-color: color-mix(in srgb, #dc2626 45%, transparent); }
+.global-alert.success-banner { border-color: color-mix(in srgb, #16a34a 45%, transparent); }
+.global-alert-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.global-alert-header button.dismiss {
+  flex-shrink: 0;
+  font-size: 0.8rem;
+  padding: 0.2rem 0.5rem;
+}
 nav { margin-bottom: 1rem; display: flex; flex-wrap: wrap; gap: 0.35rem; }
 nav button {
   border: 1px solid var(--border);

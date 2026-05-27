@@ -1,6 +1,6 @@
 # Feature-to-Phase Matrix
 
-Maps proposal capabilities to implementation phases. Use for Taiga tagging (`phase:P1` … `phase:P5`).
+Maps proposal capabilities to implementation phases. Use for Taiga tagging (`phase:P1` … `phase:P6`).
 
 ## v1 admin URL migration (breaking)
 
@@ -143,4 +143,20 @@ Maps proposal capabilities to implementation phases. Use for Taiga tagging (`pha
 | Coverage CI gates | P2 (enforce) |
 | k6 smoke baseline | P2 |
 | k6 GA + soak | P5 |
-| BenchmarkDotNet (optional) | P5 |
+| BenchmarkDotNet (optional) | P5 → P6 P2 (G-19) |
+| Full `src/` production quality review | P6 |
+| CI coverage expansion (Core, Api, Persistence, …) | P6 (G-18) |
+| Code hygiene (dead stubs, doc sync) | P6 (G-22, G-23) |
+| Playwright admin E2E (optional) | P6 P2 (G-20) |
+
+## Phase 6 — quality & remediation
+
+| Activity | Phase |
+|----------|-------|
+| Per-assembly review rubric | P6 |
+| Findings register (P0/P1/P2) | P6 |
+| Traceability matrix (feature → code → test) | P6 |
+| Remediation waves A/B/C | P6 |
+| Security code-path review (beyond WP5.7) | P6 |
+| Observability contract vs dashboards | P6 |
+| Admin UI UX audit | P6 |

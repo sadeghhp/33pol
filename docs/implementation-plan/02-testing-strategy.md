@@ -128,8 +128,11 @@ tests/33pol.Registry.Tests/ModelRegistryServiceTests.cs
 
 **Fail CI** if coverage drops below threshold on `main` (Phase 1 sets baseline; enforce from Phase 2).
 
+**CI enforcement (`build/check-coverage.sh`):** As of Phase 6 (F-P6-018), gates apply to **Registry, Proxy, Security, Policy, Observability, Billing** only. **Core, Persistence, Api, App, OperatorConsole** have guide targets above but are not yet in the cobertura gate script — expand gates in a future hygiene task or accept integration-heavy coverage for thin layers.
+
 ```bash
 dotnet test --collect:"XPlat Code Coverage"
+build/check-coverage.sh TestResults
 ```
 
 ---

@@ -30,7 +30,7 @@ Example `models.json` entry (OpenRouter):
 
 **Admin UI:** **Models → Discover provider models** — pick a provider (or Custom), set the env var on the gateway, **Fetch models**, **Use**, then **Add model**.
 
-**Admin API:** `GET /admin/api/providers/catalog`, `GET /admin/api/providers/{id}/models?envVar=…`, or `GET /admin/api/providers/models?modelsUrl=…&envVar=…` for custom endpoints.
+**Admin API:** `GET /admin/api/providers/catalog`; model discovery via **POST** only — `POST /admin/api/providers/{id}/models` with body `{ "envVar": "OPENROUTER_API_KEY" }`, or `POST /admin/api/providers/models` with `{ "modelsUrl", "envVar" }` (never put secrets or env var names in query strings).
 
 ## OpenAI-compatible clients
 

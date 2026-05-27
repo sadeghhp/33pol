@@ -12,7 +12,8 @@ public static class AdminKeyEndpoints
 {
     public static IEndpointRouteBuilder MapAdminKeyEndpoints(this IEndpointRouteBuilder endpoints)
     {
-        var group = endpoints.MapGroup("/admin/api/keys");
+        var group = endpoints.MapGroup("/admin/api/keys")
+            .RequireAuthorization(GatewayAuthPolicies.Admin);
 
         group.MapPost("/", CreateKeyAsync);
         group.MapGet("/", ListKeysAsync);
