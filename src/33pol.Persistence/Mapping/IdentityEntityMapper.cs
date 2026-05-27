@@ -68,4 +68,16 @@ internal static class IdentityEntityMapper
             ModelPattern = record.ModelPattern,
             Effect = record.Effect,
         };
+
+    public static ApiKeyModelGrantRecord ToRecord(ApiKeyModelGrantEntity entity) =>
+        new(entity.Id, entity.ApiKeyId, entity.ModelPattern, entity.Effect);
+
+    public static ApiKeyModelGrantEntity ToEntity(ApiKeyModelGrantRecord record) =>
+        new()
+        {
+            Id = record.Id,
+            ApiKeyId = record.ApiKeyId,
+            ModelPattern = record.ModelPattern,
+            Effect = record.Effect,
+        };
 }
