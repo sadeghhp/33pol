@@ -5,50 +5,42 @@ using Pol33.Persistence.Mapping;
 
 namespace Pol33.Persistence.Repositories;
 
-public sealed class ModelGrantRepository : IModelGrantRepository
+public sealed class ApiKeyModelGrantRepository : IApiKeyModelGrantRepository
 {
     private readonly GatewayDbContext _db;
 
-    public ModelGrantRepository(GatewayDbContext db) => _db = db;
+    public ApiKeyModelGrantRepository(GatewayDbContext db) => _db = db;
 
-    public async Task<IReadOnlyList<ModelGrantRecord>> ListByTenantAsync(
-        Guid tenantId,
+    public async Task<IReadOnlyList<ApiKeyModelGrantRecord>> ListByApiKeyAsync(
+        Guid apiKeyId,
         CancellationToken cancellationToken = default)
     {
-        var entities = await _db.ModelGrants
+        var entities = await _db.ApiKeyModelGrants
             .AsNoTracking()
-            .Where(g => g.TenantId == tenantId)
+            .Where(g => g.ApiKeyId == apiKeyId)
             .OrderBy(g => g.ModelPattern)
             .ToListAsync(cancellationToken);
 
         return entities.Select(IdentityEntityMapper.ToRecord).ToList();
     }
 
-    public async Task<ModelGrantRecord> AddAsync(ModelGrantRecord grant, CancellationToken cancellationToken = default)
-    {
-        var entity = IdentityEntityMapper.ToEntity(grant);
-        _db.ModelGrants.Add(entity);
-        await _db.SaveChangesAsync(cancellationToken);
-        return IdentityEntityMapper.ToRecord(entity);
-    }
-
-    public async Task ReplaceForTenantAsync(
-        Guid tenantId,
+    public async Task ReplaceForApiKeyAsync(
+        Guid apiKeyId,
         IReadOnlyList<string> modelPatterns,
         CancellationToken cancellationToken = default)
     {
-        var existing = await _db.ModelGrants
-            .Where(g => g.TenantId == tenantId)
+        var existing = await _db.ApiKeyModelGrants
+            .Where(g => g.ApiKeyId == apiKeyId)
             .ToListAsync(cancellationToken);
 
-        _db.ModelGrants.RemoveRange(existing);
+        _db.ApiKeyModelGrants.RemoveRange(existing);
 
         foreach (var pattern in NormalizePatterns(modelPatterns))
         {
-            _db.ModelGrants.Add(new Entities.ModelGrantEntity
+            _db.ApiKeyModelGrants.Add(new Entities.ApiKeyModelGrantEntity
             {
                 Id = Guid.NewGuid(),
-                TenantId = tenantId,
+                ApiKeyId = apiKeyId,
                 ModelPattern = pattern,
                 Effect = GrantEffect.Allow,
             });
