@@ -59,11 +59,86 @@
       ]
     },
     {
+      "id": 102,
+      "type": "row",
+      "title": "Policy & resilience",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 8 },
+      "panels": []
+    },
+    {
+      "id": 20,
+      "type": "timeseries",
+      "title": "Circuit breaker state",
+      "description": "0=closed, 1=half_open, 2=open",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 8, "x": 0, "y": 9 },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0, "max": 2 }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true } },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "gateway_circuit_breaker_state{model=~\"$model\"}",
+          "legendFormat": "{{model}}"
+        }
+      ]
+    },
+    {
+      "id": 21,
+      "type": "timeseries",
+      "title": "Circuit transitions / s",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 8, "x": 8, "y": 9 },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (model, to_state) (rate(gateway_circuit_breaker_transitions_total{model=~\"$model\"}[5m]))",
+          "legendFormat": "{{model}} → {{to_state}}"
+        }
+      ]
+    },
+    {
+      "id": 22,
+      "type": "timeseries",
+      "title": "Bulkhead rejections & inflight",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 8, "x": 16, "y": 9 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (model) (rate(gateway_bulkhead_rejections_total{model=~\"$model\"}[5m]))",
+          "legendFormat": "reject {{model}}"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (model) (gateway_bulkhead_inflight{model=~\"$model\"})",
+          "legendFormat": "inflight {{model}}"
+        }
+      ]
+    },
+    {
+      "id": 23,
+      "type": "timeseries",
+      "title": "Model resolve / s",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 16 },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (result) (rate(gateway_model_resolve_total[5m]))",
+          "legendFormat": "{{result}}"
+        }
+      ]
+    },
+    {
       "id": 101,
       "type": "row",
       "title": "Tokens",
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 8 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 22 },
       "panels": []
     },
     {
@@ -71,7 +146,7 @@
       "type": "timeseries",
       "title": "Tokens / s (input vs output)",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 9 },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 23 },
       "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
       "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true } },
       "targets": [

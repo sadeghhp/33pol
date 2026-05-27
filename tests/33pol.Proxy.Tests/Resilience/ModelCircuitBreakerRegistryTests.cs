@@ -1,4 +1,6 @@
 using Microsoft.Extensions.Options;
+using NSubstitute;
+using Pol33.Core.Abstractions;
 using Pol33.Core.Configuration;
 using Pol33.Policy.CircuitBreaker;
 using Pol33.Proxy.Resilience;
@@ -14,7 +16,8 @@ public sealed class ModelCircuitBreakerRegistryTests
         {
             Resilience = new GatewayResilienceOptions { CircuitBreakerFailureThreshold = 2 },
         });
-        var registry = new ModelCircuitBreakerRegistry(options);
+        var metrics = Substitute.For<IGatewayMetricsCollector>();
+        var registry = new ModelCircuitBreakerRegistry(options, metrics);
 
         registry.TryEnter("m1").Should().BeTrue();
         registry.RecordFailure("m1");
@@ -23,5 +26,21 @@ public sealed class ModelCircuitBreakerRegistryTests
 
         registry.TryEnter("m1").Should().BeFalse();
         registry.GetBreaker("m1").State.Should().Be(CircuitState.Open);
+        metrics.Received(1).RecordCircuitBreakerTransition("m1", "open");
+    }
+
+    [Fact]
+    public void GetStates_AfterOpen_ReturnsMetricStateTwo()
+    {
+        var options = Options.Create(new GatewayOptions
+        {
+            Resilience = new GatewayResilienceOptions { CircuitBreakerFailureThreshold = 1 },
+        });
+        var registry = new ModelCircuitBreakerRegistry(options, Substitute.For<IGatewayMetricsCollector>());
+
+        registry.RecordFailure("m1");
+
+        var states = registry.GetStates();
+        states.Should().ContainSingle(s => s.ModelId == "m1" && s.State == 2);
     }
 }

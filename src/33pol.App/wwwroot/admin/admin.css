@@ -1,3 +1,5 @@
+[x-cloak] { display: none !important; }
+
 :root {
   font-family: system-ui, -apple-system, sans-serif;
   color-scheme: light dark;
@@ -9,6 +11,29 @@ body { margin: 0; padding: 1.5rem; max-width: 1200px; line-height: 1.45; }
 h1 { margin-top: 0; font-size: 1.5rem; }
 h2 { margin-top: 0; font-size: 1.1rem; }
 h3 { font-size: 1rem; margin-bottom: 0.5rem; }
+.header-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.5rem;
+}
+.badge {
+  display: inline-block;
+  font-size: 0.8rem;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+}
+.badge.ok { color: #16a34a; border-color: color-mix(in srgb, #16a34a 40%, transparent); }
+.badge.fail { color: #dc2626; border-color: color-mix(in srgb, #dc2626 40%, transparent); }
+.badge.loading { color: var(--muted); }
+.loading-banner {
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin-bottom: 0.75rem;
+}
 nav { margin-bottom: 1rem; display: flex; flex-wrap: wrap; gap: 0.35rem; }
 nav button {
   border: 1px solid var(--border);
@@ -20,6 +45,13 @@ nav button {
 nav button.active { border-color: var(--accent); font-weight: 600; }
 .card { border: 1px solid var(--border); border-radius: 10px; padding: 1rem; margin-bottom: 1rem; }
 label { display: block; margin-bottom: 0.35rem; font-size: 0.9rem; }
+label.checkbox {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+label.checkbox input { width: auto; margin: 0; }
 input, select, textarea {
   width: 100%;
   padding: 0.45rem 0.55rem;
@@ -30,6 +62,14 @@ input, select, textarea {
   background: Canvas;
   color: CanvasText;
 }
+.key-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+  margin-bottom: 0.5rem;
+}
+.key-row input { flex: 1; min-width: 12rem; margin-bottom: 0; }
 button.action {
   margin-right: 0.5rem;
   margin-bottom: 0.35rem;
@@ -39,12 +79,19 @@ button.action {
   background: color-mix(in srgb, var(--accent) 12%, Canvas);
   cursor: pointer;
 }
+button.action:disabled { opacity: 0.55; cursor: not-allowed; }
 button.danger { background: color-mix(in srgb, #dc2626 12%, Canvas); }
+button.secondary {
+  background: transparent;
+}
+.table-wrap { overflow-x: auto; margin-bottom: 0.75rem; }
 table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
 th, td { text-align: left; padding: 0.4rem 0.5rem; border-bottom: 1px solid var(--border); vertical-align: top; }
 .error { color: #dc2626; white-space: pre-wrap; }
 .success { color: #16a34a; }
+.warn-inline { color: #ca8a04; font-size: 0.85rem; margin: -0.35rem 0 0.75rem; }
 .hint { color: var(--muted); font-size: 0.85rem; margin: -0.5rem 0 0.75rem; }
+.empty { color: var(--muted); font-size: 0.9rem; font-style: italic; }
 .error details { margin-top: 0.35rem; font-size: 0.85rem; }
 .error summary { cursor: pointer; color: var(--muted); }
 .error pre {
@@ -60,4 +107,24 @@ th, td { text-align: left; padding: 0.4rem 0.5rem; border-bottom: 1px solid var(
 code { font-size: 0.85rem; word-break: break-all; }
 .healthy { color: #16a34a; }
 .unhealthy { color: #dc2626; }
+.links-row a { margin-right: 1rem; }
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: color-mix(in srgb, CanvasText 25%, transparent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  padding: 1rem;
+}
+.modal {
+  background: Canvas;
+  color: CanvasText;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1.25rem;
+  max-width: 24rem;
+  width: 100%;
+}
 @media (max-width: 700px) { .grid { grid-template-columns: 1fr; } }

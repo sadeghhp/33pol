@@ -15,4 +15,10 @@ public interface IGatewayMetricsCollector
     void RecordForwardAttempt(string modelId, string outcome);
 
     void RecordModelResolve(string result);
+
+    void RecordCircuitBreakerTransition(string modelId, string toState);
+
+    void RecordBulkheadRejection(string modelId);
+
+    void RecordBulkheadInflightChange(string modelId, int delta);
 }

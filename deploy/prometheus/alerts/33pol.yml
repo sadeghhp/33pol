@@ -19,3 +19,19 @@ groups:
         annotations:
           summary: No healthy backends registered
           description: See runbook docs/runbooks/all-backends-down.md
+      - alert: GatewayUsageParseFailures
+        expr: sum(rate(gateway_usage_parse_failures_total[5m])) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Upstream usage JSON parse failures elevated
+          description: Check upstream responses include usage blocks; see docs/observability.md
+      - alert: GatewayCircuitBreakerOpen
+        expr: max by (model) (gateway_circuit_breaker_state) == 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Circuit breaker open for one or more models
+          description: Model {{ $labels.model }} circuit is open; see docs/runbooks/high-error-rate.md

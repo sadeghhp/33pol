@@ -20,6 +20,8 @@ public static class ProxyServiceCollectionExtensions
         services.AddHttpForwarder();
         services.AddSingleton<IGatewayDrainState, GatewayDrainState>();
         services.AddSingleton<ModelCircuitBreakerRegistry>();
+        services.AddSingleton<ICircuitBreakerStateSource>(sp =>
+            sp.GetRequiredService<ModelCircuitBreakerRegistry>());
         services.AddSingleton<BulkheadRegistry>();
         services.AddHostedService<GatewayShutdownHostedService>();
         services.AddSingleton(CreateHttpMessageInvoker);

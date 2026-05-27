@@ -8,14 +8,18 @@ Canonical metric names are defined in [12-metrics-and-runtime-contracts.md](impl
 
 ## Dashboards
 
-Docker Compose auto-provisions **33pol Gateway** under the Grafana folder **33pol**:
+Docker Compose auto-provisions dashboards under the Grafana folder **33pol**:
 
-- URL: http://localhost:3000/d/33pol-gateway/33pol-gateway
-- Source: [deploy/grafana/dashboards/33pol-gateway.json](../deploy/grafana/dashboards/33pol-gateway.json)
+| Dashboard | URL | Source |
+|-----------|-----|--------|
+| **33pol Gateway** (SRE / RED) | http://localhost:3000/d/33pol-gateway/33pol-gateway | [33pol-gateway.json](../deploy/grafana/dashboards/33pol-gateway.json) |
+| **33pol Gateway — Traffic & tokens** | http://localhost:3000/d/33pol-gateway-traffic/33pol-gateway-traffic | [33pol-gateway-traffic.json](../deploy/grafana/dashboards/33pol-gateway-traffic.json) |
 
-Rows: overview (RPS, error rate, p99, streams, healthy backends), RED, streaming/policy, FinOps/usage writer (tokens by `direction`: `input`, `output`, `total`), backend health. Use the **Model** variable to filter.
+**Ops dashboard:** overview (RPS, error rate, p99, streams, healthy backends), RED, streaming/policy, FinOps/usage writer, backend health.
 
-Token metrics are recorded when upstream `usage` is parsed on the inference path (`IUsageRecorder`). See [13-grafana-business-metrics.md](implementation-plan/13-grafana-business-metrics.md) for the traffic dashboard plan.
+**Traffic dashboard:** inference route rate by `route`/`stream`, forward outcomes by `outcome`, token rates (`direction=input|output`).
+
+Use the **Model** variable to filter. Token metrics are recorded when upstream `usage` is parsed on the inference path (`IUsageRecorder`). Plan: [13-grafana-business-metrics.md](implementation-plan/13-grafana-business-metrics.md).
 
 After changing the JSON or datasource provisioning, restart Grafana: `docker compose restart grafana`.
 

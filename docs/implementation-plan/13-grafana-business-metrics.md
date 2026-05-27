@@ -84,9 +84,9 @@ Compose: `deploy/grafana/dashboards/`, provisioned via `deploy/grafana/provision
 | T1 | Wire usage capture on inference hot path |
 | T2 | Token metrics `input` / `output` |
 | T3 | Routing and forward outcome counters |
-| T4 | Circuit breaker and bulkhead metrics |
-| T5 | Grafana traffic dashboard |
-| T6 | Docs, alerts, integration scrape test |
+| T4 | Circuit breaker and bulkhead metrics | Done |
+| T5 | Grafana traffic dashboard polish | Done |
+| T6 | Docs, alerts, integration scrape test | Done |
 
 ---
 

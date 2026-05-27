@@ -36,7 +36,7 @@ Verified locally:
 
 - `curl -sf http://localhost:8080/metrics | head`
 - Prometheus `http://localhost:9090/-/healthy` scrapes gateway
-- Grafana dashboard **33pol Gateway** loads
+- Grafana dashboards **33pol Gateway** and **33pol Gateway — Traffic & tokens** load (`perf/ci/verify-grafana-dashboards.sh`)
 
 Not verified (deferred): end-to-end **trace** export to an OTLP collector. Sample collector config: [deploy/otel-collector/config.yaml](../deploy/otel-collector/config.yaml).
 

@@ -37,6 +37,10 @@ Epic: **EPIC-post-ga** (358079).
 | G-16 | #542 US-post-ga-07 chaos runbook | #581 |
 | G-17 | #543 US-post-ga-08 OpenAPI prod | #582 |
 
+### Admin UI enhancements
+
+Story: **#613 US-admin-enhance** — UX, navigation, usage events, `admin-store.js`, docs. Tasks: create/close in Taiga when MCP sync works (8 tasks: UX, navigation, usage, dashboard, models/backends, keys modal, modular JS, tests/docs).
+
 ### Quality / hygiene epic (G-18–G-23)
 
 Epic: **EPIC-quality-hygiene** (358084).

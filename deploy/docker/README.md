@@ -23,7 +23,7 @@ bash perf/ci/verify-compose-health.sh
 | Admin UI       | http://localhost:8080/admin (key from `GATEWAY_ADMIN_API_KEY`) |
 | Mock upstream  | http://localhost:18080       |
 | Prometheus     | http://localhost:9090        |
-| Grafana        | http://localhost:3000 (admin / admin) — folder **33pol** → **33pol Gateway** dashboard (RED, policy, FinOps, backends) |
+| Grafana        | http://localhost:3000 (admin / admin) — folder **33pol**: [33pol Gateway](http://localhost:3000/d/33pol-gateway/33pol-gateway) (RED, backends), [Traffic & tokens](http://localhost:3000/d/33pol-gateway-traffic/33pol-gateway-traffic) — see [observability.md](../../docs/observability.md) |
 | PostgreSQL     | localhost:5432               |
 
 Test the mock:
@@ -47,6 +47,15 @@ curl -s http://localhost:8080/v1/models -H "Authorization: Bearer <api-key>"
 `host.docker.internal` is configured so backends running on the host machine are reachable from the gateway container.
 
 The whole `deploy/docker/config/` directory is mounted at `/app/config` (including `models.json`) so the Admin UI (**Models** tab) can persist registry changes. A single-file bind mount cannot be atomically replaced on Docker Desktop (EBUSY).
+
+### OpenRouter (cloud)
+
+1. Add to `.env` (optional): `OPENROUTER_API_KEY=sk-or-...` — passed into the gateway container when set.
+2. Restart stack: `docker compose up -d --build`
+3. Admin UI → **Models** → **Fetch OpenRouter models** → **Use** → **Add model** (upstream auth is prefilled).
+4. Create an **Inference** API key; clients use the gateway URL + that key (not the OpenRouter key).
+
+See [docs/integrations.md](../../docs/integrations.md#openrouter).
 
 ### LM Studio (host LLM)
 

@@ -25,4 +25,6 @@ helm upgrade --install 33pol deploy/helm/33pol -f my-values.yaml
 | `ingress.enabled` | Expose gateway HTTP (configure SSE timeouts for streaming) |
 | `autoscaling.enabled` | HPA on CPU |
 
+**Grafana:** not included in the Helm chart. Use [grafana/](./grafana/) JSON + provisioning with your own Grafana/Prometheus stack, or run the full local stack via [docker/README.md](./docker/README.md).
+
 Container images are built from the repo [Dockerfile](../Dockerfile); CI publishes to `ghcr.io/<repository>` on `main` (see `.github/workflows/docker-image.yml`).

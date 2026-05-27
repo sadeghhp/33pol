@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -37,6 +38,7 @@ public sealed class ModelRouterMiddleware
     private readonly IHttpForwarder _forwarder;
     private readonly HttpMessageInvoker _httpClient;
     private readonly TimeSpan _forwardTimeout;
+    private readonly IConfiguration _configuration;
     private readonly ILogger<ModelRouterMiddleware> _logger;
 
     public ModelRouterMiddleware(
@@ -57,6 +59,7 @@ public sealed class ModelRouterMiddleware
         IHttpForwarder forwarder,
         HttpMessageInvoker httpClient,
         IOptions<GatewayOptions> options,
+        IConfiguration configuration,
         ILogger<ModelRouterMiddleware> logger)
     {
         _next = next;
@@ -76,6 +79,7 @@ public sealed class ModelRouterMiddleware
         _forwarder = forwarder;
         _httpClient = httpClient;
         _forwardTimeout = TimeSpan.FromSeconds(options.Value.Resilience.ForwardTimeoutSeconds);
+        _configuration = configuration;
         _logger = logger;
     }
 
@@ -229,11 +233,27 @@ public sealed class ModelRouterMiddleware
                 started,
                 usageTenant);
 
+            var upstreamBearerToken = ResolveUpstreamBearerTokenOrNull(modelConfig.UpstreamAuth);
+            if (modelConfig.UpstreamAuth is not null && string.IsNullOrWhiteSpace(upstreamBearerToken))
+            {
+                _circuitBreakers.RecordFailure(modelConfig.Id);
+                inferenceScope.SetOutcome(false, "upstream_error");
+                _metricsCollector.RecordForwardAttempt(modelConfig.Id, "upstream_error");
+                await context.WriteGatewayErrorAsync(
+                    _errors.Write(
+                        GatewayErrorCode.UpstreamError,
+                        message: "Upstream auth token not configured for this model."),
+                    context.RequestAborted).ConfigureAwait(false);
+                return;
+            }
+
             var transformer = new StreamingHttpTransformer(
                 requestInfo.Stream,
                 requestInfo.Model,
                 modelConfig.Id,
-                usageCapture);
+                usageCapture,
+                stripClientAuthHeaders: true,
+                upstreamBearerToken: upstreamBearerToken);
 
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted);
             timeoutCts.CancelAfter(_forwardTimeout);
@@ -302,6 +322,26 @@ public sealed class ModelRouterMiddleware
                 }
             }
         }
+    }
+
+    private string? ResolveUpstreamBearerTokenOrNull(UpstreamAuthConfig? upstreamAuth)
+    {
+        if (upstreamAuth is null)
+        {
+            return null;
+        }
+
+        if (!string.Equals(upstreamAuth.Type, "bearer", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        if (string.IsNullOrWhiteSpace(upstreamAuth.EnvVar))
+        {
+            return null;
+        }
+
+        return _configuration[upstreamAuth.EnvVar] ?? Environment.GetEnvironmentVariable(upstreamAuth.EnvVar);
     }
 
     private void RecordRecentRequest(

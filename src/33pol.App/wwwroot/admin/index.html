@@ -5,17 +5,31 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>33pol Admin</title>
   <link rel="stylesheet" href="admin.css" />
+  <script defer src="admin-store.js"></script>
   <script defer src="admin.js"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.9/dist/cdn.min.js"></script>
 </head>
-<body x-data="adminApp()" x-init="init()">
-  <h1>33pol Gateway Admin</h1>
-  <p class="muted">Operator browser UI — uses the same <code>/admin/api/*</code> surface as automation. API key is stored in <strong>localStorage</strong>; see <code>docs/admin-ui.md</code> and <code>docs/operator-console.md</code>.</p>
+<body x-data="adminApp()" x-init="init()" x-cloak>
+  <div class="header-bar">
+    <h1>33pol Gateway Admin</h1>
+    <span x-show="apiKey && connectionStatus === 'ok'" class="badge ok">Connected</span>
+    <span x-show="apiKey && connectionStatus === 'fail'" class="badge fail">Invalid key</span>
+  </div>
+  <p class="muted">Operator browser UI — uses <code>/admin/api/*</code>. API key in <strong>localStorage</strong>; see <code>docs/admin-ui.md</code>.</p>
+
+  <p class="loading-banner" x-show="loading" x-text="loadingMessage || 'Loading…'"></p>
 
   <div class="card">
     <label for="apiKey">Admin API key</label>
-    <input id="apiKey" type="password" x-model="apiKey" placeholder="sk-..." @change="saveKey()" autocomplete="off" />
-    <div class="error" x-show="error">
+    <div class="key-row">
+      <input id="apiKey" :type="showApiKey ? 'text' : 'password'" x-model="apiKey" placeholder="sk-..."
+        @keydown.enter.prevent="saveKey()" autocomplete="off" />
+      <button type="button" class="action secondary" @click="showApiKey = !showApiKey"
+        x-text="showApiKey ? 'Hide' : 'Show'"></button>
+      <button type="button" class="action" @click="saveKey()" :disabled="loading">Save</button>
+      <button type="button" class="action secondary" @click="clearSession()" x-show="apiKey">Sign out</button>
+    </div>
+    <div class="error" x-show="error" x-transition.opacity>
       <strong x-text="errorTitle || 'Error'"></strong>
       <p x-text="error"></p>
       <details x-show="errorDetail">
@@ -23,20 +37,27 @@
         <pre x-text="errorDetail"></pre>
       </details>
     </div>
-    <p class="success" x-show="successMessage" x-text="successMessage"></p>
+    <p class="success" x-show="successMessage" x-text="successMessage" x-transition.opacity></p>
   </div>
 
-  <nav x-show="apiKey">
-    <button type="button" :class="{ active: tab === 'dashboard' }" @click="setTab('dashboard')">Dashboard</button>
-    <button type="button" :class="{ active: tab === 'usage' }" @click="setTab('usage')">Usage</button>
-    <button type="button" :class="{ active: tab === 'backends' }" @click="setTab('backends')">Backends</button>
-    <button type="button" :class="{ active: tab === 'models' }" @click="setTab('models')">Models</button>
-    <button type="button" :class="{ active: tab === 'keys' }" @click="setTab('keys')">API keys</button>
+  <nav x-show="apiKey" role="tablist">
+    <button type="button" role="tab" :aria-selected="tab === 'dashboard'" :class="{ active: tab === 'dashboard' }" @click="setTab('dashboard')">Dashboard</button>
+    <button type="button" role="tab" :aria-selected="tab === 'usage'" :class="{ active: tab === 'usage' }" @click="setTab('usage')">Usage</button>
+    <button type="button" role="tab" :aria-selected="tab === 'backends'" :class="{ active: tab === 'backends' }" @click="setTab('backends')">Backends</button>
+    <button type="button" role="tab" :aria-selected="tab === 'models'" :class="{ active: tab === 'models' }" @click="setTab('models')">Models</button>
+    <button type="button" role="tab" :aria-selected="tab === 'keys'" :class="{ active: tab === 'keys' }" @click="setTab('keys')">API keys</button>
   </nav>
 
   <div class="card" x-show="apiKey && tab === 'dashboard'">
     <h2>Dashboard</h2>
-    <p class="muted">Summary polls every 2s while this tab is active.</p>
+    <p class="muted">Summary polls every 2s while this tab is active and the page is visible.</p>
+    <p class="links-row muted" x-show="healthLive !== null">
+      Health:
+      <span :class="healthLive ? 'healthy' : 'unhealthy'" x-text="healthLive ? 'live ✓' : 'live ✗'"></span>,
+      <span :class="healthReady ? 'healthy' : 'unhealthy'" x-text="healthReady ? 'ready ✓' : 'ready ✗'"></span>
+      — <a href="/metrics" target="_blank" rel="noopener">Prometheus metrics</a>,
+      <a href="/health" target="_blank" rel="noopener">/health</a>
+    </p>
     <div class="metrics" x-show="summary">
       <div class="metric"><span class="muted">Uptime</span><strong x-text="summary?.uptime ?? '—'"></strong></div>
       <div class="metric"><span class="muted">Requests</span><strong x-text="summary?.totalInferenceRequests ?? 0"></strong></div>
@@ -46,145 +67,261 @@
       <div class="metric"><span class="muted">Rate limits</span><strong x-text="summary?.rateLimitRejections ?? 0"></strong></div>
     </div>
     <p>
-      <button type="button" class="action" @click="loadSummary()">Refresh summary</button>
-      <button type="button" class="action" @click="reloadConfig()">Reload config file</button>
-      <button type="button" class="action" @click="loadConfigStatus()">Config status</button>
-      <button type="button" class="action" @click="loadRequests()">Recent requests</button>
+      <button type="button" class="action" @click="loadSummary()" :disabled="loading">Refresh summary</button>
+      <button type="button" class="action" @click="reloadConfig()" :disabled="loading">Reload config file</button>
+      <button type="button" class="action" @click="loadConfigStatus()" :disabled="loading">Config status</button>
+      <button type="button" class="action" @click="loadRequests()" :disabled="loading">Recent requests</button>
+      <button type="button" class="action" @click="loadHealth()" :disabled="loading">Refresh health</button>
     </p>
     <p x-show="configStatus" class="muted">
       Hot reload: <span x-text="configStatus?.hotReloadEnabled"></span>,
       watch: <span x-text="configStatus?.watchEnabled"></span>,
       models: <span x-text="configStatus?.modelCount"></span>
     </p>
-    <table x-show="requests?.length">
-      <thead>
-        <tr><th>Time</th><th>Method</th><th>Path</th><th>Model</th><th>Status</th><th>ms</th></tr>
-      </thead>
-      <tbody>
-        <template x-for="r in requests ?? []" :key="r.requestId">
-          <tr>
-            <td x-text="formatTime(r.timestampUtc)"></td>
-            <td x-text="r.method"></td>
-            <td x-text="r.path"></td>
-            <td x-text="r.modelId ?? '—'"></td>
-            <td x-text="r.statusCode"></td>
-            <td x-text="r.durationMs?.toFixed?.(0) ?? r.durationMs"></td>
-          </tr>
-        </template>
-      </tbody>
-    </table>
-    <p class="muted">Full request/log history: use Grafana or your observability stack (<code>docs/observability.md</code>).</p>
+    <div class="table-wrap">
+      <table x-show="requests?.length">
+        <thead>
+          <tr><th>Time</th><th>Method</th><th>Path</th><th>Model</th><th>Status</th><th>ms</th></tr>
+        </thead>
+        <tbody>
+          <template x-for="r in requests ?? []" :key="r.requestId">
+            <tr>
+              <td x-text="formatTime(r.timestampUtc)"></td>
+              <td x-text="r.method"></td>
+              <td x-text="r.path"></td>
+              <td x-text="r.modelId ?? '—'"></td>
+              <td x-text="r.statusCode"></td>
+              <td x-text="r.durationMs?.toFixed?.(0) ?? r.durationMs"></td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+    </div>
+    <p class="empty" x-show="!loading && apiKey && (!requests || requests.length === 0)">No recent requests loaded — click Recent requests.</p>
+    <p class="muted">Full history: Grafana / observability (<code>docs/observability.md</code>).</p>
   </div>
 
   <div class="card" x-show="apiKey && tab === 'usage'">
     <h2>Usage &amp; forecast</h2>
-    <button type="button" class="action" @click="loadUsage()">Load rollups</button>
-    <button type="button" class="action" @click="loadForecast()">Forecast (7d)</button>
-    <button type="button" class="action" @click="downloadExport('json')">Export JSON</button>
-    <button type="button" class="action" @click="downloadExport('csv')">Export CSV</button>
+    <div class="grid">
+      <label>From <input type="date" x-model="usageFrom" /></label>
+      <label>To <input type="date" x-model="usageTo" /></label>
+    </div>
+    <p>
+      <button type="button" class="action" @click="loadUsage()" :disabled="loading">Load rollups</button>
+      <button type="button" class="action" @click="loadUsageEvents()" :disabled="loading">Load events</button>
+      <button type="button" class="action" @click="loadForecast()" :disabled="loading">Forecast (7d)</button>
+      <button type="button" class="action" @click="downloadExport('json')" :disabled="loading">Export JSON</button>
+      <button type="button" class="action" @click="downloadExport('csv')" :disabled="loading">Export CSV</button>
+    </p>
     <div class="metrics" x-show="usage?.summary">
       <div class="metric"><span class="muted">Prompt tokens</span><strong x-text="usage?.summary?.totalPromptTokens ?? 0"></strong></div>
       <div class="metric"><span class="muted">Completion</span><strong x-text="usage?.summary?.totalCompletionTokens ?? 0"></strong></div>
-      <div class="metric"><span class="muted">Cost</span><strong x-text="usage?.summary?.totalCost ?? 0"></strong></div>
+      <div class="metric"><span class="muted">Cost</span><strong x-text="formatCost(usage?.summary?.totalCost, forecast?.currency || usage?.currency)"></strong></div>
       <div class="metric"><span class="muted">Requests</span><strong x-text="usage?.summary?.totalRequests ?? 0"></strong></div>
     </div>
-    <p x-show="forecast"><strong>Projected monthly:</strong>
-      <span x-text="forecast?.projectedMonthlyCost"></span>
-      <span x-text="forecast?.currency"></span>
-      (trailing <span x-text="forecast?.trailingDays"></span>d, spent <span x-text="forecast?.trailingTotalCost"></span>)
+    <p x-show="forecast" class="hint"><strong>Projected monthly:</strong>
+      <span x-text="formatCost(forecast?.projectedMonthlyCost, forecast?.currency)"></span>
+      (trailing <span x-text="forecast?.trailingDays"></span>d, spent
+      <span x-text="formatCost(forecast?.trailingTotalCost, forecast?.currency)"></span>)
     </p>
-    <table x-show="usage?.rollups?.length">
-      <thead>
-        <tr><th>Date</th><th>Model</th><th>Cost center</th><th>Prompt</th><th>Completion</th><th>Cost</th><th>Req</th></tr>
-      </thead>
-      <tbody>
-        <template x-for="row in usage?.rollups ?? []" :key="row.usageDate + row.modelId + (row.costCenter || '')">
-          <tr>
-            <td x-text="row.usageDate"></td>
-            <td x-text="row.modelId"></td>
-            <td x-text="row.costCenter ?? '—'"></td>
-            <td x-text="row.promptTokens"></td>
-            <td x-text="row.completionTokens"></td>
-            <td x-text="row.totalCost"></td>
-            <td x-text="row.requestCount"></td>
-          </tr>
-        </template>
-      </tbody>
-    </table>
+    <h3>Rollups</h3>
+    <div class="table-wrap">
+      <table x-show="usage?.rollups?.length">
+        <thead>
+          <tr><th>Date</th><th>Model</th><th>Cost center</th><th>Prompt</th><th>Completion</th><th>Cost</th><th>Req</th></tr>
+        </thead>
+        <tbody>
+          <template x-for="row in usage?.rollups ?? []" :key="row.usageDate + row.modelId + (row.costCenter || '')">
+            <tr>
+              <td x-text="row.usageDate"></td>
+              <td x-text="row.modelId"></td>
+              <td x-text="row.costCenter ?? '—'"></td>
+              <td x-text="row.promptTokens"></td>
+              <td x-text="row.completionTokens"></td>
+              <td x-text="formatCost(row.totalCost, forecast?.currency)"></td>
+              <td x-text="row.requestCount"></td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+    </div>
+    <p class="empty" x-show="!loading && !usage?.rollups?.length">No rollups — set dates and click Load rollups.</p>
+    <h3>Recent billing events</h3>
+    <div class="table-wrap">
+      <table x-show="usageEvents?.length">
+        <thead>
+          <tr><th>Time</th><th>Model</th><th>Prompt</th><th>Completion</th><th>Cost</th></tr>
+        </thead>
+        <tbody>
+          <template x-for="ev in usageEvents ?? []" :key="ev.id">
+            <tr>
+              <td x-text="formatTime(ev.recordedAt)"></td>
+              <td x-text="ev.modelId ?? '—'"></td>
+              <td x-text="ev.promptTokens ?? '—'"></td>
+              <td x-text="ev.completionTokens ?? '—'"></td>
+              <td x-text="formatCost(ev.totalCost, forecast?.currency)"></td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+    </div>
+    <p class="empty" x-show="!loading && !usageEvents?.length">No events — click Load events.</p>
   </div>
 
   <div class="card" x-show="apiKey && tab === 'backends'">
     <h2>Backends</h2>
-    <button type="button" class="action" @click="loadBackends()">Refresh</button>
-    <table x-show="backends?.length">
-      <thead><tr><th>Model</th><th>URL</th><th>Alias</th><th>Health</th></tr></thead>
-      <tbody>
-        <template x-for="b in backends ?? []" :key="b.modelId">
-          <tr>
-            <td x-text="b.modelId"></td>
-            <td x-text="b.url"></td>
-            <td x-text="b.alias ?? '—'"></td>
-            <td :class="b.isHealthy ? 'healthy' : 'unhealthy'" x-text="b.isHealthy ? 'healthy' : 'unhealthy'"></td>
-          </tr>
-        </template>
-      </tbody>
-    </table>
+    <label>Filter <input x-model="backendsFilter" placeholder="model, url, alias…" /></label>
+    <button type="button" class="action" @click="loadBackends()" :disabled="loading">Refresh</button>
+    <div class="table-wrap">
+      <table x-show="filteredBackends().length">
+        <thead><tr><th>Model</th><th>URL</th><th>Alias</th><th>Health</th></tr></thead>
+        <tbody>
+          <template x-for="b in filteredBackends()" :key="b.modelId + (b.alias || '')">
+            <tr>
+              <td x-text="b.modelId"></td>
+              <td><code x-text="b.url"></code></td>
+              <td x-text="b.alias ?? '—'"></td>
+              <td :class="b.isHealthy ? 'healthy' : 'unhealthy'" x-text="b.isHealthy ? 'healthy' : 'unhealthy'"></td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+    </div>
+    <p class="empty" x-show="!loading && !filteredBackends().length">No backends — add models or click Refresh.</p>
   </div>
 
   <div class="card" x-show="apiKey && tab === 'models'">
     <h2>Models registry</h2>
-    <button type="button" class="action" @click="loadModels()">Refresh</button>
-    <table x-show="models?.length">
-      <thead><tr><th>ID</th><th>URL</th><th>Aliases</th><th>Context</th><th></th></tr></thead>
-      <tbody>
-        <template x-for="m in models ?? []" :key="m.id">
-          <tr>
-            <td x-text="m.id"></td>
-            <td x-text="m.url"></td>
-            <td x-text="(m.aliases || []).join(', ')"></td>
-            <td x-text="m.maxContextLength"></td>
-            <td>
-              <button type="button" class="action" @click="startEditModel(m)">Edit</button>
-              <button type="button" class="action danger" @click="removeModel(m.id)">Remove</button>
-            </td>
-          </tr>
-        </template>
-      </tbody>
-    </table>
+    <button type="button" class="action" @click="loadModels()" :disabled="loading">Refresh</button>
+    <div class="table-wrap">
+      <table x-show="models?.length">
+        <thead><tr><th>ID</th><th>URL</th><th>Aliases</th><th>Context</th><th></th></tr></thead>
+        <tbody>
+          <template x-for="m in models ?? []" :key="m.id">
+            <tr>
+              <td x-text="m.id"></td>
+              <td x-text="m.url"></td>
+              <td x-text="(m.aliases || []).join(', ')"></td>
+              <td x-text="m.maxContextLength"></td>
+              <td>
+                <button type="button" class="action" @click="startEditModel(m)">Edit</button>
+                <button type="button" class="action danger" @click="removeModel(m.id)">Remove</button>
+              </td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+    </div>
+    <p class="empty" x-show="!loading && !models?.length">No models in registry.</p>
+
+    <h3>Discover provider models</h3>
+    <p class="hint">
+      List models from any OpenAI-compatible provider (OpenRouter, OpenAI, Together, Groq, …) or a custom base URL.
+      “Use” prefills the add-model form. Set the provider API key as an environment variable on the gateway.
+    </p>
+    <div class="grid">
+      <label>Provider
+        <select x-model="selectedProviderId" @change="onProviderChanged()">
+          <template x-for="p in providers" :key="p.id">
+            <option :value="p.id" x-text="p.displayName"></option>
+          </template>
+        </select>
+      </label>
+      <label>API key env var
+        <input x-model="providerEnvVar" placeholder="OPENROUTER_API_KEY" :disabled="!selectedProviderRequiresAuth()" />
+      </label>
+      <label>Filter <input x-model="providerFilter" placeholder="claude, gpt, qwen..." /></label>
+      <label x-show="selectedProviderId === 'custom'">Models list URL
+        <input x-model="customModelsUrl" placeholder="https://api.example.com/v1/models" />
+      </label>
+      <label x-show="selectedProviderId === 'custom'">Upstream base URL (optional)
+        <input x-model="customUpstreamBaseUrl" placeholder="https://api.example.com — derived from models URL if empty" />
+      </label>
+    </div>
+    <p>
+      <button type="button" class="action" @click="fetchProviderModels()" :disabled="providerLoading || loading"
+        x-text="providerLoading ? 'Fetching…' : 'Fetch models'"></button>
+      <button type="button" class="action secondary" @click="loadProviders()" :disabled="loading">Reload providers</button>
+    </p>
+    <div class="table-wrap">
+      <table x-show="(filteredProviderModels()?.length || 0) > 0">
+        <thead><tr><th>ID</th><th>Name</th><th>Context</th><th></th></tr></thead>
+        <tbody>
+          <template x-for="m in filteredProviderModels()" :key="m.id">
+            <tr>
+              <td><code x-text="m.id"></code></td>
+              <td x-text="m.name ?? '—'"></td>
+              <td x-text="m.contextLength ?? '—'"></td>
+              <td><button type="button" class="action" @click="useProviderModel(m)">Use</button></td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+    </div>
+
     <h3 x-text="editModel.id ? 'Edit model' : 'Add model'"></h3>
+    <p>
+      <button type="button" class="action secondary" @click="applyModelTemplate('lmstudio-docker')">Template: LM Studio (Docker)</button>
+      <button type="button" class="action secondary" @click="applyModelTemplate('lmstudio-native')">Template: LM Studio (native)</button>
+      <button type="button" class="action secondary" @click="applyModelTemplate('openrouter')">Template: OpenRouter</button>
+      <button type="button" class="action secondary" @click="applyModelTemplate('together')">Template: Together</button>
+      <button type="button" class="action secondary" @click="applyModelTemplate('groq')">Template: Groq</button>
+      <button type="button" class="action secondary" @click="applyModelTemplate('vllm-docker')">Template: vLLM (Docker)</button>
+    </p>
     <div class="grid">
       <label>Model ID <input x-model="editModel.id" :disabled="!!editModel._existing" /></label>
       <label>Upstream URL <input x-model="editModel.url" placeholder="http://host.docker.internal:1234" /></label>
       <label>Max context <input type="number" x-model.number="editModel.maxContextLength" min="1" /></label>
       <label>Aliases (comma-separated) <input x-model="editModel.aliasesText" placeholder="gpt-4o, my-model" /></label>
+      <label class="checkbox">
+        <input type="checkbox" x-model="editModel.useUpstreamAuth" />
+        Upstream bearer auth (OpenRouter, etc.)
+      </label>
+      <label x-show="editModel.useUpstreamAuth">
+        Auth env var
+        <input x-model="editModel.upstreamAuthEnvVar" placeholder="OPENROUTER_API_KEY" />
+      </label>
     </div>
+    <p class="warn-inline" x-show="urlLooksLocalhost()">localhost/127.0.0.1 may fail from Docker — prefer host.docker.internal.</p>
     <p class="hint">
-      Docker → host LLM (LM Studio, vLLM): use <code>http://host.docker.internal:&lt;port&gt;</code> (base URL, no <code>/v1</code>).
-      LM Studio: enable Developer server + “Serve on Local Network”. Native run: <code>http://127.0.0.1:1234</code>.
+      Docker → host LLM: <code>http://host.docker.internal:&lt;port&gt;</code>. Cloud providers: use Discover above or templates; enable upstream auth + set the provider key on the gateway.
+      See <code>docs/lm-studio-with-33pol.md</code>.
     </p>
-    <button type="button" class="action" @click="saveModel()" x-text="editModel._existing ? 'Save changes' : 'Add model'"></button>
+    <button type="button" class="action" @click="saveModel()" :disabled="loading" x-text="editModel._existing ? 'Save changes' : 'Add model'"></button>
     <button type="button" class="action" x-show="editModel._existing" @click="resetModelForm()">Cancel edit</button>
+    <a class="action secondary" href="/v1/models" target="_blank" rel="noopener" x-show="apiKey">Verify on GET /v1/models</a>
   </div>
 
   <div class="card" x-show="apiKey && tab === 'keys'">
     <h2>API keys</h2>
-    <button type="button" class="action" @click="loadKeys()">Refresh</button>
-    <table x-show="keys?.length">
-      <thead><tr><th>Prefix</th><th>Role</th><th>Created</th><th>Status</th><th></th></tr></thead>
-      <tbody>
-        <template x-for="k in keys ?? []" :key="k.id">
-          <tr>
-            <td x-text="k.keyPrefix"></td>
-            <td x-text="k.role"></td>
-            <td x-text="formatTime(k.createdAt)"></td>
-            <td x-text="k.isRevoked ? 'revoked' : 'active'"></td>
-            <td>
-              <button type="button" class="action danger" x-show="!k.isRevoked" @click="revokeKey(k.id)">Revoke</button>
-            </td>
-          </tr>
-        </template>
-      </tbody>
-    </table>
+    <label>Show
+      <select x-model="keysFilter">
+        <option value="active">Active only</option>
+        <option value="revoked">Revoked only</option>
+        <option value="all">All</option>
+      </select>
+    </label>
+    <button type="button" class="action" @click="loadKeys()" :disabled="loading">Refresh</button>
+    <div class="table-wrap">
+      <table x-show="filteredKeys().length">
+        <thead><tr><th>Prefix</th><th>Role</th><th>Created</th><th>Status</th><th></th></tr></thead>
+        <tbody>
+          <template x-for="k in filteredKeys()" :key="k.id">
+            <tr>
+              <td x-text="k.keyPrefix"></td>
+              <td x-text="k.role"></td>
+              <td x-text="formatTime(k.createdAt)"></td>
+              <td x-text="k.isRevoked ? 'revoked' : 'active'"></td>
+              <td>
+                <button type="button" class="action danger" x-show="!k.isRevoked" @click="confirmRevoke(k.id)">Revoke</button>
+              </td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+    </div>
+    <p class="empty" x-show="!loading && !filteredKeys().length">No API keys match the filter.</p>
     <h3>Create key</h3>
     <label>Role
       <select x-model="newKey.role">
@@ -192,8 +329,22 @@
         <option value="Admin">Admin</option>
       </select>
     </label>
-    <button type="button" class="action" @click="createKey()">Create key</button>
-    <p x-show="createdKey"><strong>Copy now (shown once):</strong> <code x-text="createdKey"></code></p>
+    <button type="button" class="action" @click="createKey()" :disabled="loading">Create key</button>
+    <p x-show="createdKey">
+      <strong>Copy now (shown once):</strong> <code x-text="createdKey"></code>
+      <button type="button" class="action" @click="copyText(createdKey, 'Secret copied.')">Copy</button>
+    </p>
+  </div>
+
+  <div class="modal-backdrop" x-show="revokeConfirmId" @click.self="cancelRevoke()" x-transition>
+    <div class="modal" role="dialog" aria-labelledby="revoke-title">
+      <h3 id="revoke-title">Revoke API key?</h3>
+      <p class="muted">This cannot be undone.</p>
+      <p>
+        <button type="button" class="action danger" @click="revokeKeyConfirmed()" :disabled="loading">Revoke</button>
+        <button type="button" class="action secondary" @click="cancelRevoke()">Cancel</button>
+      </p>
+    </div>
   </div>
 </body>
 </html>

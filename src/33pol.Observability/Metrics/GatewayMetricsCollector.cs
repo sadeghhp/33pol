@@ -40,4 +40,18 @@ public sealed class GatewayMetricsCollector(GatewayRuntimeState runtimeState) : 
 
     public void RecordModelResolve(string result) =>
         GatewayMeters.ModelResolve.Add(1, new KeyValuePair<string, object?>("result", result));
+
+    public void RecordCircuitBreakerTransition(string modelId, string toState) =>
+        GatewayMeters.CircuitBreakerTransitions.Add(
+            1,
+            new KeyValuePair<string, object?>("model", modelId),
+            new KeyValuePair<string, object?>("to_state", toState));
+
+    public void RecordBulkheadRejection(string modelId) =>
+        GatewayMeters.BulkheadRejections.Add(1, new KeyValuePair<string, object?>("model", modelId));
+
+    public void RecordBulkheadInflightChange(string modelId, int delta) =>
+        GatewayMeters.BulkheadInflight.Add(
+            delta,
+            new KeyValuePair<string, object?>("model", modelId));
 }

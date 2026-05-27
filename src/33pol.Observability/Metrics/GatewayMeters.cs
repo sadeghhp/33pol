@@ -41,6 +41,15 @@ public static class GatewayMeters
     public static readonly Counter<long> ModelResolve =
         Meter.CreateCounter<long>("gateway_model_resolve_total");
 
+    public static readonly Counter<long> CircuitBreakerTransitions =
+        Meter.CreateCounter<long>("gateway_circuit_breaker_transitions_total");
+
+    public static readonly Counter<long> BulkheadRejections =
+        Meter.CreateCounter<long>("gateway_bulkhead_rejections_total");
+
+    public static readonly UpDownCounter<long> BulkheadInflight =
+        Meter.CreateUpDownCounter<long>("gateway_bulkhead_inflight");
+
     public static readonly UpDownCounter<long> UsageWriterQueueDepth =
         Meter.CreateUpDownCounter<long>("gateway_usage_writer_queue_depth");
 

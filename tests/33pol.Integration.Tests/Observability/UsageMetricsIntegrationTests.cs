@@ -33,4 +33,27 @@ public sealed class UsageMetricsIntegrationTests
         metrics.Should().Contain("direction=\"input\"");
         metrics.Should().Contain("direction=\"output\"");
     }
+
+    [Fact]
+    public async Task PostChatCompletions_ExposesRoutingAndPolicyMetrics()
+    {
+        var handler = new MockUpstreamHandler();
+        using var factory = GatewayWebApplicationFactory.Create(handler);
+        using var client = factory.CreateClient();
+
+        var response = await client.PostAsync(
+            "/v1/chat/completions",
+            JsonBody("""{"model":"gpt-local","stream":false}"""));
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        await response.Content.ReadAsStringAsync();
+
+        var metrics = await client.GetStringAsync("/metrics");
+
+        metrics.Should().Contain("gateway_inference_route_total");
+        metrics.Should().Contain("gateway_forward_attempts_total");
+        metrics.Should().Contain("gateway_model_resolve_total");
+        metrics.Should().Contain("gateway_circuit_breaker_state");
+        metrics.Should().Contain("gateway_bulkhead_inflight");
+    }
 }

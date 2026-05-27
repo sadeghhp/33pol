@@ -33,6 +33,25 @@ public sealed class ModelRegistryPersistenceTests
     }
 
     [Fact]
+    public void CloneModel_WithUpstreamAuth_PreservesAuthConfig()
+    {
+        var source = new ModelConfig
+        {
+            Id = "or-model",
+            Url = "https://openrouter.ai/api",
+            MaxContextLength = 128000,
+            Aliases = ["alias"],
+            UpstreamAuth = new UpstreamAuthConfig { Type = "bearer", EnvVar = "OPENROUTER_API_KEY" },
+        };
+
+        var clone = ModelRegistryPersistence.CloneModel(source);
+
+        clone.UpstreamAuth.Should().NotBeNull();
+        clone.UpstreamAuth!.Type.Should().Be("bearer");
+        clone.UpstreamAuth.EnvVar.Should().Be("OPENROUTER_API_KEY");
+    }
+
+    [Fact]
     public async Task WriteAtomicAsync_OverwritesExistingFile()
     {
         var dir = Path.Combine(Path.GetTempPath(), $"33pol-persist-{Guid.NewGuid():N}");

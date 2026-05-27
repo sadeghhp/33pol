@@ -73,6 +73,13 @@ internal static class ModelRegistryPersistence
         {
             Id = model.Id,
             Url = model.Url,
+            UpstreamAuth = model.UpstreamAuth is null
+                ? null
+                : new UpstreamAuthConfig
+                {
+                    Type = model.UpstreamAuth.Type,
+                    EnvVar = model.UpstreamAuth.EnvVar,
+                },
             MaxContextLength = model.MaxContextLength,
             Aliases = [.. model.Aliases],
         };

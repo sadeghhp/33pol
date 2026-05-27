@@ -27,6 +27,8 @@ echo "prometheus OK"
 curl -sf "http://localhost:${GRAFANA_PORT:-3000}/api/health" >/dev/null
 echo "grafana OK"
 
+bash "$(dirname "$0")/verify-grafana-dashboards.sh"
+
 if [[ "${running_services}" == *gateway* ]]; then
   curl -sf "http://localhost:${GATEWAY_PORT:-8080}/health/live" >/dev/null
   echo "gateway OK"

@@ -19,4 +19,6 @@ python3 -c "import json,sys; d=json.load(sys.stdin); ups=[t for t in d.get('data
 curl -sf "http://127.0.0.1:${GRAFANA_PORT}/api/health" >/dev/null
 echo "grafana healthy"
 
+bash "$(dirname "$0")/verify-grafana-dashboards.sh"
+
 echo "Observability local (metrics) verification passed."

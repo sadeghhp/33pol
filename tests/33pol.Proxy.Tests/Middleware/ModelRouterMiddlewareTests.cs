@@ -1,5 +1,6 @@
 using System.Text;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -280,7 +281,7 @@ public sealed class ModelRouterMiddlewareTests
         {
             Resilience = new GatewayResilienceOptions { MaxConcurrentForwardsPerModel = 1 },
         });
-        var bulkhead = new BulkheadRegistry(bulkheadOptions);
+        var bulkhead = new BulkheadRegistry(bulkheadOptions, Substitute.For<IGatewayMetricsCollector>());
         var held = await bulkhead.TryAcquireAsync("m1", CancellationToken.None);
 
         try
@@ -368,8 +369,8 @@ public sealed class ModelRouterMiddlewareTests
         var metricsCollector = Substitute.For<IGatewayMetricsCollector>();
 
         var gatewayOptions = Options.Create(new GatewayOptions());
-        var circuitBreakers = new ModelCircuitBreakerRegistry(gatewayOptions);
-        bulkhead ??= new BulkheadRegistry(gatewayOptions);
+        var circuitBreakers = new ModelCircuitBreakerRegistry(gatewayOptions, metricsCollector);
+        bulkhead ??= new BulkheadRegistry(gatewayOptions, metricsCollector);
         var rateLimitResolver = Substitute.For<IRateLimitPolicyResolver>();
         rateLimitResolver.Resolve(Arg.Any<string?>(), Arg.Any<string?>())
             .Returns(new RateLimitPolicy(10_000, 1_000, 1_000));
@@ -395,6 +396,7 @@ public sealed class ModelRouterMiddlewareTests
             forwarder,
             new HttpMessageInvoker(new HttpClientHandler()),
             gatewayOptions,
+            new ConfigurationBuilder().AddInMemoryCollection().Build(),
             NullLogger<ModelRouterMiddleware>.Instance);
     }
 

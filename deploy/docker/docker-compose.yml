@@ -58,6 +58,7 @@ services:
       Gateway__ModelsConfigPath: /app/config/models.json
       Gateway__Bootstrap__AdminApiKey: ${GATEWAY_ADMIN_API_KEY:-sk-33pol-dev-admin-key}
       Gateway__OperatorConsole__Enabled: "false"
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
     volumes:
       # Directory mount: atomic rename works; single-file bind mounts often return EBUSY on save.
       - ./config:/app/config

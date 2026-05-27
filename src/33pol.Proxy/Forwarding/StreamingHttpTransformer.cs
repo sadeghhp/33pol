@@ -12,17 +12,23 @@ public sealed class StreamingHttpTransformer : HttpTransformer
     private readonly string? _clientModelName;
     private readonly string _canonicalModelId;
     private readonly InferenceUsageCapture? _usageCapture;
+    private readonly bool _stripClientAuthHeaders;
+    private readonly string? _upstreamBearerToken;
 
     public StreamingHttpTransformer(
         bool isStreaming,
         string? clientModelName,
         string canonicalModelId,
-        InferenceUsageCapture? usageCapture = null)
+        InferenceUsageCapture? usageCapture = null,
+        bool stripClientAuthHeaders = true,
+        string? upstreamBearerToken = null)
     {
         _isStreaming = isStreaming;
         _clientModelName = clientModelName;
         _canonicalModelId = canonicalModelId;
         _usageCapture = usageCapture;
+        _stripClientAuthHeaders = stripClientAuthHeaders;
+        _upstreamBearerToken = upstreamBearerToken;
     }
 
     public override async ValueTask TransformRequestAsync(
@@ -33,6 +39,18 @@ public sealed class StreamingHttpTransformer : HttpTransformer
     {
         await base.TransformRequestAsync(httpContext, proxyRequest, destinationPrefix, cancellationToken)
             .ConfigureAwait(false);
+
+        if (_stripClientAuthHeaders)
+        {
+            proxyRequest.Headers.Authorization = null;
+            proxyRequest.Headers.Remove("Authorization");
+            proxyRequest.Headers.Remove("X-API-Key");
+        }
+
+        if (!string.IsNullOrWhiteSpace(_upstreamBearerToken))
+        {
+            proxyRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _upstreamBearerToken);
+        }
 
         if (_clientModelName is not null &&
             !string.Equals(_clientModelName, _canonicalModelId, StringComparison.OrdinalIgnoreCase) &&

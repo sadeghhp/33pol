@@ -4,6 +4,34 @@
 
 Running 33pol in Docker with LM Studio on the host: **[lm-studio-with-33pol.md](./lm-studio-with-33pol.md)**.
 
+## Cloud providers (OpenRouter, OpenAI, Together, Groq, …)
+
+Any **OpenAI-compatible** provider works: register an upstream base URL and optional `upstreamAuth` so the gateway injects the provider API key (clients still use **33pol inference keys**).
+
+| Provider | Upstream base URL (`url` in registry) | Typical env var |
+|----------|--------------------------------------|-----------------|
+| OpenRouter | `https://openrouter.ai/api` | `OPENROUTER_API_KEY` |
+| OpenAI | `https://api.openai.com` | `OPENAI_API_KEY` |
+| Together | `https://api.together.xyz` | `TOGETHER_API_KEY` |
+| Groq | `https://api.groq.com/openai` | `GROQ_API_KEY` |
+| Custom | Your base URL (no `/v1` suffix) | Any name you choose |
+
+Example `models.json` entry (OpenRouter):
+
+```json
+{
+  "id": "anthropic/claude-3.5-sonnet",
+  "url": "https://openrouter.ai/api",
+  "maxContextLength": 200000,
+  "aliases": ["claude-or"],
+  "upstreamAuth": { "type": "bearer", "envVar": "OPENROUTER_API_KEY" }
+}
+```
+
+**Admin UI:** **Models → Discover provider models** — pick a provider (or Custom), set the env var on the gateway, **Fetch models**, **Use**, then **Add model**.
+
+**Admin API:** `GET /admin/api/providers/catalog`, `GET /admin/api/providers/{id}/models?envVar=…`, or `GET /admin/api/providers/models?modelsUrl=…&envVar=…` for custom endpoints.
+
 ## OpenAI-compatible clients
 
 Point any OpenAI SDK at the gateway base URL and use your gateway API key.
@@ -75,7 +103,7 @@ Full local stack (gateway, Postgres, WireMock upstream, Prometheus, Grafana):
 cp .env.example .env && docker compose up -d --build
 ```
 
-Grafana loads the `33pol-gateway` dashboard from `deploy/grafana/dashboards/`. See [deploy/docker/README.md](../deploy/docker/README.md).
+Compose auto-provisions Grafana dashboards from `deploy/grafana/dashboards/` (folder **33pol**): **33pol Gateway** and **33pol Gateway — Traffic & tokens**. URLs: [observability.md](./observability.md). See [deploy/docker/README.md](../deploy/docker/README.md).
 
 ## Helm
 
@@ -87,7 +115,7 @@ helm upgrade --install 33pol deploy/helm/33pol \
   --set postgresql.existingSecret=gateway-db
 ```
 
-Enable `serviceMonitor.enabled` when Prometheus Operator is installed. See [deploy/README.md](../deploy/README.md).
+The chart deploys the gateway only (no Grafana). Scrape `/metrics` via `serviceMonitor.enabled` when Prometheus Operator is installed, then import or provision dashboards from `deploy/grafana/`. See [deploy/README.md](../deploy/README.md).
 
 ## Admin automation
 

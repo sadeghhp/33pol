@@ -156,7 +156,7 @@ bash perf/ci/verify-compose-health.sh
 |---------|-----|
 | Gateway | http://localhost:8080 |
 | Admin UI | http://localhost:8080/admin |
-| Grafana (`33pol Gateway` dashboard) | http://localhost:3000 |
+| Grafana (folder **33pol**, two dashboards) | http://localhost:3000 — [observability.md](./docs/observability.md) |
 | Prometheus | http://localhost:9090 |
 
 Details: [deploy/docker/README.md](./deploy/docker/README.md).
@@ -296,7 +296,7 @@ Guides: [admin-ui.md](./docs/admin-ui.md) · [operator-console.md](./docs/operat
 | Signal | Where |
 |--------|--------|
 | **Metrics** | `GET /metrics` (Prometheus) |
-| **Dashboard** | Grafana — `deploy/grafana/dashboards/33pol-gateway.json` |
+| **Dashboards** | Grafana (Compose): `deploy/grafana/dashboards/` — [observability.md](./docs/observability.md) |
 | **Alerts** | `deploy/prometheus/alerts/` |
 | **Traces** | OTel → [deploy/otel-collector/](./deploy/otel-collector/) |
 | **Recent requests** | `GET /admin/api/requests?limit=` |

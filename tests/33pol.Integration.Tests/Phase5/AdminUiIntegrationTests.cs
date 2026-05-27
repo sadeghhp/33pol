@@ -17,8 +17,23 @@ public sealed class AdminUiIntegrationTests
         var body = await response.Content.ReadAsStringAsync();
         body.Should().Contain("33pol Gateway Admin");
         body.Should().Contain("href=\"admin.css\"");
+        body.Should().Contain("src=\"admin-store.js\"");
         body.Should().Contain("src=\"admin.js\"");
+        body.Should().Contain("x-cloak");
         body.Should().NotContain("function adminApp()");
+    }
+
+    [Fact]
+    public async Task GetAdminStore_ReturnsAlpineStore()
+    {
+        await using var factory = GatewayWebApplicationFactory.CreateWithInMemoryDatabase();
+        var client = factory.CreateClient();
+
+        var response = await client.GetAsync("/admin/admin-store.js");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadAsStringAsync();
+        body.Should().Contain("Alpine.store('admin'");
     }
 
     [Fact]

@@ -25,5 +25,7 @@ See [implementation-plan/03-performance-and-load-testing.md](../implementation-p
 |--------|---------|
 | `scripts/sdk-smoke.py` | OpenAI Python SDK manual GA (chat + stream + models list) |
 | `ci/verify-compose-health.sh` | Full Compose stack (gateway + mock + Prometheus + Grafana) |
+| `ci/verify-grafana-dashboards.sh` | Grafana file-provisioned dashboards + Prometheus datasource |
+| `ci/verify-observability-local.sh` | Metrics scrape path + Grafana dashboards (G-06 local) |
 
 Sign-off steps: [docs/ga-signoff.md](../docs/ga-signoff.md).
