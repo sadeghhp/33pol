@@ -18,6 +18,11 @@ public static class GatewayApiServiceCollectionExtensions
         services.AddSingleton<GatewayReadinessService>();
         services.AddSingleton<GatewayStatsService>();
         services.AddSingleton<AdminModelProvisioningService>();
+        services.AddSingleton<AdminModelTestService>();
+        services.AddHttpClient(AdminModelTestService.HttpClientName, client =>
+        {
+            client.Timeout = TimeSpan.FromSeconds(120);
+        });
         services.AddHttpClient<OpenAiCompatibleProviderModelsClient>();
         return services;
     }

@@ -23,6 +23,7 @@ public static class AdminControlPlaneEndpoints
         group.MapPost("/models", AddModel);
         group.MapPatch("/models/{id}", UpdateModel);
         group.MapDelete("/models/{id}", RemoveModel);
+        group.MapPost("/models/{id}/test", TestModel);
 
         return endpoints;
     }
@@ -74,6 +75,16 @@ public static class AdminControlPlaneEndpoints
         CancellationToken cancellationToken)
     {
         var result = await commands.RemoveModelAsync(id, cancellationToken).ConfigureAwait(false);
+        return Results.Json(result, statusCode: result.SuggestedStatusCode);
+    }
+
+    private static async Task<IResult> TestModel(
+        AdminModelTestService testService,
+        string id,
+        [FromBody] AdminModelTestRequest? request,
+        CancellationToken cancellationToken)
+    {
+        var result = await testService.TestAsync(id, request, cancellationToken).ConfigureAwait(false);
         return Results.Json(result, statusCode: result.SuggestedStatusCode);
     }
 }

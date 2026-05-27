@@ -16,10 +16,14 @@ public sealed class AdminUiIntegrationTests
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var body = await response.Content.ReadAsStringAsync();
         body.Should().Contain("33pol Gateway Admin");
-        body.Should().Contain("href=\"admin.css?v=5\"");
-        body.Should().Contain("src=\"admin-errors.js?v=5\"");
-        body.Should().Contain("src=\"admin-store.js?v=5\"");
-        body.Should().Contain("src=\"admin-app.js?v=5\"");
+        body.Should().Contain("href=\"admin.css?v=7\"");
+        body.Should().Contain("src=\"admin-icons.js?v=7\"");
+        body.Should().Contain("src=\"admin-errors.js?v=7\"");
+        body.Should().Contain("src=\"admin-store.js?v=7\"");
+        body.Should().Contain("src=\"admin-app.js?v=7\"");
+        body.Should().Contain("testModel(");
+        body.Should().Contain("model-test-title");
+        body.Should().Contain("Hello world");
         body.Should().NotContain("Discover from provider");
         body.Should().Contain("id=\"model-upstream-api-key\"");
         body.Should().Contain("x-model=\"editModel.apiKey\"");
@@ -92,6 +96,8 @@ public sealed class AdminUiIntegrationTests
         body.Should().Contain("function adminApp()");
         body.Should().Contain("/admin/api/summary");
         body.Should().Contain("modelWriteBody");
+        body.Should().Contain("testModel");
+        body.Should().Contain("/models/");
         body.Should().Contain("apiKey");
         body.Should().Contain("downloadBlob");
         body.Should().NotContain("confirm(");

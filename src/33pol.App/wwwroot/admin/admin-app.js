@@ -38,6 +38,7 @@ function adminApp() {
     confirmDialog: null,
     _confirmReturnFocus: null,
     revokeConfirmId: null,
+    modelTestDialog: null,
     editModel: {
       id: '', url: '', maxContextLength: 8192, aliasesText: '',
       apiKey: '', clearApiKey: false, hasUpstreamCredential: false,
@@ -54,6 +55,8 @@ function adminApp() {
     },
     _saveModelInFlight: false,
     _createKeyInFlight: false,
+    darkMode: localStorage.getItem('33pol-admin-dark') === 'true' ||
+      (!localStorage.getItem('33pol-admin-dark') && window.matchMedia('(prefers-color-scheme: dark)').matches),
 
     get store() { return Alpine.store('admin'); },
     get apiKey() { return this.store.apiKey; },
@@ -146,8 +149,17 @@ function adminApp() {
       this.store.clearMessages();
     },
 
-    toast(message) {
-      this.store.pushToast(message, 'success');
+    toast(message, type) {
+      this.store.pushToast(message, type || 'success');
+    },
+
+    toggleDarkMode() {
+      this.darkMode = !this.darkMode;
+      localStorage.setItem('33pol-admin-dark', this.darkMode);
+    },
+
+    icon(name) {
+      return window.AdminIcons ? window.AdminIcons(name) : '';
     },
 
     handleCatch(e, options) {
@@ -238,7 +250,9 @@ function adminApp() {
     sortIndicator(table, key) {
       const s = this.sort[table];
       if (s.key !== key) return '';
-      return s.dir > 0 ? ' ▲' : ' ▼';
+      const cls = s.dir > 0 ? '' : ' icon-flip';
+      const svg = window.AdminIcons ? window.AdminIcons('chevron-up') : (s.dir > 0 ? ' ▲' : ' ▼');
+      return '<span class="sort-icon' + cls + '">' + svg + '</span>';
     },
 
     sortedList(list, table) {
@@ -407,8 +421,38 @@ function adminApp() {
       if (e.key === 'Escape') {
         if (this.confirmDialog) this.cancelConfirm();
         else if (this.revokeConfirmId) this.cancelRevoke();
+        else if (this.modelTestDialog) this.closeModelTestDialog();
         else if (this.modelDrawerOpen) this.closeModelDrawer();
         else if (this.keysDrawerOpen) this.closeKeysDrawer();
+      }
+    },
+
+    closeModelTestDialog() {
+      this.modelTestDialog = null;
+    },
+
+    async testModel(modelId) {
+      if (!modelId) return;
+      this.modelTestDialog = { modelId, loading: true, result: null, error: '' };
+      try {
+        const result = await this.runApi('modelTest', 'Testing model…', async () =>
+          this.apiJson('/admin/api/models/' + encodeURIComponent(modelId) + '/test', {
+            method: 'POST',
+            body: JSON.stringify({ prompt: 'Hello world', maxTokens: 16 })
+          }), { localOnly: true });
+        if (this.modelTestDialog?.modelId === modelId) {
+          this.modelTestDialog = { modelId, loading: false, result, error: '' };
+        }
+        if (result?.ok) this.toast('Model test succeeded.');
+      } catch (e) {
+        if (this.modelTestDialog?.modelId === modelId) {
+          this.modelTestDialog = {
+            modelId,
+            loading: false,
+            result: null,
+            error: e.message || String(e)
+          };
+        }
       }
     },
 
