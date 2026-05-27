@@ -853,12 +853,15 @@ tbody tr:last-child td {
   white-space: nowrap;
 }
 
-.cell-code {
-  display: flex;
+/* Flex on <td> breaks table row layout; use inner wrappers */
+.cell-code-inner {
+  display: inline-flex;
   align-items: center;
   gap: var(--space-1);
+  max-width: 100%;
+  vertical-align: middle;
 }
-.cell-code code {
+.cell-code-inner code {
   font-family: var(--font-mono);
   flex: 1;
   min-width: 0;
@@ -868,18 +871,44 @@ tbody tr:last-child td {
   word-break: normal;
 }
 
-.cell-actions {
-  display: flex;
+.cell-actions-inner {
+  display: inline-flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: var(--space-1);
   white-space: nowrap;
 }
-.cell-actions .action { margin: 0; }
+.cell-actions-inner .action { margin: 0; }
 
-.cell-health {
-  display: flex;
+/* Routing tables: keep each row on one line; scroll horizontally when needed */
+#panel-routing table {
+  table-layout: auto;
+}
+#panel-routing th,
+#panel-routing td {
+  white-space: nowrap;
+}
+#panel-routing table code {
+  word-break: normal;
+  overflow-wrap: normal;
+  white-space: nowrap;
+}
+#panel-routing td:not(.cell-code) code {
+  display: inline-block;
+  max-width: min(28rem, 50vw);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: middle;
+}
+#panel-routing .cell-actions-inner {
+  flex-wrap: nowrap;
+}
+
+.cell-health-inner {
+  display: inline-flex;
   align-items: center;
   gap: 6px;
+  white-space: nowrap;
 }
 
 .health-dot {

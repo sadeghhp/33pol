@@ -13,7 +13,7 @@
   <script defer src="admin-icons.js?v=7"></script>
   <script defer src="admin-errors.js?v=7"></script>
   <script defer src="admin-store.js?v=7"></script>
-  <script defer src="admin-app.js?v=7"></script>
+  <script defer src="admin-app.js?v=8"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.9/dist/cdn.min.js"></script>
 </head>
 <body x-data="adminApp()" x-init="init()" x-cloak :class="{ dark: darkMode }" @keydown.window="onModalKeydown($event)">
@@ -33,7 +33,7 @@
     <p class="muted">Sign in with an Admin API key. The key is stored in this browser only (localStorage). Use a private session on shared machines.</p>
     <label for="gate-apiKey">Admin API key</label>
     <div class="key-row">
-      <input id="gate-apiKey" :type="showApiKey ? 'text' : 'password'" x-model="apiKey" placeholder="sk-..."
+      <input id="gate-apiKey" :type="showApiKey ? 'text' : 'password'" x-model="gateApiKey" placeholder="sk-..."
         @keydown.enter.prevent="saveKey()" autocomplete="off" />
       <button type="button" class="action secondary" @click="showApiKey = !showApiKey">
         <span x-html="showApiKey ? icon('eye-off') : icon('eye')"></span>
@@ -312,12 +312,14 @@
                 <tbody>
                   <template x-for="b in filteredBackends()" :key="b.modelId + (b.alias || '')">
                     <tr>
-                      <td x-text="b.modelId"></td>
-                      <td><code x-text="b.url"></code></td>
+                      <td class="cell-code"><span class="cell-code-inner"><code x-text="b.modelId"></code></span></td>
+                      <td class="cell-code"><span class="cell-code-inner"><code x-text="b.url"></code></span></td>
                       <td x-text="b.alias ?? '—'"></td>
                       <td class="cell-health">
-                        <span class="health-dot" :class="b.isHealthy ? 'dot-ok' : 'dot-fail'"></span>
-                        <span x-text="b.isHealthy ? 'Healthy' : 'Unhealthy'"></span>
+                        <span class="cell-health-inner">
+                          <span class="health-dot" :class="b.isHealthy ? 'dot-ok' : 'dot-fail'"></span>
+                          <span x-text="b.isHealthy ? 'Healthy' : 'Unhealthy'"></span>
+                        </span>
                       </td>
                       <td><button type="button" class="action ghost" @click="editModelFromBackend(b.modelId)">Edit model</button></td>
                     </tr>
@@ -359,26 +361,32 @@
                   <template x-for="m in filteredModelsList()" :key="m.id">
                     <tr>
                       <td class="cell-code">
-                        <code x-text="m.id"></code>
-                        <button type="button" class="icon-btn" @click="copyText(m.id,'ID copied.')" title="Copy ID" aria-label="Copy ID">
-                          <span class="icon" x-html="icon('copy')"></span>
-                        </button>
+                        <span class="cell-code-inner">
+                          <code x-text="m.id"></code>
+                          <button type="button" class="icon-btn" @click="copyText(m.id,'ID copied.')" title="Copy ID" aria-label="Copy ID">
+                            <span class="icon" x-html="icon('copy')"></span>
+                          </button>
+                        </span>
                       </td>
                       <td class="cell-code">
-                        <code x-text="m.url"></code>
-                        <button type="button" class="icon-btn" @click="copyText(m.url,'URL copied.')" title="Copy URL" aria-label="Copy URL">
-                          <span class="icon" x-html="icon('copy')"></span>
-                        </button>
+                        <span class="cell-code-inner">
+                          <code x-text="m.url"></code>
+                          <button type="button" class="icon-btn" @click="copyText(m.url,'URL copied.')" title="Copy URL" aria-label="Copy URL">
+                            <span class="icon" x-html="icon('copy')"></span>
+                          </button>
+                        </span>
                       </td>
                       <td x-text="(m.aliases || []).join(', ') || '—'"></td>
                       <td x-text="m.maxContextLength"></td>
                       <td x-text="m.hasUpstreamCredential ? 'stored' : '—'"></td>
                       <td class="cell-actions">
-                        <button type="button" class="action secondary" @click="testModel(m.id)"
-                          :disabled="isLoading('modelTest') && modelTestDialog?.modelId === m.id"
-                          :aria-busy="isLoading('modelTest') && modelTestDialog?.modelId === m.id">Test</button>
-                        <button type="button" class="action ghost" @click="openModelDrawer(m)">Edit</button>
-                        <button type="button" class="action danger" @click="confirmRemoveModel(m.id)">Remove</button>
+                        <span class="cell-actions-inner">
+                          <button type="button" class="action secondary" @click="testModel(m.id)"
+                            :disabled="isLoading('modelTest') && modelTestDialog?.modelId === m.id"
+                            :aria-busy="isLoading('modelTest') && modelTestDialog?.modelId === m.id">Test</button>
+                          <button type="button" class="action ghost" @click="openModelDrawer(m)">Edit</button>
+                          <button type="button" class="action danger" @click="confirmRemoveModel(m.id)">Remove</button>
+                        </span>
                       </td>
                     </tr>
                   </template>

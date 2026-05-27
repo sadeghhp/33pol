@@ -11,6 +11,8 @@ function adminApp() {
     showApiKey: false,
     showModelApiKey: false,
     showChangeKey: false,
+    /** Draft key on the sign-in gate only; do not bind the gate to store.apiKey or the shell appears on first keystroke. */
+    gateApiKey: '',
     poll: null,
     summary: null,
     summaryUpdatedAt: null,
@@ -292,8 +294,14 @@ function adminApp() {
     },
 
     async saveKey() {
+      const key = ((this.apiKey ? this.apiKey : this.gateApiKey) || '').trim();
+      if (!key) {
+        this.store.error = 'Enter an admin API key.';
+        return;
+      }
       await this.runApi('auth', 'Connecting…', async () => {
-        this.store.persistApiKey(this.apiKey);
+        this.store.persistApiKey(key);
+        this.gateApiKey = '';
         this.clearMessages();
         await this.store.verifyConnection(this.editModelUrl());
         this.store.startConnectionWatch(() => this.editModelUrl());
@@ -309,6 +317,7 @@ function adminApp() {
       this.poll = null;
       this.store.stopConnectionWatch();
       this.store.persistApiKey('');
+      this.gateApiKey = '';
       this.store.connectionStatus = '';
       this.store.connectionDegraded = false;
       this.summary = null;
@@ -589,14 +598,16 @@ function adminApp() {
       });
     },
 
+    async fetchModels() {
+      const list = (await this.apiJson('/admin/api/models')) ?? [];
+      this.models = (list || []).map(item => ({
+        ...(item.model || item),
+        hasUpstreamCredential: item.hasUpstreamCredential === true
+      }));
+    },
+
     async loadModels() {
-      await this.runApi('routingModels', 'Loading models…', async () => {
-        const list = (await this.apiJson('/admin/api/models')) ?? [];
-        this.models = (list || []).map(item => ({
-          ...(item.model || item),
-          hasUpstreamCredential: item.hasUpstreamCredential === true
-        }));
-      });
+      await this.runApi('routingModels', 'Loading models…', () => this.fetchModels());
     },
 
     editModelFromBackend(modelId) {
@@ -677,7 +688,7 @@ function adminApp() {
           this.toast(body?.message || 'Model saved.');
           this.closeModelDrawer();
           this.resetModelForm();
-          await this.loadModels();
+          await this.fetchModels();
           await this.loadBackends();
         }, { localOnly: true });
       } catch (e) {
@@ -707,7 +718,7 @@ function adminApp() {
             return;
           }
           this.toast(body?.message || 'Model removed.');
-          await this.loadModels();
+          await this.fetchModels();
           await this.loadBackends();
         }, { localOnly: true });
       } catch (e) {

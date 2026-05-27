@@ -20,7 +20,7 @@ public sealed class AdminUiIntegrationTests
         body.Should().Contain("src=\"admin-icons.js?v=7\"");
         body.Should().Contain("src=\"admin-errors.js?v=7\"");
         body.Should().Contain("src=\"admin-store.js?v=7\"");
-        body.Should().Contain("src=\"admin-app.js?v=7\"");
+        body.Should().Contain("src=\"admin-app.js?v=8\"");
         body.Should().Contain("testModel(");
         body.Should().Contain("model-test-title");
         body.Should().Contain("Hello world");
@@ -33,6 +33,9 @@ public sealed class AdminUiIntegrationTests
         body.Should().Contain("x-cloak");
         body.Should().Contain("role=\"tabpanel\"");
         body.Should().Contain("app-shell");
+        body.Should().Contain("id=\"gate-apiKey\"");
+        body.Should().Contain("x-model=\"gateApiKey\"");
+        body.Should().NotMatchRegex("id=\"gate-apiKey\"[^>]*x-model=\"apiKey\"");
         body.Should().NotContain("function adminApp()");
         body.Should().NotContain("confirm(");
     }
@@ -96,9 +99,12 @@ public sealed class AdminUiIntegrationTests
         body.Should().Contain("function adminApp()");
         body.Should().Contain("/admin/api/summary");
         body.Should().Contain("modelWriteBody");
+        body.Should().Contain("async fetchModels()");
+        body.Should().MatchRegex("async removeModel\\(id\\)[\\s\\S]*?await this\\.fetchModels\\(\\)");
         body.Should().Contain("testModel");
         body.Should().Contain("/models/");
         body.Should().Contain("apiKey");
+        body.Should().Contain("gateApiKey");
         body.Should().Contain("downloadBlob");
         body.Should().NotContain("confirm(");
         body.Should().NotContain("openDiscover");
