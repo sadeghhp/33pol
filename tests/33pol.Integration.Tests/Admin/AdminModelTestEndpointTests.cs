@@ -111,7 +111,7 @@ public sealed class AdminModelTestEndpointTests
         using var factory = CreateFactory(adminKey, chatHandler);
         using var client = await CreateAdminClientAsync(factory, adminKey);
 
-        const string modelId = "vendor/sub-model:free";
+        var modelId = $"vendor/sub-model-{Guid.NewGuid():N}:free";
         var create = await client.PostAsJsonAsync(
             "/admin/api/models",
             new

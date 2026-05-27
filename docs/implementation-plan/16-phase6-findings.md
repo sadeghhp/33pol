@@ -104,3 +104,4 @@ Hygiene **#545–#547** (BenchmarkDotNet, Playwright, retention job) remain **Ne
 | 2026-05-27 | Taiga board synced: US-P6-01…14 Done, epic 358106 linked, sprints assigned |
 | 2026-05-27 | Epic 358106 → Done; sprints 521199–521201 closed; sign-off comment on #636 |
 | 2026-05-27 | Hygiene tasks #583/#587/#588 Closed; P6 sprints 521199–521201 closed; epic #631 Done |
+| 2026-05-27 | F-P6-026 closed: true SSE forwarding (US-P6-15 #656, issue #663) |

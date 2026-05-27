@@ -7,6 +7,16 @@ Runs **gateway**, **Postgres**, **Prometheus**, **Grafana**, and a **WireMock** 
 - Docker Engine 24+ with Compose v2 (`docker compose`)
 - No local .NET SDK required (gateway image is built by Compose)
 
+## Gateway image rebuild time
+
+The gateway `Dockerfile` restores NuGet packages in a layer that copies only `*.csproj` files, then copies full `src/` and publishes. That means:
+
+- **First build** (or after `Directory.Packages.props` / project file changes): expect ~1–3 minutes for `dotnet restore` inside the image.
+- **Code-only edits** (`.cs`, `wwwroot`, etc.): restore should show **CACHED**; only `publish` runs (~30–90s).
+- **Interrupted builds** (`Ctrl+C` before publish finishes) discard progress — the next `--build` pays restore again. Let one full `docker compose build gateway` complete.
+
+NuGet downloads are cached across builds via BuildKit (`--mount=type=cache` on `/root/.nuget/packages`). Do not use `docker compose build --no-cache` for routine dev unless you are debugging the image itself.
+
 ## Quick start (recommended — repo root)
 
 From the repository root:

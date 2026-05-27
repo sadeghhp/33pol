@@ -19,6 +19,13 @@ key_response="$(curl -sf -X POST "${BASE}/admin/api/keys" \
   -H "Content-Type: application/json" \
   -d '{"name":"compose-e2e","scopes":["inference"]}')"
 INFERENCE_KEY="$(python3 -c "import json,sys; print(json.load(sys.stdin)['secret'])" <<<"${key_response}")"
+KEY_ID="$(python3 -c "import json,sys; print(json.load(sys.stdin)['id'])" <<<"${key_response}")"
+
+echo "Granting model access for compose E2E..."
+curl -sf -X PUT "${BASE}/admin/api/keys/${KEY_ID}/model-grants" \
+  -H "Authorization: Bearer ${ADMIN_KEY}" \
+  -H "Content-Type: application/json" \
+  -d "{\"modelIds\":[\"${MODEL}\"]}" >/dev/null
 
 echo "GET /v1/models"
 models="$(curl -sf "${BASE}/v1/models" -H "Authorization: Bearer ${INFERENCE_KEY}")"
@@ -47,6 +54,17 @@ if ! grep -qi 'text/event-stream' <<<"${stream_headers}"; then
   exit 1
 fi
 echo "  Content-Type: text/event-stream"
+
+stream_body="$(curl -sfN -X POST "${BASE}/v1/chat/completions" \
+  -H "Authorization: Bearer ${INFERENCE_KEY}" \
+  -H "Content-Type: application/json" \
+  -d "{\"model\":\"${MODEL}\",\"messages\":[{\"role\":\"user\",\"content\":\"stream e2e\"}],\"stream\":true}")"
+if ! grep -q 'data:' <<<"${stream_body}"; then
+  echo "Expected SSE data chunks in stream body:" >&2
+  echo "${stream_body}" >&2
+  exit 1
+fi
+echo "  body contains data: chunks"
 
 echo "GET /admin (static)"
 curl -sf "${BASE}/admin/index.html" >/dev/null

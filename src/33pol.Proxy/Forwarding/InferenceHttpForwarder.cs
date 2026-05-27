@@ -95,6 +95,11 @@ public sealed class InferenceHttpForwarder(
         {
             context.Response.StatusCode = (int)responseMessage.StatusCode;
 
+            if (isStreaming)
+            {
+                context.Features.Get<IHttpResponseBodyFeature>()?.DisableBuffering();
+            }
+
             var transformBody = await transformer
                 .TransformResponseAsync(context, responseMessage, cancellationToken)
                 .ConfigureAwait(false);
@@ -108,7 +113,9 @@ public sealed class InferenceHttpForwarder(
 
             if (isStreaming)
             {
-                context.Features.Get<IHttpResponseBodyFeature>()?.DisableBuffering();
+                ApplyStreamingResponseHeaders(context);
+                await context.Response.StartAsync(cancellationToken).ConfigureAwait(false);
+
                 await using var upstreamBody = await responseMessage.Content
                     .ReadAsStreamAsync(cancellationToken)
                     .ConfigureAwait(false);
@@ -136,6 +143,11 @@ public sealed class InferenceHttpForwarder(
     {
         foreach (var header in response.Headers)
         {
+            if (isStreaming && ShouldSkipStreamingResponseHeader(header.Key))
+            {
+                continue;
+            }
+
             context.Response.Headers[header.Key] = header.Value.ToArray();
         }
 
@@ -146,8 +158,7 @@ public sealed class InferenceHttpForwarder(
 
         foreach (var header in response.Content.Headers)
         {
-            if (isStreaming &&
-                string.Equals(header.Key, "Content-Length", StringComparison.OrdinalIgnoreCase))
+            if (isStreaming && ShouldSkipStreamingResponseHeader(header.Key))
             {
                 continue;
             }
@@ -155,6 +166,17 @@ public sealed class InferenceHttpForwarder(
             context.Response.Headers[header.Key] = header.Value.ToArray();
         }
     }
+
+    private static void ApplyStreamingResponseHeaders(HttpContext context)
+    {
+        context.Response.Headers.Remove("Content-Length");
+        context.Response.Headers.CacheControl = "no-cache";
+        context.Response.Headers["X-Accel-Buffering"] = "no";
+    }
+
+    private static bool ShouldSkipStreamingResponseHeader(string headerName) =>
+        string.Equals(headerName, "Content-Length", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(headerName, "Transfer-Encoding", StringComparison.OrdinalIgnoreCase);
 
     private static async Task CopyStreamWithFlushAsync(
         Stream source,

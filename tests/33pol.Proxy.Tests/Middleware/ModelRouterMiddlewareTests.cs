@@ -15,7 +15,6 @@ using Pol33.Core.RateLimiting;
 using Pol33.Registry.Health;
 using Pol33.Proxy.Forwarding;
 using Pol33.Proxy.Middleware;
-using Pol33.Proxy.Forwarding;
 using Yarp.ReverseProxy.Forwarder;
 
 namespace Pol33.Proxy.Tests.Middleware;

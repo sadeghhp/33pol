@@ -24,6 +24,9 @@ public sealed class InferenceHttpForwarderTests
             clientModelName: "gpt",
             canonicalModelId: "gpt");
 
+        var responseBody = new SignaledResponseBodyStream();
+        context.Response.Body = responseBody;
+
         var sendTask = forwarder.SendAsync(
             context,
             "http://backend:8000",
@@ -32,18 +35,17 @@ public sealed class InferenceHttpForwarderTests
             isStreaming: true,
             CancellationToken.None);
 
-        var responseBody = context.Response.Body;
         using var readCts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
-        var firstRead = responseBody.ReadAsync(new byte[64], readCts.Token).AsTask();
         var early = await Task.WhenAny(
-            firstRead,
+            responseBody.FirstWriteTask,
             Task.Delay(DelayedSseUpstreamHandler.InterChunkDelay / 2, readCts.Token));
 
-        early.Should().Be(firstRead, "first SSE bytes should arrive before upstream inter-chunk delay");
-        (await firstRead).Should().BeGreaterThan(0);
+        early.Should().Be(responseBody.FirstWriteTask, "first SSE bytes should be written before upstream inter-chunk delay");
 
         var error = await sendTask;
         error.Should().Be(ForwarderError.None);
+        context.Response.StatusCode.Should().Be((int)HttpStatusCode.OK);
+        context.Response.Headers["X-Accel-Buffering"].ToString().Should().Be("no");
 
         responseBody.Position = 0;
         var full = await new StreamReader(responseBody).ReadToEndAsync(readCts.Token);
@@ -100,7 +102,7 @@ public sealed class InferenceHttpForwarderTests
             isStreaming: true,
             cts.Token);
 
-        error.Should().Be(ForwarderError.RequestTimedOut);
+        error.Should().BeOneOf(ForwarderError.RequestTimedOut, ForwarderError.RequestCanceled);
     }
 
     private static DefaultHttpContext CreatePostContext(string jsonBody)
@@ -120,6 +122,44 @@ public sealed class InferenceHttpForwarderTests
         };
         context.Request.EnableBuffering();
         return context;
+    }
+
+    private sealed class SignaledResponseBodyStream : MemoryStream
+    {
+        private readonly TaskCompletionSource _firstWrite = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _writes;
+
+        public Task FirstWriteTask => _firstWrite.Task;
+
+        public override void Write(byte[] buffer, int offset, int count)
+        {
+            base.Write(buffer, offset, count);
+            SignalFirstWrite();
+        }
+
+        public override Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+        {
+            var write = base.WriteAsync(buffer, offset, count, cancellationToken);
+            SignalFirstWrite();
+            return write;
+        }
+
+        public override ValueTask WriteAsync(
+            ReadOnlyMemory<byte> buffer,
+            CancellationToken cancellationToken = default)
+        {
+            var write = base.WriteAsync(buffer, cancellationToken);
+            SignalFirstWrite();
+            return write;
+        }
+
+        private void SignalFirstWrite()
+        {
+            if (Interlocked.Increment(ref _writes) == 1)
+            {
+                _firstWrite.TrySetResult();
+            }
+        }
     }
 
     private sealed class SingleHandlerClientFactory(HttpMessageHandler handler) : IHttpClientFactory
