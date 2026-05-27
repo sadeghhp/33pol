@@ -4,63 +4,9 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>33pol Admin</title>
+  <link rel="stylesheet" href="admin.css" />
+  <script defer src="admin.js"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.9/dist/cdn.min.js"></script>
-  <style>
-    :root {
-      font-family: system-ui, -apple-system, sans-serif;
-      color-scheme: light dark;
-      --border: color-mix(in srgb, CanvasText 18%, transparent);
-      --muted: color-mix(in srgb, CanvasText 55%, transparent);
-      --accent: #2563eb;
-    }
-    body { margin: 0; padding: 1.5rem; max-width: 1200px; line-height: 1.45; }
-    h1 { margin-top: 0; font-size: 1.5rem; }
-    h2 { margin-top: 0; font-size: 1.1rem; }
-    h3 { font-size: 1rem; margin-bottom: 0.5rem; }
-    nav { margin-bottom: 1rem; display: flex; flex-wrap: wrap; gap: 0.35rem; }
-    nav button {
-      border: 1px solid var(--border);
-      background: transparent;
-      border-radius: 6px;
-      padding: 0.35rem 0.75rem;
-      cursor: pointer;
-    }
-    nav button.active { border-color: var(--accent); font-weight: 600; }
-    .card { border: 1px solid var(--border); border-radius: 10px; padding: 1rem; margin-bottom: 1rem; }
-    label { display: block; margin-bottom: 0.35rem; font-size: 0.9rem; }
-    input, select, textarea {
-      width: 100%;
-      padding: 0.45rem 0.55rem;
-      margin-bottom: 0.75rem;
-      box-sizing: border-box;
-      border-radius: 6px;
-      border: 1px solid var(--border);
-      background: Canvas;
-      color: CanvasText;
-    }
-    button.action {
-      margin-right: 0.5rem;
-      margin-bottom: 0.35rem;
-      padding: 0.4rem 0.85rem;
-      border-radius: 6px;
-      border: 1px solid var(--border);
-      background: color-mix(in srgb, var(--accent) 12%, Canvas);
-      cursor: pointer;
-    }
-    button.danger { background: color-mix(in srgb, #dc2626 12%, Canvas); }
-    table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
-    th, td { text-align: left; padding: 0.4rem 0.5rem; border-bottom: 1px solid var(--border); vertical-align: top; }
-    .error { color: #dc2626; }
-    .muted { color: var(--muted); font-size: 0.9rem; }
-    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 0.75rem; }
-    .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 0.5rem; }
-    .metric { border: 1px solid var(--border); border-radius: 8px; padding: 0.6rem 0.75rem; }
-    .metric strong { display: block; font-size: 1.15rem; }
-    code { font-size: 0.85rem; word-break: break-all; }
-    .healthy { color: #16a34a; }
-    .unhealthy { color: #dc2626; }
-    @media (max-width: 700px) { .grid { grid-template-columns: 1fr; } }
-  </style>
 </head>
 <body x-data="adminApp()" x-init="init()">
   <h1>33pol Gateway Admin</h1>
@@ -69,7 +15,15 @@
   <div class="card">
     <label for="apiKey">Admin API key</label>
     <input id="apiKey" type="password" x-model="apiKey" placeholder="sk-..." @change="saveKey()" autocomplete="off" />
-    <p class="error" x-show="error" x-text="error"></p>
+    <div class="error" x-show="error">
+      <strong x-text="errorTitle || 'Error'"></strong>
+      <p x-text="error"></p>
+      <details x-show="errorDetail">
+        <summary>Technical details</summary>
+        <pre x-text="errorDetail"></pre>
+      </details>
+    </div>
+    <p class="success" x-show="successMessage" x-text="successMessage"></p>
   </div>
 
   <nav x-show="apiKey">
@@ -200,10 +154,14 @@
     <h3 x-text="editModel.id ? 'Edit model' : 'Add model'"></h3>
     <div class="grid">
       <label>Model ID <input x-model="editModel.id" :disabled="!!editModel._existing" /></label>
-      <label>Upstream URL <input x-model="editModel.url" placeholder="http://localhost:8000/v1" /></label>
+      <label>Upstream URL <input x-model="editModel.url" placeholder="http://host.docker.internal:1234" /></label>
       <label>Max context <input type="number" x-model.number="editModel.maxContextLength" min="1" /></label>
       <label>Aliases (comma-separated) <input x-model="editModel.aliasesText" placeholder="gpt-4o, my-model" /></label>
     </div>
+    <p class="hint">
+      Docker → host LLM (LM Studio, vLLM): use <code>http://host.docker.internal:&lt;port&gt;</code> (base URL, no <code>/v1</code>).
+      LM Studio: enable Developer server + “Serve on Local Network”. Native run: <code>http://127.0.0.1:1234</code>.
+    </p>
     <button type="button" class="action" @click="saveModel()" x-text="editModel._existing ? 'Save changes' : 'Add model'"></button>
     <button type="button" class="action" x-show="editModel._existing" @click="resetModelForm()">Cancel edit</button>
   </div>
@@ -237,237 +195,5 @@
     <button type="button" class="action" @click="createKey()">Create key</button>
     <p x-show="createdKey"><strong>Copy now (shown once):</strong> <code x-text="createdKey"></code></p>
   </div>
-
-  <script>
-    function adminApp() {
-      return {
-        apiKey: localStorage.getItem('33pol-admin-key') || '',
-        tab: 'dashboard',
-        poll: null,
-        summary: null,
-        usage: null,
-        forecast: null,
-        backends: [],
-        models: [],
-        keys: [],
-        requests: [],
-        configStatus: null,
-        editModel: { id: '', url: '', maxContextLength: 8192, aliasesText: '', _existing: false },
-        newKey: { role: 'Inference' },
-        createdKey: '',
-        error: '',
-
-        init() {
-          if (this.apiKey) {
-            this.saveKey();
-          }
-        },
-
-        setTab(name) {
-          this.tab = name;
-          if (name === 'dashboard') this.loadSummary();
-          if (name === 'usage' && !this.usage) this.loadUsage();
-          if (name === 'backends') this.loadBackends();
-          if (name === 'models') this.loadModels();
-          if (name === 'keys') this.loadKeys();
-        },
-
-        saveKey() {
-          localStorage.setItem('33pol-admin-key', this.apiKey);
-          this.error = '';
-          if (this.poll) clearInterval(this.poll);
-          this.poll = setInterval(() => {
-            if (this.tab === 'dashboard' && this.apiKey) this.loadSummary();
-          }, 2000);
-          this.loadSummary();
-        },
-
-        headers() {
-          return { 'X-API-Key': this.apiKey, 'Content-Type': 'application/json' };
-        },
-
-        formatTime(iso) {
-          if (!iso) return '—';
-          try { return new Date(iso).toLocaleString(); } catch { return iso; }
-        },
-
-        async apiFetch(url, options = {}) {
-          const res = await fetch(url, { ...options, headers: { ...this.headers(), ...(options.headers || {}) } });
-          if (!res.ok) {
-            const text = await res.text();
-            throw new Error(res.status + ' ' + res.statusText + (text ? ': ' + text : ''));
-          }
-          return res;
-        },
-
-        async loadSummary() {
-          try {
-            const res = await this.apiFetch('/admin/api/summary');
-            this.summary = await res.json();
-            this.error = '';
-          } catch (e) { this.error = String(e); }
-        },
-
-        async loadConfigStatus() {
-          try {
-            const res = await this.apiFetch('/admin/api/config/status');
-            this.configStatus = await res.json();
-            this.error = '';
-          } catch (e) { this.error = String(e); }
-        },
-
-        async reloadConfig() {
-          try {
-            const res = await this.apiFetch('/admin/api/config/reload', { method: 'POST' });
-            const body = await res.json();
-            if (body.status === 'error') throw new Error(body.message || 'Reload failed');
-            await this.loadConfigStatus();
-            await this.loadModels();
-            await this.loadBackends();
-            this.error = '';
-          } catch (e) { this.error = String(e); }
-        },
-
-        async loadRequests() {
-          try {
-            const res = await this.apiFetch('/admin/api/requests?limit=25');
-            this.requests = await res.json();
-            this.error = '';
-          } catch (e) { this.error = String(e); }
-        },
-
-        async loadUsage() {
-          try {
-            const res = await this.apiFetch('/admin/api/usage');
-            this.usage = await res.json();
-            this.error = '';
-          } catch (e) { this.error = String(e); }
-        },
-
-        async loadForecast() {
-          try {
-            const res = await this.apiFetch('/admin/api/usage/forecast?days=7');
-            this.forecast = await res.json();
-            this.error = '';
-          } catch (e) { this.error = String(e); }
-        },
-
-        async loadBackends() {
-          try {
-            const res = await this.apiFetch('/admin/api/backends');
-            this.backends = await res.json();
-            this.error = '';
-          } catch (e) { this.error = String(e); }
-        },
-
-        async loadModels() {
-          try {
-            const res = await this.apiFetch('/admin/api/models');
-            this.models = await res.json();
-            this.error = '';
-          } catch (e) { this.error = String(e); }
-        },
-
-        modelPayload() {
-          const aliases = (this.editModel.aliasesText || '')
-            .split(',')
-            .map(s => s.trim())
-            .filter(Boolean);
-          return {
-            id: this.editModel.id.trim(),
-            url: this.editModel.url.trim(),
-            maxContextLength: Number(this.editModel.maxContextLength) || 8192,
-            aliases
-          };
-        },
-
-        resetModelForm() {
-          this.editModel = { id: '', url: '', maxContextLength: 8192, aliasesText: '', _existing: false };
-        },
-
-        startEditModel(m) {
-          this.editModel = {
-            id: m.id,
-            url: m.url,
-            maxContextLength: m.maxContextLength || 8192,
-            aliasesText: (m.aliases || []).join(', '),
-            _existing: true
-          };
-        },
-
-        async saveModel() {
-          try {
-            const payload = this.modelPayload();
-            if (!payload.id || !payload.url) throw new Error('Model id and url are required');
-            if (this.editModel._existing) {
-              await this.apiFetch('/admin/api/models/' + encodeURIComponent(payload.id), {
-                method: 'PATCH',
-                body: JSON.stringify(payload)
-              });
-            } else {
-              await this.apiFetch('/admin/api/models', {
-                method: 'POST',
-                body: JSON.stringify(payload)
-              });
-            }
-            this.resetModelForm();
-            await this.loadModels();
-            await this.loadBackends();
-          } catch (e) { this.error = String(e); }
-        },
-
-        async removeModel(id) {
-          if (!confirm('Remove model ' + id + '?')) return;
-          try {
-            await this.apiFetch('/admin/api/models/' + encodeURIComponent(id), { method: 'DELETE' });
-            await this.loadModels();
-            await this.loadBackends();
-          } catch (e) { this.error = String(e); }
-        },
-
-        async loadKeys() {
-          try {
-            const res = await this.apiFetch('/admin/api/keys');
-            this.keys = await res.json();
-            this.error = '';
-          } catch (e) { this.error = String(e); }
-        },
-
-        async createKey() {
-          try {
-            const res = await this.apiFetch('/admin/api/keys', {
-              method: 'POST',
-              body: JSON.stringify({ role: this.newKey.role, scopes: [] })
-            });
-            const body = await res.json();
-            this.createdKey = body.secret || '';
-            await this.loadKeys();
-          } catch (e) { this.error = String(e); }
-        },
-
-        async revokeKey(id) {
-          if (!confirm('Revoke this API key?')) return;
-          try {
-            await this.apiFetch('/admin/api/keys/' + id + '/revoke', { method: 'POST' });
-            await this.loadKeys();
-          } catch (e) { this.error = String(e); }
-        },
-
-        async downloadExport(format) {
-          try {
-            const res = await fetch('/admin/api/usage/export?format=' + format, { headers: this.headers() });
-            if (!res.ok) throw new Error(res.status + ' ' + res.statusText);
-            const blob = await res.blob();
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = 'usage-export.' + (format === 'csv' ? 'csv' : 'json');
-            a.click();
-            URL.revokeObjectURL(url);
-          } catch (e) { this.error = String(e); }
-        }
-      };
-    }
-  </script>
 </body>
 </html>

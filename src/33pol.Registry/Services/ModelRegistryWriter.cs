@@ -56,10 +56,9 @@ public sealed class ModelRegistryWriter : IModelRegistryWriter
 
             return RegistryMutationResult.Ok($"Model '{model.Id}' added.");
         }
-        catch (Exception ex) when (ex is JsonException or InvalidOperationException)
+        catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Failed to add model {ModelId}.", model.Id);
-            return RegistryMutationResult.Fail(ex.Message);
+            return ModelRegistryPersistErrors.FromException(ex, ResolveConfigPath(), _logger, "add model");
         }
         finally
         {
@@ -103,10 +102,9 @@ public sealed class ModelRegistryWriter : IModelRegistryWriter
 
             return RegistryMutationResult.Ok($"Model '{canonicalId}' updated.");
         }
-        catch (Exception ex) when (ex is JsonException or InvalidOperationException)
+        catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Failed to update model {ModelId}.", id);
-            return RegistryMutationResult.Fail(ex.Message);
+            return ModelRegistryPersistErrors.FromException(ex, ResolveConfigPath(), _logger, "update model");
         }
         finally
         {
@@ -150,10 +148,9 @@ public sealed class ModelRegistryWriter : IModelRegistryWriter
 
             return RegistryMutationResult.Ok($"Model '{canonicalId}' removed.");
         }
-        catch (Exception ex) when (ex is JsonException or InvalidOperationException)
+        catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Failed to remove model {ModelId}.", id);
-            return RegistryMutationResult.Fail(ex.Message);
+            return ModelRegistryPersistErrors.FromException(ex, ResolveConfigPath(), _logger, "remove model");
         }
         finally
         {
@@ -186,10 +183,9 @@ public sealed class ModelRegistryWriter : IModelRegistryWriter
 
             return RegistryMutationResult.Ok($"Registry replaced with {cloned.Count} model(s).");
         }
-        catch (Exception ex) when (ex is JsonException or InvalidOperationException)
+        catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Failed to replace registry.");
-            return RegistryMutationResult.Fail(ex.Message);
+            return ModelRegistryPersistErrors.FromException(ex, ResolveConfigPath(), _logger, "replace registry");
         }
         finally
         {

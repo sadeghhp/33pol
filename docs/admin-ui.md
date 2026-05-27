@@ -2,6 +2,19 @@
 
 Browser-based operator surface for the 33pol gateway. It shares the same **admin API** (`/admin/api/*`) as the Spectre operator console and automation scripts.
 
+## Static assets
+
+Files under `src/33pol.App/wwwroot/admin/` (served at `/admin/`):
+
+| File | Role |
+|------|------|
+| `index.html` | Markup and Alpine.js directives only |
+| `admin.css` | Layout and theme |
+| `admin.js` | `adminApp()` — API client, tab state, forms |
+| (CDN) | Alpine.js 3.x |
+
+**Load order:** `admin.css` → deferred `admin.js` → deferred Alpine. No bundler; edit and refresh the browser.
+
 ## Access
 
 1. Open **`/admin`** (redirects to `/admin/index.html`).
@@ -36,6 +49,12 @@ For production, prefer network isolation (VPN / admin ingress), rotating admin k
 ## Observability
 
 The admin UI does **not** ship log or trace history. Use Prometheus/Grafana and the guidance in [observability.md](./observability.md).
+
+## Docker + host LLM (LM Studio)
+
+When the gateway runs in Docker, upstream URLs must use `http://host.docker.internal:<port>` (not `localhost`). LM Studio: start the Developer API server and enable **Serve on Local Network**. See [deploy/docker/README.md](../deploy/docker/README.md).
+
+The UI shows short error titles and hides stack traces under **Technical details**. Registry persist failures return JSON `message` (503) instead of raw HTML.
 
 ## Manual test checklist
 

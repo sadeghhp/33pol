@@ -91,17 +91,20 @@ Phases **1–5** are **implemented in code**. GA release requires **staging k6**
 
 ## Post-GA backlog (Taiga)
 
-Epic **EPIC-post-ga** (id 358079) created 2026-05-27. User stories **#521–#525** (G-10, G-12–G-15). Details: [post-ga-backlog.md](./post-ga-backlog.md).
+Epics and stories planned in Taiga 2026-05-27. Full index: [post-ga-backlog.md](./post-ga-backlog.md).
 
-| ID | Item | Taiga |
-|----|------|-------|
-| G-10 | Redis `IDistributedRateLimitStore` | #521 |
-| G-11 | Multi-replica HA documentation + deployment patterns | (see post-ga-backlog.md) |
-| G-12 | SSE admin event stream | #522 |
-| G-13 | Durable audit logger | #523 |
-| G-14 | Stripe adapter | #524 |
-| G-15 | Prometheus recording rules / SLO dashboards | #525 |
-| G-16 | Chaos engineering runbook | (no story yet) |
+| ID | Item | Taiga story |
+|----|------|-------------|
+| G-01–G-09 | GA sign-off (staging perf, SDK, approvals) | #527–#536, sprint **P5-Sprint-GA-signoff** |
+| G-10 | Redis `IDistributedRateLimitStore` | #528 (supersedes duplicate #521) |
+| G-11 | Multi-replica HA documentation + deployment patterns | #537 |
+| G-12 | SSE admin event stream | #538 (supersedes #522) |
+| G-13 | Durable audit logger | #539 (supersedes #523) |
+| G-14 | Stripe adapter | #540 (supersedes #524) |
+| G-15 | Prometheus recording rules / SLO dashboards | #541 (supersedes #525) |
+| G-16 | Chaos engineering runbook | #542 |
+| G-17 | OpenAPI control plane (non-Development) | #543 |
+| G-18–G-23 | CI coverage, optional tests, hygiene, doc sync | #544–#549, epic **EPIC-quality-hygiene** |
 
 ---
 

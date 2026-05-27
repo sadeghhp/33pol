@@ -55,11 +55,12 @@ services:
       ConnectionStrings__GatewayDb: >-
         Host=postgres;Port=5432;Database=${POSTGRES_DB:-gateway};
         Username=${POSTGRES_USER:-gateway};Password=${POSTGRES_PASSWORD:-gateway}
-      Gateway__ModelsConfigPath: /app/models.json
+      Gateway__ModelsConfigPath: /app/config/models.json
       Gateway__Bootstrap__AdminApiKey: ${GATEWAY_ADMIN_API_KEY:-sk-33pol-dev-admin-key}
       Gateway__OperatorConsole__Enabled: "false"
     volumes:
-      - ./config/models.json:/app/models.json:ro
+      # Directory mount: atomic rename works; single-file bind mounts often return EBUSY on save.
+      - ./config:/app/config
     ports:
       - "${GATEWAY_PORT:-8080}:8080"
     healthcheck:

@@ -16,6 +16,36 @@ public sealed class AdminUiIntegrationTests
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var body = await response.Content.ReadAsStringAsync();
         body.Should().Contain("33pol Gateway Admin");
+        body.Should().Contain("href=\"admin.css\"");
+        body.Should().Contain("src=\"admin.js\"");
+        body.Should().NotContain("function adminApp()");
+    }
+
+    [Fact]
+    public async Task GetAdminCss_ReturnsStylesheet()
+    {
+        await using var factory = GatewayWebApplicationFactory.CreateWithInMemoryDatabase();
+        var client = factory.CreateClient();
+
+        var response = await client.GetAsync("/admin/admin.css");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadAsStringAsync();
+        body.Should().Contain(":root");
+        body.Should().Contain("--accent");
+    }
+
+    [Fact]
+    public async Task GetAdminJs_ReturnsAdminApp()
+    {
+        await using var factory = GatewayWebApplicationFactory.CreateWithInMemoryDatabase();
+        var client = factory.CreateClient();
+
+        var response = await client.GetAsync("/admin/admin.js");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadAsStringAsync();
+        body.Should().Contain("function adminApp()");
         body.Should().Contain("/admin/api/summary");
     }
 

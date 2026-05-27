@@ -46,6 +46,22 @@ curl -s http://localhost:8080/v1/models -H "Authorization: Bearer <api-key>"
 
 `host.docker.internal` is configured so backends running on the host machine are reachable from the gateway container.
 
+The whole `deploy/docker/config/` directory is mounted at `/app/config` (including `models.json`) so the Admin UI (**Models** tab) can persist registry changes. A single-file bind mount cannot be atomically replaced on Docker Desktop (EBUSY).
+
+### LM Studio (or other host LLM) via Admin UI
+
+1. On your Mac: open **LM Studio** → **Developer** → start the local API server (default port **1234**).
+2. Enable **Serve on Local Network** in LM Studio settings so Docker can reach the server (loopback-only binding blocks `host.docker.internal`).
+3. Open **http://localhost:8080/admin**, enter the admin API key (`GATEWAY_ADMIN_API_KEY`, default `sk-33pol-dev-admin-key`).
+4. **Models** → **Add model**:
+   - **Model ID:** e.g. `lmstudio-local`
+   - **Upstream URL:** `http://host.docker.internal:1234` (base URL only — no `/v1` suffix)
+   - **Aliases:** optional client-facing names
+5. **Backends** → **Refresh** — should show **healthy** if LM Studio responds.
+6. Call the gateway: `GET http://localhost:8080/v1/models` with an inference API key; chat with `"model": "lmstudio-local"` (or an alias).
+
+To edit the file on disk instead: change `deploy/docker/config/models.json`, then **Reload config file** on the dashboard.
+
 **Operator console:** Disabled in the gateway container (`Gateway:OperatorConsole:Enabled=false`). Use HTTP `/admin` and Grafana. For a TTY-only local experiment, see [docs/implementation-plan/08-operator-console.md](../../docs/implementation-plan/08-operator-console.md).
 
 ## Alternate path (this directory)

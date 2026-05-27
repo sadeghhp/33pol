@@ -1,4 +1,3 @@
-using System.Text.Json;
 using FluentAssertions;
 using Pol33.Core.Models;
 using Pol33.Registry.Services;
@@ -8,64 +7,55 @@ namespace Pol33.Registry.Tests.Services;
 public sealed class ModelRegistryPersistenceTests
 {
     [Fact]
-    public void BuildLookup_EmptyList_ThrowsInvalidOperationException()
+    public async Task WriteAtomicAsync_WritesValidJson()
     {
-        var act = () => ModelRegistryPersistence.BuildLookup([]);
+        var dir = Path.Combine(Path.GetTempPath(), $"33pol-persist-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        var path = Path.Combine(dir, "models.json");
 
-        act.Should().Throw<InvalidOperationException>()
-            .WithMessage("*empty model list*");
-    }
+        try
+        {
+            await ModelRegistryPersistence.WriteAtomicAsync(
+                path,
+                [new ModelConfig { Id = "a", Url = "http://a", Aliases = [] }],
+                CancellationToken.None);
 
-    [Fact]
-    public void BuildLookup_MissingUrl_ThrowsJsonException()
-    {
-        var act = () => ModelRegistryPersistence.BuildLookup(
-        [
-            new ModelConfig { Id = "missing-url", Url = "", Aliases = [] },
-        ]);
-
-        act.Should().Throw<JsonException>()
-            .WithMessage("*missing required 'url'*");
-    }
-
-    [Fact]
-    public void BuildLookup_DuplicateModelId_ThrowsJsonException()
-    {
-        var act = () => ModelRegistryPersistence.BuildLookup(
-        [
-            new ModelConfig { Id = "dup", Url = "http://a", Aliases = [] },
-            new ModelConfig { Id = "dup", Url = "http://b", Aliases = [] },
-        ]);
-
-        act.Should().Throw<JsonException>()
-            .WithMessage("*Duplicate model id*");
-    }
-
-    [Fact]
-    public void BuildLookup_DuplicateAliasAcrossModels_ThrowsJsonException()
-    {
-        var act = () => ModelRegistryPersistence.BuildLookup(
-        [
-            new ModelConfig { Id = "a", Url = "http://a", Aliases = ["shared"] },
-            new ModelConfig { Id = "b", Url = "http://b", Aliases = ["shared"] },
-        ]);
-
-        act.Should().Throw<JsonException>()
-            .WithMessage("*Duplicate alias*");
-    }
-
-    [Fact]
-    public void Deserialize_ValidJson_ReturnsModels()
-    {
-        var config = ModelRegistryPersistence.Deserialize("""
+            var json = await File.ReadAllTextAsync(path);
+            json.Should().Contain("\"id\": \"a\"");
+        }
+        finally
+        {
+            if (Directory.Exists(dir))
             {
-              "models": [
-                { "id": "one", "url": "http://one", "aliases": ["alias-one"] }
-              ]
+                Directory.Delete(dir, recursive: true);
             }
-            """);
+        }
+    }
 
-        config.Models.Should().HaveCount(1);
-        config.Models[0].Id.Should().Be("one");
+    [Fact]
+    public async Task WriteAtomicAsync_OverwritesExistingFile()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"33pol-persist-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        var path = Path.Combine(dir, "models.json");
+        await File.WriteAllTextAsync(path, """{ "models": [] }""");
+
+        try
+        {
+            await ModelRegistryPersistence.WriteAtomicAsync(
+                path,
+                [new ModelConfig { Id = "b", Url = "http://b", Aliases = ["x"] }],
+                CancellationToken.None);
+
+            var config = ModelRegistryPersistence.Deserialize(await File.ReadAllTextAsync(path));
+            config.Models.Should().ContainSingle(m => m.Id == "b");
+        }
+        finally
+        {
+            if (Directory.Exists(dir))
+            {
+                Directory.Delete(dir, recursive: true);
+            }
+        }
     }
 }

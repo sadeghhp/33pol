@@ -91,10 +91,17 @@ internal static class ModelRegistryPersistence
         var payload = new ModelRegistryConfig { Models = models.Select(CloneModel).ToList() };
         var json = JsonSerializer.Serialize(payload, JsonOptions);
 
+        await File.WriteAllTextAsync(tempPath, json, cancellationToken).ConfigureAwait(false);
+
         try
         {
-            await File.WriteAllTextAsync(tempPath, json, cancellationToken).ConfigureAwait(false);
             File.Move(tempPath, configPath, overwrite: true);
+        }
+        catch (IOException)
+        {
+            // Single-file Docker bind mounts often reject rename-over-target (EBUSY).
+            // Same-directory rename usually works; if not, overwrite in place.
+            await File.WriteAllTextAsync(configPath, json, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
