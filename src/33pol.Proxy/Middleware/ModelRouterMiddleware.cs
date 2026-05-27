@@ -196,7 +196,7 @@ public sealed class ModelRouterMiddleware
                 context.Request.Body.Position = 0;
 
             var started = DateTimeOffset.UtcNow;
-            using var _ = _requestTracker.BeginInferenceRequest(modelConfig.Id, requestInfo.Stream);
+            using var inferenceScope = _requestTracker.BeginInferenceRequest(modelConfig.Id, requestInfo.Stream);
 
             var transformer = new StreamingHttpTransformer(
                 requestInfo.Stream,
@@ -222,6 +222,7 @@ public sealed class ModelRouterMiddleware
                                                        !priorAborted.IsCancellationRequested)
             {
                 _circuitBreakers.RecordFailure(modelConfig.Id);
+                inferenceScope.SetOutcome(false, "upstream_timeout");
                 if (!context.Response.HasStarted)
                 {
                     await context.WriteGatewayErrorAsync(
@@ -241,11 +242,13 @@ public sealed class ModelRouterMiddleware
             if (error == ForwarderError.None)
             {
                 _circuitBreakers.RecordSuccess(modelConfig.Id);
+                inferenceScope.SetOutcome(true);
                 RecordRecentRequest(context, modelConfig.Id, started, requestInfo.Stream, success: true);
                 return;
             }
 
             _circuitBreakers.RecordFailure(modelConfig.Id);
+            inferenceScope.SetOutcome(false, "upstream_error");
             if (!context.Response.HasStarted)
             {
                 _logger.LogWarning("Forwarder error {Error} for model {ModelId}", error, modelConfig.Id);

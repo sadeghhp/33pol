@@ -316,7 +316,7 @@ public sealed class ModelRouterMiddlewareTests
 
         var requestTracker = Substitute.For<IRequestTracker>();
         requestTracker.BeginInferenceRequest(Arg.Any<string>(), Arg.Any<bool>())
-            .Returns(_ => new NoOpDisposable());
+            .Returns(_ => Substitute.For<IInferenceRequestScope>());
 
         var middleware = CreateMiddleware(registry: registry, requestTracker: requestTracker);
         var context = CreateContext(
@@ -362,7 +362,7 @@ public sealed class ModelRouterMiddlewareTests
         errorWriter ??= new OpenAiErrorResponseWriter();
         requestTracker ??= Substitute.For<IRequestTracker>();
         requestTracker.BeginInferenceRequest(Arg.Any<string>(), Arg.Any<bool>())
-            .Returns(_ => new NoOpDisposable());
+            .Returns(_ => Substitute.For<IInferenceRequestScope>());
         recentRequestStore ??= Substitute.For<IRecentRequestStore>();
 
         var gatewayOptions = Options.Create(new GatewayOptions());

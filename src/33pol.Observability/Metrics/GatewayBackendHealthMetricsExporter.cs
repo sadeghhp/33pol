@@ -1,6 +1,6 @@
+using System.Diagnostics.Metrics;
 using Microsoft.Extensions.Hosting;
 using Pol33.Core.Abstractions;
-using Pol33.Observability.Metrics;
 
 namespace Pol33.Observability.Metrics;
 
@@ -11,26 +11,21 @@ public sealed class GatewayBackendHealthMetricsExporter(
     IModelRegistry registry,
     IBackendHealthStore healthStore) : IHostedService
 {
-    private IDisposable? _registration;
-
     public Task StartAsync(CancellationToken cancellationToken)
     {
-        _registration = GatewayMeters.Meter.CreateObservableGauge(
+        GatewayMeters.Meter.CreateObservableGauge(
             "gateway_backend_health",
-            Observe,
+            () => ObserveMeasurements(registry, healthStore),
             description: "Backend health per model (1 = healthy, 0 = unhealthy)");
 
         return Task.CompletedTask;
     }
 
-    public Task StopAsync(CancellationToken cancellationToken)
-    {
-        _registration?.Dispose();
-        _registration = null;
-        return Task.CompletedTask;
-    }
+    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
-    private IEnumerable<Measurement<int>> Observe()
+    public static IEnumerable<Measurement<int>> ObserveMeasurements(
+        IModelRegistry registry,
+        IBackendHealthStore healthStore)
     {
         foreach (var model in registry.GetAllModels())
         {

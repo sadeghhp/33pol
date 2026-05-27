@@ -6,7 +6,7 @@ namespace Pol33.Observability.Tracking;
 
 public sealed class GatewayRequestTracker(GatewayRuntimeState runtimeState) : IRequestTracker
 {
-    public IDisposable BeginInferenceRequest(string modelId, bool isStreaming)
+    public IInferenceRequestScope BeginInferenceRequest(string modelId, bool isStreaming)
     {
         runtimeState.RecordRequestStart(isStreaming);
         if (isStreaming)
@@ -17,13 +17,15 @@ public sealed class GatewayRequestTracker(GatewayRuntimeState runtimeState) : IR
         return new InferenceScope(runtimeState, modelId, isStreaming);
     }
 
-    private sealed class InferenceScope : IDisposable
+    private sealed class InferenceScope : IInferenceRequestScope
     {
         private readonly GatewayRuntimeState _runtimeState;
         private readonly string _modelId;
         private readonly bool _isStreaming;
         private readonly long _startTimestamp;
         private bool _disposed;
+        private bool? _success;
+        private string? _errorCode;
 
         public InferenceScope(GatewayRuntimeState runtimeState, string modelId, bool isStreaming)
         {
@@ -31,6 +33,12 @@ public sealed class GatewayRequestTracker(GatewayRuntimeState runtimeState) : IR
             _modelId = modelId;
             _isStreaming = isStreaming;
             _startTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
+        }
+
+        public void SetOutcome(bool success, string? errorCode = null)
+        {
+            _success = success;
+            _errorCode = errorCode;
         }
 
         public void Dispose()
@@ -41,15 +49,27 @@ public sealed class GatewayRequestTracker(GatewayRuntimeState runtimeState) : IR
             }
 
             _disposed = true;
+            var success = _success ?? true;
             var elapsed = System.Diagnostics.Stopwatch.GetElapsedTime(_startTimestamp);
-            var success = true;
             _runtimeState.RecordRequestComplete(_modelId, success, elapsed.TotalMilliseconds, _isStreaming);
 
+            var status = success ? "success" : "error";
             GatewayMeters.InferenceRequests.Add(
                 1,
                 new KeyValuePair<string, object?>("model", _modelId),
-                new KeyValuePair<string, object?>("status", "success"));
-            GatewayMeters.InferenceDuration.Record(elapsed.TotalSeconds, new KeyValuePair<string, object?>("model", _modelId));
+                new KeyValuePair<string, object?>("status", status));
+
+            if (!success)
+            {
+                GatewayMeters.InferenceErrors.Add(
+                    1,
+                    new KeyValuePair<string, object?>("model", _modelId),
+                    new KeyValuePair<string, object?>("code", _errorCode ?? "unknown"));
+            }
+
+            GatewayMeters.InferenceDuration.Record(
+                elapsed.TotalSeconds,
+                new KeyValuePair<string, object?>("model", _modelId));
 
             if (_isStreaming)
             {

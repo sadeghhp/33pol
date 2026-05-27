@@ -8,7 +8,14 @@ Canonical metric names are defined in [12-metrics-and-runtime-contracts.md](impl
 
 ## Dashboards
 
-Import [deploy/grafana/dashboards/33pol-gateway.json](../deploy/grafana/dashboards/33pol-gateway.json).
+Docker Compose auto-provisions **33pol Gateway** under the Grafana folder **33pol**:
+
+- URL: http://localhost:3000/d/33pol-gateway/33pol-gateway
+- Source: [deploy/grafana/dashboards/33pol-gateway.json](../deploy/grafana/dashboards/33pol-gateway.json)
+
+Rows: overview (RPS, error rate, p99, streams, healthy backends), RED, streaming/policy, FinOps/usage writer, backend health. Use the **Model** variable to filter.
+
+After changing the JSON or datasource provisioning, restart Grafana: `docker compose restart grafana`.
 
 ## Alerts
 

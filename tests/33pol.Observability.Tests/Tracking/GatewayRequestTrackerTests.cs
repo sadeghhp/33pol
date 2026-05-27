@@ -11,9 +11,10 @@ public sealed class GatewayRequestTrackerTests
         var runtime = new GatewayRuntimeState();
         var tracker = new GatewayRequestTracker(runtime);
 
-        using (tracker.BeginInferenceRequest("gpt-4o", isStreaming: true))
+        using (var scope = tracker.BeginInferenceRequest("gpt-4o", isStreaming: true))
         {
             runtime.GetStats().ActiveStreams.Should().Be(1);
+            scope.SetOutcome(true);
         }
 
         var (total, errors, avgMs, activeStreams, _, _) = runtime.GetStats();
@@ -30,9 +31,25 @@ public sealed class GatewayRequestTrackerTests
         var tracker = new GatewayRequestTracker(runtime);
 
         var scope = tracker.BeginInferenceRequest("m1", isStreaming: false);
+        scope.SetOutcome(true);
         scope.Dispose();
         scope.Dispose();
 
         runtime.GetStats().Total.Should().Be(1);
+    }
+
+    [Fact]
+    public void SetOutcome_False_RecordsErrorInRuntimeState()
+    {
+        var runtime = new GatewayRuntimeState();
+        var tracker = new GatewayRequestTracker(runtime);
+
+        using (var scope = tracker.BeginInferenceRequest("gpt-4o", isStreaming: false))
+        {
+            scope.SetOutcome(false, "upstream_error");
+        }
+
+        runtime.GetStats().Errors.Should().Be(1);
+        runtime.GetErrorsPerModel()["gpt-4o"].Should().Be(1);
     }
 }

@@ -23,7 +23,7 @@ bash perf/ci/verify-compose-health.sh
 | Admin UI       | http://localhost:8080/admin (key from `GATEWAY_ADMIN_API_KEY`) |
 | Mock upstream  | http://localhost:18080       |
 | Prometheus     | http://localhost:9090        |
-| Grafana        | http://localhost:3000 (admin / admin) — **33pol Gateway** dashboard auto-provisioned |
+| Grafana        | http://localhost:3000 (admin / admin) — folder **33pol** → **33pol Gateway** dashboard (RED, policy, FinOps, backends) |
 | PostgreSQL     | localhost:5432               |
 
 Test the mock:
