@@ -1,5 +1,9 @@
 # 33pol Gateway — Integrations
 
+## LM Studio (local)
+
+Running 33pol in Docker with LM Studio on the host: **[lm-studio-with-33pol.md](./lm-studio-with-33pol.md)**.
+
 ## OpenAI-compatible clients
 
 Point any OpenAI SDK at the gateway base URL and use your gateway API key.

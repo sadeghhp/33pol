@@ -52,7 +52,9 @@ The admin UI does **not** ship log or trace history. Use Prometheus/Grafana and 
 
 ## Docker + host LLM (LM Studio)
 
-When the gateway runs in Docker, upstream URLs must use `http://host.docker.internal:<port>` (not `localhost`). LM Studio: start the Developer API server and enable **Serve on Local Network**. See [deploy/docker/README.md](../deploy/docker/README.md).
+When the gateway runs in Docker, upstream URLs must use `http://host.docker.internal:<port>` (not `localhost`). LM Studio: start the Developer API server and enable **Serve on Local Network**.
+
+Step-by-step guide: **[lm-studio-with-33pol.md](./lm-studio-with-33pol.md)**.
 
 The UI shows short error titles and hides stack traces under **Technical details**. Registry persist failures return JSON `message` (503) instead of raw HTML.
 

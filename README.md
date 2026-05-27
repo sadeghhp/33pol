@@ -161,6 +161,8 @@ bash perf/ci/verify-compose-health.sh
 
 Details: [deploy/docker/README.md](./deploy/docker/README.md).
 
+**LM Studio on your machine:** step-by-step guide → [docs/lm-studio-with-33pol.md](./docs/lm-studio-with-33pol.md).
+
 ### Option B — .NET only (fastest loop)
 
 ```bash
