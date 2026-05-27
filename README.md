@@ -4,7 +4,7 @@ OpenAI-compatible, high-performance LLM gateway for .NET 10.
 
 ## Status
 
-**Phases 1–4 complete**; **Phase 5** (FinOps, admin UI, Helm, GA gates) in progress. See [docs/implementation-plan/README.md](./docs/implementation-plan/README.md) and [GA checklist](./docs/implementation-plan/GA-CHECKLIST.md).
+**Phases 1–4 complete**; **Phase 5** (FinOps, admin UI, Compose/Helm integrations, GA gates) largely delivered. See [docs/implementation-plan/README.md](./docs/implementation-plan/README.md) and [GA checklist](./docs/implementation-plan/GA-CHECKLIST.md).
 
 ## Quick start (local)
 
@@ -28,7 +28,9 @@ bash perf/ci/run-smoke.sh
 
 - Health: `GET http://localhost:8080/health/live`
 - Admin UI: `http://localhost:8080/admin` (set `Gateway:Bootstrap:AdminApiKey` when using Postgres)
-- CI: `build-test` + `k6-smoke` jobs in [.github/workflows/ci.yml](./.github/workflows/ci.yml)
+- CI: `build-test` + `k6-smoke` on PR/main; [docker-image](./.github/workflows/docker-image.yml) on `main`; [k6 nightly](./.github/workflows/k6-nightly.yml)
+- Integrations: [docs/integrations.md](./docs/integrations.md), [deploy/README.md](./deploy/README.md)
+- GA sign-off: [docs/ga-signoff.md](./docs/ga-signoff.md), [GA checklist](./docs/implementation-plan/GA-CHECKLIST.md)
 
 ## Build and test
 

@@ -1,0 +1,33 @@
+name: k6 nightly
+
+on:
+  schedule:
+    - cron: "0 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Restore and build gateway
+        run: |
+          dotnet restore 33pol.sln
+          dotnet build src/33pol.App/33pol.App.csproj -c Release
+
+      - name: Install k6
+        uses: grafana/setup-k6-action@v1
+
+      - name: k6 smoke (extended)
+        env:
+          SMOKE_DURATION: 2m
+        run: bash perf/ci/run-smoke.sh

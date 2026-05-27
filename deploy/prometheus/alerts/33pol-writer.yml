@@ -8,7 +8,7 @@ groups:
           severity: warning
         annotations:
           summary: Usage writer queue depth is high
-          description: Billing usage persistence queue is backing up.
+          description: Billing usage persistence queue is backing up. Runbook docs/runbooks/writer-backlog.md
 
       - alert: GatewayUsageWriterDroppedEvents
         expr: increase(gateway_usage_writer_dropped_total[5m]) > 0
@@ -17,4 +17,4 @@ groups:
           severity: critical
         annotations:
           summary: Usage events dropped
-          description: The gateway dropped usage events due to queue saturation.
+          description: The gateway dropped usage events due to queue saturation. Runbook docs/runbooks/writer-backlog.md

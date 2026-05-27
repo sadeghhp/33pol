@@ -33,14 +33,47 @@ The static admin UI (`/admin`) stores the API key in **localStorage**. Treat the
 
 Admin mutations invoke `IAuditLogger` (structured logs). Durable audit retention is a post-GA enhancement.
 
-## OWASP API (summary)
+## OWASP API Security Top 10 (mapping)
 
-| Risk | Mitigation |
-|------|------------|
-| Broken auth | Role-separated keys, hashed storage |
-| Excessive data exposure | Key list omits secrets; errors use stable codes |
-| Lack of rate limiting | RPM, concurrency, quota layers |
-| Security misconfiguration | Options validation on startup, readiness checks |
+| # | Risk | 33pol control |
+|---|------|----------------|
+| API1 | Broken object level authorization | Tenant-scoped API keys; admin APIs require admin role |
+| API2 | Broken authentication | Hashed keys, pepper, expiry/revoke |
+| API3 | Broken object property level authorization | Model grants (`IModelGrantService`); admin vs inference roles |
+| API4 | Unrestricted resource consumption | Rate limits, concurrency, quotas, request body size cap |
+| API5 | Broken function level authorization | `GatewayAuthPolicies.Admin` on `/admin/api/**` |
+| API6 | Unrestricted access to sensitive business flows | Admin UI/console documented; audit logs on mutations |
+| API7 | Server side request forgery | Upstream URLs from operator-controlled registry only |
+| API8 | Security misconfiguration | `GatewayOptions` validation; console off in K8s defaults |
+| API9 | Improper inventory management | `/v1/models` + admin registry APIs |
+| API10 | Unsafe consumption of APIs | Stable error JSON; no stack traces on inference path |
+
+## Dependency audit
+
+CI runs `dotnet list package --vulnerable --include-transitive` on every PR/main build.
+
+Central pins (2026-05-26):
+
+| Package | Version | Reason |
+|---------|---------|--------|
+| `OpenTelemetry.Api` | 1.15.3 | GHSA-g94r-2vxg-569j |
+| `System.Security.Cryptography.Xml` | 10.0.8 | EF transitive XML crypto advisories |
+
+`CentralPackageTransitivePinningEnabled` is on in `Directory.Packages.props`.
+
+## Optional penetration test (external)
+
+Engage a third party before GA or on an annual cadence. Suggested scope:
+
+| In scope | Out of scope (unless agreed) |
+|----------|------------------------------|
+| Inference API auth bypass, tenant/model grant enforcement | Physical datacenter / network perimeter |
+| Admin API authorization (`/admin/api/**`) | Social engineering |
+| SSRF via operator-controlled registry upstream URLs | Sustained DDoS (use staging k6 instead) |
+| Rate limit, quota, and budget hard-stop bypass | Supply-chain audit beyond dependency scan |
+| Secret leakage in logs, metrics, traces, and error JSON | |
+
+Deliverables: written report with severity ratings and remediation tickets; retest after fixes.
 
 ## Reporting
 

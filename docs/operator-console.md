@@ -8,7 +8,8 @@ In-process Spectre.Console TUI for local operations. HTTP admin APIs remain the 
 "Gateway": {
   "OperatorConsole": {
     "Enabled": true,
-    "RefreshIntervalMs": 1000
+    "RefreshIntervalMs": 1000,
+    "TenantSlug": "default"
   }
 }
 ```
@@ -29,6 +30,7 @@ Default: **off** in Production and Docker; **on** in Development sample.
 | `models add` | Interactive add (persist + apply) |
 | `models edit <id>` | Interactive edit |
 | `models remove <id>` | Remove with confirmation |
+| `keys list` | API key **prefixes** for `Gateway:OperatorConsole:TenantSlug` (default `default`) — never prints secrets |
 | `exit` | Stop console loop |
 
 Commands delegate to `IControlPlaneCommands` (same as HTTP admin).

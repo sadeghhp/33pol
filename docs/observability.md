@@ -37,3 +37,13 @@ All require admin API key scope.
 - `X-Request-Id` on every response (Phase 3)
 - Structured Serilog request logging
 - OTel traces when collector is configured
+
+## Runbooks
+
+| Scenario | Document |
+|----------|----------|
+| High error rate | [runbooks/high-error-rate.md](./runbooks/high-error-rate.md) |
+| All backends down | [runbooks/all-backends-down.md](./runbooks/all-backends-down.md) |
+| Usage writer backlog / drops | [runbooks/writer-backlog.md](./runbooks/writer-backlog.md) |
+
+Prometheus alert annotations reference these paths under `deploy/prometheus/alerts/`.

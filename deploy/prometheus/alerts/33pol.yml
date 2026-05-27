@@ -10,6 +10,7 @@ groups:
           severity: warning
         annotations:
           summary: Gateway inference error rate above 5%
+          description: See runbook docs/runbooks/high-error-rate.md
       - alert: GatewayNoHealthyBackends
         expr: max(gateway_backend_health) == 0
         for: 2m
@@ -17,3 +18,4 @@ groups:
           severity: critical
         annotations:
           summary: No healthy backends registered
+          description: See runbook docs/runbooks/all-backends-down.md

@@ -9,6 +9,7 @@ public sealed class ConsoleCommandParserTests
     [InlineData("summary", ConsoleCommandKind.Summary)]
     [InlineData("watch summary", ConsoleCommandKind.WatchSummary)]
     [InlineData("requests --limit 10", ConsoleCommandKind.Requests)]
+    [InlineData("keys list", ConsoleCommandKind.KeysList)]
     public void Parse_KnownCommands_ReturnsExpectedKind(string input, ConsoleCommandKind expected)
     {
         ConsoleCommandParser.Parse(input).Kind.Should().Be(expected);

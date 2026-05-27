@@ -44,6 +44,13 @@ jobs:
             echo "promtool not installed; skipping alert rule validation"
           fi
 
+      - name: Dependency vulnerability audit
+        run: |
+          dotnet list 33pol.sln package --vulnerable --include-transitive 2>&1 | tee vulnerability-audit.txt
+          if grep -q "has the following vulnerable" vulnerability-audit.txt; then
+            echo "::warning::Vulnerable packages reported — see docs/security.md and vulnerability-audit.txt"
+          fi
+
       - name: Upload coverage artifacts
         uses: actions/upload-artifact@v4
         if: always()

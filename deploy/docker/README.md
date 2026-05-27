@@ -20,7 +20,7 @@ docker compose up -d
 |----------------|------------------------------|
 | Mock upstream  | http://localhost:18080       |
 | Prometheus     | http://localhost:9090        |
-| Grafana        | http://localhost:3000 (admin / admin) |
+| Grafana        | http://localhost:3000 (admin / admin) — **33pol Gateway** dashboard auto-provisioned |
 | PostgreSQL     | localhost:5432               |
 
 Test the mock:

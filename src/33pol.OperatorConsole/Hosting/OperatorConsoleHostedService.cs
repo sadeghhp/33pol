@@ -1,6 +1,8 @@
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Pol33.Core.Abstractions;
 using Pol33.Core.Abstractions;
 using Pol33.Core.Configuration;
 using Pol33.OperatorConsole.Commands;
@@ -10,10 +12,12 @@ namespace Pol33.OperatorConsole.Hosting;
 
 public sealed class OperatorConsoleHostedService(
     IControlPlaneCommands commands,
+    IServiceProvider services,
     IOptions<OperatorConsoleOptions> options,
     ILogger<OperatorConsoleHostedService> logger) : BackgroundService
 {
     private readonly ModelRegistryConsoleInteractor _registryConsole = new(commands);
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         if (!options.Value.Enabled)
@@ -56,7 +60,7 @@ public sealed class OperatorConsoleHostedService(
             case ConsoleCommandKind.Help:
                 AnsiConsole.MarkupLine(
                     "[yellow]Commands:[/] help, exit, status, summary, watch summary, backends, " +
-                    "requests [--limit N], reload, models list|add|edit <id>|remove <id>");
+                    "requests [--limit N], reload, keys list, models list|add|edit <id>|remove <id>");
                 break;
             case ConsoleCommandKind.Status:
             case ConsoleCommandKind.Summary:
@@ -80,6 +84,9 @@ public sealed class OperatorConsoleHostedService(
             case ConsoleCommandKind.Reload:
                 var reload = await commands.ReloadConfigAsync(cancellationToken).ConfigureAwait(false);
                 AnsiConsole.MarkupLine($"[cyan]Reload:[/] {Markup.Escape(reload.Status)}");
+                break;
+            case ConsoleCommandKind.KeysList:
+                await CreateKeysInteractor().ListKeysAsync(cancellationToken).ConfigureAwait(false);
                 break;
             case ConsoleCommandKind.ModelsList:
                 RenderModels(commands.ListModels());
@@ -110,6 +117,12 @@ public sealed class OperatorConsoleHostedService(
                 break;
         }
     }
+
+    private OperatorConsoleKeysInteractor CreateKeysInteractor() =>
+        new(
+            services.GetRequiredService<IAdminKeyService>(),
+            services.GetRequiredService<ITenantRepository>(),
+            options);
 
     private static void RenderSummary(Core.Models.AdminSummarySnapshot summary)
     {

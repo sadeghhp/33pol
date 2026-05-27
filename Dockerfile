@@ -3,6 +3,7 @@ FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 
 COPY Directory.Build.props Directory.Packages.props .editorconfig 33pol.sln ./
+COPY config/ config/
 COPY src/ src/
 RUN dotnet restore src/33pol.App/33pol.App.csproj
 RUN dotnet publish src/33pol.App/33pol.App.csproj -c Release -o /app/publish /p:UseAppHost=false

@@ -1,0 +1,52 @@
+name: k6 GA (staging)
+
+on:
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: Staging gateway base URL (e.g. https://gateway.staging.example)
+        required: true
+      model:
+        description: Model id in registry
+        required: true
+        default: gpt-local
+      api_key:
+        description: Inference API key (optional; rate-limit storm may need dedicated key)
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  ga-suite:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install k6
+        uses: grafana/setup-k6-action@v1
+
+      - name: Health check
+        run: curl -sf "${{ inputs.base_url }}/health/live"
+
+      - name: inference-rps.js
+        env:
+          BASE_URL: ${{ inputs.base_url }}
+          MODEL: ${{ inputs.model }}
+          API_KEY: ${{ inputs.api_key }}
+        run: k6 run perf/k6/scripts/inference-rps.js
+
+      - name: streaming-concurrent.js
+        env:
+          BASE_URL: ${{ inputs.base_url }}
+          MODEL: ${{ inputs.model }}
+          API_KEY: ${{ inputs.api_key }}
+          STREAM_VUS: "50"
+        run: k6 run perf/k6/scripts/streaming-concurrent.js
+
+      - name: rate-limit-storm.js
+        env:
+          BASE_URL: ${{ inputs.base_url }}
+          MODEL: ${{ inputs.model }}
+          API_KEY: ${{ inputs.api_key }}
+        run: k6 run perf/k6/scripts/rate-limit-storm.js

@@ -12,7 +12,16 @@ service:
 ingress:
   enabled: false
   className: ""
-  hosts: []
+  annotations: {}
+  # Example (SSE-friendly timeouts for streaming inference):
+  # annotations:
+  #   nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+  #   nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+  hosts:
+    - host: gateway.example.com
+      paths:
+        - path: /
+          pathType: Prefix
   tls: []
 
 resources:

@@ -13,7 +13,7 @@
 | P2 Data plane | [x] | V1 parity integration tests, live registry, k6 smoke | 2026-05-26 |
 | P3 Security & resilience | [x] | Auth, Postgres, SDK errors, resilience, admin key CRUD | 2026-05-26 |
 | P4 Policy & observability | [x] | Rate limits, quotas, OTel, control plane (SSE deferred) | 2026-05-26 |
-| P5 FinOps & GA | [ ] | Code largely complete; staging k6 GA + soak + approvals remain | |
+| P5 FinOps & GA | [ ] | **Code complete** (2026-05-26); staging k6 + soak + SDK smoke run + approvals remain | |
 
 ---
 
@@ -27,9 +27,9 @@
 - [x] Rate limit returns 429 with stable `code` (integration tests)  
 - [x] Quota enforcement (hard and/or soft) + budget hard stop when `HardStopEnabled`  
 - [x] FinOps usage export (`GET /admin/api/usage/export`)  
-- [ ] OpenAI SDK (Python) chat completion against gateway — _staging manual_  
-- [ ] Streaming SSE chat completion — _staging manual_  
-- [ ] Embeddings path — _if in scope for 2.0.0_  
+- [ ] OpenAI SDK (Python) chat completion against gateway — _run `perf/scripts/sdk-smoke.py`_  
+- [ ] Streaming SSE chat completion — _included in sdk-smoke.py step 3_  
+- [x] Embeddings path — _proxy + conformance tests; SDK optional_  
 - [ ] Model aliases and canonical rewrite — _covered by integration tests; SDK manual optional_  
 - [ ] Manual `models.json` edit picked up (watch or ≤2 s poll) — _manual on staging_  
 - [ ] (Optional) WP4.9 operator-console manual smoke — _or defer with sign-off note_
@@ -40,7 +40,7 @@
 
 - [x] `dotnet test` green (CI `build-test` job)  
 - [x] Coverage ≥ targets for gated assemblies (`build/check-coverage.sh`)  
-- [ ] No critical/high vulnerabilities in dependencies — _audit pending_  
+- [x] No critical/high vulnerabilities in dependencies — _pinned OTel.Api 1.15.3, Cryptography.Xml 10.0.8; CI audit_  
 - [x] Architecture tests pass  
 
 ---
@@ -50,7 +50,7 @@
 - [x] k6 `smoke.js` CI green (workflow job `k6-smoke`)  
 - [ ] k6 `inference-rps.js` meets thresholds on **staging**  
 - [ ] k6 `streaming-concurrent.js` meets thresholds on **staging**  
-- [ ] Gateway overhead report in `perf/reports/`  
+- [x] Gateway overhead methodology in `perf/reports/ga-2026-05-26.md` + `overhead-compare.js` — _staging numbers pending_  
 - [ ] Soak test completed (4h) without memory growth — use `perf/k6/scripts/soak.js` ([guide](../perf/reports/k6-smoke-ci.md))
 
 ---
@@ -91,7 +91,9 @@
 - [x] `docs/observability.md`  
 - [x] `docs/finops.md`  
 - [x] `docs/security.md`  
+- [x] `docs/architecture.md`  
 - [x] `README.md` quick start  
+- [x] Inference conformance suite (`33pol.Conformance.Tests`) in CI  
 
 ---
 

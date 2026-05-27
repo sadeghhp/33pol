@@ -15,6 +15,7 @@ public enum ConsoleCommandKind
     ModelsAdd,
     ModelsEdit,
     ModelsRemove,
+    KeysList,
 }
 
 public sealed record ConsoleCommandIntent(
@@ -53,6 +54,8 @@ public static class ConsoleCommandParser
                 => new ConsoleCommandIntent(ConsoleCommandKind.ModelsEdit, ModelId: parts[2]),
             "models" when parts.Length > 2 && parts[1].Equals("remove", StringComparison.OrdinalIgnoreCase)
                 => new ConsoleCommandIntent(ConsoleCommandKind.ModelsRemove, ModelId: parts[2]),
+            "keys" when parts.Length > 1 && parts[1].Equals("list", StringComparison.OrdinalIgnoreCase)
+                => new ConsoleCommandIntent(ConsoleCommandKind.KeysList),
             _ => new ConsoleCommandIntent(ConsoleCommandKind.Unknown),
         };
     }
