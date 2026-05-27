@@ -7,12 +7,12 @@ namespace Pol33.Integration.Tests.Phase5;
 public sealed class AdminUiSecurityTests
 {
     [Fact]
-    public async Task GetAdminJs_DoesNotPutProviderEnvVarInQueryString()
+    public async Task GetAdminApp_DoesNotPutProviderEnvVarInQueryString()
     {
         await using var factory = GatewayWebApplicationFactory.CreateWithInMemoryDatabase();
         var client = factory.CreateClient();
 
-        var response = await client.GetAsync("/admin/admin.js?v=2");
+        var response = await client.GetAsync("/admin/admin-app.js?v=3");
         response.StatusCode.Should().Be(HttpStatusCode.OK);
 
         var body = await response.Content.ReadAsStringAsync();
@@ -25,14 +25,27 @@ public sealed class AdminUiSecurityTests
     }
 
     [Fact]
-    public async Task GetAdminJs_SetsNoStoreCacheControl()
+    public async Task GetAdminApp_SetsNoStoreCacheControl()
     {
         await using var factory = GatewayWebApplicationFactory.CreateWithInMemoryDatabase();
         var client = factory.CreateClient();
 
-        var response = await client.GetAsync("/admin/admin.js?v=2");
+        var response = await client.GetAsync("/admin/admin-app.js?v=3");
 
         response.Headers.CacheControl?.ToString().Should().Contain("no-store");
+    }
+
+    [Fact]
+    public async Task GetAdminApp_UsesDownloadBlobForExport()
+    {
+        await using var factory = GatewayWebApplicationFactory.CreateWithInMemoryDatabase();
+        var client = factory.CreateClient();
+
+        var response = await client.GetAsync("/admin/admin-app.js?v=3");
+        var body = await response.Content.ReadAsStringAsync();
+
+        body.Should().Contain("downloadBlob");
+        body.Should().NotContain("throw new Error(res.status");
     }
 
     [Fact]

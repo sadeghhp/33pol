@@ -16,11 +16,15 @@ public sealed class AdminUiIntegrationTests
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var body = await response.Content.ReadAsStringAsync();
         body.Should().Contain("33pol Gateway Admin");
-        body.Should().Contain("href=\"admin.css?v=2\"");
-        body.Should().Contain("src=\"admin-store.js?v=2\"");
-        body.Should().Contain("src=\"admin.js?v=2\"");
+        body.Should().Contain("href=\"admin.css?v=3\"");
+        body.Should().Contain("src=\"admin-errors.js?v=3\"");
+        body.Should().Contain("src=\"admin-store.js?v=3\"");
+        body.Should().Contain("src=\"admin-app.js?v=3\"");
         body.Should().Contain("x-cloak");
+        body.Should().Contain("role=\"tabpanel\"");
+        body.Should().Contain("app-shell");
         body.Should().NotContain("function adminApp()");
+        body.Should().NotContain("confirm(");
     }
 
     [Fact]
@@ -34,6 +38,22 @@ public sealed class AdminUiIntegrationTests
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var body = await response.Content.ReadAsStringAsync();
         body.Should().Contain("Alpine.store('admin'");
+        body.Should().Contain("withLoading");
+        body.Should().Contain("downloadBlob");
+    }
+
+    [Fact]
+    public async Task GetAdminErrors_ReturnsClassifier()
+    {
+        await using var factory = GatewayWebApplicationFactory.CreateWithInMemoryDatabase();
+        var client = factory.CreateClient();
+
+        var response = await client.GetAsync("/admin/admin-errors.js");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadAsStringAsync();
+        body.Should().Contain("AdminErrors");
+        body.Should().Contain("classifyError");
     }
 
     [Fact]
@@ -48,20 +68,23 @@ public sealed class AdminUiIntegrationTests
         var body = await response.Content.ReadAsStringAsync();
         body.Should().Contain(":root");
         body.Should().Contain("--accent");
+        body.Should().Contain("app-shell");
     }
 
     [Fact]
-    public async Task GetAdminJs_ReturnsAdminApp()
+    public async Task GetAdminApp_ReturnsAdminApp()
     {
         await using var factory = GatewayWebApplicationFactory.CreateWithInMemoryDatabase();
         var client = factory.CreateClient();
 
-        var response = await client.GetAsync("/admin/admin.js");
+        var response = await client.GetAsync("/admin/admin-app.js");
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var body = await response.Content.ReadAsStringAsync();
         body.Should().Contain("function adminApp()");
         body.Should().Contain("/admin/api/summary");
+        body.Should().Contain("downloadBlob");
+        body.Should().NotContain("confirm(");
     }
 
     [Fact]

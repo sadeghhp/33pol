@@ -77,9 +77,29 @@ dotnet list 33pol.sln package --vulnerable
 
 ---
 
+## Taiga sync (2026-05-27)
+
+| Ref | Internal ID | Status | Sprint | Epic |
+|-----|-------------|--------|--------|------|
+| #632–#644 | 9292058–9292077 | Done | 521199 | 358106 |
+| #645, #635 | 9292078, 9292068 | Done | 521200 | 358106 |
+| #636 | 9292069 | Done | 521201 | 358106 |
+| #544, #548, #549 | 9291730, 9291734, 9291735 | Done | 521199 | 358106 + 358084 |
+| Tasks #583, #587, #588 | 9087255, 9087259, 9087260 | **Closed** | 521199 | Hygiene child tasks (were New; closed 2026-05-27 after P6 audit) |
+| #545–#547 | 9291731–9291733 | **New** (P2) | — | 358084 only |
+| Tasks #584–#586 | 9087256–9087258 | **New** (P2) | — | Post-GA G-19–G-21; not in audit sprint |
+| #251 | 9289800 | Done | — | P4 (usage metering closed) |
+
+Hygiene **#545–#547** (BenchmarkDotNet, Playwright, retention job) remain **New** — correct for post-GA P2.
+
+---
+
 ## Changelog
 
 | Date | Action |
 |------|--------|
 | 2026-05-27 | Phase 6 kickoff; rubric signed; findings seeded from gap report + assembly audit |
 | 2026-05-27 | Wave B: removed Proxy `RequestTracker`, admin endpoint auth attributes, doc updates |
+| 2026-05-27 | Taiga board synced: US-P6-01…14 Done, epic 358106 linked, sprints assigned |
+| 2026-05-27 | Epic 358106 → Done; sprints 521199–521201 closed; sign-off comment on #636 |
+| 2026-05-27 | Hygiene tasks #583/#587/#588 Closed; P6 sprints 521199–521201 closed; epic #631 Done |

@@ -79,4 +79,6 @@ Epic: **EPIC-P6-quality-review** (see [phase-6-production-quality-review.md](./i
 | G-22 | #548 US-hygiene-05 RequestTracker cleanup | **Closed** in P6 (file removed) |
 | G-23 | #549 US-hygiene-06 doc sync after GA | **Closed** — six-phase docs, findings register |
 
-Findings: [16-phase6-findings.md](./implementation-plan/16-phase6-findings.md). User stories **#632–#645** (US-P6-01 … US-P6-14) on epic **358106**. Sprints: **521199** (audit), **521200** (P0), **521201** (P1/sign-off).
+Findings: [16-phase6-findings.md](./implementation-plan/16-phase6-findings.md).
+
+**Taiga (synced 2026-05-27):** US-P6-01…14 **#632–#645** → **Done** on epic **358106** (#631). Hygiene **#544, #548, #549** → **Done**; **#545–#547** remain **New** (P2). Sprints **521199** / **521200** / **521201**.

@@ -1,0 +1,892 @@
+function adminApp() {
+  const TABS = ['dashboard', 'usage', 'routing', 'keys', 'settings'];
+  const LEGACY = {
+    backends: { tab: 'routing', routingSubTab: 'backends' },
+    models: { tab: 'routing', routingSubTab: 'models' }
+  };
+
+  return {
+    tab: 'dashboard',
+    routingSubTab: 'models',
+    showApiKey: false,
+    showChangeKey: false,
+    poll: null,
+    summary: null,
+    summaryUpdatedAt: null,
+    pollFailCount: 0,
+    overviewStale: false,
+    usage: null,
+    usageEvents: null,
+    usageFrom: '',
+    usageTo: '',
+    forecast: null,
+    backends: [],
+    backendsFilter: '',
+    models: [],
+    modelsFilter: '',
+    providers: [],
+    selectedProviderId: 'openrouter',
+    providerEnvVar: 'OPENROUTER_API_KEY',
+    providerModels: [],
+    providerFilter: '',
+    providerError: '',
+    providerErrorTitle: '',
+    providerErrorDetail: '',
+    providerDiscoveryUpstreamUrl: '',
+    providerDiscoveryRequiresAuth: true,
+    customModelsUrl: '',
+    customUpstreamBaseUrl: '',
+    routingView: 'list',
+    modelDrawerOpen: false,
+    keysDrawerOpen: false,
+    keysCreatedAck: false,
+    keys: [],
+    keysFilter: 'active',
+    requests: [],
+    configStatus: null,
+    healthLive: null,
+    healthReady: null,
+    confirmDialog: null,
+    _confirmReturnFocus: null,
+    revokeConfirmId: null,
+    editModel: {
+      id: '', url: '', maxContextLength: 8192, aliasesText: '',
+      useUpstreamAuth: false, upstreamAuthEnvVar: 'OPENROUTER_API_KEY', _existing: false
+    },
+    modelFieldError: '',
+    newKey: { role: 'Inference' },
+    createdKey: '',
+    sort: {
+      models: { key: 'id', dir: 1 },
+      backends: { key: 'modelId', dir: 1 },
+      keys: { key: 'createdAt', dir: -1 },
+      provider: { key: 'id', dir: 1 },
+      requests: { key: 'timestampUtc', dir: -1 }
+    },
+    _saveModelInFlight: false,
+    _createKeyInFlight: false,
+
+    get store() { return Alpine.store('admin'); },
+    get apiKey() { return this.store.apiKey; },
+    set apiKey(v) { this.store.apiKey = v; },
+    get connectionStatus() { return this.store.connectionStatus; },
+    get connectionDegraded() { return this.store.connectionDegraded; },
+    get error() { return this.store.error; },
+    get errorTitle() { return this.store.errorTitle; },
+    get errorDetail() { return this.store.errorDetail; },
+    get toasts() { return this.store.toasts; },
+
+    init() {
+      this.initUsageDates();
+      this.restoreTab();
+      window.addEventListener('hashchange', () => this.applyHashTab());
+      document.addEventListener('visibilitychange', () => this.syncPoll());
+      if (this.apiKey) {
+        this.store.startConnectionWatch(() => this.editModelUrl());
+        this.saveKey();
+      }
+    },
+
+    initUsageDates() {
+      const to = new Date();
+      const from = new Date();
+      from.setDate(from.getDate() - 30);
+      this.usageTo = to.toISOString().slice(0, 10);
+      this.usageFrom = from.toISOString().slice(0, 10);
+    },
+
+    resolveHash(hash) {
+      const h = (hash || '').replace(/^#\/?/, '');
+      if (LEGACY[h]) return LEGACY[h];
+      if (TABS.includes(h)) return { tab: h };
+      return null;
+    },
+
+    restoreTab() {
+      const resolved = this.resolveHash(location.hash);
+      if (resolved) {
+        this.applyTab(resolved.tab, resolved.routingSubTab, false);
+        return;
+      }
+      const saved = sessionStorage.getItem('33pol-admin-tab');
+      const sub = sessionStorage.getItem('33pol-admin-routing-sub');
+      if (saved && TABS.includes(saved)) {
+        this.applyTab(saved, sub || 'models', false);
+      }
+    },
+
+    applyHashTab() {
+      const resolved = this.resolveHash(location.hash);
+      if (!resolved) return;
+      if (resolved.tab !== this.tab || (resolved.routingSubTab && resolved.routingSubTab !== this.routingSubTab)) {
+        this.applyTab(resolved.tab, resolved.routingSubTab, false);
+      }
+    },
+
+    applyTab(name, routingSubTab, updateHash) {
+      if (!TABS.includes(name)) return;
+      this.tab = name;
+      if (name === 'routing' && routingSubTab) {
+        this.routingSubTab = routingSubTab === 'backends' ? 'backends' : 'models';
+      }
+      sessionStorage.setItem('33pol-admin-tab', name);
+      sessionStorage.setItem('33pol-admin-routing-sub', this.routingSubTab);
+      if (updateHash) {
+        const next = '#' + name;
+        if (location.hash !== next) location.hash = next;
+      }
+      this.syncPoll();
+      this.onTabActivated(name);
+    },
+
+    setTab(name) {
+      this.applyTab(name, this.routingSubTab, true);
+    },
+
+    setRoutingSubTab(sub) {
+      this.routingSubTab = sub;
+      sessionStorage.setItem('33pol-admin-routing-sub', sub);
+      this.onTabActivated('routing');
+    },
+
+    editModelUrl() {
+      return this.editModel?.url || '';
+    },
+
+    clearMessages() {
+      this.store.clearMessages();
+    },
+
+    toast(message) {
+      this.store.pushToast(message, 'success');
+    },
+
+    handleCatch(e, options) {
+      if (options?.localOnly || (e.section && !e.global)) return;
+      if (e.global !== false) {
+        this.store.setGlobalError(e.title || 'Error', e.message || String(e), e.detail);
+      }
+    },
+
+    async runApi(scope, label, fn, options) {
+      try {
+        return await this.store.withLoading(scope, label, fn);
+      } catch (e) {
+        this.handleCatch(e, options);
+        throw e;
+      }
+    },
+
+    async apiJson(url, options = {}) {
+      return this.store.apiJson(url, options, this.editModelUrl());
+    },
+
+    isLoading(scope) {
+      return this.store.isLoading(scope);
+    },
+
+    formatTime(iso) {
+      if (!iso) return '—';
+      try { return new Date(iso).toLocaleString(); } catch { return iso; }
+    },
+
+    formatCost(value, currency) {
+      const n = Number(value);
+      if (Number.isNaN(n)) return value ?? '—';
+      try {
+        return new Intl.NumberFormat(undefined, {
+          style: 'currency', currency: currency || 'USD', maximumFractionDigits: 4
+        }).format(n);
+      } catch { return n.toFixed(4); }
+    },
+
+    summaryAgeText() {
+      if (!this.summaryUpdatedAt) return '';
+      const sec = Math.floor((Date.now() - this.summaryUpdatedAt) / 1000);
+      return sec < 5 ? 'just now' : sec + 's ago';
+    },
+
+    usageQuery() {
+      const q = new URLSearchParams();
+      if (this.usageFrom) q.set('from', this.usageFrom);
+      if (this.usageTo) q.set('to', this.usageTo);
+      const s = q.toString();
+      return s ? '?' + s : '';
+    },
+
+    setUsagePreset(days) {
+      const to = new Date();
+      const from = new Date();
+      if (days === 'mtd') {
+        from.setDate(1);
+      } else {
+        from.setDate(from.getDate() - Number(days));
+      }
+      this.usageTo = to.toISOString().slice(0, 10);
+      this.usageFrom = from.toISOString().slice(0, 10);
+    },
+
+    async copyText(text, successMsg) {
+      if (!text) return;
+      try {
+        await navigator.clipboard.writeText(text);
+        this.toast(successMsg || 'Copied to clipboard.');
+      } catch {
+        this.store.setGlobalError('Copy failed', 'Could not access clipboard.');
+      }
+    },
+
+    sortToggle(table, key) {
+      const s = this.sort[table];
+      if (s.key === key) s.dir = -s.dir;
+      else { s.key = key; s.dir = 1; }
+    },
+
+    sortIndicator(table, key) {
+      const s = this.sort[table];
+      if (s.key !== key) return '';
+      return s.dir > 0 ? ' ▲' : ' ▼';
+    },
+
+    sortedList(list, table) {
+      const arr = [...(list || [])];
+      const { key, dir } = this.sort[table];
+      arr.sort((a, b) => {
+        let av = a[key]; let bv = b[key];
+        if (key === 'createdAt' || key === 'timestampUtc') {
+          av = av ? new Date(av).getTime() : 0;
+          bv = bv ? new Date(bv).getTime() : 0;
+        } else {
+          av = (av ?? '').toString().toLowerCase();
+          bv = (bv ?? '').toString().toLowerCase();
+        }
+        if (av < bv) return -dir;
+        if (av > bv) return dir;
+        return 0;
+      });
+      return arr;
+    },
+
+    requestStatusClass(code) {
+      const c = Number(code);
+      if (c >= 500) return 'row-error';
+      if (c >= 400) return 'row-warn';
+      return '';
+    },
+
+    syncPoll() {
+      if (this.poll) clearInterval(this.poll);
+      this.poll = null;
+      if (!this.apiKey) return;
+      this.poll = setInterval(() => {
+        if (this.tab !== 'dashboard' || document.hidden) return;
+        this.loadSummary(true);
+      }, 2000);
+    },
+
+    async saveKey() {
+      await this.runApi('auth', 'Connecting…', async () => {
+        this.store.persistApiKey(this.apiKey);
+        this.clearMessages();
+        await this.store.verifyConnection(this.editModelUrl());
+        this.store.startConnectionWatch(() => this.editModelUrl());
+        this.showChangeKey = false;
+        this.syncPoll();
+        await this.loadOverviewData();
+        this.onTabActivated(this.tab);
+      });
+    },
+
+    clearSession() {
+      if (this.poll) clearInterval(this.poll);
+      this.poll = null;
+      this.store.stopConnectionWatch();
+      this.store.persistApiKey('');
+      this.store.connectionStatus = '';
+      this.store.connectionDegraded = false;
+      this.summary = null;
+      this.usage = null;
+      this.usageEvents = null;
+      this.backends = [];
+      this.models = [];
+      this.keys = [];
+      this.requests = [];
+      this.createdKey = '';
+      this.modelDrawerOpen = false;
+      this.keysDrawerOpen = false;
+      this.clearProviderError();
+      this.clearMessages();
+      this.toast('Signed out — API key cleared from this browser.');
+    },
+
+    onTabActivated(name) {
+      if (!this.apiKey) return;
+      if (name === 'dashboard') this.loadOverviewData();
+      if (name === 'usage') this.applyUsageRange();
+      if (name === 'routing') {
+        if (this.routingSubTab === 'backends') this.loadBackends();
+        else {
+          this.loadModels();
+          if (!this.providers?.length) this.loadProviders();
+        }
+      }
+      if (name === 'keys') this.loadKeys();
+      if (name === 'settings') this.loadConfigStatus();
+    },
+
+    async loadOverviewData() {
+      await this.runApi('overview', 'Loading overview…', async () => {
+        const summaryP = this.apiJson('/admin/api/summary');
+        const healthP = this.loadHealth();
+        const requestsP = this.apiJson('/admin/api/requests?limit=25');
+        await healthP;
+        this.summary = await summaryP;
+        this.requests = (await requestsP) ?? [];
+        this.summaryUpdatedAt = Date.now();
+        this.pollFailCount = 0;
+        this.overviewStale = false;
+      });
+    },
+
+    clearProviderError() {
+      this.providerError = '';
+      this.providerErrorTitle = '';
+      this.providerErrorDetail = '';
+    },
+
+    setProviderError(title, message, detail) {
+      this.providerErrorTitle = title || 'Could not fetch models';
+      this.providerError = message || 'Something went wrong.';
+      this.providerErrorDetail = detail || '';
+    },
+
+    looksLikeEnvVarSecret(value) {
+      const v = (value || '').trim();
+      if (!v) return false;
+      if (/^sk-/i.test(v) || /^Bearer\s+/i.test(v)) return true;
+      return v.length >= 32 && !v.includes('_');
+    },
+
+    validateProviderEnvVar() {
+      if (!this.selectedProviderRequiresAuth()) return true;
+      const envVar = (this.providerEnvVar || '').trim();
+      if (!envVar) {
+        const msg = 'Enter the environment variable name (e.g. OPENROUTER_API_KEY).';
+        this.setProviderError('Validation', msg);
+        return false;
+      }
+      if (this.looksLikeEnvVarSecret(envVar)) {
+        this.setProviderError(
+          'Invalid env var',
+          'This looks like an API key secret. Enter the variable name on the gateway (e.g. OPENROUTER_API_KEY), then set the secret in the host or Docker environment.');
+        return false;
+      }
+      return true;
+    },
+
+    filteredBackends() {
+      const q = (this.backendsFilter || '').trim().toLowerCase();
+      let list = [...(this.backends || [])];
+      list.sort((a, b) => Number(a.isHealthy) - Number(b.isHealthy));
+      if (q) {
+        list = list.filter(b =>
+          (b.modelId || '').toLowerCase().includes(q) ||
+          (b.url || '').toLowerCase().includes(q) ||
+          (b.alias || '').toLowerCase().includes(q));
+      }
+      return this.sortedList(list, 'backends');
+    },
+
+    filteredModelsList() {
+      const q = (this.modelsFilter || '').trim().toLowerCase();
+      let list = this.models || [];
+      if (q) {
+        list = list.filter(m =>
+          (m.id || '').toLowerCase().includes(q) ||
+          (m.url || '').toLowerCase().includes(q) ||
+          ((m.aliases || []).join(' ')).toLowerCase().includes(q));
+      }
+      return this.sortedList(list, 'models');
+    },
+
+    filteredKeys() {
+      const list = this.keys || [];
+      let filtered = list;
+      if (this.keysFilter === 'active') filtered = list.filter(k => !k.isRevoked);
+      else if (this.keysFilter === 'revoked') filtered = list.filter(k => k.isRevoked);
+      return this.sortedList(filtered, 'keys');
+    },
+
+    filteredProviderModels() {
+      const q = (this.providerFilter || '').trim().toLowerCase();
+      let list = this.providerModels || [];
+      if (q) {
+        list = list.filter(m =>
+          (m.id || '').toLowerCase().includes(q) || (m.name || '').toLowerCase().includes(q));
+      }
+      return this.sortedList(list, 'provider');
+    },
+
+    sortedRequests() {
+      return this.sortedList(this.requests || [], 'requests');
+    },
+
+    urlLooksLocalhost() {
+      return /localhost|127\.0\.0\.1/.test(this.editModel?.url || '');
+    },
+
+    openConfirm(dialog, returnFocusEl) {
+      this._confirmReturnFocus = returnFocusEl || document.activeElement;
+      this.confirmDialog = dialog;
+      this.$nextTick(() => {
+        const btn = this.$refs.confirmPrimary;
+        if (btn) btn.focus();
+      });
+    },
+
+    cancelConfirm() {
+      this.confirmDialog = null;
+      const el = this._confirmReturnFocus;
+      this._confirmReturnFocus = null;
+      if (el && el.focus) el.focus();
+    },
+
+    async confirmOk() {
+      const d = this.confirmDialog;
+      this.confirmDialog = null;
+      if (d?.onConfirm) await d.onConfirm();
+      const el = this._confirmReturnFocus;
+      this._confirmReturnFocus = null;
+      if (el && el.focus) el.focus();
+    },
+
+    onModalKeydown(e) {
+      if (e.key === 'Escape') {
+        if (this.confirmDialog) this.cancelConfirm();
+        else if (this.revokeConfirmId) this.cancelRevoke();
+        else if (this.modelDrawerOpen) this.closeModelDrawer();
+        else if (this.keysDrawerOpen) this.closeKeysDrawer();
+      }
+    },
+
+    openModelDrawer(existing) {
+      if (existing) this.startEditModel(existing);
+      else this.resetModelForm();
+      this.modelFieldError = '';
+      this.modelDrawerOpen = true;
+    },
+
+    closeModelDrawer() {
+      this.modelDrawerOpen = false;
+      this.modelFieldError = '';
+    },
+
+    openDiscover() {
+      this.routingView = 'discover';
+      this.clearProviderError();
+      if (!this.providers?.length) this.loadProviders();
+    },
+
+    openKeysDrawer() {
+      this.keysDrawerOpen = true;
+      this.createdKey = '';
+      this.keysCreatedAck = false;
+    },
+
+    closeKeysDrawer() {
+      if (this.createdKey && !this.keysCreatedAck) return;
+      this.keysDrawerOpen = false;
+      this.createdKey = '';
+    },
+
+    applyModelTemplate(kind) {
+      const templates = {
+        'lmstudio-docker': { url: 'http://host.docker.internal:1234', auth: false },
+        'lmstudio-native': { url: 'http://127.0.0.1:1234', auth: false },
+        'vllm-docker': { url: 'http://host.docker.internal:8000', auth: false }
+      };
+      if (templates[kind]) {
+        const t = templates[kind];
+        this.editModel = {
+          id: '', url: t.url, maxContextLength: 8192, aliasesText: '',
+          useUpstreamAuth: false, upstreamAuthEnvVar: 'OPENROUTER_API_KEY', _existing: false
+        };
+      } else if (['openrouter', 'together', 'groq'].includes(kind)) {
+        const p = this.providers.find(x => x.id === kind) || {};
+        const envVar = (p.defaultEnvVar || 'OPENROUTER_API_KEY').trim();
+        this.editModel = {
+          id: '', url: p.upstreamBaseUrl || '', maxContextLength: 8192, aliasesText: '',
+          useUpstreamAuth: !!p.requiresUpstreamAuth, upstreamAuthEnvVar: envVar, _existing: false
+        };
+        this.selectedProviderId = kind;
+        this.providerEnvVar = envVar;
+      }
+      this.toast('Template applied — set model id and save.');
+    },
+
+    async loadSummary(silent) {
+      if (silent) {
+        try {
+          this.summary = await this.apiJson('/admin/api/summary');
+          this.summaryUpdatedAt = Date.now();
+          this.pollFailCount = 0;
+          this.overviewStale = false;
+        } catch {
+          this.pollFailCount++;
+          if (this.pollFailCount >= 2) this.overviewStale = true;
+        }
+        return;
+      }
+      await this.runApi('overview', 'Loading summary…', async () => {
+        this.summary = await this.apiJson('/admin/api/summary');
+        this.summaryUpdatedAt = Date.now();
+        this.pollFailCount = 0;
+        this.overviewStale = false;
+      });
+    },
+
+    async loadHealth() {
+      try {
+        const [live, ready] = await Promise.all([
+          fetch('/health/live').then(r => r.ok),
+          fetch('/health/ready').then(r => r.ok)
+        ]);
+        this.healthLive = live;
+        this.healthReady = ready;
+      } catch {
+        this.healthLive = false;
+        this.healthReady = false;
+      }
+    },
+
+    async loadConfigStatus() {
+      await this.runApi('settings', 'Loading config…', async () => {
+        this.configStatus = await this.apiJson('/admin/api/config/status');
+      });
+    },
+
+    confirmReloadConfig() {
+      this.openConfirm({
+        title: 'Reload config from disk?',
+        message: 'This reloads models.json from the file on disk. Live registry changes made via the API are not overwritten, but file edits will be picked up.',
+        confirmLabel: 'Reload',
+        danger: false,
+        onConfirm: () => this.reloadConfig()
+      });
+    },
+
+    async reloadConfig() {
+      await this.runApi('settings', 'Reloading…', async () => {
+        const body = await this.apiJson('/admin/api/config/reload', { method: 'POST' });
+        if (body?.status === 'error') {
+          this.store.setGlobalError('Reload failed', body.message || 'Reload failed');
+          return;
+        }
+        this.toast(body?.message || 'Config reloaded from disk.');
+        await this.loadConfigStatus();
+        await this.loadModels();
+        await this.loadBackends();
+      });
+    },
+
+    async loadRequests() {
+      await this.runApi('overview', 'Loading requests…', async () => {
+        this.requests = (await this.apiJson('/admin/api/requests?limit=25')) ?? [];
+      });
+    },
+
+    async applyUsageRange() {
+      await this.runApi('usage', 'Loading usage…', async () => {
+        await Promise.all([
+          this.apiJson('/admin/api/usage' + this.usageQuery()).then(u => { this.usage = u; }),
+          (async () => {
+            const params = new URLSearchParams();
+            if (this.usageFrom) params.set('from', this.usageFrom);
+            if (this.usageTo) params.set('to', this.usageTo);
+            params.set('limit', '50');
+            const page = await this.apiJson('/admin/api/usage/events?' + params.toString());
+            this.usageEvents = page?.events ?? page?.Events ?? [];
+          })(),
+          this.apiJson('/admin/api/usage/forecast?days=7').then(f => { this.forecast = f; })
+        ]);
+      });
+    },
+
+    async loadBackends() {
+      await this.runApi('routingBackends', 'Loading backends…', async () => {
+        this.backends = (await this.apiJson('/admin/api/backends')) ?? [];
+      });
+    },
+
+    async loadModels() {
+      await this.runApi('routingModels', 'Loading models…', async () => {
+        this.models = (await this.apiJson('/admin/api/models')) ?? [];
+      });
+    },
+
+    getSelectedProvider() {
+      return (this.providers || []).find(p => p.id === this.selectedProviderId);
+    },
+
+    selectedProviderRequiresAuth() {
+      const p = this.getSelectedProvider();
+      if (!p) return true;
+      if (p.id === 'custom') return true;
+      return p.requiresUpstreamAuth !== false;
+    },
+
+    onProviderChanged() {
+      this.clearProviderError();
+      const p = this.getSelectedProvider();
+      if (p?.defaultEnvVar) this.providerEnvVar = p.defaultEnvVar;
+      this.providerModels = [];
+      this.providerDiscoveryUpstreamUrl = p?.upstreamBaseUrl || '';
+      this.providerDiscoveryRequiresAuth = this.selectedProviderRequiresAuth();
+      if (p?.id === 'custom' && !this.customModelsUrl && p.modelsListUrl) {
+        this.customModelsUrl = p.modelsListUrl;
+      }
+    },
+
+    async loadProviders() {
+      await this.runApi('routingModels', 'Loading providers…', async () => {
+        const body = await this.apiJson('/admin/api/providers/catalog');
+        this.providers = body?.data || [];
+        if (!this.providers.some(p => p.id === this.selectedProviderId)) {
+          this.selectedProviderId = this.providers[0]?.id || 'openrouter';
+        }
+        this.onProviderChanged();
+      });
+    },
+
+    useProviderModel(m) {
+      const id = (m?.id || '').trim();
+      if (!id) return;
+      const upstreamUrl = (this.providerDiscoveryUpstreamUrl || this.getSelectedProvider()?.upstreamBaseUrl || '').trim();
+      const envVar = (this.providerEnvVar || '').trim();
+      this.editModel = {
+        id, url: upstreamUrl,
+        maxContextLength: m?.contextLength || 8192,
+        aliasesText: '',
+        useUpstreamAuth: this.providerDiscoveryRequiresAuth && !!envVar,
+        upstreamAuthEnvVar: envVar || 'OPENROUTER_API_KEY',
+        _existing: false
+      };
+      this.routingView = 'list';
+      this.modelDrawerOpen = true;
+      this.toast('Review the model details and save.');
+    },
+
+    editModelFromBackend(modelId) {
+      const m = (this.models || []).find(x => x.id === modelId);
+      this.setRoutingSubTab('models');
+      if (m) this.openModelDrawer(m);
+      else {
+        this.modelsFilter = modelId;
+        this.openModelDrawer();
+        this.editModel.id = modelId;
+      }
+    },
+
+    async fetchProviderModels() {
+      if (!this.validateProviderEnvVar()) return;
+      this.clearProviderError();
+      try {
+        await this.store.withLoading('providerFetch', 'Fetching models…', async () => {
+          const envVar = (this.providerEnvVar || '').trim();
+          let body;
+          if (this.selectedProviderId === 'custom') {
+            body = await this.apiJson('/admin/api/providers/models', {
+              method: 'POST',
+              body: JSON.stringify({ modelsUrl: (this.customModelsUrl || '').trim(), envVar })
+            });
+            this.providerDiscoveryUpstreamUrl = (this.customUpstreamBaseUrl || body?.upstreamBaseUrl || '').trim();
+          } else {
+            body = await this.apiJson(
+              '/admin/api/providers/' + encodeURIComponent(this.selectedProviderId) + '/models',
+              { method: 'POST', body: JSON.stringify({ envVar }) });
+            this.providerDiscoveryUpstreamUrl = body?.upstreamBaseUrl || this.getSelectedProvider()?.upstreamBaseUrl || '';
+          }
+          this.providerModels = body?.data || [];
+          const name = this.getSelectedProvider()?.displayName || this.selectedProviderId;
+          this.toast('Fetched models from ' + name + '.');
+        });
+      } catch (e) {
+        this.setProviderError(e.title || 'Error', e.message || String(e), e.detail);
+        if (e.global) this.handleCatch(e);
+      }
+    },
+
+    modelPayload() {
+      const aliases = (this.editModel.aliasesText || '').split(',').map(s => s.trim()).filter(Boolean);
+      const payload = {
+        id: this.editModel.id.trim(),
+        url: this.editModel.url.trim(),
+        maxContextLength: Number(this.editModel.maxContextLength) || 8192,
+        aliases
+      };
+      if (this.editModel.useUpstreamAuth) {
+        const envVar = (this.editModel.upstreamAuthEnvVar || 'OPENROUTER_API_KEY').trim();
+        if (envVar) payload.upstreamAuth = { type: 'bearer', envVar };
+      }
+      return payload;
+    },
+
+    resetModelForm() {
+      this.editModel = {
+        id: '', url: '', maxContextLength: 8192, aliasesText: '',
+        useUpstreamAuth: false, upstreamAuthEnvVar: 'OPENROUTER_API_KEY', _existing: false
+      };
+    },
+
+    startEditModel(m) {
+      this.editModel = {
+        id: m.id, url: m.url, maxContextLength: m.maxContextLength || 8192,
+        aliasesText: (m.aliases || []).join(', '),
+        useUpstreamAuth: !!m.upstreamAuth,
+        upstreamAuthEnvVar: m.upstreamAuth?.envVar || 'OPENROUTER_API_KEY',
+        _existing: true
+      };
+    },
+
+    validateModelUpstreamEnvVar() {
+      if (!this.editModel.useUpstreamAuth) return true;
+      const envVar = (this.editModel.upstreamAuthEnvVar || '').trim();
+      if (!envVar) {
+        this.modelFieldError = 'Upstream auth env var name is required (e.g. OPENROUTER_API_KEY).';
+        return false;
+      }
+      if (this.looksLikeEnvVarSecret(envVar)) {
+        this.modelFieldError = 'Use the variable name on the gateway, not the API key secret.';
+        return false;
+      }
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(envVar)) {
+        this.modelFieldError = 'Use a valid environment variable name (letters, digits, underscore).';
+        return false;
+      }
+      this.modelFieldError = '';
+      return true;
+    },
+
+    async saveModel() {
+      if (this._saveModelInFlight) return;
+      const payload = this.modelPayload();
+      if (!payload.id || !payload.url) {
+        this.modelFieldError = 'Model id and upstream URL are required.';
+        return;
+      }
+      if (!this.validateModelUpstreamEnvVar()) return;
+      if (/localhost|127\.0\.0\.1/.test(payload.url)) {
+        this.modelFieldError = 'Use http://host.docker.internal:<port> when the gateway runs in Docker (not localhost).';
+        return;
+      }
+      this._saveModelInFlight = true;
+      try {
+        await this.runApi('routingModels', 'Saving model…', async () => {
+          const url = this.editModel._existing
+            ? '/admin/api/models/' + encodeURIComponent(payload.id)
+            : '/admin/api/models';
+          const body = await this.apiJson(url, {
+            method: this.editModel._existing ? 'PATCH' : 'POST',
+            body: JSON.stringify(payload)
+          });
+          if (body && body.success === false) {
+            this.modelFieldError = body.message || 'Could not save model.';
+            return;
+          }
+          this.toast(body?.message || 'Model saved.');
+          this.closeModelDrawer();
+          this.resetModelForm();
+          await this.loadModels();
+          await this.loadBackends();
+        }, { localOnly: true });
+      } catch (e) {
+        this.modelFieldError = e.message || 'Save failed.';
+        if (e.global) this.handleCatch(e);
+      } finally {
+        this._saveModelInFlight = false;
+      }
+    },
+
+    confirmRemoveModel(id) {
+      this.openConfirm({
+        title: 'Remove model?',
+        message: 'Remove “' + id + '” from the registry. Clients using this model id or aliases may fail until reconfigured.',
+        confirmLabel: 'Remove',
+        danger: true,
+        onConfirm: () => this.removeModel(id)
+      });
+    },
+
+    async removeModel(id) {
+      await this.runApi('routingModels', 'Removing…', async () => {
+        const body = await this.apiJson('/admin/api/models/' + encodeURIComponent(id), { method: 'DELETE' });
+        if (body?.success === false) {
+          this.store.setGlobalError('Remove failed', body.message || 'Could not remove model.');
+          return;
+        }
+        this.toast(body?.message || 'Model removed.');
+        await this.loadModels();
+        await this.loadBackends();
+      });
+    },
+
+    async loadKeys() {
+      await this.runApi('keys', 'Loading keys…', async () => {
+        this.keys = (await this.apiJson('/admin/api/keys')) ?? [];
+      });
+    },
+
+    async createKey() {
+      if (this._createKeyInFlight) return;
+      this._createKeyInFlight = true;
+      try {
+        await this.runApi('keys', 'Creating key…', async () => {
+          const body = await this.apiJson('/admin/api/keys', {
+            method: 'POST',
+            body: JSON.stringify({ role: this.newKey.role, scopes: [] })
+          });
+          this.createdKey = body?.secret || '';
+          this.keysCreatedAck = false;
+          this.toast('API key created — copy the secret now.');
+          await this.loadKeys();
+        });
+      } finally {
+        this._createKeyInFlight = false;
+      }
+    },
+
+    confirmRevoke(id) {
+      this.revokeConfirmId = id;
+    },
+
+    cancelRevoke() {
+      this.revokeConfirmId = null;
+    },
+
+    async revokeKeyConfirmed() {
+      const id = this.revokeConfirmId;
+      if (!id) return;
+      this.revokeConfirmId = null;
+      await this.runApi('keys', 'Revoking…', async () => {
+        await this.store.apiFetch('/admin/api/keys/' + id + '/revoke', { method: 'POST' }, this.editModelUrl());
+        this.toast('API key revoked.');
+        await this.loadKeys();
+      });
+    },
+
+    async downloadExport(format) {
+      await this.runApi('usage', 'Preparing export…', async () => {
+        const params = new URLSearchParams();
+        if (this.usageFrom) params.set('from', this.usageFrom);
+        if (this.usageTo) params.set('to', this.usageTo);
+        params.set('format', format);
+        const ext = format === 'csv' ? 'csv' : 'json';
+        await this.store.downloadBlob(
+          '/admin/api/usage/export?' + params.toString(),
+          'usage-export.' + ext,
+          this.editModelUrl());
+        this.toast('Export downloaded.');
+      });
+    }
+  };
+}

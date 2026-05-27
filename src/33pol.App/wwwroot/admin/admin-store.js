@@ -1,107 +1,142 @@
 document.addEventListener('alpine:init', () => {
+  const emptyLoading = () => ({
+    overview: false,
+    usage: false,
+    routingModels: false,
+    routingBackends: false,
+    keys: false,
+    settings: false,
+    providerFetch: false,
+    auth: false
+  });
+
   Alpine.store('admin', {
     apiKey: localStorage.getItem('33pol-admin-key') || '',
-    loading: false,
+    loading: emptyLoading(),
     loadingMessage: '',
     connectionStatus: '',
+    connectionDegraded: false,
     error: '',
     errorTitle: '',
     errorDetail: '',
-    successMessage: '',
+    toasts: [],
+    _toastId: 0,
+    _connectionTimer: null,
 
     clearMessages() {
       this.error = '';
       this.errorTitle = '';
       this.errorDetail = '';
-      this.successMessage = '';
     },
 
     setError(title, message, detail) {
-      this.successMessage = '';
       this.errorTitle = title || 'Error';
       this.error = message || 'Something went wrong.';
       this.errorDetail = detail || '';
       this.scrollToAlert();
     },
 
+    setGlobalError(title, message, detail) {
+      this.setError(title, message, detail);
+    },
+
     dismissError() {
       this.clearMessages();
     },
 
-    setSuccess(message) {
-      this.clearMessages();
-      this.successMessage = message;
+    pushToast(message, type) {
+      if (!message) return;
+      const id = ++this._toastId;
+      this.toasts = [...this.toasts.slice(-2), { id, message, type: type || 'success' }];
+      setTimeout(() => {
+        this.toasts = this.toasts.filter(t => t.id !== id);
+      }, 3000);
     },
 
     scrollToAlert() {
       requestAnimationFrame(() => {
         const el = document.getElementById('global-alert');
-        if (el) {
-          el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-        }
+        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
       });
     },
 
-    parseJsonBody(text) {
-      if (!text || !text.trim().startsWith('{')) return null;
-      try { return JSON.parse(text); } catch { return null; }
+    isLoading(scope) {
+      return !!this.loading[scope];
     },
 
-    friendlyApiError(status, statusText, text, editModelUrl) {
-      const json = this.parseJsonBody(text);
-      if (json?.message) {
-        return {
-          title: status + ' ' + (json.success === false ? 'Failed' : statusText),
-          message: json.message,
-          detail: json.success === false ? null : text
-        };
+    anyLoading() {
+      return Object.values(this.loading).some(Boolean);
+    },
+
+    async withLoading(scope, message, fn) {
+      if (this.loading[scope]) return;
+      this.loading = { ...this.loading, [scope]: true };
+      this.loadingMessage = message || '';
+      try {
+        return await fn();
+      } finally {
+        this.loading = { ...this.loading, [scope]: false };
+        if (!this.anyLoading()) this.loadingMessage = '';
       }
-      if (json?.title && json?.detail) {
-        const detailText = json.detail === json.title ? null : text;
-        return { title: json.title, message: json.detail, detail: detailText };
-      }
-      const raw = (text || '').trim();
-      const isHtml = raw.startsWith('<') || raw.includes('<!DOCTYPE');
-      const isStack = raw.includes(' at ') && raw.includes(' in ');
-      if (isHtml || isStack) {
-        let hint = 'The gateway returned an unexpected error.';
-        if (raw.includes('Device or resource busy') || raw.includes('models.json')) {
-          hint = 'Cannot write models.json — registry file may be read-only (Docker :ro mount). Use a writable volume or edit deploy/docker/config/models.json and Reload config.';
-        } else if (raw.includes('Unauthorized') || status === 401) {
-          hint = 'Invalid or missing admin API key.';
-        }
-        const firstLine = raw.split('\n').find(l => l.trim() && !l.startsWith('<')) || '';
-        return { title: status + ' ' + statusText, message: hint, detail: firstLine || raw.slice(0, 2000) };
-      }
-      if (editModelUrl && /localhost|127\.0\.0\.1/.test(editModelUrl)) {
-        return {
-          title: status + ' ' + statusText,
-          message: (raw || statusText) + ' — From Docker, use http://host.docker.internal:<port> instead of localhost.',
-          detail: null
-        };
-      }
-      return { title: status + ' ' + statusText, message: raw || statusText, detail: null };
     },
 
     headers() {
-      return { 'X-API-Key': this.apiKey, 'Content-Type': 'application/json' };
+      const h = { 'X-API-Key': this.apiKey };
+      return h;
+    },
+
+    jsonHeaders() {
+      return { ...this.headers(), 'Content-Type': 'application/json' };
+    },
+
+    classifyAndThrow(status, statusText, text, editModelUrl) {
+      const err = window.AdminErrors.classifyError(status, statusText, text, { editModelUrl });
+      const e = new Error(err.message);
+      e.title = err.title;
+      e.detail = err.detail;
+      e.global = err.global;
+      e.section = err.section;
+      if (status === 401) {
+        this.connectionStatus = 'fail';
+        this.connectionDegraded = true;
+      }
+      throw e;
+    },
+
+    async fetchWithRetry(url, options, editModelUrl, retries, readBodyAsText) {
+      const max = retries ?? 1;
+      const asText = readBodyAsText !== false;
+      let lastErr;
+      for (let i = 0; i <= max; i++) {
+        try {
+          const res = await fetch(url, options);
+          if (!res.ok) {
+            const text = asText ? await res.text() : '';
+            this.classifyAndThrow(res.status, res.statusText, text, editModelUrl);
+          }
+          if (asText) {
+            const text = await res.text();
+            res._bodyText = text;
+          }
+          return res;
+        } catch (e) {
+          lastErr = e;
+          if (e.title || e.global !== undefined) throw e;
+          if (i === max) {
+            this.classifyAndThrow(0, 'Failed to fetch', String(e), editModelUrl);
+          }
+        }
+      }
+      throw lastErr;
     },
 
     async apiFetch(url, options = {}, editModelUrl) {
-      const res = await fetch(url, {
+      const method = (options.method || 'GET').toUpperCase();
+      const retry = method === 'GET' ? 1 : 0;
+      return this.fetchWithRetry(url, {
         ...options,
-        headers: { ...this.headers(), ...(options.headers || {}) }
-      });
-      const text = await res.text();
-      if (!res.ok) {
-        const err = this.friendlyApiError(res.status, res.statusText, text, editModelUrl);
-        const e = new Error(err.message);
-        e.title = err.title;
-        e.detail = err.detail;
-        throw e;
-      }
-      res._bodyText = text;
-      return res;
+        headers: { ...this.jsonHeaders(), ...(options.headers || {}) }
+      }, editModelUrl, retry);
     },
 
     async apiJson(url, options = {}, editModelUrl) {
@@ -111,36 +146,63 @@ document.addEventListener('alpine:init', () => {
       return JSON.parse(text);
     },
 
-    async withLoading(message, fn) {
-      this.loading = true;
-      this.loadingMessage = message || '';
-      try {
-        return await fn();
-      } finally {
-        this.loading = false;
-        this.loadingMessage = '';
-      }
+    async downloadBlob(url, filename, editModelUrl) {
+      const res = await this.fetchWithRetry(
+        url, { headers: this.headers() }, editModelUrl, 0, false);
+      const blob = await res.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = objectUrl;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(objectUrl);
     },
 
     persistApiKey(key) {
       this.apiKey = key || '';
-      if (key) {
-        localStorage.setItem('33pol-admin-key', key);
-      } else {
-        localStorage.removeItem('33pol-admin-key');
-      }
+      if (key) localStorage.setItem('33pol-admin-key', key);
+      else localStorage.removeItem('33pol-admin-key');
+    },
+
+    keyPrefix() {
+      const k = this.apiKey || '';
+      if (k.length <= 8) return k ? '••••' : '';
+      return k.slice(0, 4) + '…' + k.slice(-4);
     },
 
     async verifyConnection(editModelUrl) {
       if (!this.apiKey) {
         this.connectionStatus = '';
-        return;
+        this.connectionDegraded = false;
+        return false;
       }
       try {
         await this.apiJson('/admin/api/config/status', {}, editModelUrl);
         this.connectionStatus = 'ok';
+        this.connectionDegraded = false;
+        return true;
       } catch {
         this.connectionStatus = 'fail';
+        this.connectionDegraded = true;
+        return false;
+      }
+    },
+
+    startConnectionWatch(editModelUrl) {
+      if (this._connectionTimer) clearInterval(this._connectionTimer);
+      this._connectionTimer = setInterval(() => {
+        if (document.hidden || !this.apiKey) return;
+        this.verifyConnection(editModelUrl);
+      }, 5 * 60 * 1000);
+      window.addEventListener('focus', () => {
+        if (this.apiKey) this.verifyConnection(editModelUrl);
+      });
+    },
+
+    stopConnectionWatch() {
+      if (this._connectionTimer) {
+        clearInterval(this._connectionTimer);
+        this._connectionTimer = null;
       }
     }
   });

@@ -129,7 +129,10 @@ README, observability, integrations, admin-ui; six-phase wording; HA limitations
 - [x] `16-phase6-findings.md`: zero Open P0  
 - [x] `dotnet test` green; coverage policy documented (G-18 / F-P6-018)  
 - [x] Gap report refreshed  
-- [ ] Epic `EPIC-P6-quality-review` Done in Taiga (close #632–#636 after sprint sign-off)  
+- [x] All US-P6 stories **Done** in Taiga (#632–#645, synced 2026-05-27)  
+- [x] Hygiene child tasks **#583, #587, #588** **Closed** (were New under Done stories #544/#548/#549; closed 2026-05-27)  
+- [x] Sprints **521199** / **521200** / **521201** closed in Taiga  
+- [x] Epic **358106** (`#631`) **Done** (2026-05-27)  
 
 ---
 
@@ -168,7 +171,13 @@ README, observability, integrations, admin-ui; six-phase wording; HA limitations
 | #635 | US-P6-13: Remediation wave B (P1) | 6.10 | 521200 |
 | #636 | US-P6-14: Phase 6 sign-off | 6.11 | 521201 |
 
-Link stories to epic **358106** in Taiga UI if MCP `linkStoryToEpic` lacks story internal ids.
+**Taiga sync (2026-05-27):** All stories **Done**, linked to epic **358106** (ref #631), assigned to sprints **521199** / **521200** / **521201**. Internal IDs: #632→9292058 … #636→9292069 (see [16-phase6-findings.md](../16-phase6-findings.md) § Taiga).
+
+| Ref | Internal ID | Sprint |
+|-----|-------------|--------|
+| #632–#644 | 9292058–9292077 | 521199 (audit) |
+| #645, #635 | 9292078, 9292068 | 521200 (remediation P0/P1) |
+| #636 | 9292069 | 521201 (sign-off) |
 
 ---
 
