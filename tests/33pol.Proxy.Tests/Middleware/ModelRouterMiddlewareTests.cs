@@ -15,6 +15,7 @@ using Pol33.Core.RateLimiting;
 using Pol33.Registry.Health;
 using Pol33.Proxy.Forwarding;
 using Pol33.Proxy.Middleware;
+using Pol33.Proxy.Forwarding;
 using Yarp.ReverseProxy.Forwarder;
 
 namespace Pol33.Proxy.Tests.Middleware;
@@ -112,7 +113,7 @@ public sealed class ModelRouterMiddlewareTests
                 Error: "down",
                 LastCheckedUtc: DateTimeOffset.UtcNow));
 
-            var forwarder = Substitute.For<IHttpForwarder>();
+            var forwarder = Substitute.For<IInferenceHttpForwarder>();
             var middleware = CreateMiddleware(registry: registry, healthStore: health, forwarder: forwarder);
             var context = CreateContext(
                 HttpMethods.Post,
@@ -125,9 +126,9 @@ public sealed class ModelRouterMiddlewareTests
             await forwarder.DidNotReceive().SendAsync(
                 Arg.Any<HttpContext>(),
                 Arg.Any<string>(),
-                Arg.Any<HttpMessageInvoker>(),
-                Arg.Any<ForwarderRequestConfig>(),
-                Arg.Any<HttpTransformer>());
+                Arg.Any<string?>(),
+                Arg.Any<StreamingHttpTransformer>(),
+                Arg.Any<CancellationToken>());
         }
         finally
         {
@@ -152,13 +153,13 @@ public sealed class ModelRouterMiddlewareTests
             var health = Substitute.For<IBackendHealthStore>();
             health.IsBackendHealthy("m1").Returns(true);
 
-            var forwarder = Substitute.For<IHttpForwarder>();
+            var forwarder = Substitute.For<IInferenceHttpForwarder>();
             forwarder.SendAsync(
                     Arg.Any<HttpContext>(),
                     Arg.Any<string>(),
-                    Arg.Any<HttpMessageInvoker>(),
-                    Arg.Any<ForwarderRequestConfig>(),
-                    Arg.Any<HttpTransformer>())
+                    Arg.Any<string?>(),
+                    Arg.Any<StreamingHttpTransformer>(),
+                    Arg.Any<CancellationToken>())
                 .Returns(ForwarderError.None);
 
             var middleware = CreateMiddleware(registry: registry, healthStore: health, forwarder: forwarder);
@@ -172,9 +173,9 @@ public sealed class ModelRouterMiddlewareTests
             await forwarder.Received(1).SendAsync(
                 Arg.Any<HttpContext>(),
                 "http://backend:8000",
-                Arg.Any<HttpMessageInvoker>(),
-                Arg.Any<ForwarderRequestConfig>(),
-                Arg.Any<StreamingHttpTransformer>());
+                Arg.Any<string?>(),
+                Arg.Any<StreamingHttpTransformer>(),
+                Arg.Any<CancellationToken>());
         }
         finally
         {
@@ -334,7 +335,7 @@ public sealed class ModelRouterMiddlewareTests
         RequestDelegate? next = null,
         IModelRegistry? registry = null,
         IBackendHealthStore? healthStore = null,
-        IHttpForwarder? forwarder = null,
+        IInferenceHttpForwarder? forwarder = null,
         IErrorResponseWriter? errorWriter = null,
         IRequestTracker? requestTracker = null,
         IRecentRequestStore? recentRequestStore = null,
@@ -351,7 +352,7 @@ public sealed class ModelRouterMiddlewareTests
             healthStore = health;
         }
 
-        forwarder ??= Substitute.For<IHttpForwarder>();
+        forwarder ??= Substitute.For<IInferenceHttpForwarder>();
 
         var modelGrants = Substitute.For<IModelGrantService>();
         modelGrants.IsModelAllowedAsync(Arg.Any<Guid>(), Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
@@ -394,7 +395,6 @@ public sealed class ModelRouterMiddlewareTests
             rateLimitResolver,
             rateLimitStore,
             forwarder,
-            new HttpMessageInvoker(new HttpClientHandler()),
             gatewayOptions,
             Substitute.For<IUpstreamBearerTokenResolver>(),
             NullLogger<ModelRouterMiddleware>.Instance);

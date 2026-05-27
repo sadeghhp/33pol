@@ -21,6 +21,7 @@ document.addEventListener('alpine:init', () => {
     toasts: [],
     _toastId: 0,
     _connectionTimer: null,
+    _loadingDepth: {},
 
     clearMessages() {
       this.error = '';
@@ -68,14 +69,24 @@ document.addEventListener('alpine:init', () => {
     },
 
     async withLoading(scope, message, fn) {
-      if (this.loading[scope]) return;
-      this.loading = { ...this.loading, [scope]: true };
-      this.loadingMessage = message || '';
+      const depth = (this._loadingDepth[scope] || 0) + 1;
+      this._loadingDepth[scope] = depth;
+      const first = depth === 1;
+      if (first) {
+        this.loading = { ...this.loading, [scope]: true };
+        this.loadingMessage = message || '';
+      }
       try {
         return await fn();
       } finally {
-        this.loading = { ...this.loading, [scope]: false };
-        if (!this.anyLoading()) this.loadingMessage = '';
+        const next = (this._loadingDepth[scope] || 1) - 1;
+        if (next <= 0) {
+          delete this._loadingDepth[scope];
+          this.loading = { ...this.loading, [scope]: false };
+          if (!this.anyLoading()) this.loadingMessage = '';
+        } else {
+          this._loadingDepth[scope] = next;
+        }
       }
     },
 

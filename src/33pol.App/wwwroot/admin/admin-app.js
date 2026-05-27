@@ -227,7 +227,7 @@ function adminApp() {
       return s ? '?' + s : '';
     },
 
-    setUsagePreset(days) {
+    async setUsagePreset(days) {
       const to = new Date();
       const from = new Date();
       if (days === 'mtd') {
@@ -237,6 +237,7 @@ function adminApp() {
       }
       this.usageTo = to.toISOString().slice(0, 10);
       this.usageFrom = from.toISOString().slice(0, 10);
+      if (this.apiKey) await this.applyUsageRange();
     },
 
     async copyText(text, successMsg) {
@@ -251,8 +252,8 @@ function adminApp() {
 
     sortToggle(table, key) {
       const s = this.sort[table];
-      if (s.key === key) s.dir = -s.dir;
-      else { s.key = key; s.dir = 1; }
+      const next = s.key === key ? { key, dir: -s.dir } : { key, dir: 1 };
+      this.sort = { ...this.sort, [table]: next };
     },
 
     sortIndicator(table, key) {
@@ -349,11 +350,15 @@ function adminApp() {
         else this.loadModels();
       }
       if (name === 'keys') this.loadKeys();
-      if (name === 'settings') {
-        if (!this.models?.length) this.fetchModels();
-        this.loadTenantGrants();
-      }
-      if (name === 'settings') this.loadConfigStatus();
+      if (name === 'settings') this.loadSettings();
+    },
+
+    async loadSettings() {
+      await this.runApi('settings', 'Loading settings…', async () => {
+        const tasks = [this.fetchTenantGrants(), this.fetchConfigStatus()];
+        if (!this.models?.length) tasks.unshift(this.fetchModels());
+        await Promise.all(tasks);
+      });
     },
 
     async loadOverviewData() {
@@ -393,6 +398,21 @@ function adminApp() {
           ((m.aliases || []).join(' ')).toLowerCase().includes(q));
       }
       return this.sortedList(list, 'models');
+    },
+
+    normalizeApiKeyRole(role) {
+      if (role === 'Admin' || role === 1) return 'Admin';
+      if (role === 'Both' || role === 2) return 'Both';
+      if (role === 'Inference' || role === 0) return 'Inference';
+      return role != null ? String(role) : 'Inference';
+    },
+
+    normalizeApiKeyList(list) {
+      return (list || []).map(k => ({
+        ...k,
+        role: this.normalizeApiKeyRole(k.role),
+        isRevoked: !!(k.isRevoked ?? k.revokedAt)
+      }));
     },
 
     filteredKeys() {
@@ -538,7 +558,7 @@ function adminApp() {
         });
         this.toast('Model access updated.');
         this.closeKeyAccessDrawer();
-        await this.loadKeys();
+        await this.fetchKeys();
       });
     },
 
@@ -620,10 +640,12 @@ function adminApp() {
       }
     },
 
+    async fetchConfigStatus() {
+      this.configStatus = await this.apiJson('/admin/api/config/status');
+    },
+
     async loadConfigStatus() {
-      await this.runApi('settings', 'Loading config…', async () => {
-        this.configStatus = await this.apiJson('/admin/api/config/status');
-      });
+      await this.runApi('settings', 'Loading config…', () => this.fetchConfigStatus());
     },
 
     confirmReloadConfig() {
@@ -644,8 +666,8 @@ function adminApp() {
           return;
         }
         this.toast(body?.message || 'Config reloaded from disk.');
-        await this.loadConfigStatus();
-        await this.loadModels();
+        await this.fetchConfigStatus();
+        await this.fetchModels();
         await this.loadBackends();
       });
     },
@@ -807,10 +829,13 @@ function adminApp() {
       }
     },
 
+    async fetchKeys() {
+      const list = (await this.apiJson('/admin/api/keys')) ?? [];
+      this.keys = this.normalizeApiKeyList(list);
+    },
+
     async loadKeys() {
-      await this.runApi('keys', 'Loading keys…', async () => {
-        this.keys = (await this.apiJson('/admin/api/keys')) ?? [];
-      });
+      await this.runApi('keys', 'Loading keys…', () => this.fetchKeys());
     },
 
     async createKey() {
@@ -825,7 +850,7 @@ function adminApp() {
           this.createdKey = body?.secret || '';
           this.keysCreatedAck = false;
           this.toast('API key created — copy the secret now.');
-          await this.loadKeys();
+          await this.fetchKeys();
         });
       } finally {
         this._createKeyInFlight = false;
@@ -847,7 +872,7 @@ function adminApp() {
       await this.runApi('keys', 'Revoking…', async () => {
         await this.store.apiFetch('/admin/api/keys/' + id + '/revoke', { method: 'POST' }, this.editModelUrl());
         this.toast('API key revoked.');
-        await this.loadKeys();
+        await this.fetchKeys();
       });
     },
 

@@ -1,7 +1,9 @@
+using System.Net;
 using Microsoft.AspNetCore.Http;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using Pol33.Proxy.Routing;
 using Yarp.ReverseProxy.Forwarder;
 
 namespace Pol33.Proxy.Forwarding;
@@ -37,8 +39,10 @@ public sealed class StreamingHttpTransformer : HttpTransformer
         string destinationPrefix,
         CancellationToken cancellationToken)
     {
-        await base.TransformRequestAsync(httpContext, proxyRequest, destinationPrefix, cancellationToken)
-            .ConfigureAwait(false);
+        proxyRequest.RequestUri = InferenceDestinationBuilder.BuildOutboundUri(
+            destinationPrefix,
+            httpContext.Request.Path,
+            httpContext.Request.QueryString);
 
         if (_stripClientAuthHeaders)
         {

@@ -19,8 +19,8 @@ public sealed class AdminUiIntegrationTests
         body.Should().Contain("href=\"admin.css?v=7\"");
         body.Should().Contain("src=\"admin-icons.js?v=7\"");
         body.Should().Contain("src=\"admin-errors.js?v=7\"");
-        body.Should().Contain("src=\"admin-store.js?v=7\"");
-        body.Should().Contain("src=\"admin-app.js?v=9\"");
+        body.Should().Contain("src=\"admin-store.js?v=8\"");
+        body.Should().Contain("src=\"admin-app.js?v=10\"");
         body.Should().Contain("openKeyAccess");
         body.Should().Contain("Tenant model access");
         body.Should().Contain("testModel(");
@@ -54,6 +54,7 @@ public sealed class AdminUiIntegrationTests
         var body = await response.Content.ReadAsStringAsync();
         body.Should().Contain("Alpine.store('admin'");
         body.Should().Contain("withLoading");
+        body.Should().Contain("_loadingDepth");
         body.Should().Contain("downloadBlob");
     }
 
@@ -102,6 +103,9 @@ public sealed class AdminUiIntegrationTests
         body.Should().Contain("/admin/api/summary");
         body.Should().Contain("modelWriteBody");
         body.Should().Contain("async fetchModels()");
+        body.Should().Contain("normalizeApiKeyList");
+        body.Should().Contain("async fetchKeys()");
+        body.Should().MatchRegex("async revokeKeyConfirmed\\(\\)[\\s\\S]*?await this\\.fetchKeys\\(\\)");
         body.Should().MatchRegex("async removeModel\\(id\\)[\\s\\S]*?await this\\.fetchModels\\(\\)");
         body.Should().Contain("testModel");
         body.Should().Contain("/models/");

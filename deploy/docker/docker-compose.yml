@@ -59,6 +59,7 @@ services:
       Gateway__Bootstrap__AdminApiKey: ${GATEWAY_ADMIN_API_KEY:-sk-33pol-dev-admin-key}
       Gateway__OperatorConsole__Enabled: "false"
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      DOTNET_SYSTEM_NET_HTTP_SOCKETSHTTPHANDLER_HTTP2SUPPORT: "false"
     volumes:
       # Directory mount: atomic rename works; single-file bind mounts often return EBUSY on save.
       - ./config:/app/config

@@ -60,9 +60,8 @@ internal static class GatewayWebApplicationFactory
 
                 if (upstreamHandler is not null)
                 {
-                    services.RemoveAll<HttpMessageInvoker>();
-                    services.AddSingleton(upstreamHandler);
-                    services.AddSingleton(sp => new HttpMessageInvoker(upstreamHandler, disposeHandler: false));
+                    services.AddHttpClient(Pol33.Core.Http.UpstreamHttpClientNames.Inference)
+                        .ConfigurePrimaryHttpMessageHandler(() => upstreamHandler);
                 }
             });
         });
@@ -107,9 +106,8 @@ internal static class GatewayWebApplicationFactory
 
                 if (upstreamHandler is not null)
                 {
-                    services.RemoveAll<HttpMessageInvoker>();
-                    services.AddSingleton(upstreamHandler);
-                    services.AddSingleton(_ => new HttpMessageInvoker(upstreamHandler, disposeHandler: false));
+                    services.AddHttpClient(Pol33.Core.Http.UpstreamHttpClientNames.Inference)
+                        .ConfigurePrimaryHttpMessageHandler(() => upstreamHandler);
                 }
             });
         });

@@ -34,8 +34,7 @@ public sealed class ModelRouterMiddleware
     private readonly BulkheadRegistry _bulkhead;
     private readonly IRateLimitPolicyResolver _rateLimitPolicyResolver;
     private readonly IDistributedRateLimitStore _rateLimitStore;
-    private readonly IHttpForwarder _forwarder;
-    private readonly HttpMessageInvoker _httpClient;
+    private readonly IInferenceHttpForwarder _forwarder;
     private readonly TimeSpan _forwardTimeout;
     private readonly IUpstreamBearerTokenResolver _upstreamBearerTokenResolver;
     private readonly ILogger<ModelRouterMiddleware> _logger;
@@ -55,8 +54,7 @@ public sealed class ModelRouterMiddleware
         BulkheadRegistry bulkhead,
         IRateLimitPolicyResolver rateLimitPolicyResolver,
         IDistributedRateLimitStore rateLimitStore,
-        IHttpForwarder forwarder,
-        HttpMessageInvoker httpClient,
+        IInferenceHttpForwarder forwarder,
         IOptions<GatewayOptions> options,
         IUpstreamBearerTokenResolver upstreamBearerTokenResolver,
         ILogger<ModelRouterMiddleware> logger)
@@ -76,7 +74,6 @@ public sealed class ModelRouterMiddleware
         _rateLimitPolicyResolver = rateLimitPolicyResolver;
         _rateLimitStore = rateLimitStore;
         _forwarder = forwarder;
-        _httpClient = httpClient;
         _forwardTimeout = TimeSpan.FromSeconds(options.Value.Resilience.ForwardTimeoutSeconds);
         _upstreamBearerTokenResolver = upstreamBearerTokenResolver;
         _logger = logger;
@@ -269,9 +266,9 @@ public sealed class ModelRouterMiddleware
                 error = await _forwarder.SendAsync(
                     context,
                     modelConfig.Url,
-                    _httpClient,
-                    ForwarderRequestConfig.Empty,
-                    transformer).ConfigureAwait(false);
+                    upstreamBearerToken,
+                    transformer,
+                    timeoutCts.Token).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested &&
                                                        !priorAborted.IsCancellationRequested)

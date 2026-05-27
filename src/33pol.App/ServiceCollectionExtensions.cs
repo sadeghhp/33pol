@@ -2,6 +2,7 @@ using Microsoft.Extensions.Options;
 using Pol33.App.DependencyInjection;
 using Pol33.Api.DependencyInjection;
 using Pol33.Core.Configuration;
+using Pol33.Core.Http;
 using Pol33.Billing.DependencyInjection;
 using Pol33.Policy.DependencyInjection;
 using Pol33.Proxy.DependencyInjection;
@@ -37,6 +38,10 @@ public static class ServiceCollectionExtensions
         services.AddGatewayRegistry();
         services.AddGatewayApi();
         services.AddGatewayProxy();
+        services.AddHttpClient(UpstreamHttpClientNames.Inference, client =>
+        {
+            client.Timeout = TimeSpan.FromSeconds(120);
+        });
 
         if (configuration.GetValue<bool>("Gateway:OperatorConsole:Enabled"))
         {

@@ -14,7 +14,7 @@ public sealed class AdminModelTestService(
     IUpstreamBearerTokenResolver tokenResolver,
     IHttpClientFactory httpClientFactory)
 {
-    public const string HttpClientName = "AdminModelTest";
+    public const string HttpClientName = Core.Http.UpstreamHttpClientNames.Inference;
 
     public const string DefaultPrompt = "ping";
 
