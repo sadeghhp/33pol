@@ -364,6 +364,8 @@ public sealed class ModelRouterMiddlewareTests
         requestTracker.BeginInferenceRequest(Arg.Any<string>(), Arg.Any<bool>())
             .Returns(_ => Substitute.For<IInferenceRequestScope>());
         recentRequestStore ??= Substitute.For<IRecentRequestStore>();
+        var usageRecorder = Substitute.For<IUsageRecorder>();
+        var metricsCollector = Substitute.For<IGatewayMetricsCollector>();
 
         var gatewayOptions = Options.Create(new GatewayOptions());
         var circuitBreakers = new ModelCircuitBreakerRegistry(gatewayOptions);
@@ -384,6 +386,8 @@ public sealed class ModelRouterMiddlewareTests
             errorWriter,
             requestTracker,
             recentRequestStore,
+            usageRecorder,
+            metricsCollector,
             circuitBreakers,
             bulkhead,
             rateLimitResolver,

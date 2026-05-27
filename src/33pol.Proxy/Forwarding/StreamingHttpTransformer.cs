@@ -11,12 +11,18 @@ public sealed class StreamingHttpTransformer : HttpTransformer
     private readonly bool _isStreaming;
     private readonly string? _clientModelName;
     private readonly string _canonicalModelId;
+    private readonly InferenceUsageCapture? _usageCapture;
 
-    public StreamingHttpTransformer(bool isStreaming, string? clientModelName, string canonicalModelId)
+    public StreamingHttpTransformer(
+        bool isStreaming,
+        string? clientModelName,
+        string canonicalModelId,
+        InferenceUsageCapture? usageCapture = null)
     {
         _isStreaming = isStreaming;
         _clientModelName = clientModelName;
         _canonicalModelId = canonicalModelId;
+        _usageCapture = usageCapture;
     }
 
     public override async ValueTask TransformRequestAsync(
@@ -55,8 +61,45 @@ public sealed class StreamingHttpTransformer : HttpTransformer
             httpContext.Response.Headers["X-Accel-Buffering"] = "no";
         }
 
+        if (_usageCapture is not null && proxyResponse?.Content is not null)
+        {
+            await PrepareUsageCapturingContentAsync(proxyResponse, cancellationToken).ConfigureAwait(false);
+        }
+
         return await base.TransformResponseAsync(httpContext, proxyResponse, cancellationToken)
             .ConfigureAwait(false);
+    }
+
+    private async Task PrepareUsageCapturingContentAsync(
+        HttpResponseMessage proxyResponse,
+        CancellationToken cancellationToken)
+    {
+        var contentType = proxyResponse.Content!.Headers.ContentType;
+        var originalStream = await proxyResponse.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+
+        if (_isStreaming)
+        {
+            var capturingStream = new UsageCapturingStream(
+                originalStream,
+                sseText => _usageCapture!.CaptureFromSseText(sseText));
+            proxyResponse.Content = new StreamContent(capturingStream);
+            if (contentType is not null)
+            {
+                proxyResponse.Content.Headers.ContentType = contentType;
+            }
+
+            return;
+        }
+
+        using var buffer = new MemoryStream();
+        await originalStream.CopyToAsync(buffer, cancellationToken).ConfigureAwait(false);
+        var body = buffer.ToArray();
+        _usageCapture!.CaptureFromJsonBody(body);
+        proxyResponse.Content = new ByteArrayContent(body);
+        if (contentType is not null)
+        {
+            proxyResponse.Content.Headers.ContentType = contentType;
+        }
     }
 
     public static string RewriteModelProperty(string json, string canonicalModelId)

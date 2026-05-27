@@ -26,4 +26,15 @@ public sealed class GatewayMetricsCollectorTests
 
         runtime.GetStats().Quota.Should().Be(1);
     }
+
+    [Fact]
+    public void RecordTokenUsage_DoesNotThrow()
+    {
+        var runtime = new GatewayRuntimeState();
+        var collector = new GatewayMetricsCollector(runtime);
+
+        var act = () => collector.RecordTokenUsage("m1", 3, 7);
+
+        act.Should().NotThrow();
+    }
 }

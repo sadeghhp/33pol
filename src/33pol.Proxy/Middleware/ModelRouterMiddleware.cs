@@ -8,7 +8,6 @@ using Pol33.Core.Configuration;
 using Pol33.Core.Errors;
 using Pol33.Core.Models;
 using Pol33.Core.Identity;
-using Pol33.Core.Models;
 using Pol33.Core.RateLimiting;
 using Pol33.Proxy.Errors;
 using Pol33.Proxy.Forwarding;
@@ -29,6 +28,8 @@ public sealed class ModelRouterMiddleware
     private readonly IErrorResponseWriter _errors;
     private readonly IRequestTracker _requestTracker;
     private readonly IRecentRequestStore _recentRequestStore;
+    private readonly IUsageRecorder _usageRecorder;
+    private readonly IGatewayMetricsCollector _metricsCollector;
     private readonly ModelCircuitBreakerRegistry _circuitBreakers;
     private readonly BulkheadRegistry _bulkhead;
     private readonly IRateLimitPolicyResolver _rateLimitPolicyResolver;
@@ -47,6 +48,8 @@ public sealed class ModelRouterMiddleware
         IErrorResponseWriter errors,
         IRequestTracker requestTracker,
         IRecentRequestStore recentRequestStore,
+        IUsageRecorder usageRecorder,
+        IGatewayMetricsCollector metricsCollector,
         ModelCircuitBreakerRegistry circuitBreakers,
         BulkheadRegistry bulkhead,
         IRateLimitPolicyResolver rateLimitPolicyResolver,
@@ -64,6 +67,8 @@ public sealed class ModelRouterMiddleware
         _errors = errors;
         _requestTracker = requestTracker;
         _recentRequestStore = recentRequestStore;
+        _usageRecorder = usageRecorder;
+        _metricsCollector = metricsCollector;
         _circuitBreakers = circuitBreakers;
         _bulkhead = bulkhead;
         _rateLimitPolicyResolver = rateLimitPolicyResolver;
@@ -109,6 +114,7 @@ public sealed class ModelRouterMiddleware
 
         if (!_registry.TryGetModel(requestInfo.Model, out var modelConfig) || modelConfig is null)
         {
+            _metricsCollector.RecordModelResolve("not_found");
             await context.WriteGatewayErrorAsync(
                 _errors.Write(
                     GatewayErrorCode.ModelNotFound,
@@ -116,6 +122,12 @@ public sealed class ModelRouterMiddleware
                 context.RequestAborted).ConfigureAwait(false);
             return;
         }
+
+        _metricsCollector.RecordModelResolve(
+            string.Equals(requestInfo.Model, modelConfig.Id, StringComparison.OrdinalIgnoreCase)
+                ? "resolved"
+                : "alias");
+        _metricsCollector.RecordInferenceRouted(modelConfig.Id, ClassifyRoute(context.Request.Path), requestInfo.Stream);
 
         if (_authState.IsAuthenticationRequired &&
             context.Items.TryGetValue(TenantContextKeys.HttpContextItemKey, out var tenantValue) &&
@@ -137,6 +149,7 @@ public sealed class ModelRouterMiddleware
 
         if (!_healthStore.IsBackendHealthy(modelConfig.Id))
         {
+            _metricsCollector.RecordForwardAttempt(modelConfig.Id, "backend_unhealthy");
             await context.WriteGatewayErrorAsync(
                 _errors.Write(
                     GatewayErrorCode.BackendUnhealthy,
@@ -147,6 +160,7 @@ public sealed class ModelRouterMiddleware
 
         if (!_circuitBreakers.TryEnter(modelConfig.Id))
         {
+            _metricsCollector.RecordForwardAttempt(modelConfig.Id, "circuit_open");
             await context.WriteGatewayErrorAsync(
                 _errors.Write(GatewayErrorCode.CircuitOpen),
                 context.RequestAborted).ConfigureAwait(false);
@@ -157,6 +171,7 @@ public sealed class ModelRouterMiddleware
         if (bulkheadLease is null)
         {
             _circuitBreakers.RecordFailure(modelConfig.Id);
+            _metricsCollector.RecordForwardAttempt(modelConfig.Id, "bulkhead_full");
             await context.WriteGatewayErrorAsync(
                 _errors.Write(
                     GatewayErrorCode.UpstreamError,
@@ -198,10 +213,27 @@ public sealed class ModelRouterMiddleware
             var started = DateTimeOffset.UtcNow;
             using var inferenceScope = _requestTracker.BeginInferenceRequest(modelConfig.Id, requestInfo.Stream);
 
+            var requestId = ResolveRequestId(context);
+            TenantContext? usageTenant = null;
+            if (context.Items.TryGetValue(TenantContextKeys.HttpContextItemKey, out var usageTenantValue) &&
+                usageTenantValue is TenantContext tenantContextForUsage)
+            {
+                usageTenant = tenantContextForUsage;
+            }
+
+            var usageCapture = new InferenceUsageCapture(
+                _usageRecorder,
+                _metricsCollector,
+                modelConfig.Id,
+                requestId,
+                started,
+                usageTenant);
+
             var transformer = new StreamingHttpTransformer(
                 requestInfo.Stream,
                 requestInfo.Model,
-                modelConfig.Id);
+                modelConfig.Id,
+                usageCapture);
 
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted);
             timeoutCts.CancelAfter(_forwardTimeout);
@@ -223,6 +255,7 @@ public sealed class ModelRouterMiddleware
             {
                 _circuitBreakers.RecordFailure(modelConfig.Id);
                 inferenceScope.SetOutcome(false, "upstream_timeout");
+                _metricsCollector.RecordForwardAttempt(modelConfig.Id, "upstream_timeout");
                 if (!context.Response.HasStarted)
                 {
                     await context.WriteGatewayErrorAsync(
@@ -243,12 +276,14 @@ public sealed class ModelRouterMiddleware
             {
                 _circuitBreakers.RecordSuccess(modelConfig.Id);
                 inferenceScope.SetOutcome(true);
+                _metricsCollector.RecordForwardAttempt(modelConfig.Id, "success");
                 RecordRecentRequest(context, modelConfig.Id, started, requestInfo.Stream, success: true);
                 return;
             }
 
             _circuitBreakers.RecordFailure(modelConfig.Id);
             inferenceScope.SetOutcome(false, "upstream_error");
+            _metricsCollector.RecordForwardAttempt(modelConfig.Id, "upstream_error");
             if (!context.Response.HasStarted)
             {
                 _logger.LogWarning("Forwarder error {Error} for model {ModelId}", error, modelConfig.Id);
@@ -276,9 +311,7 @@ public sealed class ModelRouterMiddleware
         bool isStreaming,
         bool success)
     {
-        var requestId = context.Items.TryGetValue(RequestIdKeys.HttpContextItemKey, out var rid)
-            ? rid?.ToString() ?? Guid.NewGuid().ToString("N")
-            : Guid.NewGuid().ToString("N");
+        var requestId = ResolveRequestId(context);
 
         string? tenantId = null;
         if (context.Items.TryGetValue(TenantContextKeys.HttpContextItemKey, out var tenantValue) &&
@@ -302,6 +335,32 @@ public sealed class ModelRouterMiddleware
             IsStreaming = isStreaming,
             TimestampUtc = DateTimeOffset.UtcNow,
         });
+    }
+
+    private static string ResolveRequestId(HttpContext context) =>
+        context.Items.TryGetValue(RequestIdKeys.HttpContextItemKey, out var rid)
+            ? rid?.ToString() ?? Guid.NewGuid().ToString("N")
+            : Guid.NewGuid().ToString("N");
+
+    private static string ClassifyRoute(PathString path)
+    {
+        var value = path.Value ?? string.Empty;
+        if (value.EndsWith("/v1/chat/completions", StringComparison.OrdinalIgnoreCase))
+        {
+            return "chat";
+        }
+
+        if (value.EndsWith("/v1/completions", StringComparison.OrdinalIgnoreCase))
+        {
+            return "completions";
+        }
+
+        if (value.EndsWith("/v1/embeddings", StringComparison.OrdinalIgnoreCase))
+        {
+            return "embeddings";
+        }
+
+        return "unknown";
     }
 
     private static string ResolveRateLimitPartitionKey(HttpContext context) =>

@@ -37,5 +37,5 @@ export default function () {
     "status is 200": (r) => r.status === 200,
   });
 
-  sleep(0.1);
+  sleep(Number(__ENV.K6_SLEEP_SEC || 0.1));
 }

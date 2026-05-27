@@ -32,6 +32,15 @@ public static class GatewayMeters
     public static readonly Counter<long> UsageParseFailures =
         Meter.CreateCounter<long>("gateway_usage_parse_failures_total");
 
+    public static readonly Counter<long> InferenceRoute =
+        Meter.CreateCounter<long>("gateway_inference_route_total");
+
+    public static readonly Counter<long> ForwardAttempts =
+        Meter.CreateCounter<long>("gateway_forward_attempts_total");
+
+    public static readonly Counter<long> ModelResolve =
+        Meter.CreateCounter<long>("gateway_model_resolve_total");
+
     public static readonly UpDownCounter<long> UsageWriterQueueDepth =
         Meter.CreateUpDownCounter<long>("gateway_usage_writer_queue_depth");
 

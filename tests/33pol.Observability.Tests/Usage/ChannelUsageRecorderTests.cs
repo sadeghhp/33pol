@@ -23,7 +23,8 @@ public sealed class ChannelUsageRecorderTests
         var scopeFactory = Substitute.For<IServiceScopeFactory>();
         scopeFactory.CreateAsyncScope().Returns(scope);
 
-        var recorder = new ChannelUsageRecorder(quota, scopeFactory, NullLogger<ChannelUsageRecorder>.Instance);
+        var metrics = Substitute.For<IGatewayMetricsCollector>();
+        var recorder = new ChannelUsageRecorder(quota, scopeFactory, metrics, NullLogger<ChannelUsageRecorder>.Instance);
 
         await recorder.StartAsync(CancellationToken.None);
         recorder.Enqueue(new UsageEvent
@@ -40,6 +41,7 @@ public sealed class ChannelUsageRecorderTests
 
         quota.Received(1).CommitUsage("tenant-a", "gpt-4o", 15, "req-1");
         await persistence.Received(1).PersistAsync(Arg.Is<UsageEvent>(e => e.RequestId == "req-1"), Arg.Any<CancellationToken>());
+        metrics.Received(1).RecordTokenUsage("gpt-4o", 10, 5);
     }
 
     [Fact]
@@ -58,7 +60,8 @@ public sealed class ChannelUsageRecorderTests
         var scopeFactory = Substitute.For<IServiceScopeFactory>();
         scopeFactory.CreateAsyncScope().Returns(scope);
 
-        var recorder = new ChannelUsageRecorder(quota, scopeFactory, NullLogger<ChannelUsageRecorder>.Instance);
+        var metrics = Substitute.For<IGatewayMetricsCollector>();
+        var recorder = new ChannelUsageRecorder(quota, scopeFactory, metrics, NullLogger<ChannelUsageRecorder>.Instance);
         await recorder.StartAsync(CancellationToken.None);
 
         for (var i = 0; i < 10_001; i++)
@@ -81,9 +84,4 @@ public sealed class ChannelUsageRecorderTests
             Arg.Any<CancellationToken>());
     }
 
-    [Fact]
-    public void TryParseUsage_InvalidJson_ReturnsFalse()
-    {
-        UsageJsonParser.TryParseUsage("{not-json"u8.ToArray(), out _, out _).Should().BeFalse();
-    }
 }

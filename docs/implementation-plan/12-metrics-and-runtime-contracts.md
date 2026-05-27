@@ -54,7 +54,7 @@
 
 | Metric | Type | Labels | Phase |
 |--------|------|--------|-------|
-| `gateway_tokens_total` | Counter | `model`, `direction` | 4 |
+| `gateway_tokens_total` | Counter | `model`, `direction` (`input`, `output`, `total`) | 4 |
 | `gateway_usage_parse_failures_total` | Counter | `model` | 4 |
 | `gateway_usage_writer_queue_depth` | Gauge | — | 5 |
 | `gateway_usage_writer_dropped_total` | Counter | — | 5 |

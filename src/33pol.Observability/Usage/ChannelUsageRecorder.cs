@@ -23,21 +23,29 @@ public sealed class ChannelUsageRecorder : IUsageRecorder, IHostedService
 
     private readonly IQuotaService _quotaService;
     private readonly IServiceScopeFactory _scopeFactory;
+    private readonly IGatewayMetricsCollector _metricsCollector;
     private readonly ILogger<ChannelUsageRecorder> _logger;
     private Task? _worker;
 
     public ChannelUsageRecorder(
         IQuotaService quotaService,
         IServiceScopeFactory scopeFactory,
+        IGatewayMetricsCollector metricsCollector,
         ILogger<ChannelUsageRecorder> logger)
     {
         _quotaService = quotaService;
         _scopeFactory = scopeFactory;
+        _metricsCollector = metricsCollector;
         _logger = logger;
     }
 
     public void Enqueue(UsageEvent usageEvent)
     {
+        _metricsCollector.RecordTokenUsage(
+            usageEvent.ModelId,
+            usageEvent.PromptTokens,
+            usageEvent.CompletionTokens);
+
         var wasFull = _channel.Reader.CanCount && _channel.Reader.Count >= ChannelCapacity;
 
         if (!_channel.Writer.TryWrite(usageEvent))
@@ -88,11 +96,6 @@ public sealed class ChannelUsageRecorder : IUsageRecorder, IHostedService
             await using var scope = _scopeFactory.CreateAsyncScope();
             var persistence = scope.ServiceProvider.GetRequiredService<IUsagePersistenceHandler>();
             await persistence.PersistAsync(usage, cancellationToken).ConfigureAwait(false);
-
-            GatewayMeters.TokensTotal.Add(
-                totalTokens,
-                new KeyValuePair<string, object?>("model", usage.ModelId),
-                new KeyValuePair<string, object?>("direction", "total"));
         }
     }
 }

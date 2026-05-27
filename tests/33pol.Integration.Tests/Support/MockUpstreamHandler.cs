@@ -26,7 +26,14 @@ internal sealed class MockUpstreamHandler : HttpMessageHandler
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(
-                    "data: {\"id\":\"chunk-1\"}\n\ndata: [DONE]\n\n",
+                    """
+                    data: {"id":"chunk-1","choices":[]}
+
+                    data: {"usage":{"prompt_tokens":8,"completion_tokens":2}}
+
+                    data: [DONE]
+
+                    """,
                     Encoding.UTF8,
                     "text/event-stream"),
             };
@@ -35,7 +42,14 @@ internal sealed class MockUpstreamHandler : HttpMessageHandler
         return new HttpResponseMessage(HttpStatusCode.OK)
         {
             Content = new StringContent(
-                """{"id":"upstream-1","object":"chat.completion","model":"local-mock"}""",
+                """
+                {
+                  "id": "upstream-1",
+                  "object": "chat.completion",
+                  "model": "local-mock",
+                  "usage": { "prompt_tokens": 12, "completion_tokens": 6 }
+                }
+                """,
                 Encoding.UTF8,
                 "application/json"),
         };

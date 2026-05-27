@@ -13,7 +13,9 @@ Docker Compose auto-provisions **33pol Gateway** under the Grafana folder **33po
 - URL: http://localhost:3000/d/33pol-gateway/33pol-gateway
 - Source: [deploy/grafana/dashboards/33pol-gateway.json](../deploy/grafana/dashboards/33pol-gateway.json)
 
-Rows: overview (RPS, error rate, p99, streams, healthy backends), RED, streaming/policy, FinOps/usage writer, backend health. Use the **Model** variable to filter.
+Rows: overview (RPS, error rate, p99, streams, healthy backends), RED, streaming/policy, FinOps/usage writer (tokens by `direction`: `input`, `output`, `total`), backend health. Use the **Model** variable to filter.
+
+Token metrics are recorded when upstream `usage` is parsed on the inference path (`IUsageRecorder`). See [13-grafana-business-metrics.md](implementation-plan/13-grafana-business-metrics.md) for the traffic dashboard plan.
 
 After changing the JSON or datasource provisioning, restart Grafana: `docker compose restart grafana`.
 

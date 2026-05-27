@@ -1,0 +1,111 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": { "type": "grafana", "uid": "-- Grafana --" },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "id": 100,
+      "type": "row",
+      "title": "Traffic & routing",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "panels": []
+    },
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Inference route / s",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 1 },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true } },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (route, stream) (rate(gateway_inference_route_total{model=~\"$model\"}[5m]))",
+          "legendFormat": "{{route}} stream={{stream}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Forward outcomes / s",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 1 },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true } },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (model, outcome) (rate(gateway_forward_attempts_total{model=~\"$model\"}[5m]))",
+          "legendFormat": "{{model}} {{outcome}}"
+        }
+      ]
+    },
+    {
+      "id": 101,
+      "type": "row",
+      "title": "Tokens",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 8 },
+      "panels": []
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Tokens / s (input vs output)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 9 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true } },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (model, direction) (rate(gateway_tokens_total{model=~\"$model\", direction=~\"input|output\"}[5m]))",
+          "legendFormat": "{{model}} {{direction}}"
+        }
+      ]
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 39,
+  "style": "dark",
+  "tags": ["33pol", "traffic"],
+  "templating": {
+    "list": [
+      {
+        "name": "model",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "definition": "label_values(gateway_inference_requests_total, model)",
+        "query": { "query": "label_values(gateway_inference_requests_total, model)", "refId": "PrometheusVariableQueryEditor-VariableQuery" },
+        "includeAll": true,
+        "multi": true,
+        "current": { "selected": true, "text": "All", "value": "$__all" }
+      }
+    ]
+  },
+  "time": { "from": "now-30m", "to": "now" },
+  "timepicker": {},
+  "timezone": "",
+  "title": "33pol Gateway — Traffic & tokens",
+  "uid": "33pol-gateway-traffic",
+  "version": 1,
+  "weekStart": ""
+}

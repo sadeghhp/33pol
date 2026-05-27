@@ -1,5 +1,5 @@
 import http from "k6/http";
-import { check } from "k6";
+import { check, sleep } from "k6";
 import { chatCompletionPayload, jsonHeaders } from "../lib/helpers.js";
 
 const baseUrl = __ENV.BASE_URL || "http://localhost:8080";
@@ -12,7 +12,7 @@ export const options = {
     streaming: {
       executor: "constant-vus",
       vus,
-      duration: "3m",
+      duration: __ENV.STREAM_DURATION || "3m",
     },
   },
   thresholds: {
@@ -39,4 +39,6 @@ export default function () {
       (r.headers["Content-Type"] || "").includes("text/event-stream"),
     "body has data chunks": (r) => r.body && r.body.includes("data:"),
   });
+
+  sleep(Number(__ENV.K6_SLEEP_SEC || 0));
 }
