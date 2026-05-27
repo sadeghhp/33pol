@@ -1,6 +1,8 @@
 <div align="center">
 
-# 33pol
+<img src="./docs/assets/33pol-logo.png" alt="33pol — OpenAI-compatible LLM gateway (Si-o-se Pol, Isfahan)" width="128" />
+
+<br/>
 
 **OpenAI-compatible LLM gateway for .NET 10**
 
