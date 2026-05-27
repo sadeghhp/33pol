@@ -12,7 +12,7 @@ public sealed class AdminUiSecurityTests
         await using var factory = GatewayWebApplicationFactory.CreateWithInMemoryDatabase();
         var client = factory.CreateClient();
 
-        var response = await client.GetAsync("/admin/admin-app.js?v=4");
+        var response = await client.GetAsync("/admin/admin-app.js?v=5");
         response.StatusCode.Should().Be(HttpStatusCode.OK);
 
         var body = await response.Content.ReadAsStringAsync();
@@ -29,7 +29,7 @@ public sealed class AdminUiSecurityTests
         await using var factory = GatewayWebApplicationFactory.CreateWithInMemoryDatabase();
         var client = factory.CreateClient();
 
-        var response = await client.GetAsync("/admin/admin-app.js?v=4");
+        var response = await client.GetAsync("/admin/admin-app.js?v=5");
 
         response.Headers.CacheControl?.ToString().Should().Contain("no-store");
     }
@@ -40,7 +40,7 @@ public sealed class AdminUiSecurityTests
         await using var factory = GatewayWebApplicationFactory.CreateWithInMemoryDatabase();
         var client = factory.CreateClient();
 
-        var response = await client.GetAsync("/admin/admin-app.js?v=4");
+        var response = await client.GetAsync("/admin/admin-app.js?v=5");
         var body = await response.Content.ReadAsStringAsync();
 
         body.Should().Contain("downloadBlob");

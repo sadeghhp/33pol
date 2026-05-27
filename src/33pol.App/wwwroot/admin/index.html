@@ -4,10 +4,10 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>33pol Admin</title>
-  <link rel="stylesheet" href="admin.css?v=4" />
-  <script defer src="admin-errors.js?v=4"></script>
-  <script defer src="admin-store.js?v=4"></script>
-  <script defer src="admin-app.js?v=4"></script>
+  <link rel="stylesheet" href="admin.css?v=5" />
+  <script defer src="admin-errors.js?v=5"></script>
+  <script defer src="admin-store.js?v=5"></script>
+  <script defer src="admin-app.js?v=5"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.9/dist/cdn.min.js"></script>
 </head>
 <body x-data="adminApp()" x-init="init()" x-cloak @keydown.window="onModalKeydown($event)">
@@ -50,18 +50,25 @@
     </aside>
 
     <div class="app-main">
-      <header class="app-header">
+      <header class="app-header" :class="{ 'auth-fail': connectionStatus === 'fail' }">
         <div class="header-auth">
-          <span class="muted" x-show="store.keyPrefix()" x-text="'Key ' + store.keyPrefix()"></span>
-          <span x-show="connectionStatus === 'ok'" class="status-chip ok">Connected</span>
-          <span x-show="connectionStatus === 'fail'" class="status-chip fail">Invalid key</span>
-          <span x-show="connectionDegraded && connectionStatus === 'ok'" class="status-chip warn">Session check failed</span>
-          <button type="button" class="action ghost" @click="showChangeKey = !showChangeKey">Change key</button>
-          <button type="button" class="action ghost" @click="clearSession()">Sign out</button>
+          <div class="header-auth-meta">
+            <span class="key-label" x-show="store.keyPrefix()">
+              <span class="muted">Key</span>
+              <code class="key-prefix" x-text="store.keyPrefix()"></code>
+            </span>
+            <span x-show="connectionStatus === 'ok'" class="status-chip ok">Connected</span>
+            <span x-show="connectionStatus === 'fail'" class="status-chip fail">Invalid key</span>
+            <span x-show="connectionDegraded && connectionStatus === 'ok'" class="status-chip warn">Session check failed</span>
+          </div>
+          <div class="header-auth-actions">
+            <button type="button" class="action ghost" @click="showChangeKey = !showChangeKey">Change key</button>
+            <button type="button" class="action ghost" @click="clearSession()">Sign out</button>
+          </div>
         </div>
       </header>
 
-      <div class="card" x-show="showChangeKey" style="margin: 1rem 1.5rem 0;">
+      <div class="card change-key-panel" x-show="showChangeKey">
         <label for="header-apiKey">Admin API key</label>
         <div class="key-row">
           <input id="header-apiKey" :type="showApiKey ? 'text' : 'password'" x-model="apiKey" @keydown.enter.prevent="saveKey()" autocomplete="off" />
@@ -71,17 +78,15 @@
 
       <div id="global-alert" class="global-alert error-banner" role="alert" aria-live="assertive"
         x-show="error" x-transition.opacity>
-        <div class="global-alert-header">
-          <div class="error">
-            <strong x-text="errorTitle || 'Error'"></strong>
-            <p x-text="error"></p>
-            <details x-show="errorDetail">
-              <summary>Technical details</summary>
-              <pre x-text="errorDetail"></pre>
-            </details>
-          </div>
-          <button type="button" class="action secondary" @click="clearMessages()">Dismiss</button>
+        <div class="global-alert-body">
+          <strong x-text="errorTitle || 'Error'"></strong>
+          <p x-text="error"></p>
+          <details x-show="errorDetail" class="global-alert-details">
+            <summary>Technical details</summary>
+            <pre x-text="errorDetail"></pre>
+          </details>
         </div>
+        <button type="button" class="action ghost" @click="clearMessages()">Dismiss</button>
       </div>
 
       <main class="page-content" role="main">
@@ -94,8 +99,9 @@
               title="Refresh">↻ Refresh</button>
           </div>
           <p class="muted" x-show="summaryUpdatedAt">Updated <span x-text="summaryAgeText()"></span> · polls every 2s while visible</p>
-          <p class="stale-banner" x-show="overviewStale" role="status">Dashboard data may be stale — last update failed. Check your connection.</p>
-          <div class="toolbar" x-show="healthLive !== null">
+          <p class="stale-banner" x-show="overviewStale && connectionStatus !== 'fail'" role="status">Dashboard data may be stale — last update failed. Check your connection.</p>
+          <p class="auth-hint" x-show="connectionStatus === 'fail'" role="status">Your admin API key was rejected. Use <strong>Change key</strong> above to sign in again.</p>
+          <div class="status-row" x-show="healthLive !== null">
             <span class="status-chip" :class="healthLive ? 'ok' : 'fail'" x-text="healthLive ? 'Live' : 'Live down'"></span>
             <span class="status-chip" :class="healthReady ? 'ok' : 'fail'" x-text="healthReady ? 'Ready' : 'Not ready'"></span>
           </div>
@@ -123,7 +129,7 @@
                   <tr :class="requestStatusClass(r.statusCode)">
                     <td x-text="formatTime(r.timestampUtc)"></td>
                     <td x-text="r.method"></td>
-                    <td x-text="r.path"></td>
+                    <td class="col-truncate" x-text="r.path" :title="r.path"></td>
                     <td x-text="r.modelId ?? '—'"></td>
                     <td x-text="r.statusCode"></td>
                     <td x-text="r.durationMs?.toFixed?.(0) ?? r.durationMs"></td>
@@ -208,8 +214,8 @@
 
           <div x-show="routingSubTab === 'backends'">
             <div class="toolbar">
-              <label style="flex:1;max-width:20rem;margin:0">Filter
-                <input x-model="backendsFilter" placeholder="model, url, alias…" style="margin-bottom:0" />
+              <label class="filter-field">Filter
+                <input x-model="backendsFilter" placeholder="model, url, alias…" />
               </label>
               <button type="button" class="action secondary" @click="loadBackends()" :disabled="isLoading('routingBackends')">Refresh</button>
             </div>
@@ -239,8 +245,8 @@
 
           <div x-show="routingSubTab === 'models'">
             <div class="toolbar">
-              <label style="flex:1;max-width:16rem;margin:0">Search
-                <input x-model="modelsFilter" placeholder="id, url, alias…" style="margin-bottom:0" />
+              <label class="filter-field filter-field-narrow">Search
+                <input x-model="modelsFilter" placeholder="id, url, alias…" />
               </label>
               <button type="button" class="action" @click="openModelDrawer()">Add model</button>
               <button type="button" class="action secondary" @click="loadModels()" :disabled="isLoading('routingModels')">Refresh</button>
@@ -257,18 +263,18 @@
                 <tbody>
                   <template x-for="m in filteredModelsList()" :key="m.id">
                     <tr>
-                      <td>
+                      <td class="cell-code">
                         <code x-text="m.id"></code>
-                        <button type="button" class="action ghost icon" @click="copyText(m.id,'ID copied.')" title="Copy">⎘</button>
+                        <button type="button" class="action ghost icon" @click="copyText(m.id,'ID copied.')" title="Copy ID" aria-label="Copy ID">⎘</button>
                       </td>
-                      <td>
+                      <td class="cell-code">
                         <code x-text="m.url"></code>
-                        <button type="button" class="action ghost icon" @click="copyText(m.url,'URL copied.')" title="Copy">⎘</button>
+                        <button type="button" class="action ghost icon" @click="copyText(m.url,'URL copied.')" title="Copy URL" aria-label="Copy URL">⎘</button>
                       </td>
                       <td x-text="(m.aliases || []).join(', ') || '—'"></td>
                       <td x-text="m.maxContextLength"></td>
                       <td x-text="m.hasUpstreamCredential ? 'stored' : '—'"></td>
-                      <td>
+                      <td class="cell-actions">
                         <button type="button" class="action ghost" @click="openModelDrawer(m)">Edit</button>
                         <button type="button" class="action danger" @click="confirmRemoveModel(m.id)">Remove</button>
                       </td>
@@ -288,8 +294,8 @@
             <button type="button" class="action" @click="openKeysDrawer()">Create key</button>
           </div>
           <div class="toolbar">
-            <label style="margin:0">Show
-              <select x-model="keysFilter" style="width:auto;margin-bottom:0">
+            <label class="filter-field filter-field-inline">Show
+              <select class="inline-select" x-model="keysFilter">
                 <option value="active">Active only</option>
                 <option value="revoked">Revoked only</option>
                 <option value="all">All</option>
@@ -312,7 +318,9 @@
                   <tr>
                     <td x-text="k.keyPrefix"></td><td x-text="k.role"></td>
                     <td x-text="formatTime(k.createdAt)"></td>
-                    <td x-text="k.isRevoked ? 'revoked' : 'active'"></td>
+                    <td>
+                      <span class="status-chip" :class="k.isRevoked ? 'fail' : 'ok'" x-text="k.isRevoked ? 'revoked' : 'active'"></span>
+                    </td>
                     <td>
                       <button type="button" class="action danger" x-show="!k.isRevoked" @click="confirmRevoke(k.id)">Revoke</button>
                     </td>
@@ -371,9 +379,15 @@
       <label>Model name <input x-model="editModel.id" :disabled="!!editModel._existing" autocomplete="off" /></label>
       <label>Upstream URL <input x-model="editModel.url" placeholder="https://openrouter.ai/api or http://host.docker.internal:1234" autocomplete="off" /></label>
       <p class="hint">When the gateway runs in Docker, use <code>host.docker.internal</code> instead of <code>localhost</code> for local upstreams.</p>
-      <label x-text="editModel._existing ? 'New API key (leave blank to keep current)' : 'API key (optional)'">
-        <input type="password" x-model="editModel.apiKey" autocomplete="new-password" placeholder="sk-…" />
+      <label for="model-upstream-api-key">
+        <span x-text="editModel._existing ? 'New API key (leave blank to keep current)' : 'API key (optional)'"></span>
+        <input id="model-upstream-api-key" :type="showModelApiKey ? 'text' : 'password'" x-model="editModel.apiKey"
+          autocomplete="new-password" placeholder="sk-or-… (OpenRouter) or sk-…" />
       </label>
+      <div class="key-row">
+        <button type="button" class="action secondary" @click="showModelApiKey = !showModelApiKey"
+          x-text="showModelApiKey ? 'Hide' : 'Show'"></button>
+      </div>
       <p class="hint" x-show="editModel._existing && editModel.hasUpstreamCredential && !(editModel.apiKey || '').trim()">Credential stored on gateway. Enter a new key above to rotate.</p>
       <label class="checkbox" x-show="editModel._existing && editModel.hasUpstreamCredential">
         <input type="checkbox" x-model="editModel.clearApiKey" /> Remove stored API key
@@ -412,7 +426,7 @@
       <template x-if="createdKey">
         <div>
           <p><strong>Copy now — shown once:</strong></p>
-          <code x-text="createdKey"></code>
+          <code class="secret-display" x-text="createdKey"></code>
           <div class="toolbar">
             <button type="button" class="action" @click="copyText(createdKey,'Secret copied.')">Copy</button>
           </div>

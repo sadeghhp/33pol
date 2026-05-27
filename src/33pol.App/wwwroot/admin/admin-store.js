@@ -183,6 +183,7 @@ document.addEventListener('alpine:init', () => {
       } catch {
         this.connectionStatus = 'fail';
         this.connectionDegraded = true;
+        if (this.errorTitle === 'Authentication failed') this.clearMessages();
         return false;
       }
     },

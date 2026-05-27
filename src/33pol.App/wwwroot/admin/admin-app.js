@@ -9,6 +9,7 @@ function adminApp() {
     tab: 'dashboard',
     routingSubTab: 'models',
     showApiKey: false,
+    showModelApiKey: false,
     showChangeKey: false,
     poll: null,
     summary: null,
@@ -152,6 +153,10 @@ function adminApp() {
     handleCatch(e, options) {
       if (options?.localOnly || (e.section && !e.global)) return;
       if (e.global !== false) {
+        const isAuth =
+          e.title === 'Authentication failed' ||
+          /admin API key/i.test(e.message || '');
+        if (isAuth && this.connectionStatus === 'fail') return;
         this.store.setGlobalError(e.title || 'Error', e.message || String(e), e.detail);
       }
     },

@@ -16,13 +16,16 @@ public sealed class AdminUiIntegrationTests
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var body = await response.Content.ReadAsStringAsync();
         body.Should().Contain("33pol Gateway Admin");
-        body.Should().Contain("href=\"admin.css?v=4\"");
-        body.Should().Contain("src=\"admin-errors.js?v=4\"");
-        body.Should().Contain("src=\"admin-store.js?v=4\"");
-        body.Should().Contain("src=\"admin-app.js?v=4\"");
+        body.Should().Contain("href=\"admin.css?v=5\"");
+        body.Should().Contain("src=\"admin-errors.js?v=5\"");
+        body.Should().Contain("src=\"admin-store.js?v=5\"");
+        body.Should().Contain("src=\"admin-app.js?v=5\"");
         body.Should().NotContain("Discover from provider");
-        body.Should().Contain("type=\"password\"");
+        body.Should().Contain("id=\"model-upstream-api-key\"");
         body.Should().Contain("x-model=\"editModel.apiKey\"");
+        body.Should().NotMatchRegex(@"<label[^>]*x-text=[^>]*>[\s\S]*?x-model=""editModel\.apiKey""");
+        body.Should().Contain("auth-hint");
+        body.Should().Contain("showModelApiKey");
         body.Should().Contain("x-cloak");
         body.Should().Contain("role=\"tabpanel\"");
         body.Should().Contain("app-shell");
@@ -72,6 +75,8 @@ public sealed class AdminUiIntegrationTests
         body.Should().Contain(":root");
         body.Should().Contain("--accent");
         body.Should().Contain("app-shell");
+        body.Should().Contain(".auth-hint");
+        body.Should().Contain(".cell-code");
     }
 
     [Fact]

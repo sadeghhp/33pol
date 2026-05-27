@@ -15,7 +15,7 @@ Files under `src/33pol.App/wwwroot/admin/` (served at `/admin/`):
 | `admin-app.js` | `adminApp()` — navigation and feature logic |
 | (CDN) | Alpine.js 3.x |
 
-**Load order:** `admin.css` → `admin-errors.js` → `admin-store.js` → `admin-app.js` → Alpine (all deferred). Query `?v=4` on static assets busts caches after upgrades.
+**Load order:** `admin.css` → `admin-errors.js` → `admin-store.js` → `admin-app.js` → Alpine (all deferred). Query `?v=5` on static assets busts caches after upgrades.
 
 **Cache:** `/admin/*` static files are served with `Cache-Control: no-store`.
 
@@ -42,7 +42,7 @@ Files under `src/33pol.App/wwwroot/admin/` (served at `/admin/`):
 
 | Situation | Where shown |
 |-----------|-------------|
-| Invalid admin key (401) | Global banner + header chip |
+| Invalid admin key (401) | Header chip + inline hint (no duplicate global banner) |
 | Network / gateway unreachable | Global banner |
 | Model save validation | Inline in model drawer |
 | Success actions | Toast (top-right, auto-dismiss) |
@@ -91,7 +91,7 @@ Rotating **KeyPepper** invalidates stored upstream secrets — re-enter API keys
 |---------|--------|-----|
 | 400 on save with `envVar` in JSON | Secret pasted as env var name | Use quick-add **API key** field, or a valid name like `OPENROUTER_API_KEY` in file-based config |
 | Upstream 401 | Missing or wrong stored key | Edit model → set new API key; verify `hasUpstreamCredential` on GET |
-| Stale UI after upgrade | Cached admin assets | Hard refresh; assets use `?v=4` |
+| Stale UI after upgrade | Cached admin assets | Hard refresh; assets use `?v=5` |
 | Docker local LLM fails | Used `localhost` in URL | Use `http://host.docker.internal:<port>` |
 
 ## Security audit (strict)
