@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
+using Pol33.Api;
 using Pol33.Api.Contracts;
 using Pol33.Api.Services;
 using Pol33.Core.Abstractions;
@@ -65,7 +66,7 @@ public static class AdminControlPlaneEndpoints
             return Results.BadRequest(new { message = "Request body must include model." });
         }
 
-        var result = await provisioning.UpdateAsync(id, request, cancellationToken).ConfigureAwait(false);
+        var result = await provisioning.UpdateAsync(AdminModelRouteId.Decode(id), request, cancellationToken).ConfigureAwait(false);
         return Results.Json(result, statusCode: result.SuggestedStatusCode);
     }
 
@@ -74,7 +75,7 @@ public static class AdminControlPlaneEndpoints
         string id,
         CancellationToken cancellationToken)
     {
-        var result = await commands.RemoveModelAsync(id, cancellationToken).ConfigureAwait(false);
+        var result = await commands.RemoveModelAsync(AdminModelRouteId.Decode(id), cancellationToken).ConfigureAwait(false);
         return Results.Json(result, statusCode: result.SuggestedStatusCode);
     }
 
@@ -84,7 +85,7 @@ public static class AdminControlPlaneEndpoints
         [FromBody] AdminModelTestRequest? request,
         CancellationToken cancellationToken)
     {
-        var result = await testService.TestAsync(id, request, cancellationToken).ConfigureAwait(false);
+        var result = await testService.TestAsync(AdminModelRouteId.Decode(id), request, cancellationToken).ConfigureAwait(false);
         return Results.Json(result, statusCode: result.SuggestedStatusCode);
     }
 }

@@ -699,16 +699,20 @@ function adminApp() {
     },
 
     async removeModel(id) {
-      await this.runApi('routingModels', 'Removing…', async () => {
-        const body = await this.apiJson('/admin/api/models/' + encodeURIComponent(id), { method: 'DELETE' });
-        if (body?.success === false) {
-          this.store.setGlobalError('Remove failed', body.message || 'Could not remove model.');
-          return;
-        }
-        this.toast(body?.message || 'Model removed.');
-        await this.loadModels();
-        await this.loadBackends();
-      });
+      try {
+        await this.runApi('routingModels', 'Removing…', async () => {
+          const body = await this.apiJson('/admin/api/models/' + encodeURIComponent(id), { method: 'DELETE' });
+          if (body?.success === false) {
+            this.toast(body.message || 'Could not remove model.', 'error');
+            return;
+          }
+          this.toast(body?.message || 'Model removed.');
+          await this.loadModels();
+          await this.loadBackends();
+        }, { localOnly: true });
+      } catch (e) {
+        this.toast(e.message || 'Could not remove model.', 'error');
+      }
     },
 
     async loadKeys() {

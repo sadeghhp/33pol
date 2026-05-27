@@ -104,6 +104,42 @@ public sealed class AdminModelTestEndpointTests
     }
 
     [Fact]
+    public async Task PostModelTest_EncodedSlashInRouteId_ResolvesRegisteredModel()
+    {
+        const string adminKey = "sk-33pol-model-test-encoded-slash";
+        var chatHandler = new StubChatCompletionHandler();
+        using var factory = CreateFactory(adminKey, chatHandler);
+        using var client = await CreateAdminClientAsync(factory, adminKey);
+
+        const string modelId = "vendor/sub-model:free";
+        var create = await client.PostAsJsonAsync(
+            "/admin/api/models",
+            new
+            {
+                model = new
+                {
+                    id = modelId,
+                    url = "http://upstream.test",
+                    aliases = Array.Empty<string>(),
+                    maxContextLength = 8192
+                },
+                apiKey = "sk-upstream-test-key-1234567890abcdef"
+            });
+        create.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var encodedId = Uri.EscapeDataString(modelId);
+        var response = await client.PostAsJsonAsync(
+            $"/admin/api/models/{encodedId}/test",
+            new { prompt = "ping", maxTokens = 3 });
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<ModelTestPayload>();
+        body.Should().NotBeNull();
+        body!.Ok.Should().BeTrue();
+        body.ModelId.Should().Be(modelId);
+    }
+
+    [Fact]
     public async Task PostModelTest_UpstreamUnauthorized_ReturnsOkFalse()
     {
         const string adminKey = "sk-33pol-model-test-upstream-401";
