@@ -1,14 +1,20 @@
 #!/usr/bin/env bash
-# Quick health check for deploy/docker stack (no gateway profile required).
+# Health check for the all-in-one Compose stack (gateway + observability + mock upstream).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-COMPOSE_DIR="${ROOT}/deploy/docker"
+
+if [ -f "${ROOT}/docker-compose.yml" ]; then
+  COMPOSE_DIR="${ROOT}"
+else
+  COMPOSE_DIR="${ROOT}/deploy/docker"
+fi
 
 cd "${COMPOSE_DIR}"
 
-if ! docker compose ps --status running 2>/dev/null | grep -q postgres; then
-  echo "Start stack first: cd deploy/docker && docker compose up -d" >&2
+running_services="$(docker compose ps --services --filter status=running 2>/dev/null || true)"
+if [[ "${running_services}" != *postgres* ]]; then
+  echo "Start stack first: cd ${COMPOSE_DIR} && docker compose up -d --build" >&2
   exit 1
 fi
 
@@ -21,4 +27,12 @@ echo "prometheus OK"
 curl -sf "http://localhost:${GRAFANA_PORT:-3000}/api/health" >/dev/null
 echo "grafana OK"
 
-echo "Compose observability + mock stack healthy."
+if [[ "${running_services}" == *gateway* ]]; then
+  curl -sf "http://localhost:${GATEWAY_PORT:-8080}/health/live" >/dev/null
+  echo "gateway OK"
+else
+  echo "gateway: not running (start full stack with: docker compose up -d --build)" >&2
+  exit 1
+fi
+
+echo "Compose stack healthy."

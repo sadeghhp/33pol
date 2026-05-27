@@ -195,10 +195,10 @@ Implement **`IControlPlaneCommands`** and **`IAdminSummaryReader`** in Core (int
 
 **Exit criteria (WP4.9):**
 
-- [ ] Spectre reference only in `33pol.OperatorConsole`  
-- [ ] Development `appsettings` sample enables console; Production/CI samples disable  
-- [ ] Operator can run `watch summary` and `reload` locally without stopping inference (manual smoke)  
-- [ ] `docs/operator-console.md` complete  
+- [x] Spectre reference only in `33pol.OperatorConsole` (NetArchTest)  
+- [x] Development `appsettings` sample enables console; Production/CI samples disable  
+- [ ] Operator can run `watch summary` and `reload` locally without stopping inference (manual smoke — optional for GA)  
+- [x] `docs/operator-console.md` complete  
 
 ---
 

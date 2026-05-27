@@ -24,8 +24,7 @@ k6 run perf/k6/scripts/inference-rps.js \
   -e "BASE_URL=${BASE_URL}" \
   -e "MODEL=${MODEL}" \
   --duration 30s \
-  --vus 5 \
-  --max-vus 10
+  --vus 5
 
 echo "GA local — streaming concurrent (short)..."
 k6 run perf/k6/scripts/streaming-concurrent.js \

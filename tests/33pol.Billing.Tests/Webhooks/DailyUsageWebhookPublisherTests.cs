@@ -14,8 +14,8 @@ public sealed class DailyUsageWebhookPublisherTests
     public async Task DispatchYesterdayAsync_WhenHourMatches_SendsPerTenant()
     {
         var tenantId = Guid.NewGuid();
-        var yesterday = DateOnly.FromDateTime(DateTime.UtcNow).AddDays(-1);
         var utcNow = new DateTime(2026, 5, 26, 12, 0, 0, DateTimeKind.Utc);
+        var yesterday = DateOnly.FromDateTime(utcNow).AddDays(-1);
 
         var rollups = Substitute.For<IDailyUsageRollupRepository>();
         rollups.GetRollupsAsync(yesterday, yesterday, null, Arg.Any<CancellationToken>())

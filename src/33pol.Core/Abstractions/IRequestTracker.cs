@@ -5,5 +5,5 @@ public interface IRequestTracker
     /// <summary>
     /// Called when an inference request is about to be forwarded (Phase 4 metrics hook).
     /// </summary>
-    IDisposable BeginInferenceRequest(string modelId, bool isStreaming);
+    IInferenceRequestScope BeginInferenceRequest(string modelId, bool isStreaming);
 }

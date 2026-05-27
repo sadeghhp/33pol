@@ -1,0 +1,9 @@
+# All-in-one 33pol local stack (gateway + Postgres + mock upstream + Prometheus + Grafana).
+# From repo root:
+#   cp .env.example .env
+#   docker compose up -d --build
+#
+# Same services as deploy/docker/docker-compose.yml (included for a single entry point).
+
+include:
+  - deploy/docker/docker-compose.yml

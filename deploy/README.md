@@ -2,7 +2,7 @@
 
 | Path | Description |
 |------|-------------|
-| [docker/](./docker/) | Docker Compose local stack (WP5.4) |
+| [docker/](./docker/) | Compose service definitions (WP5.4); run from repo root via [`docker-compose.yml`](../docker-compose.yml) |
 | [grafana/](./grafana/) | `provisioning/` (datasources, providers) + `dashboards/` JSON (Phase 4+) |
 | [prometheus/](./prometheus/) | Prometheus alert rules |
 | [helm/33pol/](./helm/33pol/) | Helm chart (Deployment, Service, HPA, ServiceMonitor) |

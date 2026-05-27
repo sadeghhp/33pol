@@ -2,7 +2,7 @@
 
 This folder contains the **authoritative implementation plan** for 33pol LLM Gateway version 2.0. It translates the product proposal into **five ordered phases**, a **modern .NET 10 solution architecture**, a **unit-test-first quality bar**, and a **performance/load testing program**.
 
-**Status:** Planning authoritative; **Phases 1–4 complete in repo**. **Phase 5** in progress (FinOps, admin UI, Helm, k6 suite, **CI smoke**). Staging: GA k6 scripts + 4h soak. See [../implementation-plan-gap-report.md](../implementation-plan-gap-report.md) and [GA-CHECKLIST.md](./GA-CHECKLIST.md).
+**Status:** Planning authoritative; **Phases 1–5 code-complete in repo**. **GA sign-off pending** — staging k6/soak, SDK smoke execution, Compose E2E, checklist approvals. See [../implementation-plan-gap-report.md](../implementation-plan-gap-report.md) and [GA-CHECKLIST.md](./GA-CHECKLIST.md).
 
 **Logging:** Application logs are **not** stored in PostgreSQL (Serilog + OpenTelemetry export only). See [01-solution-architecture.md](./01-solution-architecture.md).
 

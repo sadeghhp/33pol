@@ -13,7 +13,7 @@
 | P2 Data plane | [x] | V1 parity integration tests, live registry, k6 smoke | 2026-05-26 |
 | P3 Security & resilience | [x] | Auth, Postgres, SDK errors, resilience, admin key CRUD | 2026-05-26 |
 | P4 Policy & observability | [x] | Rate limits, quotas, OTel, control plane (SSE deferred) | 2026-05-26 |
-| P5 FinOps & GA | [ ] | **Code complete** (2026-05-26); staging k6 + soak + SDK smoke run + approvals remain | |
+| P5 FinOps & GA | [ ] | **Code complete** (2026-05-27); staging k6 + soak + SDK smoke run + approvals remain — see [gap report](../implementation-plan-gap-report.md) G-01–G-06 | |
 
 ---
 

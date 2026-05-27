@@ -4,7 +4,7 @@ OpenAI-compatible, high-performance LLM gateway for .NET 10.
 
 ## Status
 
-**Phases 1–4 complete**; **Phase 5** (FinOps, admin UI, Compose/Helm integrations, GA gates) largely delivered. See [docs/implementation-plan/README.md](./docs/implementation-plan/README.md) and [GA checklist](./docs/implementation-plan/GA-CHECKLIST.md).
+**Phases 1–5 code-complete**; **GA sign-off pending** (staging perf, SDK smoke run, Compose E2E, approvals). See [docs/implementation-plan/README.md](./docs/implementation-plan/README.md), [gap report](./docs/implementation-plan-gap-report.md), and [GA checklist](./docs/implementation-plan/GA-CHECKLIST.md).
 
 ## Quick start (local)
 
@@ -43,13 +43,15 @@ bash build/check-coverage.sh TestResults
 
 ## Local stack (Docker Compose)
 
+All-in-one stack (gateway, Postgres, mock upstream, Prometheus, Grafana):
+
 ```bash
-cd deploy/docker
 cp .env.example .env
-docker compose up -d
+docker compose up -d --build
+bash perf/ci/verify-compose-health.sh
 ```
 
-See [deploy/docker/README.md](./deploy/docker/README.md) for ports, mock upstream, and the optional gateway profile.
+See [deploy/docker/README.md](./deploy/docker/README.md) for ports, admin key, and service details.
 
 ## References
 

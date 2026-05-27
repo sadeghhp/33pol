@@ -1,5 +1,5 @@
 # 33pol local stack — gateway, Postgres, Prometheus, Grafana, mock upstream (WP5.4).
-# Usage: see deploy/docker/README.md
+# Usage: repo root `docker compose up -d --build` or see deploy/docker/README.md
 
 name: 33pol
 
@@ -38,7 +38,6 @@ services:
       start_period: 5s
 
   gateway:
-    profiles: [gateway]
     build:
       context: ../..
       dockerfile: Dockerfile
@@ -57,12 +56,14 @@ services:
         Host=postgres;Port=5432;Database=${POSTGRES_DB:-gateway};
         Username=${POSTGRES_USER:-gateway};Password=${POSTGRES_PASSWORD:-gateway}
       Gateway__ModelsConfigPath: /app/models.json
+      Gateway__Bootstrap__AdminApiKey: ${GATEWAY_ADMIN_API_KEY:-sk-33pol-dev-admin-key}
+      Gateway__OperatorConsole__Enabled: "false"
     volumes:
       - ./config/models.json:/app/models.json:ro
     ports:
       - "${GATEWAY_PORT:-8080}:8080"
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O - http://localhost:8080/health/live >/dev/null 2>&1 || exit 1"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health/live >/dev/null || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 6
@@ -82,6 +83,8 @@ services:
     ports:
       - "${PROMETHEUS_PORT:-9090}:9090"
     depends_on:
+      gateway:
+        condition: service_healthy
       mock-upstream:
         condition: service_healthy
 

@@ -65,11 +65,10 @@ Sample collector config: [deploy/otel-collector/config.yaml](../deploy/otel-coll
 
 ## Docker Compose
 
-Full local stack (Postgres, WireMock upstream, Prometheus, Grafana):
+Full local stack (gateway, Postgres, WireMock upstream, Prometheus, Grafana):
 
 ```bash
-cd deploy/docker && cp .env.example .env && docker compose up -d
-docker compose --profile gateway up -d --build   # optional gateway container
+cp .env.example .env && docker compose up -d --build
 ```
 
 Grafana loads the `33pol-gateway` dashboard from `deploy/grafana/dashboards/`. See [deploy/docker/README.md](../deploy/docker/README.md).

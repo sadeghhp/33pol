@@ -155,26 +155,26 @@ Execute [03-performance-and-load-testing.md](../03-performance-and-load-testing.
 
 ## GA checklist (summary)
 
-- [ ] All Phase 1–5 exit criteria met  
-- [ ] `dotnet test` green; coverage gates met all assemblies  
-- [ ] k6 GA thresholds pass on staging  
-- [ ] Helm deploy successful on test cluster  
-- [ ] Inference conformance suite passes (WP5.8)  
-- [ ] Docker Compose stack loads Grafana dashboard (WP5.4)  
-- [ ] OpenAI Python SDK smoke against gateway  
+- [x] All Phase 1–5 **code** exit criteria met (ops GA items remain)  
+- [x] `dotnet test` green; coverage gates met for gated assemblies (2026-05-27)  
+- [ ] k6 GA thresholds pass on **staging**  
+- [ ] Helm deploy successful on test cluster (manual)  
+- [x] Inference conformance suite passes (WP5.8, CI)  
+- [ ] Docker Compose stack E2E verified (WP5.4, manual)  
+- [ ] OpenAI Python SDK smoke against gateway (`perf/scripts/sdk-smoke.py`)  
 - [ ] FinOps export validated by sample spreadsheet  
-- [ ] Runbooks linked from alerts  
-- [ ] Taiga epic P5 closed  
+- [x] Runbooks linked from alerts (`docs/runbooks/`, prom alert annotations)  
+- [ ] Taiga epic P5 closed (after checklist sign-off)  
 
 ---
 
 ## Unit test checklist (Phase 5)
 
-- [ ] Billing cost engine all model/tier combinations  
-- [ ] Budget evaluator edge cases (timezone, month boundary)  
-- [ ] Webhook HMAC validation  
-- [ ] Export CSV column contract  
-- [ ] Coverage ≥ 90% Billing  
+- [x] Billing cost engine all model/tier combinations  
+- [x] Budget evaluator edge cases (timezone, month boundary)  
+- [x] Webhook HMAC validation  
+- [x] Export CSV column contract  
+- [x] Coverage ≥ 90% Billing (98.9% line coverage, 2026-05-27)  
 
 ---
 

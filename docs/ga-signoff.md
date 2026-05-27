@@ -27,22 +27,23 @@ bash perf/ci/run-overhead-compare.sh   # requires mock on :18080
 
 ## 3. OpenAI Python SDK smoke
 
-With gateway running (auth off or valid key):
+With gateway running (auth off or valid inference key):
 
 ```bash
 pip install openai
 export OPENAI_BASE_URL=http://localhost:8080/v1
-export OPENAI_API_KEY=sk-your-key
-export MODEL=gpt-local
+export OPENAI_API_KEY=sk-your-key   # inference key when Postgres is enabled
+export MODEL=gpt-local              # or mock-gpt when using deploy/docker Compose
 python3 perf/scripts/sdk-smoke.py
 ```
+
+**Compose note:** WireMock upstream does not emit SSE chunks; for streaming step 3 use `perf/scripts/mock-upstream.py` or record a sign-off exception. See [perf/reports/ga-local-2026-05-27.md](../perf/reports/ga-local-2026-05-27.md).
 
 ## 4. Docker Compose
 
 ```bash
-cd deploy/docker && cp .env.example .env && docker compose up -d
+cp .env.example .env && docker compose up -d --build
 bash perf/ci/verify-compose-health.sh
-docker compose --profile gateway up -d --build   # optional full gateway
 ```
 
 ## 5. Dependencies
