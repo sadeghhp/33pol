@@ -44,6 +44,7 @@ python3 perf/scripts/sdk-smoke.py
 ```bash
 cp .env.example .env && docker compose up -d --build
 bash perf/ci/verify-compose-health.sh
+bash perf/ci/run-compose-e2e.sh   # G-04 formal sign-off (health + inference + stream)
 ```
 
 ## 5. Dependencies

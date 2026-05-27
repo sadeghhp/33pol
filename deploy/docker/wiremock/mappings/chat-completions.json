@@ -1,7 +1,13 @@
 {
+  "priority": 2,
   "request": {
     "method": "POST",
-    "urlPath": "/v1/chat/completions"
+    "urlPath": "/v1/chat/completions",
+    "bodyPatterns": [
+      {
+        "doesNotContain": "\"stream\":true"
+      }
+    ]
   },
   "response": {
     "status": 200,

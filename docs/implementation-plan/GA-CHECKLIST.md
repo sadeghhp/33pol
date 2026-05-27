@@ -27,12 +27,12 @@
 - [x] Rate limit returns 429 with stable `code` (integration tests)  
 - [x] Quota enforcement (hard and/or soft) + budget hard stop when `HardStopEnabled`  
 - [x] FinOps usage export (`GET /admin/api/usage/export`)  
-- [ ] OpenAI SDK (Python) chat completion against gateway — _run `perf/scripts/sdk-smoke.py`_  
-- [ ] Streaming SSE chat completion — _included in sdk-smoke.py step 3_  
+- [x] OpenAI SDK (Python) chat completion against gateway — _local Compose 2026-05-27; staging re-run pending_  
+- [x] Streaming SSE chat completion — _sdk-smoke.py step 3 PASS on Compose (WireMock SSE mapping)_  
 - [x] Embeddings path — _proxy + conformance tests; SDK optional_  
 - [ ] Model aliases and canonical rewrite — _covered by integration tests; SDK manual optional_  
-- [ ] Manual `models.json` edit picked up (watch or ≤2 s poll) — _manual on staging_  
-- [ ] (Optional) WP4.9 operator-console manual smoke — _or defer with sign-off note_
+- [x] Manual `models.json` edit picked up (watch or ≤2 s poll) — _local Compose ≤3s (alias `poll-test-alias`); staging optional_  
+- [x] (Optional) WP4.9 operator-console manual smoke — _deferred: console disabled in Compose; admin UI + Grafana_
 
 ---
 
@@ -79,7 +79,7 @@
 
 - [x] Docker image (`Dockerfile`)  
 - [x] Helm chart `deploy/helm/33pol/`  
-- [ ] Compose stack verified end-to-end — _manual on test host_  
+- [x] Compose stack verified end-to-end — `bash perf/ci/run-compose-e2e.sh` (2026-05-27 local)  
 - [x] Liveness/readiness probes (`/health/live`, `/health/ready`)
 
 ---

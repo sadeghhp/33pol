@@ -4,6 +4,7 @@ import { chatCompletionPayload, jsonHeaders } from "../lib/helpers.js";
 
 const baseUrl = __ENV.BASE_URL || "http://localhost:8080";
 const model = __ENV.MODEL || "gpt-local";
+const apiKey = __ENV.API_KEY || "";
 
 export const options = {
   vus: Number(__ENV.SOAK_VUS || 5),
@@ -15,10 +16,15 @@ export const options = {
 };
 
 export default function () {
+  const headers = jsonHeaders();
+  if (apiKey) {
+    headers["X-API-Key"] = apiKey;
+  }
+
   const response = http.post(
     `${baseUrl}/v1/chat/completions`,
     chatCompletionPayload(model, false),
-    { headers: jsonHeaders(), tags: { name: "chat_completions_soak" } },
+    { headers, tags: { name: "chat_completions_soak" } },
   );
 
   check(response, {
