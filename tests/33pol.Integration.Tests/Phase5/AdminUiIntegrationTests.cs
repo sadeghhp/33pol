@@ -20,7 +20,7 @@ public sealed class AdminUiIntegrationTests
         body.Should().Contain("src=\"admin-icons.js?v=7\"");
         body.Should().Contain("src=\"admin-errors.js?v=7\"");
         body.Should().Contain("src=\"admin-store.js?v=8\"");
-        body.Should().Contain("src=\"admin-app.js?v=10\"");
+        body.Should().Contain("src=\"admin-app.js?v=11\"");
         body.Should().Contain("openKeyAccess");
         body.Should().Contain("Tenant model access");
         body.Should().Contain("testModel(");
@@ -104,7 +104,10 @@ public sealed class AdminUiIntegrationTests
         body.Should().Contain("modelWriteBody");
         body.Should().Contain("async fetchModels()");
         body.Should().Contain("normalizeApiKeyList");
+        body.Should().Contain("normalizeApiKeyRole");
         body.Should().Contain("async fetchKeys()");
+        body.Should().Contain("async fetchBackends()");
+        body.Should().Contain("async loadSettings()");
         body.Should().MatchRegex("async revokeKeyConfirmed\\(\\)[\\s\\S]*?await this\\.fetchKeys\\(\\)");
         body.Should().MatchRegex("async removeModel\\(id\\)[\\s\\S]*?await this\\.fetchModels\\(\\)");
         body.Should().Contain("testModel");

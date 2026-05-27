@@ -28,7 +28,7 @@ public static class ModelGrantEvaluator
 
         if (apiKeyGrants.Count == 0)
         {
-            return true;
+            return false;
         }
 
         return MatchesAllowGrant(

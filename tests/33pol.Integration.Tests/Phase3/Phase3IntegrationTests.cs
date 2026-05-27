@@ -55,7 +55,9 @@ public sealed class Phase3IntegrationTests
             new { role = "Inference" });
         createResponse.EnsureSuccessStatusCode();
         using var created = System.Text.Json.JsonDocument.Parse(await createResponse.Content.ReadAsStringAsync());
+        var keyId = created.RootElement.GetProperty("id").GetGuid();
         var secret = created.RootElement.GetProperty("secret").GetString()!;
+        await ModelGrantTestHelpers.GrantApiKeyModelsAsync(adminClient, keyId, "local-mock");
 
         var inferenceClient = factory.CreateClient();
         inferenceClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", secret);

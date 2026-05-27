@@ -1,11 +1,12 @@
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
-using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
 using Pol33.Core.Abstractions;
+using Pol33.Core.Http;
 using Pol33.Core.Models;
+using Pol33.Persistence.DependencyInjection;
 
 namespace Pol33.Conformance.Tests.Support;
 
@@ -18,13 +19,9 @@ internal static class ConformanceGatewayFactory
             builder.UseSetting(WebHostDefaults.EnvironmentKey, Environments.Development);
             builder.UseSetting("Gateway:OperatorConsole:Enabled", "false");
             builder.UseSetting("Gateway:RegistryWatchEnabled", "false");
-            builder.ConfigureAppConfiguration((_, config) =>
-            {
-                config.AddInMemoryCollection(new Dictionary<string, string?>
-                {
-                    ["ConnectionStrings:GatewayDb"] = string.Empty,
-                });
-            });
+            builder.UseSetting(
+                $"ConnectionStrings:{PersistenceServiceCollectionExtensions.ConnectionStringName}",
+                string.Empty);
 
             builder.ConfigureServices(services =>
             {
@@ -33,9 +30,8 @@ internal static class ConformanceGatewayFactory
 
                 if (upstreamHandler is not null)
                 {
-                    services.RemoveAll<HttpMessageInvoker>();
-                    services.AddSingleton(upstreamHandler);
-                    services.AddSingleton(_ => new HttpMessageInvoker(upstreamHandler, disposeHandler: false));
+                    services.AddHttpClient(UpstreamHttpClientNames.Inference)
+                        .ConfigurePrimaryHttpMessageHandler(() => upstreamHandler);
                 }
             });
         });

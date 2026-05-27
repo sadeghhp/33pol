@@ -106,7 +106,7 @@ Failure → 403 `insufficient_scope` ([06-sdk-error-catalog.md](./06-sdk-error-c
 **Evaluation with tenant grants (MUST):**
 
 1. Apply tenant rules from `ModelGrant` (see above).
-2. If API key has **no** `api_key_model_grants` rows → inherit tenant result only.
+2. If API key has **no** `api_key_model_grants` rows → **deny all models** (new keys cannot call inference until admin assigns models).
 3. If API key has **≥1** row → model must match key allowlist **and** tenant rules (intersection).
 4. Admin `PUT` key grants validates each id exists in registry and is allowed by tenant policy.
 

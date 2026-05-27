@@ -13,7 +13,7 @@
   <script defer src="admin-icons.js?v=7"></script>
   <script defer src="admin-errors.js?v=7"></script>
   <script defer src="admin-store.js?v=8"></script>
-  <script defer src="admin-app.js?v=10"></script>
+  <script defer src="admin-app.js?v=11"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.9/dist/cdn.min.js"></script>
 </head>
 <body x-data="adminApp()" x-init="init()" x-cloak :class="{ dark: darkMode }" @keydown.window="onModalKeydown($event)">
@@ -477,7 +477,7 @@
           </div>
           <div class="card" style="margin-top: 1rem">
             <h3>Tenant model access</h3>
-            <p class="hint">Restrict which registry models inference keys may use. Keys can further limit models within this ceiling.</p>
+            <p class="hint">Optional tenant ceiling. Inference keys have <strong>no model access by default</strong>; assign allowed models per key under API keys → Models.</p>
             <label class="checkbox">
               <input type="checkbox" x-model="tenantGrantRestricted" @change="if (!tenantGrantRestricted) tenantGrantSelected = []" />
               Restrict tenant to selected models (empty = all registry models)
@@ -592,22 +592,16 @@
           <span class="icon" x-html="icon('x')"></span>
         </button>
       </div>
-      <p class="hint" x-show="keyAccessEdit">Key <code x-text="keyAccessEdit?.keyPrefix"></code></p>
-      <label class="checkbox">
-        <input type="checkbox" x-model="keyAccessRestricted" @change="if (!keyAccessRestricted) keyAccessSelected = []" />
-        Restrict this key to selected models (off = tenant default)
-      </label>
-      <template x-if="keyAccessRestricted">
-        <div class="model-grant-list" style="margin-top: 0.75rem; max-height: 14rem; overflow: auto">
-          <template x-for="m in models" :key="m.id">
-            <label class="checkbox">
-              <input type="checkbox" :value="m.id" :checked="keyAccessSelected.includes(m.id)"
-                @change="toggleKeyAccessModel(m.id)" />
-              <span x-text="m.id"></span>
-            </label>
-          </template>
-        </div>
-      </template>
+      <p class="hint" x-show="keyAccessEdit">Key <code x-text="keyAccessEdit?.keyPrefix"></code> — select models this key may call. None selected = no access.</p>
+      <div class="model-grant-list" style="margin-top: 0.75rem; max-height: 14rem; overflow: auto">
+        <template x-for="m in models" :key="m.id">
+          <label class="checkbox">
+            <input type="checkbox" :value="m.id" :checked="keyAccessSelected.includes(m.id)"
+              @change="toggleKeyAccessModel(m.id)" />
+            <span x-text="m.id"></span>
+          </label>
+        </template>
+      </div>
       <div class="toolbar" style="margin-top: 1rem">
         <button type="button" class="action" @click="saveKeyAccess()" :disabled="isLoading('keys')">Save</button>
         <button type="button" class="action secondary" @click="closeKeyAccessDrawer()">Cancel</button>

@@ -60,7 +60,9 @@ GET requests retry once on network failure. Usage export uses `downloadBlob` wit
 | Routing — Models | `GET/POST/PATCH/DELETE /admin/api/models` (write body: `{ model, apiKey?, clearApiKey? }`; GET returns `{ model, hasUpstreamCredential }`) |
 | Routing — Backends | `GET /admin/api/backends` |
 | API keys | `GET/POST /admin/api/keys`, `POST …/revoke`, `GET/PUT …/keys/{id}/model-grants` |
-| Tenant model access | `GET/PUT /admin/api/tenant/model-grants` |
+| Tenant model access | `GET/PUT /admin/api/tenant/model-grants` (optional ceiling; empty = all registry models) |
+
+**Per-key model access:** Inference keys start with **no models** allowed. Open **Models** on a key, check the registry models it may call, and save. `GET /v1/models` and inference only expose models in that allowlist (intersected with tenant policy when the tenant is restricted).
 | Settings | `GET /admin/api/config/status`, `POST /admin/api/config/reload` |
 
 After adding or editing a model, verify **`GET /v1/models`** (link on Routing → Models).

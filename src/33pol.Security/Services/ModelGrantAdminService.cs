@@ -31,7 +31,7 @@ public sealed class ModelGrantAdminService : IModelGrantAdminService
         CancellationToken cancellationToken = default)
     {
         var grants = await _tenantGrants.ListByTenantAsync(tenantId, cancellationToken).ConfigureAwait(false);
-        return ToResponse(grants.Select(g => g.ModelPattern).ToList(), grants.Count == 0);
+        return ToTenantResponse(grants.Select(g => g.ModelPattern).ToList());
     }
 
     public async Task<ModelGrantsResponse> ReplaceTenantGrantsAsync(
@@ -42,7 +42,7 @@ public sealed class ModelGrantAdminService : IModelGrantAdminService
         var modelIds = ValidateModelIds(request.ModelIds);
         await _tenantGrants.ReplaceForTenantAsync(tenantId, modelIds, cancellationToken).ConfigureAwait(false);
         _grantService.InvalidateTenantGrants(tenantId);
-        return ToResponse(modelIds, modelIds.Count == 0);
+        return ToTenantResponse(modelIds);
     }
 
     public async Task<ModelGrantsResponse> GetApiKeyGrantsAsync(
@@ -53,7 +53,7 @@ public sealed class ModelGrantAdminService : IModelGrantAdminService
         var key = await RequireInferenceKeyAsync(tenantId, apiKeyId, cancellationToken).ConfigureAwait(false);
         _ = key;
         var grants = await _apiKeyGrants.ListByApiKeyAsync(apiKeyId, cancellationToken).ConfigureAwait(false);
-        return ToResponse(grants.Select(g => g.ModelPattern).ToList(), grants.Count == 0);
+        return ToApiKeyResponse(grants.Select(g => g.ModelPattern).ToList());
     }
 
     public async Task<ModelGrantsResponse> ReplaceApiKeyGrantsAsync(
@@ -67,7 +67,7 @@ public sealed class ModelGrantAdminService : IModelGrantAdminService
         await EnsureKeyGrantsWithinTenantAsync(tenantId, modelIds, cancellationToken).ConfigureAwait(false);
         await _apiKeyGrants.ReplaceForApiKeyAsync(apiKeyId, modelIds, cancellationToken).ConfigureAwait(false);
         _grantService.InvalidateApiKeyGrants(apiKeyId);
-        return ToResponse(modelIds, modelIds.Count == 0);
+        return ToApiKeyResponse(modelIds);
     }
 
     private async Task<ApiKeyRecord> RequireInferenceKeyAsync(
@@ -132,10 +132,17 @@ public sealed class ModelGrantAdminService : IModelGrantAdminService
         return normalized;
     }
 
-    private static ModelGrantsResponse ToResponse(IReadOnlyList<string> modelIds, bool usesDefaultAccess) =>
+    private static ModelGrantsResponse ToTenantResponse(IReadOnlyList<string> modelIds) =>
         new()
         {
             ModelIds = modelIds,
-            UsesDefaultAccess = usesDefaultAccess,
+            UsesDefaultAccess = modelIds.Count == 0,
+        };
+
+    private static ModelGrantsResponse ToApiKeyResponse(IReadOnlyList<string> modelIds) =>
+        new()
+        {
+            ModelIds = modelIds,
+            UsesDefaultAccess = false,
         };
 }

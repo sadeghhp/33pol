@@ -4,7 +4,10 @@ public sealed class ModelGrantsResponse
 {
     public required IReadOnlyList<string> ModelIds { get; init; }
 
-    /// <summary>When true, no explicit allowlist rows exist (tenant-open or key inherits tenant).</summary>
+    /// <summary>
+    /// Tenant: true when no explicit tenant allowlist (all registry models allowed at tenant level).
+    /// API key: always false — keys require an explicit allowlist; an empty list means no model access.
+    /// </summary>
     public bool UsesDefaultAccess { get; init; }
 }
 

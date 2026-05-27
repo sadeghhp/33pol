@@ -78,12 +78,49 @@ public sealed class ModelGrantEndpointTests
 
         var inferenceClient = factory.CreateClient();
         inferenceClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", secret);
-        using var body = new StringContent(
+        using var deniedBody = new StringContent(
             $$"""{"model":"{{RequestModelAlias}}","stream":false}""",
             System.Text.Encoding.UTF8,
             "application/json");
-        var response = await inferenceClient.PostAsync("/v1/chat/completions", body);
-        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var denied = await inferenceClient.PostAsync("/v1/chat/completions", deniedBody);
+        denied.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+
+        await ModelGrantTestHelpers.GrantApiKeyModelsAsync(adminClient, keyId, CanonicalModelId);
+        using var allowedBody = new StringContent(
+            $$"""{"model":"{{RequestModelAlias}}","stream":false}""",
+            System.Text.Encoding.UTF8,
+            "application/json");
+        var allowed = await inferenceClient.PostAsync("/v1/chat/completions", allowedBody);
+        allowed.StatusCode.Should().Be(HttpStatusCode.OK);
+    }
+
+    [Fact]
+    public async Task NewInferenceKey_WithoutGrants_DeniesModelsAndInference()
+    {
+        await using var factory = GatewayWebApplicationFactory.CreateWithInMemoryDatabase(
+            AdminKey,
+            upstreamHandler: new MockUpstreamHandler());
+        await GatewayWebApplicationFactory.EnsureAuthReadyAsync(factory);
+        var adminClient = CreateAuthenticatedClient(factory, AdminKey);
+        var createResponse = await adminClient.PostAsJsonAsync("/admin/api/keys", new { role = "Inference" });
+        createResponse.EnsureSuccessStatusCode();
+        using var created = JsonDocument.Parse(await createResponse.Content.ReadAsStringAsync());
+        var secret = created.RootElement.GetProperty("secret").GetString()!;
+
+        var inferenceClient = factory.CreateClient();
+        inferenceClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", secret);
+
+        var modelsResponse = await inferenceClient.GetAsync("/v1/models");
+        modelsResponse.EnsureSuccessStatusCode();
+        using var modelsDoc = JsonDocument.Parse(await modelsResponse.Content.ReadAsStringAsync());
+        modelsDoc.RootElement.GetProperty("data").GetArrayLength().Should().Be(0);
+
+        using var chatBody = new StringContent(
+            $$"""{"model":"{{RequestModelAlias}}","stream":false}""",
+            System.Text.Encoding.UTF8,
+            "application/json");
+        var chat = await inferenceClient.PostAsync("/v1/chat/completions", chatBody);
+        chat.StatusCode.Should().Be(HttpStatusCode.Forbidden);
     }
 
     [Fact]

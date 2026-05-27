@@ -33,7 +33,6 @@ function adminApp() {
     keysCreatedAck: false,
     keyAccessDrawerOpen: false,
     keyAccessEdit: null,
-    keyAccessRestricted: false,
     keyAccessSelected: [],
     tenantGrantRestricted: false,
     tenantGrantSelected: [],
@@ -524,14 +523,11 @@ function adminApp() {
       if (!key?.id || key.role === 'Admin') return;
       this.keyAccessEdit = key;
       this.keyAccessDrawerOpen = true;
-      this.keyAccessRestricted = false;
       this.keyAccessSelected = [];
       if (!this.models?.length) await this.fetchModels();
       await this.runApi('keys', 'Loading model access…', async () => {
         const body = await this.apiJson('/admin/api/keys/' + key.id + '/model-grants');
-        const ids = body?.modelIds ?? [];
-        this.keyAccessRestricted = ids.length > 0;
-        this.keyAccessSelected = [...ids];
+        this.keyAccessSelected = [...(body?.modelIds ?? [])];
       });
     },
 
@@ -550,26 +546,27 @@ function adminApp() {
     async saveKeyAccess() {
       const key = this.keyAccessEdit;
       if (!key?.id) return;
-      const modelIds = this.keyAccessRestricted ? this.keyAccessSelected : [];
       await this.runApi('keys', 'Saving model access…', async () => {
         await this.apiJson('/admin/api/keys/' + key.id + '/model-grants', {
           method: 'PUT',
-          body: JSON.stringify({ modelIds })
+          body: JSON.stringify({ modelIds: this.keyAccessSelected })
         });
         this.toast('Model access updated.');
         this.closeKeyAccessDrawer();
-        await this.fetchKeys();
+        await this.loadKeys();
       });
+    },
+
+    async fetchTenantGrants() {
+      const body = await this.apiJson('/admin/api/tenant/model-grants');
+      const ids = body?.modelIds ?? [];
+      this.tenantGrantRestricted = ids.length > 0;
+      this.tenantGrantSelected = [...ids];
     },
 
     async loadTenantGrants() {
       if (!this.apiKey) return;
-      await this.runApi('settings', 'Loading tenant model access…', async () => {
-        const body = await this.apiJson('/admin/api/tenant/model-grants');
-        const ids = body?.modelIds ?? [];
-        this.tenantGrantRestricted = ids.length > 0;
-        this.tenantGrantSelected = [...ids];
-      });
+      await this.runApi('settings', 'Loading tenant model access…', () => this.fetchTenantGrants());
     },
 
     toggleTenantGrantModel(id) {
@@ -587,6 +584,7 @@ function adminApp() {
           body: JSON.stringify({ modelIds })
         });
         this.toast('Tenant model access updated.');
+        await this.fetchTenantGrants();
       });
     },
 
@@ -668,7 +666,7 @@ function adminApp() {
         this.toast(body?.message || 'Config reloaded from disk.');
         await this.fetchConfigStatus();
         await this.fetchModels();
-        await this.loadBackends();
+        await this.fetchBackends();
       });
     },
 
@@ -695,10 +693,12 @@ function adminApp() {
       });
     },
 
+    async fetchBackends() {
+      this.backends = (await this.apiJson('/admin/api/backends')) ?? [];
+    },
+
     async loadBackends() {
-      await this.runApi('routingBackends', 'Loading backends…', async () => {
-        this.backends = (await this.apiJson('/admin/api/backends')) ?? [];
-      });
+      await this.runApi('routingBackends', 'Loading backends…', () => this.fetchBackends());
     },
 
     async fetchModels() {
@@ -792,7 +792,7 @@ function adminApp() {
           this.closeModelDrawer();
           this.resetModelForm();
           await this.fetchModels();
-          await this.loadBackends();
+          await this.fetchBackends();
         }, { localOnly: true });
       } catch (e) {
         this.modelFieldError = e.message || 'Save failed.';
@@ -822,7 +822,7 @@ function adminApp() {
           }
           this.toast(body?.message || 'Model removed.');
           await this.fetchModels();
-          await this.loadBackends();
+          await this.fetchBackends();
         }, { localOnly: true });
       } catch (e) {
         this.toast(e.message || 'Could not remove model.', 'error');

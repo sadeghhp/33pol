@@ -149,6 +149,7 @@ The bootstrap admin key (`sk-33pol-dev-admin-key`) works for **`/admin` only**. 
 1. In the admin UI, go to **API keys**.
 2. **Create key** → Role: **Inference**.
 3. **Copy the secret immediately** (shown once).
+4. Click **Models** on that key and select which registry models it may use, then **Save**. New keys have **no model access** until you assign at least one model.
 
 Example:
 
@@ -167,7 +168,7 @@ curl -s http://localhost:8080/v1/models \
   -H "Authorization: Bearer $GATEWAY_KEY"
 ```
 
-You should see your registered model (and any others, e.g. `mock-gpt` from the default stack).
+You should see only models assigned to that key in **Models** (not the full registry).
 
 ---
 

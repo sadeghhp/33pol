@@ -11,21 +11,21 @@ public sealed class ModelGrantIntersectionTests
         new(Guid.NewGuid(), Guid.NewGuid(), pattern, GrantEffect.Allow);
 
     [Fact]
-    public void IsModelAllowed_OpenTenantOpenKey_AllowsAny()
+    public void IsModelAllowed_OpenTenantNoKeyGrants_DeniesAll()
     {
-        ModelGrantEvaluator.IsModelAllowed([], [], "any-model").Should().BeTrue();
+        ModelGrantEvaluator.IsModelAllowed([], [], "any-model").Should().BeFalse();
     }
 
     [Fact]
-    public void IsModelAllowed_TenantRestrictedKeyOpen_InheritsTenant()
+    public void IsModelAllowed_TenantRestrictedNoKeyGrants_DeniesAll()
     {
         var tenant = new[] { TenantGrant("gpt-local") };
-        ModelGrantEvaluator.IsModelAllowed(tenant, [], "gpt-local").Should().BeTrue();
+        ModelGrantEvaluator.IsModelAllowed(tenant, [], "gpt-local").Should().BeFalse();
         ModelGrantEvaluator.IsModelAllowed(tenant, [], "other").Should().BeFalse();
     }
 
     [Fact]
-    public void IsModelAllowed_TenantOpenKeyRestricted_KeyAllowlist()
+    public void IsModelAllowed_TenantOpenKeyAllowlist_OnlyListedModels()
     {
         var key = new[] { KeyGrant("gpt-local") };
         ModelGrantEvaluator.IsModelAllowed([], key, "gpt-local").Should().BeTrue();

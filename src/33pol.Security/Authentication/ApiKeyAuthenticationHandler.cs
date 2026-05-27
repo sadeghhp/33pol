@@ -35,21 +35,27 @@ public sealed class ApiKeyAuthenticationHandler : AuthenticationHandler<Authenti
 
     protected override async Task<AuthenticateResult> HandleAuthenticateAsync()
     {
-        if (!_authState.IsAuthenticationRequired)
-        {
-            return AuthenticateResult.NoResult();
-        }
-
         if (PublicGatewayPaths.IsAnonymous(Request.Path))
         {
             return AuthenticateResult.NoResult();
         }
 
         var apiKey = ExtractApiKey(Request);
-        var result = await _validator.ValidateAsync(apiKey, Context.RequestAborted).ConfigureAwait(false);
+        if (string.IsNullOrWhiteSpace(apiKey))
+        {
+            return _authState.IsAuthenticationRequired
+                ? AuthenticateResult.Fail("missing_api_key")
+                : AuthenticateResult.NoResult();
+        }
 
+        var result = await _validator.ValidateAsync(apiKey, Context.RequestAborted).ConfigureAwait(false);
         if (!result.IsSuccess)
         {
+            if (!_authState.IsAuthenticationRequired)
+            {
+                return AuthenticateResult.NoResult();
+            }
+
             var code = result.Failure switch
             {
                 ApiKeyValidationFailure.Expired => "expired_api_key",
@@ -60,6 +66,11 @@ public sealed class ApiKeyAuthenticationHandler : AuthenticationHandler<Authenti
             return AuthenticateResult.Fail(code);
         }
 
+        return Success(result);
+    }
+
+    private AuthenticateResult Success(ApiKeyValidationResult result)
+    {
         var claims = new List<Claim>
         {
             new(GatewayAuthClaims.TenantId, result.TenantId!.Value.ToString()),

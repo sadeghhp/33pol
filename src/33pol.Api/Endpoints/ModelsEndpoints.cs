@@ -3,7 +3,10 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Pol33.Api.Services;
 using Pol33.Core.Abstractions;
+using Pol33.Core.Errors;
 using Pol33.Core.Identity;
+using Pol33.Core.Security;
+using Pol33.Security.Identity;
 
 namespace Pol33.Api.Endpoints;
 
@@ -11,65 +14,86 @@ public static class ModelsEndpoints
 {
     public static IEndpointRouteBuilder MapModelsEndpoints(this IEndpointRouteBuilder endpoints)
     {
-        endpoints.MapGet("/v1/models", ListModels);
-        endpoints.MapGet("/v1/models/{model}", GetModel);
+        var group = endpoints.MapGroup("")
+            .RequireAuthorization(GatewayAuthPolicies.Inference);
+
+        group.MapGet("/v1/models", ListModels);
+        group.MapGet("/v1/models/{model}", GetModel);
         return endpoints;
     }
 
     private static async Task<IResult> ListModels(
         HttpContext httpContext,
         ModelsApiService modelsApi,
-        IGatewayAuthenticationState authState)
+        IGatewayAuthenticationState authState,
+        IErrorResponseWriter errors)
     {
-        if (authState.IsAuthenticationRequired && TryGetCaller(httpContext, out var tenantId, out var apiKeyId))
+        if (!TryResolveCallerIds(httpContext, out var tenantId, out var apiKeyId))
         {
-            var list = await modelsApi.ListHealthyModelsAsync(tenantId, apiKeyId, httpContext.RequestAborted)
-                .ConfigureAwait(false);
-            return Results.Json(list);
+            if (authState.IsAuthenticationRequired)
+            {
+                return Unauthorized(errors);
+            }
+
+            return Results.Json(modelsApi.ListHealthyModels());
         }
 
-        return Results.Json(modelsApi.ListHealthyModels());
+        var list = await modelsApi
+            .ListHealthyModelsAsync(tenantId, apiKeyId, httpContext.RequestAborted)
+            .ConfigureAwait(false);
+        return Results.Json(list);
     }
 
     private static async Task<IResult> GetModel(
         string model,
         HttpContext httpContext,
         ModelsApiService modelsApi,
-        IGatewayAuthenticationState authState)
+        IGatewayAuthenticationState authState,
+        IErrorResponseWriter errors)
     {
-        if (authState.IsAuthenticationRequired && TryGetCaller(httpContext, out var tenantId, out var apiKeyId))
+        if (!TryResolveCallerIds(httpContext, out var tenantId, out var apiKeyId))
         {
-            var (response, error) = await modelsApi
-                .TryGetModelAsync(model, tenantId, apiKeyId, httpContext.RequestAborted)
-                .ConfigureAwait(false);
-            if (error is not null)
+            if (authState.IsAuthenticationRequired)
             {
-                return Results.Json(error, statusCode: StatusCodes.Status404NotFound);
+                return Unauthorized(errors);
             }
 
-            return Results.Json(response);
+            var (syncResponse, syncError) = modelsApi.TryGetModel(model);
+            if (syncError is not null)
+            {
+                return Results.Json(syncError, statusCode: StatusCodes.Status404NotFound);
+            }
+
+            return Results.Json(syncResponse);
         }
 
-        var (syncResponse, syncError) = modelsApi.TryGetModel(model);
-        if (syncError is not null)
+        var (response, error) = await modelsApi
+            .TryGetModelAsync(model, tenantId, apiKeyId, httpContext.RequestAborted)
+            .ConfigureAwait(false);
+        if (error is not null)
         {
-            return Results.Json(syncError, statusCode: StatusCodes.Status404NotFound);
+            return Results.Json(error, statusCode: StatusCodes.Status404NotFound);
         }
 
-        return Results.Json(syncResponse);
+        return Results.Json(response);
     }
 
-    private static bool TryGetCaller(HttpContext context, out Guid tenantId, out Guid apiKeyId)
+    private static bool TryResolveCallerIds(HttpContext context, out Guid tenantId, out Guid apiKeyId)
     {
         tenantId = default;
         apiKeyId = default;
-        if (!context.Items.TryGetValue(TenantContextKeys.HttpContextItemKey, out var value) ||
-            value is not TenantContext tenant)
+        if (context.GetTenantContext() is not TenantContext tenant)
         {
             return false;
         }
 
         return Guid.TryParse(tenant.TenantId, out tenantId)
             && Guid.TryParse(tenant.ApiKeyId, out apiKeyId);
+    }
+
+    private static IResult Unauthorized(IErrorResponseWriter errors)
+    {
+        var response = errors.Write(GatewayErrorCode.InvalidApiKey);
+        return Results.Content(response.Json, "application/json", statusCode: response.HttpStatusCode);
     }
 }
