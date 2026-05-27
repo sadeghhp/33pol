@@ -27,6 +27,7 @@ public sealed class ProviderModelsEndpointTests
         var json = await response.Content.ReadAsStringAsync();
         json.Should().Contain("openrouter");
         json.Should().Contain("together");
+        json.Should().Contain("dashscope");
         json.Should().Contain("custom");
     }
 

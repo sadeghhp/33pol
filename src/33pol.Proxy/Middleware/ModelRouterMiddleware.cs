@@ -268,6 +268,7 @@ public sealed class ModelRouterMiddleware
                     modelConfig.Url,
                     upstreamBearerToken,
                     transformer,
+                    requestInfo.Stream,
                     timeoutCts.Token).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested &&

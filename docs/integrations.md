@@ -14,6 +14,8 @@ Any **OpenAI-compatible** provider works: register an upstream base URL and opti
 | OpenAI | `https://api.openai.com` | `OPENAI_API_KEY` |
 | Together | `https://api.together.xyz` | `TOGETHER_API_KEY` |
 | Groq | `https://api.groq.com/openai` | `GROQ_API_KEY` |
+| Alibaba Model Studio (DashScope, intl) | `https://dashscope-intl.aliyuncs.com/compatible-mode` | `DASHSCOPE_API_KEY` |
+| Alibaba Model Studio (DashScope, Beijing) | `https://dashscope.aliyuncs.com/compatible-mode` | `DASHSCOPE_API_KEY` (key from Beijing console) |
 | Custom | Your base URL (no `/v1` suffix) | Any name you choose |
 
 Example `models.json` entry (OpenRouter):
@@ -28,7 +30,51 @@ Example `models.json` entry (OpenRouter):
 }
 ```
 
-**Admin UI:** **Routing → Add model** — model name, upstream URL, optional API key (stored encrypted on the gateway; not in `models.json`). URL presets include OpenRouter, Together, and Groq.
+**Admin UI:** **Routing → Add model** — model name, upstream URL, optional API key (stored encrypted on the gateway; not in `models.json`). URL presets include OpenRouter, Together, Groq, and DashScope (intl).
+
+**DashScope region:** API keys and base URLs are region-specific. Use the intl endpoint with a Singapore-region key, or the Beijing endpoint with a China-region key. Mismatching key and URL returns `401 Invalid API-key`.
+
+## Chatbox and other desktop clients
+
+Point **Custom OpenAI** (or OpenAI-compatible) at the gateway:
+
+| Setting | Value |
+|---------|--------|
+| API host / base URL | `http://localhost:8080/v1` (or your gateway URL + `/v1`) |
+| API key | A **33pol inference** key (not your DashScope/OpenRouter provider key) |
+| Model | Exact id from `GET /v1/models` on the gateway (e.g. `qwen-plus` after you register it) |
+
+Clients still send the provider model name in the JSON `"model"` field; 33pol resolves it to the upstream and injects the provider API key from the registry.
+
+### “Connection failed” with Alibaba / inappropriate content
+
+If Chatbox shows a generic **Connection failed** banner **and** a detail like:
+
+`Upstream error from Alibaba: Output data may contain inappropriate content`
+
+the request reached Alibaba Model Studio; this is **content moderation** (`400` / `DataInspectionFailed`), not a broken 33pol connection. Alibaba blocked **input or output** (your message says **Output** when the model’s reply was filtered).
+
+What usually helps:
+
+1. **Start a new chat** — Chatbox sends full history; long threads re-send prior turns and can trigger moderation or token limits.
+2. **Shorten or rephrase** the last message; avoid edgy topics.
+3. **Match region** — intl key + `https://dashscope-intl.aliyuncs.com/compatible-mode`, or Beijing key + `https://dashscope.aliyuncs.com/compatible-mode`.
+4. **Via 33pol** — use gateway base URL + inference key; register the DashScope model in admin with `DASHSCOPE_API_KEY` on the gateway (not in Chatbox).
+5. **Direct to DashScope in Chatbox** — base URL must be the compatible-mode URL above; API key is your `sk-…` DashScope key; model id must match [Model Studio model ids](https://www.alibabacloud.com/help/en/model-studio/models) (e.g. `qwen-plus`, not Hugging Face paths).
+
+There is no gateway setting to disable Alibaba moderation. See [Alibaba error codes — inappropriate content](https://www.alibabacloud.com/help/en/model-studio/error-code#inappropriate-content).
+
+Example registry entry (DashScope intl):
+
+```json
+{
+  "id": "qwen-plus",
+  "url": "https://dashscope-intl.aliyuncs.com/compatible-mode",
+  "maxContextLength": 131072,
+  "aliases": [],
+  "upstreamAuth": { "type": "bearer", "envVar": "DASHSCOPE_API_KEY" }
+}
+```
 
 **File-backed secret (quick-add):** `upstreamAuth: { "type": "bearer", "secretRef": "file:model:<modelId>" }` with plaintext only in `config/upstream-secrets.enc`.
 

@@ -58,7 +58,7 @@
 
 | # | Check | Result | Notes |
 |---|-------|--------|-------|
-| P1 | SSE not fully buffered before forward | Y | `StreamingHttpTransformer`, `UsageCapturingStream` |
+| P1 | SSE not fully buffered before forward | Y | `InferenceHttpForwarder` (`ResponseHeadersRead` + flush), `StreamingHttpTransformer`, `UsageCapturingStream` — F-P6-026 |
 | P2 | Model JSON rewrite (spacing variants) | Y | Unit + conformance |
 | P3 | Health gating before forward | Y | `ModelRouterMiddleware` |
 | P4 | Circuit breaker + bulkhead ordering | Y | Registry tests |

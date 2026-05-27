@@ -128,6 +128,7 @@ public sealed class ModelRouterMiddlewareTests
                 Arg.Any<string>(),
                 Arg.Any<string?>(),
                 Arg.Any<StreamingHttpTransformer>(),
+                Arg.Any<bool>(),
                 Arg.Any<CancellationToken>());
         }
         finally
@@ -159,6 +160,7 @@ public sealed class ModelRouterMiddlewareTests
                     Arg.Any<string>(),
                     Arg.Any<string?>(),
                     Arg.Any<StreamingHttpTransformer>(),
+                    Arg.Any<bool>(),
                     Arg.Any<CancellationToken>())
                 .Returns(ForwarderError.None);
 
@@ -175,6 +177,7 @@ public sealed class ModelRouterMiddlewareTests
                 "http://backend:8000",
                 Arg.Any<string?>(),
                 Arg.Any<StreamingHttpTransformer>(),
+                false,
                 Arg.Any<CancellationToken>());
         }
         finally

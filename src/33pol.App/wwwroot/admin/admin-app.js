@@ -595,7 +595,9 @@ function adminApp() {
         'vllm-docker': 'http://host.docker.internal:8000',
         openrouter: 'https://openrouter.ai/api',
         together: 'https://api.together.xyz',
-        groq: 'https://api.groq.com/openai'
+        groq: 'https://api.groq.com/openai',
+        dashscope: 'https://dashscope-intl.aliyuncs.com/compatible-mode',
+        'dashscope-beijing': 'https://dashscope.aliyuncs.com/compatible-mode'
       };
       if (urls[kind]) {
         this.editModel.url = urls[kind];

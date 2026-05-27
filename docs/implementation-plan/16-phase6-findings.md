@@ -45,12 +45,13 @@ Full matrix: extend per feature row in [05-feature-to-phase-matrix.md](./05-feat
 | F-P6-023 | P2 | Docs | Plan README said “five phases” only | Closed | Six-phase wording in README + 04-phase-overview |
 | F-P6-024 | P1 | Docs | Metric doc 12 lists circuit breaker as post-GA but code ships gauge | Closed | Doc 12 updated to Phase 4/5 implemented |
 | F-P6-025 | P2 | Observability | Local `verify-observability-local.sh` requires running Compose | Open | P5 G-06 staging; script documented |
+| F-P6-026 | P0 | Proxy | `InferenceHttpForwarder` buffered full SSE body (`ResponseContentRead`); no incremental TTFT | Closed | US-P6-15 #656: `ResponseHeadersRead` + flush pipe; `DelayedChunkStreamingHandler` integration test; HttpClient timeout = `ForwardTimeoutSeconds` |
 
 ---
 
 ## Open P0 summary
 
-**None.** (2026-05-27 audit)
+**None.** (2026-05-27 audit; F-P6-026 closed 2026-05-27)
 
 ---
 

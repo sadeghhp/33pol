@@ -55,6 +55,12 @@ public static class ProviderCatalog
             "http://host.docker.internal:1234/v1/models",
             string.Empty,
             RequiresUpstreamAuth: false),
+        new(
+            "dashscope",
+            "Alibaba Model Studio (DashScope, intl)",
+            "https://dashscope-intl.aliyuncs.com/compatible-mode",
+            "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models",
+            "DASHSCOPE_API_KEY"),
     ];
 
     public static IReadOnlyList<ProviderDefinition> ListBuiltIn() => BuiltIn;

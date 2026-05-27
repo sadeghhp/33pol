@@ -9,6 +9,7 @@ public sealed class ProviderCatalogTests
     [InlineData("openrouter", "https://openrouter.ai/api")]
     [InlineData("together", "https://api.together.xyz")]
     [InlineData("groq", "https://api.groq.com/openai")]
+    [InlineData("dashscope", "https://dashscope-intl.aliyuncs.com/compatible-mode")]
     public void TryGetBuiltIn_KnownProvider_ReturnsDefinition(string id, string expectedBase)
     {
         ProviderCatalog.TryGetBuiltIn(id, out var definition).Should().BeTrue();

@@ -16,7 +16,7 @@ namespace Pol33.Integration.Tests.Support;
 internal static class GatewayWebApplicationFactory
 {
     public static WebApplicationFactory<Program> Create(
-        MockUpstreamHandler? upstreamHandler = null,
+        HttpMessageHandler? upstreamHandler = null,
         IBackendHealthStore? healthStore = null,
         Action<IConfigurationBuilder>? configureConfiguration = null,
         bool clearGatewayDatabase = true,
@@ -69,7 +69,7 @@ internal static class GatewayWebApplicationFactory
 
     public static WebApplicationFactory<Program> CreateWithInMemoryDatabase(
         string adminApiKey = "sk-33pol-integration-admin-key",
-        MockUpstreamHandler? upstreamHandler = null,
+        HttpMessageHandler? upstreamHandler = null,
         IBackendHealthStore? healthStore = null,
         Action<IDictionary<string, string?>>? configureSettings = null)
     {

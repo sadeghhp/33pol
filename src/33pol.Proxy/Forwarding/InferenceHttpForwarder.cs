@@ -2,6 +2,7 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.Extensions.Logging;
 using Pol33.Proxy.Routing;
 using Yarp.ReverseProxy.Forwarder;
@@ -15,6 +16,7 @@ public interface IInferenceHttpForwarder
         string modelUrl,
         string? upstreamBearerToken,
         StreamingHttpTransformer transformer,
+        bool isStreaming,
         CancellationToken cancellationToken);
 }
 
@@ -29,6 +31,7 @@ public sealed class InferenceHttpForwarder(
         string modelUrl,
         string? upstreamBearerToken,
         StreamingHttpTransformer transformer,
+        bool isStreaming,
         CancellationToken cancellationToken)
     {
         var destinationPrefix = InferenceDestinationBuilder.ToForwarderDestination(modelUrl);
@@ -63,11 +66,15 @@ public sealed class InferenceHttpForwarder(
 
         var client = httpClientFactory.CreateClient(HttpClientName);
 
+        var completionOption = isStreaming
+            ? HttpCompletionOption.ResponseHeadersRead
+            : HttpCompletionOption.ResponseContentRead;
+
         HttpResponseMessage responseMessage;
         try
         {
             responseMessage = await client
-                .SendAsync(requestMessage, cancellationToken)
+                .SendAsync(requestMessage, completionOption, cancellationToken)
                 .ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -92,7 +99,26 @@ public sealed class InferenceHttpForwarder(
                 .TransformResponseAsync(context, responseMessage, cancellationToken)
                 .ConfigureAwait(false);
 
-            if (transformBody && responseMessage.Content is not null)
+            if (!transformBody || responseMessage.Content is null)
+            {
+                return ForwarderError.None;
+            }
+
+            CopyResponseHeaders(context, responseMessage, isStreaming);
+
+            if (isStreaming)
+            {
+                context.Features.Get<IHttpResponseBodyFeature>()?.DisableBuffering();
+                await using var upstreamBody = await responseMessage.Content
+                    .ReadAsStreamAsync(cancellationToken)
+                    .ConfigureAwait(false);
+                await CopyStreamWithFlushAsync(
+                        upstreamBody,
+                        context.Response.Body,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            else
             {
                 await responseMessage.Content
                     .CopyToAsync(context.Response.Body, cancellationToken)
@@ -101,6 +127,49 @@ public sealed class InferenceHttpForwarder(
         }
 
         return ForwarderError.None;
+    }
+
+    private static void CopyResponseHeaders(
+        HttpContext context,
+        HttpResponseMessage response,
+        bool isStreaming)
+    {
+        foreach (var header in response.Headers)
+        {
+            context.Response.Headers[header.Key] = header.Value.ToArray();
+        }
+
+        if (response.Content is null)
+        {
+            return;
+        }
+
+        foreach (var header in response.Content.Headers)
+        {
+            if (isStreaming &&
+                string.Equals(header.Key, "Content-Length", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            context.Response.Headers[header.Key] = header.Value.ToArray();
+        }
+    }
+
+    private static async Task CopyStreamWithFlushAsync(
+        Stream source,
+        Stream destination,
+        CancellationToken cancellationToken)
+    {
+        var buffer = new byte[8192];
+        int read;
+        while ((read = await source
+                   .ReadAsync(buffer.AsMemory(0, buffer.Length), cancellationToken)
+                   .ConfigureAwait(false)) > 0)
+        {
+            await destination.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
+            await destination.FlushAsync(cancellationToken).ConfigureAwait(false);
+        }
     }
 
     private static bool HasRequestBody(HttpRequest request) =>

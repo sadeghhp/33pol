@@ -38,10 +38,16 @@ public static class ServiceCollectionExtensions
         services.AddGatewayRegistry();
         services.AddGatewayApi();
         services.AddGatewayProxy();
-        services.AddHttpClient(UpstreamHttpClientNames.Inference, client =>
-        {
-            client.Timeout = TimeSpan.FromSeconds(120);
-        });
+        services.AddHttpClient(UpstreamHttpClientNames.Inference)
+            .ConfigureHttpClient((sp, client) =>
+            {
+                var forwardTimeoutSeconds = sp
+                    .GetRequiredService<IOptions<GatewayOptions>>()
+                    .Value
+                    .Resilience
+                    .ForwardTimeoutSeconds;
+                client.Timeout = TimeSpan.FromSeconds(forwardTimeoutSeconds);
+            });
 
         if (configuration.GetValue<bool>("Gateway:OperatorConsole:Enabled"))
         {

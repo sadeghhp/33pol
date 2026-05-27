@@ -64,6 +64,37 @@ public sealed class InferenceProxyEndpointTests
     }
 
     [Fact]
+    public async Task PostChatCompletions_Stream_ForwardsFirstChunkBeforeUpstreamDelay()
+    {
+        var handler = new DelayedChunkStreamingHandler();
+        using var factory = GatewayWebApplicationFactory.Create(handler);
+        using var client = factory.CreateClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/chat/completions")
+        {
+            Content = JsonBody("""{"model":"local-mock","stream":true}"""),
+        };
+        using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        await using var bodyStream = await response.Content.ReadAsStreamAsync();
+
+        using var readCts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+        var firstByteBuffer = new byte[1];
+        var firstRead = bodyStream.ReadAsync(firstByteBuffer, readCts.Token).AsTask();
+        var winner = await Task.WhenAny(
+            firstRead,
+            Task.Delay(DelayedChunkStreamingHandler.InterChunkDelay / 2, readCts.Token));
+
+        winner.Should().Be(firstRead, "first SSE chunk should reach the client before upstream inter-chunk delay");
+        (await firstRead).Should().BeGreaterThan(0);
+
+        using var reader = new StreamReader(bodyStream);
+        var remainder = await reader.ReadToEndAsync(readCts.Token);
+        remainder.Should().Contain(DelayedChunkStreamingHandler.SecondChunkMarker);
+    }
+
+    [Fact]
     public async Task PostCompletions_ForwardsToBackendPath()
     {
         var handler = new MockUpstreamHandler();
