@@ -17,6 +17,7 @@ public static class GatewayApiServiceCollectionExtensions
         services.AddSingleton<GatewayHealthService>();
         services.AddSingleton<GatewayReadinessService>();
         services.AddSingleton<GatewayStatsService>();
+        services.AddSingleton<AdminModelProvisioningService>();
         services.AddHttpClient<OpenAiCompatibleProviderModelsClient>();
         return services;
     }

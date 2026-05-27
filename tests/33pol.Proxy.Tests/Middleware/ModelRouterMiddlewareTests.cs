@@ -396,7 +396,7 @@ public sealed class ModelRouterMiddlewareTests
             forwarder,
             new HttpMessageInvoker(new HttpClientHandler()),
             gatewayOptions,
-            new ConfigurationBuilder().AddInMemoryCollection().Build(),
+            Substitute.For<IUpstreamBearerTokenResolver>(),
             NullLogger<ModelRouterMiddleware>.Instance);
     }
 

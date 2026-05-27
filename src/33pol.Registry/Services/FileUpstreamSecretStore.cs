@@ -1,0 +1,161 @@
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using Pol33.Core.Abstractions;
+using Pol33.Core.Configuration;
+
+namespace Pol33.Registry.Services;
+
+public sealed class FileUpstreamSecretStore : IUpstreamSecretStore
+{
+    private readonly GatewayOptions _gatewayOptions;
+    private readonly byte[] _key;
+    private readonly ILogger<FileUpstreamSecretStore> _logger;
+    private readonly object _lock = new();
+    private Dictionary<string, string> _cache = new(StringComparer.OrdinalIgnoreCase);
+
+    public FileUpstreamSecretStore(
+        IOptions<GatewayOptions> gatewayOptions,
+        IConfiguration configuration,
+        ILogger<FileUpstreamSecretStore> logger)
+    {
+        _gatewayOptions = gatewayOptions.Value;
+        var pepper = configuration["Gateway:Security:KeyPepper"]
+            ?? configuration["Gateway:Bootstrap:KeyPepper"]
+            ?? "dev-pepper-change-me";
+        _key = UpstreamSecretFileCipher.DeriveKey(pepper);
+        _logger = logger;
+        LoadFromDisk();
+    }
+
+    public bool TryGet(string modelId, out string? secret)
+    {
+        lock (_lock)
+        {
+            if (_cache.TryGetValue(modelId, out var cipher) &&
+                UpstreamSecretFileCipher.TryDecrypt(cipher, _key, out var plain))
+            {
+                secret = plain;
+                return true;
+            }
+        }
+
+        secret = null;
+        return false;
+    }
+
+    public async Task PutAsync(string modelId, string secret, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(modelId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(secret);
+
+        var cipher = UpstreamSecretFileCipher.Encrypt(secret.Trim(), _key);
+        lock (_lock)
+        {
+            _cache[modelId.Trim()] = cipher;
+        }
+
+        await PersistAsync(cancellationToken).ConfigureAwait(false);
+        _logger.LogInformation("Stored upstream secret for model {ModelId}.", modelId);
+    }
+
+    public async Task DeleteAsync(string modelId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(modelId);
+        var removed = false;
+        lock (_lock)
+        {
+            removed = _cache.Remove(modelId.Trim());
+        }
+
+        if (removed)
+        {
+            await PersistAsync(cancellationToken).ConfigureAwait(false);
+            _logger.LogInformation("Removed upstream secret for model {ModelId}.", modelId);
+        }
+    }
+
+    public Task<bool> ExistsAsync(string modelId, CancellationToken cancellationToken = default)
+    {
+        lock (_lock)
+        {
+            return Task.FromResult(_cache.ContainsKey(modelId.Trim()));
+        }
+    }
+
+    private void LoadFromDisk()
+    {
+        var path = ResolvePath();
+        if (!File.Exists(path))
+        {
+            _cache = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            return;
+        }
+
+        try
+        {
+            var json = File.ReadAllText(path);
+            var payload = JsonSerializer.Deserialize<SecretFilePayload>(json);
+            _cache = payload?.Secrets ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to load upstream secrets from {Path}; starting empty.", path);
+            _cache = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        }
+    }
+
+    private async Task PersistAsync(CancellationToken cancellationToken)
+    {
+        var path = ResolvePath();
+        var directory = Path.GetDirectoryName(path)
+            ?? throw new InvalidOperationException($"Cannot resolve directory for '{path}'.");
+        Directory.CreateDirectory(directory);
+
+        Dictionary<string, string> snapshot;
+        lock (_lock)
+        {
+            snapshot = new Dictionary<string, string>(_cache, StringComparer.OrdinalIgnoreCase);
+        }
+
+        var payload = new SecretFilePayload { Version = 1, Secrets = snapshot };
+        var json = JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true });
+        var tempPath = Path.Combine(directory, $".{Path.GetFileName(path)}.{Guid.NewGuid():N}.tmp");
+        await File.WriteAllTextAsync(tempPath, json, cancellationToken).ConfigureAwait(false);
+
+        try
+        {
+            if (File.Exists(path))
+            {
+                File.Replace(tempPath, path, null);
+            }
+            else
+            {
+                File.Move(tempPath, path);
+            }
+        }
+        catch
+        {
+            if (File.Exists(tempPath))
+            {
+                File.Delete(tempPath);
+            }
+
+            throw;
+        }
+    }
+
+    private string ResolvePath()
+    {
+        var path = _gatewayOptions.UpstreamSecretsPath;
+        return Path.IsPathRooted(path) ? path : Path.Combine(AppContext.BaseDirectory, path);
+    }
+
+    private sealed class SecretFilePayload
+    {
+        public int Version { get; set; }
+
+        public Dictionary<string, string> Secrets { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    }
+}

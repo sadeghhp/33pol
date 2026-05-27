@@ -13,17 +13,20 @@ public sealed class ModelRegistryWriter : IModelRegistryWriter
     private readonly ModelRegistryService _registry;
     private readonly RegistryGate _gate;
     private readonly GatewayOptions _options;
+    private readonly IUpstreamSecretStore _secretStore;
     private readonly ILogger<ModelRegistryWriter> _logger;
 
     public ModelRegistryWriter(
         ModelRegistryService registry,
         RegistryGate gate,
         IOptions<GatewayOptions> options,
+        IUpstreamSecretStore secretStore,
         ILogger<ModelRegistryWriter> logger)
     {
         _registry = registry;
         _gate = gate;
         _options = options.Value;
+        _secretStore = secretStore;
         _logger = logger;
     }
 
@@ -154,6 +157,7 @@ public sealed class ModelRegistryWriter : IModelRegistryWriter
             }
 
             await _registry.PersistAndApplyAsync(configPath, models, cancellationToken).ConfigureAwait(false);
+            await _secretStore.DeleteAsync(canonicalId, cancellationToken).ConfigureAwait(false);
             _logger.LogInformation("Removed model {ModelId} from registry.", canonicalId);
 
             return RegistryMutationResult.Ok($"Model '{canonicalId}' removed.");

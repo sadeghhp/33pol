@@ -20,6 +20,32 @@ public static class ModelConfigValidation
             return false;
         }
 
+        var hasEnv = !string.IsNullOrWhiteSpace(model.UpstreamAuth.EnvVar);
+        var hasRef = !string.IsNullOrWhiteSpace(model.UpstreamAuth.SecretRef);
+
+        if (hasEnv && hasRef)
+        {
+            error = "upstreamAuth cannot set both envVar and secretRef.";
+            return false;
+        }
+
+        if (!hasEnv && !hasRef)
+        {
+            error = "upstreamAuth requires envVar or secretRef.";
+            return false;
+        }
+
+        if (hasRef)
+        {
+            if (!UpstreamSecretRefs.IsValidForModel(model.UpstreamAuth.SecretRef, model.Id))
+            {
+                error = "upstreamAuth.secretRef must be 'file:model:{modelId}' matching this model's id.";
+                return false;
+            }
+
+            return true;
+        }
+
         return EnvVarNameValidator.TryValidate(model.UpstreamAuth.EnvVar, out _, out error);
     }
 }

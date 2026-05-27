@@ -7,21 +7,20 @@ namespace Pol33.Integration.Tests.Phase5;
 public sealed class AdminUiSecurityTests
 {
     [Fact]
-    public async Task GetAdminApp_DoesNotPutProviderEnvVarInQueryString()
+    public async Task GetAdminApp_SendsApiKeyInModelWriteBodyNotQueryString()
     {
         await using var factory = GatewayWebApplicationFactory.CreateWithInMemoryDatabase();
         var client = factory.CreateClient();
 
-        var response = await client.GetAsync("/admin/admin-app.js?v=3");
+        var response = await client.GetAsync("/admin/admin-app.js?v=4");
         response.StatusCode.Should().Be(HttpStatusCode.OK);
 
         var body = await response.Content.ReadAsStringAsync();
-        body.Should().Contain("method: 'POST'");
-        body.Should().Contain("JSON.stringify({ envVar");
-        body.Should().NotContain("envVar=' +");
-        body.Should().NotContain("envVar=\" +");
+        body.Should().Contain("modelWriteBody");
+        body.Should().Contain("apiKey");
         body.Should().NotContain("?envVar=");
-        body.Should().NotContain("?modelsUrl=");
+        body.Should().NotContain("?apiKey=");
+        body.Should().NotContain("fetchProviderModels");
     }
 
     [Fact]
@@ -30,7 +29,7 @@ public sealed class AdminUiSecurityTests
         await using var factory = GatewayWebApplicationFactory.CreateWithInMemoryDatabase();
         var client = factory.CreateClient();
 
-        var response = await client.GetAsync("/admin/admin-app.js?v=3");
+        var response = await client.GetAsync("/admin/admin-app.js?v=4");
 
         response.Headers.CacheControl?.ToString().Should().Contain("no-store");
     }
@@ -41,7 +40,7 @@ public sealed class AdminUiSecurityTests
         await using var factory = GatewayWebApplicationFactory.CreateWithInMemoryDatabase();
         var client = factory.CreateClient();
 
-        var response = await client.GetAsync("/admin/admin-app.js?v=3");
+        var response = await client.GetAsync("/admin/admin-app.js?v=4");
         var body = await response.Content.ReadAsStringAsync();
 
         body.Should().Contain("downloadBlob");
@@ -61,11 +60,14 @@ public sealed class AdminUiSecurityTests
             "/admin/api/models",
             new
             {
-                id = "or-bad",
-                url = "https://openrouter.ai/api",
-                aliases = Array.Empty<string>(),
-                maxContextLength = 8192,
-                upstreamAuth = new { type = "bearer", envVar = "sk-or-v1-abcdef0123456789" }
+                model = new
+                {
+                    id = "or-bad",
+                    url = "https://openrouter.ai/api",
+                    aliases = Array.Empty<string>(),
+                    maxContextLength = 8192,
+                    upstreamAuth = new { type = "bearer", envVar = "sk-or-v1-abcdef0123456789" }
+                }
             });
 
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);

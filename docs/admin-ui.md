@@ -15,7 +15,7 @@ Files under `src/33pol.App/wwwroot/admin/` (served at `/admin/`):
 | `admin-app.js` | `adminApp()` — navigation and feature logic |
 | (CDN) | Alpine.js 3.x |
 
-**Load order:** `admin.css` → `admin-errors.js` → `admin-store.js` → `admin-app.js` → Alpine (all deferred). Query `?v=3` on static assets busts caches after upgrades.
+**Load order:** `admin.css` → `admin-errors.js` → `admin-store.js` → `admin-app.js` → Alpine (all deferred). Query `?v=4` on static assets busts caches after upgrades.
 
 **Cache:** `/admin/*` static files are served with `Cache-Control: no-store`.
 
@@ -34,7 +34,7 @@ Files under `src/33pol.App/wwwroot/admin/` (served at `/admin/`):
 |---------|------|---------|
 | Overview | `#/dashboard` | Metrics (2s poll while active + visible), health chips, recent requests |
 | Usage | `#/usage` | Date presets, unified **Apply range**, rollups, events, forecast, export |
-| Routing | `#/routing` | **Models** (registry, discover, drawer) and **Backends** (health table) |
+| Routing | `#/routing` | **Models** (registry, quick-add drawer) and **Backends** (health table) |
 | API keys | `#/keys` | List, create (drawer), revoke (modal) |
 | Settings | `#/settings` | Config status, reload from disk, observability links |
 
@@ -44,7 +44,6 @@ Files under `src/33pol.App/wwwroot/admin/` (served at `/admin/`):
 |-----------|-------------|
 | Invalid admin key (401) | Global banner + header chip |
 | Network / gateway unreachable | Global banner |
-| Provider fetch / validation | Inline under discover (not duplicated globally) |
 | Model save validation | Inline in model drawer |
 | Success actions | Toast (top-right, auto-dismiss) |
 | Unhandled 5xx / HTML errors | Global banner; stack/detail under **Technical details** |
@@ -57,37 +56,52 @@ GET requests retry once on network failure. Usage export uses `downloadBlob` wit
 |---------|-----------|
 | Overview | `GET /admin/api/summary`, `GET /admin/api/requests?limit=25`, `GET /health/live`, `GET /health/ready` |
 | Usage | `GET /admin/api/usage`, `/usage/events`, `/usage/forecast`, `GET /usage/export` |
-| Routing — Models | `GET/POST/PATCH/DELETE /admin/api/models`, provider catalog + POST discovery |
+| Routing — Models | `GET/POST/PATCH/DELETE /admin/api/models` (write body: `{ model, apiKey?, clearApiKey? }`; GET returns `{ model, hasUpstreamCredential }`) |
 | Routing — Backends | `GET /admin/api/backends` |
 | API keys | `GET/POST /admin/api/keys`, `POST …/revoke` |
 | Settings | `GET /admin/api/config/status`, `POST /admin/api/config/reload` |
 
 After adding or editing a model, verify **`GET /v1/models`** (link on Routing → Models).
 
-## Provider model discovery
+## Quick-add model (name + URL + API key)
 
-1. On the gateway host (or Docker `environment`), set the upstream secret, e.g. `OPENROUTER_API_KEY=sk-or-…`.
-2. **Routing → Discover from provider** — enter the **variable name** (`OPENROUTER_API_KEY`), not the secret.
-3. Click **Fetch models**. Errors appear inline on the discover panel.
-4. Click **Add** on a row to open the model drawer for review and save.
+1. **Routing → Add model** (or edit an existing row).
+2. Enter **model name**, **upstream URL**, and optionally an **API key** (password field). Leave the key empty for local upstreams with no auth.
+3. **Save**. The gateway stores the key in an encrypted file (`config/upstream-secrets.enc` by default) and sets `upstreamAuth.secretRef` in the registry — **never** the raw key in `models.json`.
+4. On edit, **Credential stored** means a secret exists; enter a **new API key** to rotate, or check **Remove stored API key** to clear it.
+
+**URL presets** in the drawer only fill the upstream URL (OpenRouter, Together, Groq, LM Studio, vLLM).
+
+**GitOps / env-var auth:** Existing entries with `upstreamAuth.envVar` still work. Set secrets in Docker `.env` and use the variable name in JSON — no UI discover flow required.
+
+**Provider discovery API** (`POST /admin/api/providers/...`) remains for scripts/automation (env-based only); there is no discover panel in the UI.
+
+### Upstream secrets file
+
+| Setting | Default |
+|---------|---------|
+| Path | `Gateway:UpstreamSecretsPath` → `config/upstream-secrets.enc` |
+| Encryption key | Derived from `Gateway:Security:KeyPepper` |
+
+Rotating **KeyPepper** invalidates stored upstream secrets — re-enter API keys in admin. Back up the writable `config/` volume in Docker (same mount as `models.json`).
 
 ### Troubleshooting
 
 | Symptom | Cause | Fix |
 |---------|--------|-----|
-| 400 “not the API key” | Pasted `sk-…` into env var field | Use `OPENROUTER_API_KEY`; set secret on gateway |
-| 400 “Missing API token” | Env var name correct but unset on gateway | Add to `.env` / compose and restart |
-| Stale UI after upgrade | Cached admin assets | Hard refresh; assets use `?v=3` |
-| GET provider models returns 405 | Old client | Use POST with JSON body |
+| 400 on save with `envVar` in JSON | Secret pasted as env var name | Use quick-add **API key** field, or a valid name like `OPENROUTER_API_KEY` in file-based config |
+| Upstream 401 | Missing or wrong stored key | Edit model → set new API key; verify `hasUpstreamCredential` on GET |
+| Stale UI after upgrade | Cached admin assets | Hard refresh; assets use `?v=4` |
+| Docker local LLM fails | Used `localhost` in URL | Use `http://host.docker.internal:<port>` |
 
 ## Security audit (strict)
 
 | # | Area | Verdict | Notes |
 |---|------|---------|--------|
-| 1 | Provider discovery transport | **PASS** | UI uses **POST** only; no `?envVar=` / `?modelsUrl=` in JS |
-| 2 | Provider discovery API | **PASS** | GET on discovery paths returns **405**; POST + `EnvVarNameValidator` |
-| 3 | Registry `upstreamAuth.envVar` | **PASS** | Server rejects secret-like names on POST/PATCH model |
-| 4 | Add/edit model form (UI) | **PASS** | Client validates env var name before save |
+| 1 | Model write transport | **PASS** | API keys in **POST/PATCH JSON body** only (`apiKey`); not in query strings |
+| 2 | Provider discovery API | **PASS** | GET on discovery paths returns **405**; POST + `EnvVarNameValidator` (automation) |
+| 3 | Registry `upstreamAuth.envVar` | **PASS** | Server rejects secret-like env var names on model write |
+| 4 | Upstream secrets at rest | **PASS** | Encrypted file store; GET models never returns `apiKey` |
 | 5 | Admin API key in URL | **PASS** | **`X-API-Key` header** only |
 | 6 | Admin key storage | **ACCEPTED RISK** | `localStorage` — XSS can exfiltrate |
 | 7 | New inference key display | **ACCEPTED** | Secret shown once in create drawer |
@@ -105,7 +119,7 @@ After adding or editing a model, verify **`GET /v1/models`** (link on Routing �
 |------|------------|
 | **XSS** on `/admin` steals the admin key | Trusted network; CSP; short-lived admin keys |
 | **Shared workstation** | **Sign out** or private browser profile |
-| **Key in URL/history** | Provider discovery uses **POST**; admin key in header only |
+| **Key in URL/history** | Model `apiKey` in POST body only; admin key in header only |
 
 ## Docker + host LLM (LM Studio)
 
@@ -116,9 +130,9 @@ When the gateway runs in Docker, upstream URLs must use `http://host.docker.inte
 - [ ] Connect with admin API key → **Connected**; Overview metrics load automatically
 - [ ] `#/routing` — Models and Backends sub-tabs; legacy `#/models` / `#/backends` still work
 - [ ] **Usage:** presets → **Apply range** → rollups + events; export JSON/CSV
-- [ ] **Routing:** Discover → Fetch → Add → save in drawer → `GET /v1/models` updated
-- [ ] **Providers:** paste `sk-…` in env var → inline error only (no POST)
-- [ ] **Providers:** Network tab shows **POST** for fetch
+- [ ] **Routing:** Add model (name + URL + API key) → save → `GET /v1/models` lists id
+- [ ] **Routing:** Edit → rotate API key → upstream still works
+- [ ] **Routing:** Edit → remove stored key → `hasUpstreamCredential` false
 - [ ] **Models:** remove uses confirm dialog (not `confirm()`)
 - [ ] **Backends:** unhealthy first; **Edit model** jumps to Models
 - [ ] **API keys:** create drawer → copy → acknowledge saved; revoke modal
@@ -135,4 +149,4 @@ When the gateway runs in Docker, upstream URLs must use `http://host.docker.inte
 
 - [operator-console.md](./operator-console.md) — CLI equivalent
 - [finops.md](./finops.md) — usage, forecast, webhooks
-- Taiga: **US-admin-enhance** (#613) — admin UI overhaul
+- Taiga: **US-admin-quick-model** / **#613** — admin UI + file-backed upstream secrets

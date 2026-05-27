@@ -27,4 +27,7 @@ public sealed class UpstreamAuthConfig
 
     [JsonPropertyName("envVar")]
     public string EnvVar { get; set; } = string.Empty;
+
+    [JsonPropertyName("secretRef")]
+    public string SecretRef { get; set; } = string.Empty;
 }

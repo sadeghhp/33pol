@@ -24,20 +24,8 @@ function adminApp() {
     backendsFilter: '',
     models: [],
     modelsFilter: '',
-    providers: [],
-    selectedProviderId: 'openrouter',
-    providerEnvVar: 'OPENROUTER_API_KEY',
-    providerModels: [],
-    providerFilter: '',
-    providerError: '',
-    providerErrorTitle: '',
-    providerErrorDetail: '',
-    providerDiscoveryUpstreamUrl: '',
-    providerDiscoveryRequiresAuth: true,
-    customModelsUrl: '',
-    customUpstreamBaseUrl: '',
-    routingView: 'list',
     modelDrawerOpen: false,
+    showAdvancedModel: false,
     keysDrawerOpen: false,
     keysCreatedAck: false,
     keys: [],
@@ -51,7 +39,8 @@ function adminApp() {
     revokeConfirmId: null,
     editModel: {
       id: '', url: '', maxContextLength: 8192, aliasesText: '',
-      useUpstreamAuth: false, upstreamAuthEnvVar: 'OPENROUTER_API_KEY', _existing: false
+      apiKey: '', clearApiKey: false, hasUpstreamCredential: false,
+      upstreamAuth: null, _existing: false
     },
     modelFieldError: '',
     newKey: { role: 'Inference' },
@@ -60,7 +49,6 @@ function adminApp() {
       models: { key: 'id', dir: 1 },
       backends: { key: 'modelId', dir: 1 },
       keys: { key: 'createdAt', dir: -1 },
-      provider: { key: 'id', dir: 1 },
       requests: { key: 'timestampUtc', dir: -1 }
     },
     _saveModelInFlight: false,
@@ -314,7 +302,6 @@ function adminApp() {
       this.createdKey = '';
       this.modelDrawerOpen = false;
       this.keysDrawerOpen = false;
-      this.clearProviderError();
       this.clearMessages();
       this.toast('Signed out — API key cleared from this browser.');
     },
@@ -325,10 +312,7 @@ function adminApp() {
       if (name === 'usage') this.applyUsageRange();
       if (name === 'routing') {
         if (this.routingSubTab === 'backends') this.loadBackends();
-        else {
-          this.loadModels();
-          if (!this.providers?.length) this.loadProviders();
-        }
+        else this.loadModels();
       }
       if (name === 'keys') this.loadKeys();
       if (name === 'settings') this.loadConfigStatus();
@@ -346,42 +330,6 @@ function adminApp() {
         this.pollFailCount = 0;
         this.overviewStale = false;
       });
-    },
-
-    clearProviderError() {
-      this.providerError = '';
-      this.providerErrorTitle = '';
-      this.providerErrorDetail = '';
-    },
-
-    setProviderError(title, message, detail) {
-      this.providerErrorTitle = title || 'Could not fetch models';
-      this.providerError = message || 'Something went wrong.';
-      this.providerErrorDetail = detail || '';
-    },
-
-    looksLikeEnvVarSecret(value) {
-      const v = (value || '').trim();
-      if (!v) return false;
-      if (/^sk-/i.test(v) || /^Bearer\s+/i.test(v)) return true;
-      return v.length >= 32 && !v.includes('_');
-    },
-
-    validateProviderEnvVar() {
-      if (!this.selectedProviderRequiresAuth()) return true;
-      const envVar = (this.providerEnvVar || '').trim();
-      if (!envVar) {
-        const msg = 'Enter the environment variable name (e.g. OPENROUTER_API_KEY).';
-        this.setProviderError('Validation', msg);
-        return false;
-      }
-      if (this.looksLikeEnvVarSecret(envVar)) {
-        this.setProviderError(
-          'Invalid env var',
-          'This looks like an API key secret. Enter the variable name on the gateway (e.g. OPENROUTER_API_KEY), then set the secret in the host or Docker environment.');
-        return false;
-      }
-      return true;
     },
 
     filteredBackends() {
@@ -415,16 +363,6 @@ function adminApp() {
       if (this.keysFilter === 'active') filtered = list.filter(k => !k.isRevoked);
       else if (this.keysFilter === 'revoked') filtered = list.filter(k => k.isRevoked);
       return this.sortedList(filtered, 'keys');
-    },
-
-    filteredProviderModels() {
-      const q = (this.providerFilter || '').trim().toLowerCase();
-      let list = this.providerModels || [];
-      if (q) {
-        list = list.filter(m =>
-          (m.id || '').toLowerCase().includes(q) || (m.name || '').toLowerCase().includes(q));
-      }
-      return this.sortedList(list, 'provider');
     },
 
     sortedRequests() {
@@ -481,12 +419,6 @@ function adminApp() {
       this.modelFieldError = '';
     },
 
-    openDiscover() {
-      this.routingView = 'discover';
-      this.clearProviderError();
-      if (!this.providers?.length) this.loadProviders();
-    },
-
     openKeysDrawer() {
       this.keysDrawerOpen = true;
       this.createdKey = '';
@@ -500,28 +432,18 @@ function adminApp() {
     },
 
     applyModelTemplate(kind) {
-      const templates = {
-        'lmstudio-docker': { url: 'http://host.docker.internal:1234', auth: false },
-        'lmstudio-native': { url: 'http://127.0.0.1:1234', auth: false },
-        'vllm-docker': { url: 'http://host.docker.internal:8000', auth: false }
+      const urls = {
+        'lmstudio-docker': 'http://host.docker.internal:1234',
+        'lmstudio-native': 'http://127.0.0.1:1234',
+        'vllm-docker': 'http://host.docker.internal:8000',
+        openrouter: 'https://openrouter.ai/api',
+        together: 'https://api.together.xyz',
+        groq: 'https://api.groq.com/openai'
       };
-      if (templates[kind]) {
-        const t = templates[kind];
-        this.editModel = {
-          id: '', url: t.url, maxContextLength: 8192, aliasesText: '',
-          useUpstreamAuth: false, upstreamAuthEnvVar: 'OPENROUTER_API_KEY', _existing: false
-        };
-      } else if (['openrouter', 'together', 'groq'].includes(kind)) {
-        const p = this.providers.find(x => x.id === kind) || {};
-        const envVar = (p.defaultEnvVar || 'OPENROUTER_API_KEY').trim();
-        this.editModel = {
-          id: '', url: p.upstreamBaseUrl || '', maxContextLength: 8192, aliasesText: '',
-          useUpstreamAuth: !!p.requiresUpstreamAuth, upstreamAuthEnvVar: envVar, _existing: false
-        };
-        this.selectedProviderId = kind;
-        this.providerEnvVar = envVar;
+      if (urls[kind]) {
+        this.editModel.url = urls[kind];
+        this.toast('URL preset applied — set model name and API key if needed.');
       }
-      this.toast('Template applied — set model id and save.');
     },
 
     async loadSummary(silent) {
@@ -620,60 +542,12 @@ function adminApp() {
 
     async loadModels() {
       await this.runApi('routingModels', 'Loading models…', async () => {
-        this.models = (await this.apiJson('/admin/api/models')) ?? [];
+        const list = (await this.apiJson('/admin/api/models')) ?? [];
+        this.models = (list || []).map(item => ({
+          ...(item.model || item),
+          hasUpstreamCredential: item.hasUpstreamCredential === true
+        }));
       });
-    },
-
-    getSelectedProvider() {
-      return (this.providers || []).find(p => p.id === this.selectedProviderId);
-    },
-
-    selectedProviderRequiresAuth() {
-      const p = this.getSelectedProvider();
-      if (!p) return true;
-      if (p.id === 'custom') return true;
-      return p.requiresUpstreamAuth !== false;
-    },
-
-    onProviderChanged() {
-      this.clearProviderError();
-      const p = this.getSelectedProvider();
-      if (p?.defaultEnvVar) this.providerEnvVar = p.defaultEnvVar;
-      this.providerModels = [];
-      this.providerDiscoveryUpstreamUrl = p?.upstreamBaseUrl || '';
-      this.providerDiscoveryRequiresAuth = this.selectedProviderRequiresAuth();
-      if (p?.id === 'custom' && !this.customModelsUrl && p.modelsListUrl) {
-        this.customModelsUrl = p.modelsListUrl;
-      }
-    },
-
-    async loadProviders() {
-      await this.runApi('routingModels', 'Loading providers…', async () => {
-        const body = await this.apiJson('/admin/api/providers/catalog');
-        this.providers = body?.data || [];
-        if (!this.providers.some(p => p.id === this.selectedProviderId)) {
-          this.selectedProviderId = this.providers[0]?.id || 'openrouter';
-        }
-        this.onProviderChanged();
-      });
-    },
-
-    useProviderModel(m) {
-      const id = (m?.id || '').trim();
-      if (!id) return;
-      const upstreamUrl = (this.providerDiscoveryUpstreamUrl || this.getSelectedProvider()?.upstreamBaseUrl || '').trim();
-      const envVar = (this.providerEnvVar || '').trim();
-      this.editModel = {
-        id, url: upstreamUrl,
-        maxContextLength: m?.contextLength || 8192,
-        aliasesText: '',
-        useUpstreamAuth: this.providerDiscoveryRequiresAuth && !!envVar,
-        upstreamAuthEnvVar: envVar || 'OPENROUTER_API_KEY',
-        _existing: false
-      };
-      this.routingView = 'list';
-      this.modelDrawerOpen = true;
-      this.toast('Review the model details and save.');
     },
 
     editModelFromBackend(modelId) {
@@ -687,95 +561,53 @@ function adminApp() {
       }
     },
 
-    async fetchProviderModels() {
-      if (!this.validateProviderEnvVar()) return;
-      this.clearProviderError();
-      try {
-        await this.store.withLoading('providerFetch', 'Fetching models…', async () => {
-          const envVar = (this.providerEnvVar || '').trim();
-          let body;
-          if (this.selectedProviderId === 'custom') {
-            body = await this.apiJson('/admin/api/providers/models', {
-              method: 'POST',
-              body: JSON.stringify({ modelsUrl: (this.customModelsUrl || '').trim(), envVar })
-            });
-            this.providerDiscoveryUpstreamUrl = (this.customUpstreamBaseUrl || body?.upstreamBaseUrl || '').trim();
-          } else {
-            body = await this.apiJson(
-              '/admin/api/providers/' + encodeURIComponent(this.selectedProviderId) + '/models',
-              { method: 'POST', body: JSON.stringify({ envVar }) });
-            this.providerDiscoveryUpstreamUrl = body?.upstreamBaseUrl || this.getSelectedProvider()?.upstreamBaseUrl || '';
-          }
-          this.providerModels = body?.data || [];
-          const name = this.getSelectedProvider()?.displayName || this.selectedProviderId;
-          this.toast('Fetched models from ' + name + '.');
-        });
-      } catch (e) {
-        this.setProviderError(e.title || 'Error', e.message || String(e), e.detail);
-        if (e.global) this.handleCatch(e);
-      }
-    },
-
-    modelPayload() {
+    modelWriteBody() {
       const aliases = (this.editModel.aliasesText || '').split(',').map(s => s.trim()).filter(Boolean);
-      const payload = {
+      const model = {
         id: this.editModel.id.trim(),
         url: this.editModel.url.trim(),
         maxContextLength: Number(this.editModel.maxContextLength) || 8192,
         aliases
       };
-      if (this.editModel.useUpstreamAuth) {
-        const envVar = (this.editModel.upstreamAuthEnvVar || 'OPENROUTER_API_KEY').trim();
-        if (envVar) payload.upstreamAuth = { type: 'bearer', envVar };
+      if (this.editModel._existing && this.editModel.upstreamAuth && !(this.editModel.apiKey || '').trim() && !this.editModel.clearApiKey) {
+        model.upstreamAuth = this.editModel.upstreamAuth;
       }
-      return payload;
+      const apiKey = (this.editModel.apiKey || '').trim();
+      return {
+        model,
+        apiKey: apiKey || null,
+        clearApiKey: !!this.editModel.clearApiKey
+      };
     },
 
     resetModelForm() {
       this.editModel = {
         id: '', url: '', maxContextLength: 8192, aliasesText: '',
-        useUpstreamAuth: false, upstreamAuthEnvVar: 'OPENROUTER_API_KEY', _existing: false
+        apiKey: '', clearApiKey: false, hasUpstreamCredential: false,
+        upstreamAuth: null, _existing: false
       };
+      this.showAdvancedModel = false;
     },
 
     startEditModel(m) {
       this.editModel = {
         id: m.id, url: m.url, maxContextLength: m.maxContextLength || 8192,
         aliasesText: (m.aliases || []).join(', '),
-        useUpstreamAuth: !!m.upstreamAuth,
-        upstreamAuthEnvVar: m.upstreamAuth?.envVar || 'OPENROUTER_API_KEY',
+        apiKey: '', clearApiKey: false,
+        hasUpstreamCredential: !!m.hasUpstreamCredential,
+        upstreamAuth: m.upstreamAuth || null,
         _existing: true
       };
     },
 
-    validateModelUpstreamEnvVar() {
-      if (!this.editModel.useUpstreamAuth) return true;
-      const envVar = (this.editModel.upstreamAuthEnvVar || '').trim();
-      if (!envVar) {
-        this.modelFieldError = 'Upstream auth env var name is required (e.g. OPENROUTER_API_KEY).';
-        return false;
-      }
-      if (this.looksLikeEnvVarSecret(envVar)) {
-        this.modelFieldError = 'Use the variable name on the gateway, not the API key secret.';
-        return false;
-      }
-      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(envVar)) {
-        this.modelFieldError = 'Use a valid environment variable name (letters, digits, underscore).';
-        return false;
-      }
-      this.modelFieldError = '';
-      return true;
-    },
-
     async saveModel() {
       if (this._saveModelInFlight) return;
-      const payload = this.modelPayload();
-      if (!payload.id || !payload.url) {
-        this.modelFieldError = 'Model id and upstream URL are required.';
+      const write = this.modelWriteBody();
+      if (!write.model.id || !write.model.url) {
+        this.modelFieldError = 'Model name and upstream URL are required.';
         return;
       }
-      if (!this.validateModelUpstreamEnvVar()) return;
-      if (/localhost|127\.0\.0\.1/.test(payload.url)) {
+      if (/localhost|127\.0\.0\.1/.test(write.model.url)) {
         this.modelFieldError = 'Use http://host.docker.internal:<port> when the gateway runs in Docker (not localhost).';
         return;
       }
@@ -783,11 +615,11 @@ function adminApp() {
       try {
         await this.runApi('routingModels', 'Saving model…', async () => {
           const url = this.editModel._existing
-            ? '/admin/api/models/' + encodeURIComponent(payload.id)
+            ? '/admin/api/models/' + encodeURIComponent(write.model.id)
             : '/admin/api/models';
           const body = await this.apiJson(url, {
             method: this.editModel._existing ? 'PATCH' : 'POST',
-            body: JSON.stringify(payload)
+            body: JSON.stringify(write)
           });
           if (body && body.success === false) {
             this.modelFieldError = body.message || 'Could not save model.';

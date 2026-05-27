@@ -6,6 +6,11 @@ public sealed class GatewayOptions
 
     public string ModelsConfigPath { get; set; } = "config/models.json";
 
+    /// <summary>
+    /// Encrypted upstream API keys for models using <c>upstreamAuth.secretRef</c>.
+    /// </summary>
+    public string UpstreamSecretsPath { get; set; } = "config/upstream-secrets.enc";
+
     public int ConfigReloadIntervalSeconds { get; set; } = 2;
 
     public int HealthCheckIntervalSeconds { get; set; } = 30;

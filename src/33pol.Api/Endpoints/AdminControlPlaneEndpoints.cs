@@ -1,8 +1,10 @@
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
+using Pol33.Api.Contracts;
+using Pol33.Api.Services;
 using Pol33.Core.Abstractions;
-using Pol33.Core.Models;
 using Pol33.Core.Security;
 
 namespace Pol33.Api.Endpoints;
@@ -31,28 +33,38 @@ public static class AdminControlPlaneEndpoints
     private static IResult ListBackends(IControlPlaneCommands commands) =>
         Results.Json(commands.ListBackends());
 
-    private static IResult ListModels(IControlPlaneCommands commands) =>
-        Results.Json(commands.ListModels());
+    private static IResult ListModels(AdminModelProvisioningService provisioning) =>
+        Results.Json(provisioning.ListModels());
 
     private static IResult ListRequests(IControlPlaneCommands commands, int? limit) =>
         Results.Json(commands.ListRecentRequests(limit is > 0 and <= 500 ? limit.Value : 50));
 
     private static async Task<IResult> AddModel(
-        IControlPlaneCommands commands,
-        ModelConfig model,
+        AdminModelProvisioningService provisioning,
+        [FromBody] AdminModelWriteRequest? request,
         CancellationToken cancellationToken)
     {
-        var result = await commands.AddModelAsync(model, cancellationToken).ConfigureAwait(false);
+        if (request?.Model is null)
+        {
+            return Results.BadRequest(new { message = "Request body must include model." });
+        }
+
+        var result = await provisioning.AddAsync(request, cancellationToken).ConfigureAwait(false);
         return Results.Json(result, statusCode: result.SuggestedStatusCode);
     }
 
     private static async Task<IResult> UpdateModel(
-        IControlPlaneCommands commands,
+        AdminModelProvisioningService provisioning,
         string id,
-        ModelConfig model,
+        [FromBody] AdminModelWriteRequest? request,
         CancellationToken cancellationToken)
     {
-        var result = await commands.UpdateModelAsync(id, model, cancellationToken).ConfigureAwait(false);
+        if (request?.Model is null)
+        {
+            return Results.BadRequest(new { message = "Request body must include model." });
+        }
+
+        var result = await provisioning.UpdateAsync(id, request, cancellationToken).ConfigureAwait(false);
         return Results.Json(result, statusCode: result.SuggestedStatusCode);
     }
 

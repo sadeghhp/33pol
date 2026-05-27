@@ -79,6 +79,7 @@ internal static class ModelRegistryPersistence
                 {
                     Type = model.UpstreamAuth.Type,
                     EnvVar = model.UpstreamAuth.EnvVar,
+                    SecretRef = model.UpstreamAuth.SecretRef,
                 },
             MaxContextLength = model.MaxContextLength,
             Aliases = [.. model.Aliases],

@@ -16,10 +16,13 @@ public sealed class AdminUiIntegrationTests
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var body = await response.Content.ReadAsStringAsync();
         body.Should().Contain("33pol Gateway Admin");
-        body.Should().Contain("href=\"admin.css?v=3\"");
-        body.Should().Contain("src=\"admin-errors.js?v=3\"");
-        body.Should().Contain("src=\"admin-store.js?v=3\"");
-        body.Should().Contain("src=\"admin-app.js?v=3\"");
+        body.Should().Contain("href=\"admin.css?v=4\"");
+        body.Should().Contain("src=\"admin-errors.js?v=4\"");
+        body.Should().Contain("src=\"admin-store.js?v=4\"");
+        body.Should().Contain("src=\"admin-app.js?v=4\"");
+        body.Should().NotContain("Discover from provider");
+        body.Should().Contain("type=\"password\"");
+        body.Should().Contain("x-model=\"editModel.apiKey\"");
         body.Should().Contain("x-cloak");
         body.Should().Contain("role=\"tabpanel\"");
         body.Should().Contain("app-shell");
@@ -83,8 +86,12 @@ public sealed class AdminUiIntegrationTests
         var body = await response.Content.ReadAsStringAsync();
         body.Should().Contain("function adminApp()");
         body.Should().Contain("/admin/api/summary");
+        body.Should().Contain("modelWriteBody");
+        body.Should().Contain("apiKey");
         body.Should().Contain("downloadBlob");
         body.Should().NotContain("confirm(");
+        body.Should().NotContain("openDiscover");
+        body.Should().NotContain("fetchProviderModels");
     }
 
     [Fact]

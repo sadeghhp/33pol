@@ -13,6 +13,10 @@ public static class RegistryServiceCollectionExtensions
         services.AddSingleton<RegistryGate>();
         services.AddSingleton<ModelRegistryService>();
         services.AddSingleton<IModelRegistry>(sp => sp.GetRequiredService<ModelRegistryService>());
+        services.AddSingleton<FileUpstreamSecretStore>();
+        services.AddSingleton<IUpstreamSecretStore>(sp => sp.GetRequiredService<FileUpstreamSecretStore>());
+        services.AddSingleton<UpstreamBearerTokenResolver>();
+        services.AddSingleton<IUpstreamBearerTokenResolver>(sp => sp.GetRequiredService<UpstreamBearerTokenResolver>());
         services.AddSingleton<ModelRegistryWriter>();
         services.AddSingleton<IModelRegistryWriter>(sp => sp.GetRequiredService<ModelRegistryWriter>());
         services.AddSingleton<BackendHealthStore>();

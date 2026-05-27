@@ -1,6 +1,5 @@
 using System.Text.Json;
 using Microsoft.AspNetCore.Http;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -38,7 +37,7 @@ public sealed class ModelRouterMiddleware
     private readonly IHttpForwarder _forwarder;
     private readonly HttpMessageInvoker _httpClient;
     private readonly TimeSpan _forwardTimeout;
-    private readonly IConfiguration _configuration;
+    private readonly IUpstreamBearerTokenResolver _upstreamBearerTokenResolver;
     private readonly ILogger<ModelRouterMiddleware> _logger;
 
     public ModelRouterMiddleware(
@@ -59,7 +58,7 @@ public sealed class ModelRouterMiddleware
         IHttpForwarder forwarder,
         HttpMessageInvoker httpClient,
         IOptions<GatewayOptions> options,
-        IConfiguration configuration,
+        IUpstreamBearerTokenResolver upstreamBearerTokenResolver,
         ILogger<ModelRouterMiddleware> logger)
     {
         _next = next;
@@ -79,7 +78,7 @@ public sealed class ModelRouterMiddleware
         _forwarder = forwarder;
         _httpClient = httpClient;
         _forwardTimeout = TimeSpan.FromSeconds(options.Value.Resilience.ForwardTimeoutSeconds);
-        _configuration = configuration;
+        _upstreamBearerTokenResolver = upstreamBearerTokenResolver;
         _logger = logger;
     }
 
@@ -233,7 +232,7 @@ public sealed class ModelRouterMiddleware
                 started,
                 usageTenant);
 
-            var upstreamBearerToken = ResolveUpstreamBearerTokenOrNull(modelConfig.UpstreamAuth);
+            var upstreamBearerToken = _upstreamBearerTokenResolver.ResolveBearerToken(modelConfig.UpstreamAuth);
             if (modelConfig.UpstreamAuth is not null && string.IsNullOrWhiteSpace(upstreamBearerToken))
             {
                 _circuitBreakers.RecordFailure(modelConfig.Id);
@@ -322,26 +321,6 @@ public sealed class ModelRouterMiddleware
                 }
             }
         }
-    }
-
-    private string? ResolveUpstreamBearerTokenOrNull(UpstreamAuthConfig? upstreamAuth)
-    {
-        if (upstreamAuth is null)
-        {
-            return null;
-        }
-
-        if (!string.Equals(upstreamAuth.Type, "bearer", StringComparison.OrdinalIgnoreCase))
-        {
-            return null;
-        }
-
-        if (string.IsNullOrWhiteSpace(upstreamAuth.EnvVar))
-        {
-            return null;
-        }
-
-        return _configuration[upstreamAuth.EnvVar] ?? Environment.GetEnvironmentVariable(upstreamAuth.EnvVar);
     }
 
     private void RecordRecentRequest(

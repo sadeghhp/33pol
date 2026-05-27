@@ -4,10 +4,10 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>33pol Admin</title>
-  <link rel="stylesheet" href="admin.css?v=3" />
-  <script defer src="admin-errors.js?v=3"></script>
-  <script defer src="admin-store.js?v=3"></script>
-  <script defer src="admin-app.js?v=3"></script>
+  <link rel="stylesheet" href="admin.css?v=4" />
+  <script defer src="admin-errors.js?v=4"></script>
+  <script defer src="admin-store.js?v=4"></script>
+  <script defer src="admin-app.js?v=4"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.9/dist/cdn.min.js"></script>
 </head>
 <body x-data="adminApp()" x-init="init()" x-cloak @keydown.window="onModalKeydown($event)">
@@ -238,107 +238,46 @@
           </div>
 
           <div x-show="routingSubTab === 'models'">
-            <div class="toolbar" x-show="routingView === 'list'">
+            <div class="toolbar">
               <label style="flex:1;max-width:16rem;margin:0">Search
                 <input x-model="modelsFilter" placeholder="id, url, alias…" style="margin-bottom:0" />
               </label>
               <button type="button" class="action" @click="openModelDrawer()">Add model</button>
-              <button type="button" class="action secondary" @click="openDiscover()">Discover from provider</button>
               <button type="button" class="action secondary" @click="loadModels()" :disabled="isLoading('routingModels')">Refresh</button>
               <a class="action secondary" href="/v1/models" target="_blank" rel="noopener">Verify /v1/models</a>
             </div>
-
-            <div x-show="routingView === 'discover'">
-              <div class="toolbar">
-                <button type="button" class="action secondary" @click="routingView = 'list'">← Back to registry</button>
-              </div>
-              <p class="hint">List models from an OpenAI-compatible provider. Set the provider API key as an environment variable on the gateway host.</p>
-              <div class="grid">
-                <label>Provider
-                  <select x-model="selectedProviderId" @change="onProviderChanged()">
-                    <template x-for="p in providers" :key="p.id">
-                      <option :value="p.id" x-text="p.displayName"></option>
-                    </template>
-                  </select>
-                </label>
-                <label>API key env var (on gateway)
-                  <input x-model="providerEnvVar" placeholder="OPENROUTER_API_KEY" :disabled="!selectedProviderRequiresAuth()"
-                    @input="clearProviderError()" />
-                </label>
-                <label x-show="selectedProviderId === 'custom'">Models list URL
-                  <input x-model="customModelsUrl" placeholder="https://api.example.com/v1/models" />
-                </label>
-                <label x-show="selectedProviderId === 'custom'">Upstream base URL (optional)
-                  <input x-model="customUpstreamBaseUrl" placeholder="https://api.example.com" />
-                </label>
-                <label>Filter results <input x-model="providerFilter" placeholder="claude, gpt…" /></label>
-              </div>
-              <div class="toolbar">
-                <button type="button" class="action" @click="fetchProviderModels()"
-                  :disabled="isLoading('providerFetch')" x-text="isLoading('providerFetch') ? 'Fetching…' : 'Fetch models'"></button>
-              </div>
-              <div id="provider-fetch-alert" class="error" role="alert" x-show="providerError">
-                <strong x-text="providerErrorTitle"></strong>
-                <p x-text="providerError"></p>
-                <details x-show="providerErrorDetail"><summary>Technical details</summary><pre x-text="providerErrorDetail"></pre></details>
-              </div>
-              <div class="table-wrap">
-                <table x-show="filteredProviderModels().length">
-                  <thead>
+            <div class="table-wrap">
+              <table x-show="filteredModelsList().length">
+                <thead>
+                  <tr>
+                    <th class="sortable" @click="sortToggle('models','id')">ID<span x-text="sortIndicator('models','id')"></span></th>
+                    <th>URL</th><th>Aliases</th><th>Context</th><th>Auth</th><th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <template x-for="m in filteredModelsList()" :key="m.id">
                     <tr>
-                      <th class="sortable" @click="sortToggle('provider','id')">ID<span x-text="sortIndicator('provider','id')"></span></th>
-                      <th>Name</th><th>Context</th><th></th>
+                      <td>
+                        <code x-text="m.id"></code>
+                        <button type="button" class="action ghost icon" @click="copyText(m.id,'ID copied.')" title="Copy">⎘</button>
+                      </td>
+                      <td>
+                        <code x-text="m.url"></code>
+                        <button type="button" class="action ghost icon" @click="copyText(m.url,'URL copied.')" title="Copy">⎘</button>
+                      </td>
+                      <td x-text="(m.aliases || []).join(', ') || '—'"></td>
+                      <td x-text="m.maxContextLength"></td>
+                      <td x-text="m.hasUpstreamCredential ? 'stored' : '—'"></td>
+                      <td>
+                        <button type="button" class="action ghost" @click="openModelDrawer(m)">Edit</button>
+                        <button type="button" class="action danger" @click="confirmRemoveModel(m.id)">Remove</button>
+                      </td>
                     </tr>
-                  </thead>
-                  <tbody>
-                    <template x-for="m in filteredProviderModels()" :key="m.id">
-                      <tr>
-                        <td><code x-text="m.id"></code></td>
-                        <td x-text="m.name ?? '—'"></td>
-                        <td x-text="m.contextLength ?? '—'"></td>
-                        <td><button type="button" class="action" @click="useProviderModel(m)">Add</button></td>
-                      </tr>
-                    </template>
-                  </tbody>
-                </table>
-              </div>
-              <p class="empty-state" x-show="!isLoading('providerFetch') && !filteredProviderModels().length && !providerError">
-                Fetch models from your provider, or adjust the filter.</p>
+                  </template>
+                </tbody>
+              </table>
             </div>
-
-            <div x-show="routingView === 'list'">
-              <div class="table-wrap">
-                <table x-show="filteredModelsList().length">
-                  <thead>
-                    <tr>
-                      <th class="sortable" @click="sortToggle('models','id')">ID<span x-text="sortIndicator('models','id')"></span></th>
-                      <th>URL</th><th>Aliases</th><th>Context</th><th></th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <template x-for="m in filteredModelsList()" :key="m.id">
-                      <tr>
-                        <td>
-                          <code x-text="m.id"></code>
-                          <button type="button" class="action ghost icon" @click="copyText(m.id,'ID copied.')" title="Copy">⎘</button>
-                        </td>
-                        <td>
-                          <code x-text="m.url"></code>
-                          <button type="button" class="action ghost icon" @click="copyText(m.url,'URL copied.')" title="Copy">⎘</button>
-                        </td>
-                        <td x-text="(m.aliases || []).join(', ') || '—'"></td>
-                        <td x-text="m.maxContextLength"></td>
-                        <td>
-                          <button type="button" class="action ghost" @click="openModelDrawer(m)">Edit</button>
-                          <button type="button" class="action danger" @click="confirmRemoveModel(m.id)">Remove</button>
-                        </td>
-                      </tr>
-                    </template>
-                  </tbody>
-                </table>
-              </div>
-              <p class="empty-state" x-show="!isLoading('routingModels') && !filteredModelsList().length">No models registered. Add one or discover from a provider.</p>
-            </div>
+            <p class="empty-state" x-show="!isLoading('routingModels') && !filteredModelsList().length">No models registered. Use Add model to register an upstream.</p>
           </div>
         </section>
 
@@ -418,9 +357,9 @@
         <h3 id="model-drawer-title" x-text="editModel._existing ? 'Edit model' : 'Add model'"></h3>
         <button type="button" class="action ghost" @click="closeModelDrawer()">Close</button>
       </div>
-      <label>Start from template
+      <label>URL preset (optional)
         <select @change="applyModelTemplate($event.target.value); $event.target.value=''">
-          <option value="">— Choose template —</option>
+          <option value="">— Choose preset —</option>
           <option value="lmstudio-docker">LM Studio (Docker)</option>
           <option value="lmstudio-native">LM Studio (native)</option>
           <option value="openrouter">OpenRouter</option>
@@ -429,17 +368,22 @@
           <option value="vllm-docker">vLLM (Docker)</option>
         </select>
       </label>
-      <label>Model ID <input x-model="editModel.id" :disabled="!!editModel._existing" /></label>
-      <label>Upstream URL <input x-model="editModel.url" placeholder="http://host.docker.internal:1234" /></label>
-      <label>Max context <input type="number" x-model.number="editModel.maxContextLength" min="1" /></label>
-      <label>Aliases (comma-separated) <input x-model="editModel.aliasesText" /></label>
-      <label class="checkbox">
-        <input type="checkbox" x-model="editModel.useUpstreamAuth" /> Upstream bearer auth
+      <label>Model name <input x-model="editModel.id" :disabled="!!editModel._existing" autocomplete="off" /></label>
+      <label>Upstream URL <input x-model="editModel.url" placeholder="https://openrouter.ai/api or http://host.docker.internal:1234" autocomplete="off" /></label>
+      <p class="hint">When the gateway runs in Docker, use <code>host.docker.internal</code> instead of <code>localhost</code> for local upstreams.</p>
+      <label x-text="editModel._existing ? 'New API key (leave blank to keep current)' : 'API key (optional)'">
+        <input type="password" x-model="editModel.apiKey" autocomplete="new-password" placeholder="sk-…" />
       </label>
-      <label x-show="editModel.useUpstreamAuth">Auth env var (on gateway)
-        <input x-model="editModel.upstreamAuthEnvVar" placeholder="OPENROUTER_API_KEY" />
+      <p class="hint" x-show="editModel._existing && editModel.hasUpstreamCredential && !(editModel.apiKey || '').trim()">Credential stored on gateway. Enter a new key above to rotate.</p>
+      <label class="checkbox" x-show="editModel._existing && editModel.hasUpstreamCredential">
+        <input type="checkbox" x-model="editModel.clearApiKey" /> Remove stored API key
       </label>
-      <p class="hint" x-show="editModel.useUpstreamAuth">Variable name only — set the secret in gateway environment, not here.</p>
+      <button type="button" class="action ghost" @click="showAdvancedModel = !showAdvancedModel"
+        x-text="showAdvancedModel ? 'Hide advanced' : 'Advanced options'"></button>
+      <div x-show="showAdvancedModel">
+        <label>Max context <input type="number" x-model.number="editModel.maxContextLength" min="1" /></label>
+        <label>Aliases (comma-separated) <input x-model="editModel.aliasesText" /></label>
+      </div>
       <p class="warn-inline" x-show="urlLooksLocalhost()">localhost may fail from Docker — use host.docker.internal instead.</p>
       <p class="field-error" x-show="modelFieldError" x-text="modelFieldError"></p>
       <button type="button" class="action" @click="saveModel()" :disabled="isLoading('routingModels')"

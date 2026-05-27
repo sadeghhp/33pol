@@ -359,7 +359,12 @@ public sealed class ModelRegistryWriterTests
     private static ModelRegistryWriter CreateWriter(ModelRegistryService registry, string path)
     {
         var options = Options.Create(new GatewayOptions { ModelsConfigPath = path });
-        return new ModelRegistryWriter(registry, new RegistryGate(), options, NullLogger<ModelRegistryWriter>.Instance);
+        return new ModelRegistryWriter(
+            registry,
+            new RegistryGate(),
+            options,
+            new TestUpstreamSecretStore(),
+            NullLogger<ModelRegistryWriter>.Instance);
     }
 
     private static async Task<string> WriteTempConfigAsync(string json)

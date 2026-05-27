@@ -50,10 +50,15 @@ The whole `deploy/docker/config/` directory is mounted at `/app/config` (includi
 
 ### OpenRouter (cloud)
 
-1. Add to `.env` (optional): `OPENROUTER_API_KEY=sk-or-...` — passed into the gateway container when set.
-2. Restart stack: `docker compose up -d --build`
-3. Admin UI → **Models** → **Fetch OpenRouter models** → **Use** → **Add model** (upstream auth is prefilled).
-4. Create an **Inference** API key; clients use the gateway URL + that key (not the OpenRouter key).
+**Recommended (no provider key in `.env`):**
+
+1. Open http://localhost:8080/admin → sign in with `GATEWAY_ADMIN_API_KEY`.
+2. **Routing → Add model** — model name (e.g. `anthropic/claude-3.5-sonnet`), URL `https://openrouter.ai/api`, paste your OpenRouter API key.
+3. **API keys → Create** an inference key for clients.
+
+The gateway writes `config/upstream-secrets.enc` on the mounted `config/` volume (writable). Restart preserves secrets.
+
+**Optional GitOps:** set `OPENROUTER_API_KEY` in `.env` and use `upstreamAuth.envVar` in `models.json` instead of the admin API key field. Provider discovery HTTP API is still available for automation (not exposed in the UI).
 
 See [docs/integrations.md](../../docs/integrations.md#openrouter).
 

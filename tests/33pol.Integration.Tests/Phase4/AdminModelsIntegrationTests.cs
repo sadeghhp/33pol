@@ -22,7 +22,8 @@ public sealed class AdminModelsIntegrationTests
         var models = await response.Content.ReadFromJsonAsync<JsonElement>();
         models.ValueKind.Should().Be(JsonValueKind.Array);
         models.GetArrayLength().Should().BeGreaterThan(0);
-        models[0].GetProperty("id").GetString().Should().NotBeNullOrEmpty();
+        models[0].GetProperty("model").GetProperty("id").GetString().Should().NotBeNullOrEmpty();
+        models[0].TryGetProperty("hasUpstreamCredential", out _).Should().BeTrue();
     }
 
     [Fact]

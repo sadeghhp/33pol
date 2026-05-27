@@ -6,7 +6,6 @@ document.addEventListener('alpine:init', () => {
     routingBackends: false,
     keys: false,
     settings: false,
-    providerFetch: false,
     auth: false
   });
 
