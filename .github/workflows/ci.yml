@@ -74,10 +74,14 @@ jobs:
           SHELLCHECK_OPTS: -e SC1091
         run: |
           shellcheck scripts/install-33pol.sh scripts/install/install-33pol.sh scripts/install/lib/*.sh \
+            scripts/host-health/ubuntu-healthcheck.sh scripts/host-health/lib/*.sh \
             perf/ci/verify-compose-health-gpu.sh perf/ci/verify-compose-health.sh
 
       - name: Bats install lib tests
         run: bats tests/install/
+
+      - name: Bats host-health tests
+        run: bats tests/host-health/
 
   k6-smoke:
     runs-on: ubuntu-latest

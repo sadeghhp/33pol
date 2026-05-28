@@ -19,13 +19,15 @@ install_prompt_profile() {
   fi
   local choice
   echo "Select deployment profile:" >&2
-  echo "  1) gpu-gateway  — Postgres + gateway (remote GPU server)" >&2
-  echo "  2) full-stack   — adds mock upstream, Prometheus, Grafana" >&2
+  echo "  1) gpu-gateway       — Postgres + gateway (remote GPU server)" >&2
+  echo "  2) gpu-observability — above + Prometheus + Grafana (no mock)" >&2
+  echo "  3) full-stack        — above + WireMock mock upstream (local demo)" >&2
   read -rp "Choice [1]: " choice
   choice="${choice:-1}"
   case "${choice}" in
     1|gpu-gateway) echo "gpu-gateway" ;;
-    2|full-stack) echo "full-stack" ;;
+    2|gpu-observability) echo "gpu-observability" ;;
+    3|full-stack) echo "full-stack" ;;
     *) die "Invalid profile choice" ;;
   esac
 }
@@ -92,7 +94,7 @@ install_prompt_gpu_upstream() {
 
 install_resolve_install_config() {
   INSTALL_PROFILE="$(install_prompt_profile)"
-  install_validate_profile "${INSTALL_PROFILE}" || die "Invalid profile: ${INSTALL_PROFILE} (use gpu-gateway or full-stack)"
+  install_validate_profile "${INSTALL_PROFILE}" || die "Invalid profile: ${INSTALL_PROFILE} (use gpu-gateway, gpu-observability, or full-stack)"
 
   # Preserve INSTALL_DIR from resolve_install_dir() or --install-dir; only default when unset.
   if [[ -z "${INSTALL_DIR:-}" ]]; then
@@ -131,13 +133,13 @@ install_resolve_install_config() {
   fi
 
   INSTALL_POSTGRES_USER="${INSTALL_POSTGRES_USER:-gateway}"
-  if [[ "${INSTALL_PROFILE}" == gpu-gateway ]]; then
+  if [[ "${INSTALL_PROFILE}" == gpu-gateway || "${INSTALL_PROFILE}" == gpu-observability ]]; then
     INSTALL_POSTGRES_PASSWORD="${INSTALL_POSTGRES_PASSWORD:-$(install_generate_password)}"
   else
     INSTALL_POSTGRES_PASSWORD="${INSTALL_POSTGRES_PASSWORD:-gateway}"
   fi
 
-  if [[ "${INSTALL_PROFILE}" == gpu-gateway ]]; then
+  if [[ "${INSTALL_PROFILE}" == gpu-gateway || "${INSTALL_PROFILE}" == gpu-observability ]]; then
     INSTALL_ASPNET_ENV="${INSTALL_ASPNET_ENV:-Production}"
     install_prompt_gpu_upstream
   else

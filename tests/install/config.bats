@@ -18,11 +18,18 @@ setup() {
   [[ "${output}" == *"GATEWAY_PORT=8080"* ]]
 }
 
+@test "install_build_env_content uses observability profile for gpu-observability" {
+  local output
+  output="$(install_build_env_content gpu-observability 8080 0.0.0.0 sk-admin gateway pass 0.0.0.0 5432 Production)"
+  [[ "${output}" == *"COMPOSE_PROFILES=observability"* ]]
+}
+
 @test "install_build_env_content omits full profile for gpu-gateway" {
   local output
   output="$(install_build_env_content gpu-gateway 9090 127.0.0.1 sk-admin gateway pass 127.0.0.1 5432 Production)"
   [[ "${output}" == *"COMPOSE_PROFILES="* ]]
   [[ "${output}" != *"COMPOSE_PROFILES=full"* ]]
+  [[ "${output}" != *"COMPOSE_PROFILES=observability"* ]]
   [[ "${output}" == *"ASPNETCORE_ENVIRONMENT=Production"* ]]
 }
 

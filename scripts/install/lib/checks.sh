@@ -27,6 +27,7 @@ install_profile_to_compose_profiles() {
   local profile="$1"
   case "${profile}" in
     gpu-gateway) echo "" ;;
+    gpu-observability) echo "observability" ;;
     full-stack) echo "full" ;;
     *) return 1 ;;
   esac

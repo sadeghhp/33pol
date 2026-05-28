@@ -23,7 +23,7 @@ services:
       start_period: 10s
 
   mock-upstream:
-    profiles: ["full"]
+    profiles: ["mock", "full"]
     image: wiremock/wiremock:3.9.1
     restart: unless-stopped
     command: ["--global-response-templating", "--verbose"]
@@ -68,6 +68,7 @@ services:
       MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
       FIREWORKS_API_KEY: ${FIREWORKS_API_KEY:-}
       DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:-}
+      Quota__DefaultMonthlyTokenLimit: ${QUOTA_MONTHLY_TOKEN_LIMIT:-10000000}
       DOTNET_SYSTEM_NET_HTTP_SOCKETSHTTPHANDLER_HTTP2SUPPORT: "false"
     volumes:
       # Directory mount: atomic rename works; single-file bind mounts often return EBUSY on save.
@@ -75,14 +76,14 @@ services:
     ports:
       - "${GATEWAY_BIND:-0.0.0.0}:${GATEWAY_PORT:-8080}:8080"
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health/live >/dev/null || exit 1"]
+      test: ["CMD", "/app/healthcheck.sh"]
       interval: 10s
       timeout: 5s
       retries: 6
       start_period: 30s
 
   prometheus:
-    profiles: ["full"]
+    profiles: ["observability", "full"]
     image: prom/prometheus:v2.55.1
     restart: unless-stopped
     command:
@@ -98,11 +99,9 @@ services:
     depends_on:
       gateway:
         condition: service_healthy
-      mock-upstream:
-        condition: service_healthy
 
   grafana:
-    profiles: ["full"]
+    profiles: ["observability", "full"]
     image: grafana/grafana:11.3.0
     restart: unless-stopped
     environment:

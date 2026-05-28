@@ -40,7 +40,7 @@ Commands:
 
 Install options:
   -y, --yes              Non-interactive with generated defaults
-  --profile PROFILE      gpu-gateway | full-stack
+  --profile PROFILE      gpu-gateway | gpu-observability | full-stack
   --install-dir PATH     Install/clone directory (default: ~/33pol)
   --git-url URL          Git remote (default: https://github.com/sadeghhp/33pol.git)
   --git-ref REF          Branch or tag (default: main)
@@ -62,7 +62,7 @@ parse_global_flags() {
       -y|--yes) INSTALL_YES=true; shift ;;
       --profile)
         INSTALL_PROFILE="$2"
-        install_validate_profile "${INSTALL_PROFILE}" || die "Invalid --profile: ${INSTALL_PROFILE} (gpu-gateway | full-stack)"
+        install_validate_profile "${INSTALL_PROFILE}" || die "Invalid --profile: ${INSTALL_PROFILE} (gpu-gateway | gpu-observability | full-stack)"
         shift 2
         ;;
       --install-dir) INSTALL_DIR="$2"; shift 2 ;;
@@ -212,9 +212,9 @@ cmd_install() {
 
   install_write_env_file "${INSTALL_DIR}" "${env_content}"
 
-  if [[ "${INSTALL_PROFILE}" == gpu-gateway ]]; then
+  if [[ "${INSTALL_PROFILE}" == gpu-gateway || "${INSTALL_PROFILE}" == gpu-observability ]]; then
     if ! install_validate_model_id "${INSTALL_GPU_MODEL_ID:-local-llm}"; then
-      die "Invalid model id for gpu-gateway"
+      die "Invalid model id for ${INSTALL_PROFILE}"
     fi
     install_seed_models_gpu "${INSTALL_DIR}" \
       "${INSTALL_GPU_MODEL_ID:-local-llm}" \
@@ -265,6 +265,8 @@ cmd_upgrade() {
   local profile="gpu-gateway"
   if [[ "${COMPOSE_PROFILES:-}" == *full* ]]; then
     profile="full-stack"
+  elif [[ "${COMPOSE_PROFILES:-}" == *observability* ]]; then
+    profile="gpu-observability"
   fi
   install_run_verify_script "${INSTALL_DIR}" "${profile}"
   log "Upgrade complete."

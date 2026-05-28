@@ -21,15 +21,21 @@ if [[ "${running_services}" != *postgres* ]]; then
   exit 1
 fi
 
-full_profile_active=false
-if [[ "${COMPOSE_PROFILES:-}" == *full* ]]; then
-  full_profile_active=true
+mock_profile_active=false
+observability_profile_active=false
+if [[ "${COMPOSE_PROFILES:-}" == *mock* || "${COMPOSE_PROFILES:-}" == *full* ]]; then
+  mock_profile_active=true
+fi
+if [[ "${COMPOSE_PROFILES:-}" == *observability* || "${COMPOSE_PROFILES:-}" == *full* ]]; then
+  observability_profile_active=true
 fi
 
-if [[ "${full_profile_active}" == true ]]; then
+if [[ "${mock_profile_active}" == true ]]; then
   curl -sf "http://localhost:${MOCK_UPSTREAM_PORT:-18080}/v1/models" >/dev/null
   echo "mock-upstream OK"
+fi
 
+if [[ "${observability_profile_active}" == true ]]; then
   curl -sf "http://localhost:${PROMETHEUS_PORT:-9090}/-/healthy" >/dev/null
   echo "prometheus OK"
 
@@ -37,9 +43,9 @@ if [[ "${full_profile_active}" == true ]]; then
   echo "grafana OK"
 
   bash "$(dirname "$0")/verify-grafana-dashboards.sh"
-else
-  echo "COMPOSE_PROFILES does not include 'full'; skipping mock/prometheus/grafana checks" >&2
-  echo "For full-stack verification set COMPOSE_PROFILES=full in .env" >&2
+elif [[ "${mock_profile_active}" != true ]]; then
+  echo "COMPOSE_PROFILES does not include 'observability' or 'full'; skipping prometheus/grafana checks" >&2
+  echo "For observability set COMPOSE_PROFILES=observability in .env" >&2
 fi
 
 if [[ "${running_services}" == *gateway* ]]; then

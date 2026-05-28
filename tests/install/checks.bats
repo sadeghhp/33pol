@@ -24,6 +24,10 @@ setup() {
   [ -z "$(install_profile_to_compose_profiles gpu-gateway)" ]
 }
 
+@test "install_profile_to_compose_profiles gpu-observability is observability" {
+  [ "$(install_profile_to_compose_profiles gpu-observability)" = "observability" ]
+}
+
 @test "install_profile_to_compose_profiles full-stack is full" {
   [ "$(install_profile_to_compose_profiles full-stack)" = "full" ]
 }
@@ -34,6 +38,7 @@ setup() {
 
 @test "install_validate_profile accepts known profiles" {
   install_validate_profile gpu-gateway
+  install_validate_profile gpu-observability
   install_validate_profile full-stack
   ! install_validate_profile invalid
 }

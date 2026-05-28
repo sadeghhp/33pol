@@ -93,9 +93,16 @@ bash perf/ci/verify-compose-health-gpu.sh
 curl -s http://127.0.0.1:8080/health/live
 ```
 
-## Full local demo stack
+## Observability on the GPU host
 
-For mock upstream, Prometheus, and Grafana on the same machine, use **full-stack**:
+For Prometheus and Grafana without a mock upstream, use **gpu-observability**:
+
+```bash
+# In .env: COMPOSE_PROFILES=observability
+./scripts/install-33pol.sh install --yes --profile gpu-observability
+```
+
+For mock upstream plus observability (local demo only), use **full-stack**:
 
 ```bash
 cp .env.example .env   # COMPOSE_PROFILES=full

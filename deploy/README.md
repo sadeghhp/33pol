@@ -16,9 +16,9 @@ See [docker/README.md](./docker/README.md) for Compose usage.
 ./scripts/install-33pol.sh install
 ```
 
-Profiles: **gpu-gateway** (Postgres + gateway) or **full-stack** (adds mock, Prometheus, Grafana). See [docs/deploy-remote-gpu.md](../docs/deploy-remote-gpu.md).
+Profiles: **gpu-gateway**, **gpu-observability** (Prometheus + Grafana), or **full-stack** (adds mock upstream). See [docs/deploy-remote-gpu.md](../docs/deploy-remote-gpu.md).
 
-Compose profiles use `COMPOSE_PROFILES=full` in `.env` (see `.env.example`).
+Compose profiles use `COMPOSE_PROFILES` in `.env` (see `.env.example`): `observability` or `full`.
 
 ## Helm
 

@@ -38,11 +38,7 @@ install_run_verify_script() {
     log "[dry-run] skip verify scripts"
     return 0
   fi
-  if [[ "${profile}" == full-stack ]]; then
-    bash "${script_dir}/verify-compose-health.sh"
-  else
-    bash "${script_dir}/verify-compose-health-gpu.sh"
-  fi
+  bash "${script_dir}/verify-compose-health.sh"
 }
 
 install_probe_host_upstream() {

@@ -13,3 +13,4 @@ src/33pol.App/appsettings.Development.local.json
 deploy/docker/.env
 TestResults-*
 perf/*
+.env

@@ -7,9 +7,10 @@ Runs **gateway** and **Postgres** by default. Optional Compose profile **`full`*
 | Profile | `COMPOSE_PROFILES` | Services |
 |---------|----------------------|----------|
 | **gpu-gateway** (default) | empty / unset | `postgres`, `gateway` |
-| **full-stack** (local demo) | `full` | above + `mock-upstream`, `prometheus`, `grafana` |
+| **gpu-observability** | `observability` | above + `prometheus`, `grafana` |
+| **full-stack** (local demo) | `full` | above + `mock-upstream` |
 
-Set in `.env` (see `.env.example`). Without `COMPOSE_PROFILES=full`, `docker compose up` starts only Postgres and the gateway — suitable for remote GPU servers with vLLM/Ollama on the host.
+Set in `.env` (see `.env.example`). Use `observability` on GPU servers that need metrics dashboards without WireMock. Use `full` only for local demo stacks with a mock upstream.
 
 Interactive install: [../../scripts/install-33pol.sh](../../scripts/install-33pol.sh) and [docs/deploy-remote-gpu.md](../../docs/deploy-remote-gpu.md).
 
