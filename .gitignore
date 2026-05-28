@@ -3,7 +3,10 @@
 **/obj/**
 TestResults/
 TestResults-*
+# perf run artifacts; keep CI scripts and k6 sources in repo
 perf/*
+!perf/ci/
+!perf/k6/
 
 # API keys, tokens, and environment secrets
 .env
