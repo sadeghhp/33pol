@@ -105,6 +105,86 @@ public sealed class InferenceHttpForwarderTests
         error.Should().BeOneOf(ForwarderError.RequestTimedOut, ForwarderError.RequestCanceled);
     }
 
+    [Fact]
+    public async Task SendAsync_Streaming_ClientDisconnectDuringCopy_ReturnsRequestCanceled()
+    {
+        var handler = new DelayedSseUpstreamHandler();
+        var forwarder = new InferenceHttpForwarder(
+            new SingleHandlerClientFactory(handler),
+            NullLogger<InferenceHttpForwarder>.Instance);
+
+        var context = CreatePostContext("""{"model":"gpt","stream":true}""");
+        context.Response.Body = new ThrowingAfterFirstWriteStream();
+        var transformer = new StreamingHttpTransformer(true, "gpt", "gpt");
+
+        var error = await forwarder.SendAsync(
+            context,
+            "http://backend:8000",
+            null,
+            transformer,
+            isStreaming: true,
+            CancellationToken.None);
+
+        error.Should().Be(ForwarderError.RequestCanceled);
+    }
+
+    [Fact]
+    public async Task SendAsync_Streaming_SkipsHopByHopHeaders()
+    {
+        var handler = new StreamingHeadersUpstreamHandler();
+        var forwarder = new InferenceHttpForwarder(
+            new SingleHandlerClientFactory(handler),
+            NullLogger<InferenceHttpForwarder>.Instance);
+
+        var context = CreatePostContext("""{"model":"gpt","stream":true}""");
+        var transformer = new StreamingHttpTransformer(true, "gpt", "gpt");
+
+        var error = await forwarder.SendAsync(
+            context,
+            "http://backend:8000",
+            upstreamBearerToken: null,
+            transformer,
+            isStreaming: true,
+            CancellationToken.None);
+
+        error.Should().Be(ForwarderError.None);
+        context.Response.Headers.ContainsKey("Connection").Should().BeFalse();
+        context.Response.Headers.ContainsKey("Transfer-Encoding").Should().BeFalse();
+        context.Response.Headers.ContainsKey("Keep-Alive").Should().BeFalse();
+        context.Response.Headers.ContainsKey("Content-Length").Should().BeFalse();
+        context.Response.Headers.ContentType.ToString().Should().Contain("text/event-stream");
+    }
+
+    [Fact]
+    public async Task SendAsync_Streaming_ConcurrentRequests_AllCompleteSuccessfully()
+    {
+        var handler = new DelayedSseUpstreamHandler();
+        var forwarder = new InferenceHttpForwarder(
+            new SingleHandlerClientFactory(handler),
+            NullLogger<InferenceHttpForwarder>.Instance);
+
+        var tasks = Enumerable.Range(0, 8).Select(async _ =>
+        {
+            var context = CreatePostContext("""{"model":"gpt","stream":true}""");
+            var transformer = new StreamingHttpTransformer(true, "gpt", "gpt");
+            var error = await forwarder.SendAsync(
+                context,
+                "http://backend:8000",
+                upstreamBearerToken: null,
+                transformer,
+                isStreaming: true,
+                CancellationToken.None);
+
+            error.Should().Be(ForwarderError.None);
+            context.Response.Body.Position = 0;
+            var body = await new StreamReader(context.Response.Body).ReadToEndAsync();
+            body.Should().Contain(DelayedSseUpstreamHandler.FirstChunkMarker);
+            body.Should().Contain(DelayedSseUpstreamHandler.SecondChunkMarker);
+        });
+
+        await Task.WhenAll(tasks);
+    }
+
     private static DefaultHttpContext CreatePostContext(string jsonBody)
     {
         var bodyBytes = Encoding.UTF8.GetBytes(jsonBody);
@@ -244,6 +324,41 @@ public sealed class InferenceHttpForwarderTests
             public override void SetLength(long value) => throw new NotSupportedException();
 
             public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        }
+    }
+
+    private sealed class StreamingHeadersUpstreamHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            var response = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("data: {\"m\":\"ok\"}\n\n", Encoding.UTF8, "text/event-stream"),
+            };
+            response.Headers.Connection.Add("keep-alive");
+            response.Headers.TransferEncodingChunked = true;
+            response.Headers.TryAddWithoutValidation("Keep-Alive", "timeout=5");
+            return Task.FromResult(response);
+        }
+    }
+
+    private sealed class ThrowingAfterFirstWriteStream : MemoryStream
+    {
+        private bool _written;
+
+        public override ValueTask WriteAsync(
+            ReadOnlyMemory<byte> buffer,
+            CancellationToken cancellationToken = default)
+        {
+            if (_written)
+            {
+                throw new IOException("Simulated client disconnect.");
+            }
+
+            _written = true;
+            return base.WriteAsync(buffer, cancellationToken);
         }
     }
 

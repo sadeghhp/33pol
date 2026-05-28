@@ -1,6 +1,5 @@
 using System.Net.Http.Headers;
-using System.Net.Http.Json;
-using System.Text.Json;
+using System.Buffers;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.Extensions.Logging;
@@ -42,17 +41,15 @@ public sealed class InferenceHttpForwarder(
 
         using var requestMessage = new HttpRequestMessage(new HttpMethod(context.Request.Method), outboundUri);
 
-        byte[]? requestBody = null;
         if (HasRequestBody(context.Request))
         {
             context.Request.Body.Position = 0;
-            using var buffer = new MemoryStream();
-            await context.Request.Body.CopyToAsync(buffer, cancellationToken).ConfigureAwait(false);
-            requestBody = buffer.ToArray();
-            context.Request.Body = new MemoryStream(requestBody);
-            context.Request.Body.Position = 0;
-            using var json = JsonDocument.Parse(requestBody);
-            requestMessage.Content = JsonContent.Create(json.RootElement.Clone());
+            requestMessage.Content = new StreamContent(context.Request.Body);
+            if (!string.IsNullOrWhiteSpace(context.Request.ContentType) &&
+                MediaTypeHeaderValue.TryParse(context.Request.ContentType, out var contentType))
+            {
+                requestMessage.Content.Headers.ContentType = contentType;
+            }
         }
 
         if (!string.IsNullOrWhiteSpace(upstreamBearerToken))
@@ -93,43 +90,55 @@ public sealed class InferenceHttpForwarder(
 
         using (responseMessage)
         {
-            context.Response.StatusCode = (int)responseMessage.StatusCode;
-
-            if (isStreaming)
+            try
             {
-                context.Features.Get<IHttpResponseBodyFeature>()?.DisableBuffering();
-            }
+                context.Response.StatusCode = (int)responseMessage.StatusCode;
 
-            var transformBody = await transformer
-                .TransformResponseAsync(context, responseMessage, cancellationToken)
-                .ConfigureAwait(false);
+                if (isStreaming)
+                {
+                    context.Features.Get<IHttpResponseBodyFeature>()?.DisableBuffering();
+                }
 
-            if (!transformBody || responseMessage.Content is null)
-            {
-                return ForwarderError.None;
-            }
-
-            CopyResponseHeaders(context, responseMessage, isStreaming);
-
-            if (isStreaming)
-            {
-                ApplyStreamingResponseHeaders(context);
-                await context.Response.StartAsync(cancellationToken).ConfigureAwait(false);
-
-                await using var upstreamBody = await responseMessage.Content
-                    .ReadAsStreamAsync(cancellationToken)
+                var transformBody = await transformer
+                    .TransformResponseAsync(context, responseMessage, cancellationToken)
                     .ConfigureAwait(false);
-                await CopyStreamWithFlushAsync(
-                        upstreamBody,
-                        context.Response.Body,
-                        cancellationToken)
-                    .ConfigureAwait(false);
+
+                if (!transformBody || responseMessage.Content is null)
+                {
+                    return ForwarderError.None;
+                }
+
+                CopyResponseHeaders(context, responseMessage, isStreaming);
+
+                if (isStreaming)
+                {
+                    ApplyStreamingResponseHeaders(context);
+                    await context.Response.StartAsync(cancellationToken).ConfigureAwait(false);
+
+                    await using var upstreamBody = await responseMessage.Content
+                        .ReadAsStreamAsync(cancellationToken)
+                        .ConfigureAwait(false);
+                    await CopyStreamWithFlushAsync(
+                            upstreamBody,
+                            context.Response.Body,
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                else
+                {
+                    await responseMessage.Content
+                        .CopyToAsync(context.Response.Body, cancellationToken)
+                        .ConfigureAwait(false);
+                }
             }
-            else
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
-                await responseMessage.Content
-                    .CopyToAsync(context.Response.Body, cancellationToken)
-                    .ConfigureAwait(false);
+                return ForwarderError.RequestCanceled;
+            }
+            catch (IOException)
+            {
+                // Client disconnected while streaming response body.
+                return ForwarderError.RequestCanceled;
             }
         }
 
@@ -143,7 +152,7 @@ public sealed class InferenceHttpForwarder(
     {
         foreach (var header in response.Headers)
         {
-            if (isStreaming && ShouldSkipStreamingResponseHeader(header.Key))
+            if (ShouldSkipResponseHeader(header.Key, isStreaming))
             {
                 continue;
             }
@@ -158,7 +167,7 @@ public sealed class InferenceHttpForwarder(
 
         foreach (var header in response.Content.Headers)
         {
-            if (isStreaming && ShouldSkipStreamingResponseHeader(header.Key))
+            if (ShouldSkipResponseHeader(header.Key, isStreaming))
             {
                 continue;
             }
@@ -174,23 +183,44 @@ public sealed class InferenceHttpForwarder(
         context.Response.Headers["X-Accel-Buffering"] = "no";
     }
 
-    private static bool ShouldSkipStreamingResponseHeader(string headerName) =>
-        string.Equals(headerName, "Content-Length", StringComparison.OrdinalIgnoreCase) ||
-        string.Equals(headerName, "Transfer-Encoding", StringComparison.OrdinalIgnoreCase);
+    private static bool ShouldSkipResponseHeader(string headerName, bool isStreaming)
+    {
+        if (string.Equals(headerName, "Connection", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(headerName, "Keep-Alive", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(headerName, "Proxy-Authenticate", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(headerName, "Proxy-Authorization", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(headerName, "TE", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(headerName, "Trailer", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(headerName, "Transfer-Encoding", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(headerName, "Upgrade", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return isStreaming &&
+               string.Equals(headerName, "Content-Length", StringComparison.OrdinalIgnoreCase);
+    }
 
     private static async Task CopyStreamWithFlushAsync(
         Stream source,
         Stream destination,
         CancellationToken cancellationToken)
     {
-        var buffer = new byte[8192];
-        int read;
-        while ((read = await source
-                   .ReadAsync(buffer.AsMemory(0, buffer.Length), cancellationToken)
-                   .ConfigureAwait(false)) > 0)
+        var buffer = ArrayPool<byte>.Shared.Rent(16 * 1024);
+        try
         {
-            await destination.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
-            await destination.FlushAsync(cancellationToken).ConfigureAwait(false);
+            int read;
+            while ((read = await source
+                       .ReadAsync(buffer.AsMemory(0, buffer.Length), cancellationToken)
+                       .ConfigureAwait(false)) > 0)
+            {
+                await destination.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
+                await destination.FlushAsync(cancellationToken).ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
         }
     }
 

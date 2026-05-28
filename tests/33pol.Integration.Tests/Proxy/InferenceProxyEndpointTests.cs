@@ -92,6 +92,45 @@ public sealed class InferenceProxyEndpointTests
         using var reader = new StreamReader(bodyStream);
         var remainder = await reader.ReadToEndAsync(readCts.Token);
         remainder.Should().Contain(DelayedChunkStreamingHandler.SecondChunkMarker);
+        remainder.Should().Contain("[DONE]");
+    }
+
+    [Fact]
+    public async Task PostChatCompletions_Stream_ConcurrentClients_ReceiveFirstChunkQuickly()
+    {
+        var handler = new DelayedChunkStreamingHandler();
+        using var factory = GatewayWebApplicationFactory.Create(
+            handler,
+            configureSettings: settings =>
+            {
+                settings["RateLimiting:Default:MaxConcurrentStreams"] = "16";
+                settings["RateLimiting:Default:Rpm"] = "600";
+                settings["RateLimiting:Default:Burst"] = "32";
+            });
+        using var client = factory.CreateClient();
+
+        var tasks = Enumerable.Range(0, 6).Select(async _ =>
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/chat/completions")
+            {
+                Content = JsonBody("""{"model":"local-mock","stream":true}"""),
+            };
+            using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
+
+            response.StatusCode.Should().Be(HttpStatusCode.OK);
+            await using var bodyStream = await response.Content.ReadAsStreamAsync();
+
+            using var readCts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+            var firstRead = bodyStream.ReadAsync(new byte[1], readCts.Token).AsTask();
+            var winner = await Task.WhenAny(
+                firstRead,
+                Task.Delay(DelayedChunkStreamingHandler.InterChunkDelay / 2, readCts.Token));
+
+            winner.Should().Be(firstRead, "streaming response should flush first chunk without waiting for next upstream chunk");
+            (await firstRead).Should().BeGreaterThan(0);
+        });
+
+        await Task.WhenAll(tasks);
     }
 
     [Fact]
