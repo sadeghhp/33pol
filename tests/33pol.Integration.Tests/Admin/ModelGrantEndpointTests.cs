@@ -17,9 +17,7 @@ public sealed class ModelGrantEndpointTests
     [Fact]
     public async Task PutApiKeyGrants_ThenInference_DeniesUnlistedModel()
     {
-        await using var factory = GatewayWebApplicationFactory.CreateWithInMemoryDatabase(
-            AdminKey,
-            upstreamHandler: new MockUpstreamHandler());
+        await using var factory = CreateGrantTestFactory();
         await GatewayWebApplicationFactory.EnsureAuthReadyAsync(factory);
         var adminClient = CreateAuthenticatedClient(factory, AdminKey);
         var createResponse = await adminClient.PostAsJsonAsync("/admin/api/keys", new { role = "Inference" });
@@ -55,9 +53,7 @@ public sealed class ModelGrantEndpointTests
     [Fact]
     public async Task PutTenantGrants_CapsKeyAllowlist()
     {
-        await using var factory = GatewayWebApplicationFactory.CreateWithInMemoryDatabase(
-            AdminKey,
-            upstreamHandler: new MockUpstreamHandler());
+        await using var factory = CreateGrantTestFactory();
         await GatewayWebApplicationFactory.EnsureAuthReadyAsync(factory);
         var adminClient = CreateAuthenticatedClient(factory, AdminKey);
         var tenantPut = await adminClient.PutAsJsonAsync(
@@ -97,9 +93,7 @@ public sealed class ModelGrantEndpointTests
     [Fact]
     public async Task NewInferenceKey_WithoutGrants_DeniesModelsAndInference()
     {
-        await using var factory = GatewayWebApplicationFactory.CreateWithInMemoryDatabase(
-            AdminKey,
-            upstreamHandler: new MockUpstreamHandler());
+        await using var factory = CreateGrantTestFactory();
         await GatewayWebApplicationFactory.EnsureAuthReadyAsync(factory);
         var adminClient = CreateAuthenticatedClient(factory, AdminKey);
         var createResponse = await adminClient.PostAsJsonAsync("/admin/api/keys", new { role = "Inference" });
@@ -126,7 +120,7 @@ public sealed class ModelGrantEndpointTests
     [Fact]
     public async Task GetModels_WithRestrictedKey_ReturnsSubset()
     {
-        await using var factory = GatewayWebApplicationFactory.CreateWithInMemoryDatabase(AdminKey);
+        await using var factory = CreateGrantTestFactory();
         await GatewayWebApplicationFactory.EnsureAuthReadyAsync(factory);
         var adminClient = CreateAuthenticatedClient(factory, AdminKey);
         var createResponse = await adminClient.PostAsJsonAsync("/admin/api/keys", new { role = "Inference" });
@@ -148,6 +142,16 @@ public sealed class ModelGrantEndpointTests
             .Select(e => e.GetProperty("id").GetString())
             .ToList();
         ids.Should().ContainSingle().Which.Should().Be(CanonicalModelId);
+    }
+
+    private static WebApplicationFactory<Program> CreateGrantTestFactory()
+    {
+        var configPath = IntegrationModelsConfig.WriteStandardModelsConfig();
+        return GatewayWebApplicationFactory.CreateWithInMemoryDatabase(
+            AdminKey,
+            upstreamHandler: new MockUpstreamHandler(),
+            configureSettings: settings =>
+                IntegrationModelsConfig.ApplyStandardModelsSettings(settings, configPath));
     }
 
     private static HttpClient CreateAuthenticatedClient(WebApplicationFactory<Program> factory, string apiKey)

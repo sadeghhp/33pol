@@ -354,7 +354,7 @@
                 <thead>
                   <tr>
                     <th class="sortable" @click="sortToggle('models','id')">ID<span x-html="sortIndicator('models','id')"></span></th>
-                    <th>URL</th><th>Aliases</th><th>Context</th><th>Auth</th><th></th>
+                    <th>URL</th><th>Aliases</th><th>Context</th><th>Access</th><th>Upstream</th><th></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -378,6 +378,7 @@
                       </td>
                       <td x-text="(m.aliases || []).join(', ') || '—'"></td>
                       <td x-text="m.maxContextLength"></td>
+                      <td x-text="m.publicAccess ? 'Public' : 'Key required'"></td>
                       <td x-text="m.hasUpstreamCredential ? 'stored' : '—'"></td>
                       <td class="cell-actions">
                         <span class="cell-actions-inner">
@@ -596,6 +597,11 @@
         <label>Model name <input x-model="editModel.id" :disabled="!!editModel._existing" autocomplete="off" /></label>
         <label>Upstream URL <input x-model="editModel.url" placeholder="https://openrouter.ai/api or http://host.docker.internal:1234" autocomplete="off" /></label>
         <p class="hint">When the gateway runs in Docker, use <code>host.docker.internal</code> instead of <code>localhost</code> for local upstreams.</p>
+        <label class="checkbox">
+          <input type="checkbox" x-model="editModel.publicAccess" />
+          Allow use without 33pol API key (public access)
+        </label>
+        <p class="hint">Clients may send any placeholder in <code>Authorization: Bearer …</code>. Rate limits and quotas still apply. Use only for trusted or local upstreams.</p>
       </div>
 
       <div class="drawer-section">

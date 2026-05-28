@@ -4,7 +4,8 @@
 
 | Surface | Credential | Notes |
 |---------|------------|-------|
-| Inference (`/v1/*` POST) | Inference API key | Required when keys configured in DB/bootstrap |
+| Inference (`/v1/*` POST) | Inference API key | Required when keys configured in DB/bootstrap, except models with `publicAccess: true` |
+| Inference (`GET /v1/models*`) | Optional | Unauthenticated callers see only `publicAccess` models; authenticated callers see public + granted models |
 | Admin (`/admin/api/*`) | Admin API key | Separate role; never expose in browser URLs |
 | Health / metrics | None | `/health/live`, `/health/ready`, `/metrics` public for probes |
 
@@ -28,6 +29,17 @@ Production uses restricted origins via environment-based CORS policy. Do not use
 ## Admin UI
 
 The static admin UI (`/admin`) stores the API key in **localStorage**. Treat the workstation as trusted; prefer short-lived keys and network isolation.
+
+## Public models (`publicAccess`)
+
+Operators may mark individual registry models with `"publicAccess": true` (admin UI: **Allow use without 33pol API key**). For those models only:
+
+- Clients may call inference with **no** API key or any placeholder `Authorization: Bearer` value.
+- A **valid** inference key still works and attributes usage to the tenant (rate limits, quotas, budgets).
+- Model grants are **not** enforced for public models.
+- Anonymous callers use the same `anonymous` rate-limit and quota partition as other unauthenticated traffic.
+
+**Operational guidance:** Use public access only for local or internal upstreams (e.g. LM Studio). Do not mark paid cloud models public without network isolation and strict default/anonymous rate limits.
 
 ## Audit
 

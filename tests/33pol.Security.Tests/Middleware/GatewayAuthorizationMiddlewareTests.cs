@@ -4,7 +4,9 @@ using Microsoft.AspNetCore.Http;
 using Pol33.Core.Abstractions;
 using Pol33.Core.Errors;
 using Pol33.Core.Identity;
+using Pol33.Core.Models;
 using Pol33.Core.Security;
+using Pol33.Security.Authentication;
 using Pol33.Security.Hosting;
 using Pol33.Security.Middleware;
 
@@ -76,7 +78,31 @@ public sealed class GatewayAuthorizationMiddlewareTests
     }
 
     [Fact]
-    public async Task InvokeAsync_InferencePath_Unauthenticated_Returns401()
+    public async Task InvokeAsync_GetModelsListing_Unauthenticated_AllowsThrough()
+    {
+        var authState = new GatewayAuthenticationState { IsAuthenticationRequired = true };
+        var authorization = Substitute.For<IAuthorizationService>();
+        var nextCalled = false;
+        RequestDelegate next = _ =>
+        {
+            nextCalled = true;
+            return Task.CompletedTask;
+        };
+
+        var sut = new GatewayAuthorizationMiddleware(next, authState, authorization, new OpenAiErrorResponseWriter());
+        var context = new DefaultHttpContext();
+        context.Request.Method = HttpMethods.Get;
+        context.Request.Path = "/v1/models";
+
+        await sut.InvokeAsync(context);
+
+        nextCalled.Should().BeTrue();
+        await authorization.DidNotReceive()
+            .AuthorizeAsync(Arg.Any<ClaimsPrincipal>(), Arg.Any<object?>(), Arg.Any<string>());
+    }
+
+    [Fact]
+    public async Task InvokeAsync_InferencePost_Unauthenticated_Returns401()
     {
         var authState = new GatewayAuthenticationState { IsAuthenticationRequired = true };
         var authorization = Substitute.For<IAuthorizationService>();
@@ -86,13 +112,37 @@ public sealed class GatewayAuthorizationMiddlewareTests
         RequestDelegate next = _ => Task.CompletedTask;
         var sut = new GatewayAuthorizationMiddleware(next, authState, authorization, new OpenAiErrorResponseWriter());
         var context = new DefaultHttpContext();
-        context.Request.Path = "/v1/models";
+        context.Request.Method = HttpMethods.Post;
+        context.Request.Path = "/v1/chat/completions";
         context.Response.Body = new MemoryStream();
 
         await sut.InvokeAsync(context);
 
         context.Response.StatusCode.Should().Be(StatusCodes.Status401Unauthorized);
         context.Response.Headers[GatewayHeaders.ErrorCode].ToString().Should().Be("invalid_api_key");
+    }
+
+    [Fact]
+    public async Task InvokeAsync_PublicInference_Unauthenticated_AllowsThrough()
+    {
+        var authState = new GatewayAuthenticationState { IsAuthenticationRequired = true };
+        var authorization = Substitute.For<IAuthorizationService>();
+        var nextCalled = false;
+        RequestDelegate next = _ =>
+        {
+            nextCalled = true;
+            return Task.CompletedTask;
+        };
+
+        var sut = new GatewayAuthorizationMiddleware(next, authState, authorization, new OpenAiErrorResponseWriter());
+        var context = new DefaultHttpContext();
+        context.Request.Method = HttpMethods.Post;
+        context.Request.Path = "/v1/chat/completions";
+        context.Items[PublicModelAccessKeys.IsPublicInference] = true;
+
+        await sut.InvokeAsync(context);
+
+        nextCalled.Should().BeTrue();
     }
 
     private static ClaimsPrincipal CreatePrincipal(ApiKeyRole role)

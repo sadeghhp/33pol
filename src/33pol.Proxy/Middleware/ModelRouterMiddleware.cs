@@ -10,6 +10,8 @@ using Pol33.Core.Errors;
 using Pol33.Core.Models;
 using Pol33.Core.Identity;
 using Pol33.Core.RateLimiting;
+using Pol33.Core.Security;
+using System.Security.Claims;
 using Pol33.Proxy.Errors;
 using Pol33.Proxy.Forwarding;
 using Pol33.Proxy.Parsing;
@@ -130,19 +132,23 @@ public sealed class ModelRouterMiddleware
                 : "alias");
         _metricsCollector.RecordInferenceRouted(modelConfig.Id, ClassifyRoute(context.Request.Path), requestInfo.Stream);
 
-        if (_authState.IsAuthenticationRequired &&
-            context.Items.TryGetValue(TenantContextKeys.HttpContextItemKey, out var tenantValue) &&
-            tenantValue is TenantContext tenantContext &&
-            Guid.TryParse(tenantContext.TenantId, out var tenantId))
+        if (_authState.IsAuthenticationRequired && !modelConfig.AllowsPublicGatewayAccess())
         {
+            if (context.User.Identity?.IsAuthenticated != true ||
+                !Guid.TryParse(context.User.FindFirstValue(GatewayAuthClaims.TenantId), out var tenantId) ||
+                !Guid.TryParse(context.User.FindFirstValue(GatewayAuthClaims.ApiKeyId), out var apiKeyId))
+            {
+                await context.WriteGatewayErrorAsync(
+                    _errors.Write(GatewayErrorCode.InvalidApiKey),
+                    context.RequestAborted).ConfigureAwait(false);
+                return;
+            }
+
             await using var scope = _scopeFactory.CreateAsyncScope();
             var modelGrants = scope.ServiceProvider.GetRequiredService<IModelGrantService>();
-            var apiKeyId = Guid.TryParse(tenantContext.ApiKeyId, out var parsedKeyId)
-                ? parsedKeyId
-                : Guid.Empty;
             if (!await modelGrants.IsModelAllowedAsync(tenantId, apiKeyId, modelConfig.Id, context.RequestAborted)
                     .ConfigureAwait(false))
-        {
+            {
                 await context.WriteGatewayErrorAsync(
                     _errors.Write(
                         GatewayErrorCode.InsufficientScope,

@@ -1,0 +1,10 @@
+{
+  "models": [
+    {
+      "id": "local-llm",
+      "url": "http://host.docker.internal:8000",
+      "maxContextLength": 32768,
+      "aliases": []
+    }
+  ]
+}

@@ -48,6 +48,14 @@ public sealed class GatewayAuthorizationMiddleware
             return;
         }
 
+        if (policy == GatewayAuthPolicies.Inference &&
+            (PublicModelAccess.IsPublicInferenceRequest(context) ||
+             PublicModelAccess.AllowsAnonymousModelsListing(context)))
+        {
+            await _next(context).ConfigureAwait(false);
+            return;
+        }
+
         var result = await _authorization.AuthorizeAsync(context.User, policy).ConfigureAwait(false);
         if (result.Succeeded)
         {

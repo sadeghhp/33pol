@@ -33,6 +33,16 @@ public sealed class ModelRegistryPersistenceTests
     }
 
     [Fact]
+    public void CloneModel_PreservesPublicAccess()
+    {
+        var source = new ModelConfig { Id = "a", Url = "http://a", PublicAccess = true };
+
+        var clone = ModelRegistryPersistence.CloneModel(source);
+
+        clone.PublicAccess.Should().BeTrue();
+    }
+
+    [Fact]
     public void CloneModel_WithUpstreamAuth_PreservesAuthConfig()
     {
         var source = new ModelConfig

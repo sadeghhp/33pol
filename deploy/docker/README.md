@@ -1,6 +1,17 @@
 # Docker Compose — local 33pol stack
 
-Runs **gateway**, **Postgres**, **Prometheus**, **Grafana**, and a **WireMock** OpenAI-compatible mock upstream in one command.
+Runs **gateway** and **Postgres** by default. Optional Compose profile **`full`** adds Prometheus, Grafana, and a WireMock mock upstream.
+
+## Compose profiles
+
+| Profile | `COMPOSE_PROFILES` | Services |
+|---------|----------------------|----------|
+| **gpu-gateway** (default) | empty / unset | `postgres`, `gateway` |
+| **full-stack** (local demo) | `full` | above + `mock-upstream`, `prometheus`, `grafana` |
+
+Set in `.env` (see `.env.example`). Without `COMPOSE_PROFILES=full`, `docker compose up` starts only Postgres and the gateway — suitable for remote GPU servers with vLLM/Ollama on the host.
+
+Interactive install: [../../scripts/install-33pol.sh](../../scripts/install-33pol.sh) and [docs/deploy-remote-gpu.md](../../docs/deploy-remote-gpu.md).
 
 ## Prerequisites
 
@@ -22,10 +33,12 @@ NuGet downloads are cached across builds via BuildKit (`--mount=type=cache` on `
 From the repository root:
 
 ```bash
-cp .env.example .env
+cp .env.example .env   # includes COMPOSE_PROFILES=full
 docker compose up -d --build
 bash perf/ci/verify-compose-health.sh
 ```
+
+For **gpu-gateway only**, omit `COMPOSE_PROFILES` in `.env` (or leave it empty), then use `bash perf/ci/verify-compose-health-gpu.sh`.
 
 | Service        | URL / port (defaults)        |
 |----------------|------------------------------|

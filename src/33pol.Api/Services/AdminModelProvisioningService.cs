@@ -99,7 +99,8 @@ public sealed class AdminModelProvisioningService(
             Id = model.Id?.Trim() ?? string.Empty,
             Url = model.Url?.Trim() ?? string.Empty,
             MaxContextLength = model.MaxContextLength > 0 ? model.MaxContextLength : 8192,
-            Aliases = model.Aliases ?? []
+            Aliases = model.Aliases ?? [],
+            PublicAccess = model.PublicAccess,
         };
 
         if (string.IsNullOrWhiteSpace(normalized.Id) || string.IsNullOrWhiteSpace(normalized.Url))

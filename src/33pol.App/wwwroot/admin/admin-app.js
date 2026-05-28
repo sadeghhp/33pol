@@ -54,7 +54,7 @@ function adminApp() {
     editModel: {
       id: '', url: '', maxContextLength: 8192, aliasesText: '',
       apiKey: '', clearApiKey: false, hasUpstreamCredential: false,
-      upstreamAuth: null, _existing: false
+      publicAccess: false, upstreamAuth: null, _existing: false
     },
     modelFieldError: '',
     newKey: { role: 'Inference' },
@@ -896,7 +896,8 @@ function adminApp() {
         id: this.editModel.id.trim(),
         url: this.editModel.url.trim(),
         maxContextLength: Number(this.editModel.maxContextLength) || 8192,
-        aliases
+        aliases,
+        publicAccess: !!this.editModel.publicAccess
       };
       if (this.editModel._existing && this.editModel.upstreamAuth && !(this.editModel.apiKey || '').trim() && !this.editModel.clearApiKey) {
         model.upstreamAuth = this.editModel.upstreamAuth;
@@ -913,7 +914,7 @@ function adminApp() {
       this.editModel = {
         id: '', url: '', maxContextLength: 8192, aliasesText: '',
         apiKey: '', clearApiKey: false, hasUpstreamCredential: false,
-        upstreamAuth: null, _existing: false
+        publicAccess: false, upstreamAuth: null, _existing: false
       };
       this.showAdvancedModel = false;
     },
@@ -924,6 +925,7 @@ function adminApp() {
         aliasesText: (m.aliases || []).join(', '),
         apiKey: '', clearApiKey: false,
         hasUpstreamCredential: !!m.hasUpstreamCredential,
+        publicAccess: !!m.publicAccess,
         upstreamAuth: m.upstreamAuth || null,
         _existing: true
       };

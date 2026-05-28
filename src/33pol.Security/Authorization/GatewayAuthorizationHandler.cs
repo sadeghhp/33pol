@@ -1,7 +1,9 @@
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Http;
 using Pol33.Core.Abstractions;
 using Pol33.Core.Identity;
 using Pol33.Core.Security;
+using Pol33.Security.Authentication;
 
 namespace Pol33.Security.Authorization;
 
@@ -21,6 +23,15 @@ public sealed class GatewayAuthorizationHandler : AuthorizationHandler<GatewayAu
         GatewayAuthorizationRequirement requirement)
     {
         if (!_authState.IsAuthenticationRequired)
+        {
+            context.Succeed(requirement);
+            return Task.CompletedTask;
+        }
+
+        if (context.Resource is HttpContext httpContext &&
+            requirement.PolicyName == GatewayAuthPolicies.Inference &&
+            (PublicModelAccess.IsPublicInferenceRequest(httpContext) ||
+             PublicModelAccess.AllowsAnonymousModelsListing(httpContext)))
         {
             context.Succeed(requirement);
             return Task.CompletedTask;

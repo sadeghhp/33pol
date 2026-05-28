@@ -314,10 +314,18 @@ FinOps detail: [finops.md](./docs/finops.md) · Observability: [observability.md
 
 | Artifact | Use case |
 |----------|----------|
+| [scripts/install-33pol.sh](./scripts/install-33pol.sh) | Interactive install on a Linux server (GPU gateway profile) |
+| [docs/deploy-remote-gpu.md](./docs/deploy-remote-gpu.md) | Remote GPU server walkthrough |
 | [Dockerfile](./Dockerfile) | Production container (`ghcr.io` on `main`) |
-| [docker-compose.yml](./docker-compose.yml) | Local full stack |
+| [docker-compose.yml](./docker-compose.yml) | Local full stack (`COMPOSE_PROFILES=full` in `.env.example`) |
 | [deploy/helm/33pol/](./deploy/helm/33pol/) | Kubernetes (HPA, ServiceMonitor, ingress) |
 | [deploy/README.md](./deploy/README.md) | Layout index |
+
+**Server install (one-liner after clone):**
+
+```bash
+git clone https://github.com/sadeghhp/33pol.git && cd 33pol && ./scripts/install-33pol.sh install
+```
 
 **Helm (sketch):**
 

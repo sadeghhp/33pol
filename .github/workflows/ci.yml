@@ -59,6 +59,26 @@ jobs:
           path: TestResults/**/coverage.cobertura.xml
           if-no-files-found: warn
 
+  install-scripts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install shellcheck and bats
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq shellcheck bats
+
+      - name: Shellcheck install scripts
+        env:
+          SHELLCHECK_OPTS: -e SC1091
+        run: |
+          shellcheck scripts/install-33pol.sh scripts/install/install-33pol.sh scripts/install/lib/*.sh \
+            perf/ci/verify-compose-health-gpu.sh perf/ci/verify-compose-health.sh
+
+      - name: Bats install lib tests
+        run: bats tests/install/
+
   k6-smoke:
     runs-on: ubuntu-latest
     needs: build-test

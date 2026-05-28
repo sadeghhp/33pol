@@ -40,9 +40,17 @@ public sealed class ApiKeyAuthenticationHandler : AuthenticationHandler<Authenti
             return AuthenticateResult.NoResult();
         }
 
+        var isPublicInference = PublicModelAccess.IsPublicInferenceRequest(Context);
+        var allowsAnonymousModelsListing = PublicModelAccess.AllowsAnonymousModelsListing(Context);
+
         var apiKey = ExtractApiKey(Request);
         if (string.IsNullOrWhiteSpace(apiKey))
         {
+            if (isPublicInference || allowsAnonymousModelsListing)
+            {
+                return AuthenticateResult.NoResult();
+            }
+
             return _authState.IsAuthenticationRequired
                 ? AuthenticateResult.Fail("missing_api_key")
                 : AuthenticateResult.NoResult();
@@ -51,7 +59,7 @@ public sealed class ApiKeyAuthenticationHandler : AuthenticationHandler<Authenti
         var result = await _validator.ValidateAsync(apiKey, Context.RequestAborted).ConfigureAwait(false);
         if (!result.IsSuccess)
         {
-            if (!_authState.IsAuthenticationRequired)
+            if (isPublicInference || allowsAnonymousModelsListing || !_authState.IsAuthenticationRequired)
             {
                 return AuthenticateResult.NoResult();
             }

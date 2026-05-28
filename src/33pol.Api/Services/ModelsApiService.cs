@@ -12,7 +12,10 @@ public sealed class ModelsApiService(
     IModelGrantService modelGrants)
 {
     public OpenAiModelListResponse ListHealthyModels() =>
-        ListHealthyModelsCore(modelId => true);
+        ListHealthyModelsCore(_ => true);
+
+    public OpenAiModelListResponse ListPublicHealthyModels() =>
+        ListHealthyModelsCore(model => model.AllowsPublicGatewayAccess());
 
     public async Task<OpenAiModelListResponse> ListHealthyModelsAsync(
         Guid tenantId,
@@ -27,6 +30,12 @@ public sealed class ModelsApiService(
                 continue;
             }
 
+            if (model.AllowsPublicGatewayAccess())
+            {
+                allowed.Add(model.Id);
+                continue;
+            }
+
             if (await modelGrants.IsModelAllowedAsync(tenantId, apiKeyId, model.Id, cancellationToken)
                     .ConfigureAwait(false))
             {
@@ -34,11 +43,24 @@ public sealed class ModelsApiService(
             }
         }
 
-        return ListHealthyModelsCore(id => allowed.Contains(id));
+        return ListHealthyModelsCore(model => allowed.Contains(model.Id));
     }
 
     public (OpenAiModelResponse? Model, ErrorResult? Error) TryGetModel(string name) =>
         TryGetModelCore(name, _ => true);
+
+    public (OpenAiModelResponse? Model, ErrorResult? Error) TryGetPublicModel(string name)
+    {
+        if (!registry.TryGetModel(name, out var model) || model is null || !model.AllowsPublicGatewayAccess())
+        {
+            return (null, ErrorResult.FromCode(
+                GatewayErrorCode.ModelNotFound,
+                $"Model '{name}' not found",
+                "invalid_request_error"));
+        }
+
+        return TryGetModelCore(name, id => string.Equals(id, model.Id, StringComparison.OrdinalIgnoreCase));
+    }
 
     public async Task<(OpenAiModelResponse? Model, ErrorResult? Error)> TryGetModelAsync(
         string name,
@@ -54,7 +76,8 @@ public sealed class ModelsApiService(
                 "invalid_request_error"));
         }
 
-        if (!await modelGrants.IsModelAllowedAsync(tenantId, apiKeyId, model.Id, cancellationToken)
+        if (!model.AllowsPublicGatewayAccess() &&
+            !await modelGrants.IsModelAllowedAsync(tenantId, apiKeyId, model.Id, cancellationToken)
                 .ConfigureAwait(false))
         {
             return (null, ErrorResult.FromCode(
@@ -66,10 +89,10 @@ public sealed class ModelsApiService(
         return TryGetModelCore(name, id => string.Equals(id, model.Id, StringComparison.OrdinalIgnoreCase));
     }
 
-    private OpenAiModelListResponse ListHealthyModelsCore(Func<string, bool> includeModel)
+    private OpenAiModelListResponse ListHealthyModelsCore(Func<ModelConfig, bool> includeModel)
     {
         var data = registry.GetAllModels()
-            .Where(model => healthStore.IsBackendHealthy(model.Id) && includeModel(model.Id))
+            .Where(model => healthStore.IsBackendHealthy(model.Id) && includeModel(model))
             .Select(model => OpenAiModelMapper.ToResponse(model, available: true))
             .ToList();
 

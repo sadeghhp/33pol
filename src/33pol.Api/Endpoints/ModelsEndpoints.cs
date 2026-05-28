@@ -7,6 +7,7 @@ using Pol33.Core.Errors;
 using Pol33.Core.Identity;
 using Pol33.Core.Security;
 using Pol33.Security.Identity;
+using System.Security.Claims;
 
 namespace Pol33.Api.Endpoints;
 
@@ -32,7 +33,7 @@ public static class ModelsEndpoints
         {
             if (authState.IsAuthenticationRequired)
             {
-                return Unauthorized(errors);
+                return Results.Json(modelsApi.ListPublicHealthyModels());
             }
 
             return Results.Json(modelsApi.ListHealthyModels());
@@ -55,7 +56,13 @@ public static class ModelsEndpoints
         {
             if (authState.IsAuthenticationRequired)
             {
-                return Unauthorized(errors);
+                var (publicResponse, publicError) = modelsApi.TryGetPublicModel(model);
+                if (publicError is not null)
+                {
+                    return Results.Json(publicError, statusCode: StatusCodes.Status404NotFound);
+                }
+
+                return Results.Json(publicResponse);
             }
 
             var (syncResponse, syncError) = modelsApi.TryGetModel(model);
@@ -82,13 +89,22 @@ public static class ModelsEndpoints
     {
         tenantId = default;
         apiKeyId = default;
-        if (context.GetTenantContext() is not TenantContext tenant)
+
+        if (context.GetTenantContext() is TenantContext tenant &&
+            Guid.TryParse(tenant.TenantId, out tenantId) &&
+            Guid.TryParse(tenant.ApiKeyId, out apiKeyId))
         {
-            return false;
+            return true;
         }
 
-        return Guid.TryParse(tenant.TenantId, out tenantId)
-            && Guid.TryParse(tenant.ApiKeyId, out apiKeyId);
+        if (context.User.Identity?.IsAuthenticated == true &&
+            Guid.TryParse(context.User.FindFirstValue(GatewayAuthClaims.TenantId), out tenantId) &&
+            Guid.TryParse(context.User.FindFirstValue(GatewayAuthClaims.ApiKeyId), out apiKeyId))
+        {
+            return true;
+        }
+
+        return false;
     }
 
     private static IResult Unauthorized(IErrorResponseWriter errors)

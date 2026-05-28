@@ -11,6 +11,8 @@ using Pol33.Core.Configuration;
 using Pol33.Core.Errors;
 using Pol33.Core.Identity;
 using Pol33.Core.Models;
+using Pol33.Core.Security;
+using System.Security.Claims;
 using Pol33.Core.RateLimiting;
 using Pol33.Registry.Health;
 using Pol33.Proxy.Forwarding;
@@ -213,11 +215,88 @@ public sealed class ModelRouterMiddlewareTests
         return context;
     }
 
+    private static void SetInferenceUser(DefaultHttpContext context, Guid tenantId, Guid apiKeyId)
+    {
+        var identity = new ClaimsIdentity(
+        [
+            new Claim(GatewayAuthClaims.TenantId, tenantId.ToString()),
+            new Claim(GatewayAuthClaims.ApiKeyId, apiKeyId.ToString()),
+            new Claim(GatewayAuthClaims.Role, ApiKeyRole.Inference.ToString()),
+        ],
+        GatewayAuthSchemes.ApiKey);
+        context.User = new ClaimsPrincipal(identity);
+        context.Items[TenantContextKeys.HttpContextItemKey] = new TenantContext
+        {
+            TenantId = tenantId.ToString(),
+            ApiKeyId = apiKeyId.ToString(),
+            Role = ApiKeyRole.Inference,
+        };
+    }
+
     private static async Task<string> ReadResponseBodyAsync(HttpContext context)
     {
         context.Response.Body.Position = 0;
         using var reader = new StreamReader(context.Response.Body, Encoding.UTF8);
         return await reader.ReadToEndAsync();
+    }
+
+    [Fact]
+    public async Task InvokeAsync_PublicModel_SkipsGrantCheckEvenWhenDenied()
+    {
+        var registry = Substitute.For<IModelRegistry>();
+        registry.TryGetModel("m1", out Arg.Any<ModelConfig?>())
+            .Returns(call =>
+            {
+                call[1] = new ModelConfig { Id = "m1", Url = "http://backend:8000", PublicAccess = true };
+                return true;
+            });
+
+        var tenantId = Guid.NewGuid();
+        var modelGrants = Substitute.For<IModelGrantService>();
+        modelGrants.IsModelAllowedAsync(tenantId, Arg.Any<Guid>(), "m1", Arg.Any<CancellationToken>())
+            .Returns(false);
+
+        var scopeFactory = Substitute.For<IServiceScopeFactory>();
+        var scope = Substitute.For<IServiceScope>();
+        var scopeProvider = Substitute.For<IServiceProvider>();
+        scopeFactory.CreateAsyncScope().Returns(scope);
+        scope.ServiceProvider.Returns(scopeProvider);
+        scopeProvider.GetService(typeof(IModelGrantService)).Returns(modelGrants);
+
+        var authState = Substitute.For<IGatewayAuthenticationState>();
+        authState.IsAuthenticationRequired.Returns(true);
+
+        var health = Substitute.For<IBackendHealthStore>();
+        health.IsBackendHealthy("m1").Returns(true);
+
+        var forwarder = Substitute.For<IInferenceHttpForwarder>();
+        forwarder.SendAsync(
+                Arg.Any<HttpContext>(),
+                Arg.Any<string>(),
+                Arg.Any<string?>(),
+                Arg.Any<StreamingHttpTransformer>(),
+                Arg.Any<bool>(),
+                Arg.Any<CancellationToken>())
+            .Returns(ForwarderError.None);
+
+        var middleware = CreateMiddleware(
+            registry: registry,
+            scopeFactory: scopeFactory,
+            authState: authState,
+            healthStore: health,
+            forwarder: forwarder);
+
+        var context = CreateContext(
+            HttpMethods.Post,
+            "/v1/chat/completions",
+            """{"model":"m1"}""");
+        SetInferenceUser(context, tenantId, Guid.NewGuid());
+
+        await middleware.InvokeAsync(context);
+
+        context.Response.StatusCode.Should().NotBe(StatusCodes.Status403Forbidden);
+        await modelGrants.DidNotReceive()
+            .IsModelAllowedAsync(Arg.Any<Guid>(), Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -255,12 +334,7 @@ public sealed class ModelRouterMiddlewareTests
             HttpMethods.Post,
             "/v1/chat/completions",
             """{"model":"m1"}""");
-        context.Items[TenantContextKeys.HttpContextItemKey] = new TenantContext
-        {
-            TenantId = tenantId.ToString(),
-            ApiKeyId = Guid.NewGuid().ToString(),
-            Role = ApiKeyRole.Inference,
-        };
+        SetInferenceUser(context, tenantId, Guid.NewGuid());
 
         await middleware.InvokeAsync(context);
 

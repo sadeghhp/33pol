@@ -22,7 +22,8 @@ This document supersedes the weaker v1-only “poll + optional reload button” 
 ## 2. Non-goals
 
 - **Per-model HTTP routes** on the gateway (clients always use OpenAI paths + `model` in body).
-- **Separate “provider plugin” types** (OpenAI vs Azure vs vLLM) — only `models[]` entries with `id`, `url`, `aliases`.
+- **Separate “provider plugin” types** (OpenAI vs Azure vs vLLM) — only `models[]` entries with `id`, `url`, `aliases`, optional `publicAccess`.
+- **`publicAccess`** (boolean, default false) — when true, inference to that model does not require a valid 33pol API key; persisted in `models.json` and editable via admin UI.
 - **Cluster-wide automatic sync** across pods without shared storage or orchestration (see [11-ha-and-scaling.md](./11-ha-and-scaling.md)).
 - **Synchronous health proof** before listing — new models may appear on detail API immediately; list API still filters by health per [09-v1-parity-spec.md](./09-v1-parity-spec.md) §8.
 

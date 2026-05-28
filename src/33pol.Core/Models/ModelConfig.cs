@@ -18,6 +18,12 @@ public sealed class ModelConfig
 
     [JsonPropertyName("aliases")]
     public List<string> Aliases { get; set; } = [];
+
+    /// <summary>
+    /// When true, inference may proceed without a valid 33pol API key (rate limits still apply).
+    /// </summary>
+    [JsonPropertyName("publicAccess")]
+    public bool PublicAccess { get; set; }
 }
 
 public sealed class UpstreamAuthConfig

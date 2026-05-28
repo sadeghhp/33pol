@@ -27,6 +27,9 @@ public static class ProxyServiceCollectionExtensions
         return services;
     }
 
+    public static IApplicationBuilder UsePublicModelDetection(this IApplicationBuilder app) =>
+        app.UseMiddleware<PublicModelDetectionMiddleware>();
+
     public static IApplicationBuilder UseInferenceResilience(this IApplicationBuilder app) =>
         app.UseMiddleware<InferenceResilienceMiddleware>();
 

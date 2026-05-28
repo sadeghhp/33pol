@@ -46,6 +46,7 @@ public static class GatewayHostBuilderExtensions
         app.UseRouting();
         app.UseCors();
         app.UseGatewayRequestId();
+        app.UsePublicModelDetection();
         app.UseGatewaySecurity(app.Configuration);
 
         app.MapGet("/", GatewayEndpoints.GetRoot);
