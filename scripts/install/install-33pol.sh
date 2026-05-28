@@ -25,6 +25,10 @@ INSTALL_ENV_OVERRIDE=""
 INSTALL_SUBCMD="install"
 INSTALL_VOLUMES=false
 INSTALL_LOGS_SERVICE=""
+INSTALL_REAPPLY_SERVICE=""
+INSTALL_REAPPLY_FORCE=false
+INSTALL_REAPPLY_BUILD=false
+INSTALL_REAPPLY_NO_WAIT=false
 
 usage() {
   cat <<'EOF'
@@ -33,6 +37,7 @@ Usage: install-33pol.sh <command> [options]
 Commands:
   install     Clone/build/configure and start 33pol (default)
   upgrade     git pull, rebuild gateway, docker compose up -d
+  reapply     Recreate containers to apply .env changes (quota, ports, profiles)
   status      docker compose ps and gateway health
   logs        docker compose logs -f [service]
   uninstall   docker compose down [--volumes]
@@ -49,10 +54,18 @@ Install options:
   --force-config         Overwrite models.json for gpu-gateway
   --dry-run              Print actions without executing compose
 
+Reapply options:
+  --service NAME         Recreate only this service (e.g. gateway)
+  --force-recreate       Always recreate containers (even if compose sees no diff)
+  --build                Rebuild images before recreating
+  --no-wait              Skip gateway health wait after reapply
+
 Examples:
   ./scripts/install-33pol.sh install --yes --profile gpu-gateway
   ./scripts/install-33pol.sh doctor
   ./scripts/install-33pol.sh upgrade
+  ./scripts/install-33pol.sh reapply --service gateway
+  ./scripts/install-33pol.sh reapply --force-recreate
 EOF
 }
 
@@ -73,6 +86,10 @@ parse_global_flags() {
       --force-config) INSTALL_FORCE_CONFIG=true; shift ;;
       --dry-run) INSTALL_DRY_RUN=true; shift ;;
       --volumes) INSTALL_VOLUMES=true; shift ;;
+      --service) INSTALL_REAPPLY_SERVICE="$2"; shift 2 ;;
+      --force-recreate) INSTALL_REAPPLY_FORCE=true; shift ;;
+      --build) INSTALL_REAPPLY_BUILD=true; shift ;;
+      --no-wait) INSTALL_REAPPLY_NO_WAIT=true; shift ;;
       -h|--help) usage; exit 0 ;;
       *)
         if [[ "${INSTALL_SUBCMD}" == logs && -z "${INSTALL_LOGS_SERVICE}" && "${1}" != -* ]]; then
@@ -93,7 +110,7 @@ parse_args() {
   fi
 
   case "$1" in
-    install|upgrade|status|logs|uninstall|doctor)
+    install|upgrade|reapply|status|logs|uninstall|doctor)
       INSTALL_SUBCMD="$1"
       shift
       ;;
@@ -272,6 +289,29 @@ cmd_upgrade() {
   log "Upgrade complete."
 }
 
+cmd_reapply() {
+  init_logging
+  INSTALL_DIR="${INSTALL_DIR:-$(install_find_repo_root "$(pwd)" 2>/dev/null || install_read_state_install_dir 2>/dev/null || echo "${DEFAULT_INSTALL_DIR}")}"
+  if [[ ! -f "${INSTALL_DIR}/.env" ]]; then
+    die "No .env in ${INSTALL_DIR}; run install first."
+  fi
+  if [[ ! -f "${INSTALL_DIR}/docker-compose.yml" ]]; then
+    die "Install directory does not look like 33pol: ${INSTALL_DIR}"
+  fi
+  install_load_env "${INSTALL_DIR}"
+  log "Reapplying configuration from ${INSTALL_DIR}/.env"
+  install_compose_reapply \
+    "${INSTALL_DIR}" \
+    "${INSTALL_REAPPLY_SERVICE}" \
+    "${INSTALL_REAPPLY_FORCE}" \
+    "${INSTALL_REAPPLY_BUILD}"
+  if [[ "${INSTALL_REAPPLY_NO_WAIT}" != true ]]; then
+    install_wait_for_gateway "${GATEWAY_PORT:-8080}"
+  fi
+  log "Reapply complete."
+  log "  Gateway: http://127.0.0.1:${GATEWAY_PORT:-8080}"
+}
+
 cmd_status() {
   INSTALL_DIR="${INSTALL_DIR:-$(install_read_state_install_dir 2>/dev/null || echo "${DEFAULT_INSTALL_DIR}")}"
   install_compose_ps "${INSTALL_DIR}"
@@ -306,6 +346,7 @@ main() {
   case "${INSTALL_SUBCMD}" in
     install) cmd_install ;;
     upgrade) cmd_upgrade ;;
+    reapply) cmd_reapply ;;
     status) cmd_status ;;
     logs) cmd_logs ;;
     uninstall) cmd_uninstall ;;

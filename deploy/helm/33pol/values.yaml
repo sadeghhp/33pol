@@ -47,6 +47,11 @@ gateway:
   modelsConfigPath: /app/config/models.json
   operatorConsole:
     enabled: false
+  # Browser SPA origins for Production (scheme + host + port, no trailing slash).
+  cors:
+    allowedOrigins: []
+    # allowedOrigins:
+    #   - https://app.example.com
 
 # Optional upstream provider API keys for models.json upstreamAuth.envVar.
 # Prefer Kubernetes Secrets via extraEnvFrom (do not commit secrets in values.yaml).

@@ -131,6 +131,7 @@ install_build_env_content() {
     install_env_line GRAFANA_ADMIN_USER admin
     install_env_line GRAFANA_ADMIN_PASSWORD admin
     install_env_line ASPNETCORE_ENVIRONMENT "${aspnet_env}"
+    install_env_line QUOTA_MONTHLY_TOKEN_LIMIT 10000000
   }
 }
 

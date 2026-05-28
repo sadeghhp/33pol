@@ -116,6 +116,25 @@ docker compose up -d --build
 | `../prometheus/alerts/` | Alert rules for `promtool` / Prometheus |
 | `../../docker-compose.yml` | Root entry point (`include` of this file) |
 
+## Browser applications (CORS)
+
+| `ASPNETCORE_ENVIRONMENT` | Configuration |
+|--------------------------|---------------|
+| **Development** (default in `.env.example`) | Any browser origin allowed; no `GATEWAY_CORS_ALLOWED_ORIGIN_*` needed. |
+| **Production** | Set `GATEWAY_CORS_ALLOWED_ORIGIN_0` (and `_1`, `_2` if needed) to the SPA origin, e.g. `http://localhost:5173`. Must match the browser address bar exactly (`localhost` ≠ `127.0.0.1`). |
+
+Verify after changing `.env`:
+
+```bash
+docker compose up -d gateway
+curl -i -X OPTIONS "http://localhost:${GATEWAY_PORT:-8080}/v1/chat/completions" \
+  -H "Origin: http://localhost:5173" \
+  -H "Access-Control-Request-Method: POST" \
+  -H "Access-Control-Request-Headers: authorization,content-type"
+```
+
+Production with a configured origin should return `Access-Control-Allow-Origin`. See [docs/security.md](../../docs/security.md).
+
 ## Stop and reset
 
 ```bash

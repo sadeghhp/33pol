@@ -20,11 +20,12 @@ internal static class GatewayWebApplicationFactory
         IBackendHealthStore? healthStore = null,
         Action<IConfigurationBuilder>? configureConfiguration = null,
         bool clearGatewayDatabase = true,
-        Action<IDictionary<string, string?>>? configureSettings = null)
+        Action<IDictionary<string, string?>>? configureSettings = null,
+        string? environmentName = null)
     {
         return new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
         {
-            builder.UseSetting(WebHostDefaults.EnvironmentKey, Environments.Development);
+            builder.UseSetting(WebHostDefaults.EnvironmentKey, environmentName ?? Environments.Development);
             builder.UseSetting("Gateway:OperatorConsole:Enabled", "false");
             var extra = new Dictionary<string, string?>();
             configureSettings?.Invoke(extra);

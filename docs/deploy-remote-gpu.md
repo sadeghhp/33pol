@@ -77,6 +77,8 @@ Open only the gateway port in your firewall; do not expose Postgres publicly unl
 ```bash
 ./scripts/install-33pol.sh status
 ./scripts/install-33pol.sh upgrade
+./scripts/install-33pol.sh reapply                  # apply .env changes (quota, ports, profiles)
+./scripts/install-33pol.sh reapply --service gateway  # gateway-only (faster for quota/env)
 ./scripts/install-33pol.sh logs gateway
 ./scripts/install-33pol.sh doctor
 ./scripts/install-33pol.sh uninstall          # stop containers

@@ -14,6 +14,8 @@ public static class GatewayCorsServiceCollectionExtensions
             .GetSection($"{GatewayOptions.SectionName}:{GatewayCorsOptions.SectionName}")
             .Get<GatewayCorsOptions>() ?? new GatewayCorsOptions();
 
+        var allowedOrigins = corsOptions.GetNormalizedOrigins();
+
         services.AddCors(options =>
         {
             options.AddDefaultPolicy(policy =>
@@ -26,14 +28,19 @@ public static class GatewayCorsServiceCollectionExtensions
                     return;
                 }
 
-                if (corsOptions.AllowedOrigins.Length > 0)
+                if (allowedOrigins.Length > 0)
                 {
-                    policy.WithOrigins(corsOptions.AllowedOrigins)
+                    policy.WithOrigins(allowedOrigins)
                         .AllowAnyHeader()
                         .AllowAnyMethod();
+                    return;
                 }
+
+                policy.SetIsOriginAllowed(_ => false);
             });
         });
+
+        services.AddHostedService<GatewayCorsStartupWarningHostedService>();
 
         return services;
     }

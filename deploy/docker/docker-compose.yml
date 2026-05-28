@@ -60,6 +60,9 @@ services:
       Gateway__ModelsConfigPath: /app/config/models.json
       Gateway__Bootstrap__AdminApiKey: ${GATEWAY_ADMIN_API_KEY:-sk-33pol-dev-admin-key}
       Gateway__OperatorConsole__Enabled: "false"
+      Gateway__Cors__AllowedOrigins__0: ${GATEWAY_CORS_ALLOWED_ORIGIN_0:-}
+      Gateway__Cors__AllowedOrigins__1: ${GATEWAY_CORS_ALLOWED_ORIGIN_1:-}
+      Gateway__Cors__AllowedOrigins__2: ${GATEWAY_CORS_ALLOWED_ORIGIN_2:-}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       TOGETHER_API_KEY: ${TOGETHER_API_KEY:-}

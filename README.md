@@ -128,7 +128,7 @@ Deeper architecture: [docs/architecture.md](./docs/architecture.md) · [solution
 |------|------------|
 | **Compatibility** | OpenAI-shaped requests, responses, errors, and SSE streaming |
 | **Routing** | Body-based `model` → backend URL; aliases; hot reload of `models.json` |
-| **Security** | Hashed API keys (HMAC + pepper), admin vs inference roles, model grants, CORS |
+| **Security** | Hashed API keys (HMAC + pepper), admin vs inference roles, model grants, [CORS for browser SPAs](docs/security.md#cors) |
 | **Resilience** | Forward timeouts, body size limits, per-model concurrency, circuit breaker |
 | **Policy** | RPM/burst, concurrent streams, monthly token quotas, budget hard-stop |
 | **FinOps** | Usage events, daily rollups, CSV/JSON export, forecast API, signed webhooks |

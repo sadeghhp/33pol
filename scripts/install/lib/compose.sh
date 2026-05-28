@@ -36,6 +36,32 @@ install_compose_up() {
   (cd "${compose_dir}" && docker compose up -d)
 }
 
+# Recreate containers to pick up .env / compose changes (quota, ports, profiles) without git pull.
+install_compose_reapply() {
+  local install_dir="$1"
+  local service="${2:-}"
+  local force_recreate="${3:-false}"
+  local with_build="${4:-false}"
+  local compose_dir
+  compose_dir="$(install_compose_dir "${install_dir}")"
+  local -a args=(up -d)
+  if [[ "${with_build}" == true ]]; then
+    args+=(--build)
+  fi
+  if [[ "${force_recreate}" == true ]]; then
+    args+=(--force-recreate)
+  fi
+  if [[ -n "${service}" ]]; then
+    args+=("${service}")
+  fi
+  if [[ "${INSTALL_DRY_RUN:-false}" == true ]]; then
+    log "[dry-run] docker compose ${args[*]}"
+    return 0
+  fi
+  log "Applying configuration: docker compose ${args[*]}"
+  (cd "${compose_dir}" && docker compose "${args[@]}")
+}
+
 install_compose_down() {
   local install_dir="$1"
   local with_volumes="$2"

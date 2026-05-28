@@ -18,7 +18,42 @@ Keys are stored **hashed** (HMAC + pepper). Plaintext secrets are shown only onc
 
 ## CORS
 
-Production uses restricted origins via environment-based CORS policy. Do not use `AllowAnyOrigin` in production configs.
+Cross-Origin Resource Sharing applies only to **browser** clients calling the gateway from a **different origin** (scheme, host, or port) than the API. Server-side SDKs, `curl`, and mobile native HTTP are not affected.
+
+| Environment | Policy |
+|-------------|--------|
+| **Development** | `AllowAnyOrigin` — browser SPAs need no origin list. |
+| **Production / Staging** | Only origins in `Gateway:Cors:AllowedOrigins` are allowed. Empty list blocks all cross-origin browser traffic (startup logs a warning). |
+
+Do not use `AllowAnyOrigin` in production. The built-in admin UI (`/admin`) is same-origin and does not need CORS configuration.
+
+### Browser / SPA clients
+
+1. Set **exact** SPA origins (no path, no trailing slash), e.g. `https://app.example.com`, `http://localhost:5173`.
+2. `http://localhost:5173` and `http://127.0.0.1:5173` are different origins — list both if needed.
+3. Call inference with `Authorization: Bearer <inference-key>` (or `X-API-Key`). Do not rely on `credentials: 'include'`; the gateway does not enable `AllowCredentials` for CORS.
+
+**Configuration**
+
+| Mechanism | Example |
+|-----------|---------|
+| `appsettings` | `Gateway:Cors:AllowedOrigins: ["http://localhost:5173"]` |
+| Environment | `Gateway__Cors__AllowedOrigins__0=http://localhost:5173` |
+| Docker Compose (`.env`) | `GATEWAY_CORS_ALLOWED_ORIGIN_0=http://localhost:5173` (with `ASPNETCORE_ENVIRONMENT=Production`) |
+| Helm | `gateway.cors.allowedOrigins` in `values.yaml` |
+
+**Verify preflight**
+
+```bash
+curl -i -X OPTIONS 'http://localhost:8080/v1/chat/completions' \
+  -H 'Origin: http://localhost:5173' \
+  -H 'Access-Control-Request-Method: POST' \
+  -H 'Access-Control-Request-Headers: authorization,content-type'
+```
+
+Expect `Access-Control-Allow-Origin: http://localhost:5173` when that origin is configured (or `*` in Development).
+
+**Alternative:** serve the SPA behind the same host as the gateway (reverse proxy) so requests are same-origin and CORS is unnecessary.
 
 ## Secrets
 
