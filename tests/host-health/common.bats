@@ -28,7 +28,7 @@ setup() {
 }
 
 @test "health_load_status warn between warn and fail multiplier" {
-  [ "$(health_load_status 3.0 2 2 4)" = "warn" ]
+  [ "$(health_load_status 5.0 2 2 4)" = "warn" ]
 }
 
 @test "health_load_status fail at fail multiplier" {
