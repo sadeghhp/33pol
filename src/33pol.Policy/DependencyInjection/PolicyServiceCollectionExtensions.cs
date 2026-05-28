@@ -2,6 +2,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Pol33.Core.Abstractions;
 using Pol33.Core.Configuration;
+using Pol33.Policy.Admin;
 using Pol33.Policy.Quotas;
 using Pol33.Policy.RateLimiting;
 
@@ -22,6 +23,7 @@ public static class PolicyServiceCollectionExtensions
             .Bind(configuration.GetSection(QuotaOptions.SectionName));
 
         services.AddSingleton<IRateLimitPolicyResolver, RateLimitPolicyResolver>();
+        services.AddSingleton<IRateLimitConfigAdminService, RateLimitConfigAdminService>();
         services.AddSingleton<IDistributedRateLimitStore, InMemoryDistributedRateLimitStore>();
         services.AddSingleton<IQuotaService, InMemoryQuotaService>();
 

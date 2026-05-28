@@ -14,7 +14,7 @@ public sealed class RateLimitMiddlewareTests
     [Fact]
     public async Task InvokeAsync_WhenRpmExceeded_Returns429WithRetryAfter()
     {
-        var resolver = new RateLimitPolicyResolver(Options.Create(new RateLimitingOptions
+        var resolver = new RateLimitPolicyResolver(new FixedOptionsMonitor(new RateLimitingOptions
         {
             Default = new RateLimitTierOptions { Rpm = 1, Burst = 0, MaxConcurrentStreams = 5 },
         }));
@@ -47,5 +47,14 @@ public sealed class RateLimitMiddlewareTests
         context.Response.StatusCode.Should().Be(StatusCodes.Status429TooManyRequests);
         context.Response.Headers[GatewayHeaders.RetryAfter].ToString().Should().NotBeNullOrEmpty();
         context.Response.Headers[GatewayHeaders.ErrorCode].ToString().Should().Be("rate_limit_exceeded");
+    }
+
+    private sealed class FixedOptionsMonitor(RateLimitingOptions value) : IOptionsMonitor<RateLimitingOptions>
+    {
+        public RateLimitingOptions CurrentValue { get; } = value;
+
+        public RateLimitingOptions Get(string? name) => CurrentValue;
+
+        public IDisposable? OnChange(Action<RateLimitingOptions, string?> listener) => null;
     }
 }

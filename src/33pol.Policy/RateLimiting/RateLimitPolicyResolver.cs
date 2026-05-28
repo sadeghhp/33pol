@@ -7,26 +7,28 @@ namespace Pol33.Policy.RateLimiting;
 
 public sealed class RateLimitPolicyResolver : IRateLimitPolicyResolver
 {
-    private readonly RateLimitingOptions _options;
+    private readonly IOptionsMonitor<RateLimitingOptions> _options;
 
-    public RateLimitPolicyResolver(IOptions<RateLimitingOptions> options) =>
-        _options = options.Value;
+    public RateLimitPolicyResolver(IOptionsMonitor<RateLimitingOptions> options) =>
+        _options = options;
 
     public RateLimitPolicy Resolve(string? planSlug, string? tenantSlug)
     {
+        var options = _options.CurrentValue;
+
         if (!string.IsNullOrWhiteSpace(tenantSlug) &&
-            _options.Tenants.TryGetValue(tenantSlug, out var tenantTier))
+            options.Tenants.TryGetValue(tenantSlug, out var tenantTier))
         {
             return ToPolicy(tenantTier);
         }
 
         if (!string.IsNullOrWhiteSpace(planSlug) &&
-            _options.Plans.TryGetValue(planSlug, out var planTier))
+            options.Plans.TryGetValue(planSlug, out var planTier))
         {
             return ToPolicy(planTier);
         }
 
-        return ToPolicy(_options.Default);
+        return ToPolicy(options.Default);
     }
 
     private static RateLimitPolicy ToPolicy(RateLimitTierOptions tier) =>

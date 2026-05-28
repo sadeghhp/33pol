@@ -36,8 +36,7 @@ Files under `src/33pol.App/wwwroot/admin/` (served at `/admin/`):
 | Usage | `#/usage` | Date presets, unified **Apply range**, rollups, events, forecast, export |
 | Routing | `#/routing` | **Models** (registry, quick-add drawer) and **Backends** (health table) |
 | API keys | `#/keys` | List, create (drawer), per-key model access (drawer), revoke (modal) |
-| Settings | `#/settings` | Config reload; tenant-wide model allowlist |
-| Settings | `#/settings` | Config status, reload from disk, observability links |
+| Settings | `#/settings` | Config status, rate limits (default + plans), tenant model allowlist, observability links |
 
 ## Errors and feedback
 
@@ -63,7 +62,9 @@ GET requests retry once on network failure. Usage export uses `downloadBlob` wit
 | Tenant model access | `GET/PUT /admin/api/tenant/model-grants` (optional ceiling; empty = all registry models) |
 
 **Per-key model access:** Inference keys start with **no models** allowed. Open **Models** on a key, check the registry models it may call, and save. `GET /v1/models` and inference only expose models in that allowlist (intersected with tenant policy when the tenant is restricted).
-| Settings | `GET /admin/api/config/status`, `POST /admin/api/config/reload` |
+| Settings | `GET /admin/api/config/status`, `POST /admin/api/config/reload`, `GET/PUT /admin/api/rate-limits` |
+
+Rate limit changes are written to `appsettings.json` and applied via configuration reload (see [rate-limit-admin.md](./runbooks/rate-limit-admin.md)).
 
 After adding or editing a model, verify **`GET /v1/models`** (link on Routing → Models).
 

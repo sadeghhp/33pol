@@ -52,6 +52,7 @@ public static class GatewayHostBuilderExtensions
         app.MapGet("/admin", () => Results.Redirect("/admin/index.html"));
         app.MapHealthChecks("/health/live");
         app.MapConfigAdminEndpoints();
+        app.MapAdminRateLimitEndpoints();
         app.MapAdminKeyEndpoints();
         app.MapAdminModelGrantEndpoints();
         app.MapAdminControlPlaneEndpoints();

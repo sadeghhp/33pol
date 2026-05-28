@@ -62,5 +62,14 @@ public sealed class RateLimitPolicyResolverTests
     }
 
     private static RateLimitPolicyResolver CreateResolver(RateLimitingOptions options) =>
-        new(Options.Create(options));
+        new(new TestOptionsMonitor(options));
+
+    private sealed class TestOptionsMonitor(RateLimitingOptions value) : IOptionsMonitor<RateLimitingOptions>
+    {
+        public RateLimitingOptions CurrentValue { get; private set; } = value;
+
+        public RateLimitingOptions Get(string? name) => CurrentValue;
+
+        public IDisposable? OnChange(Action<RateLimitingOptions, string?> listener) => null;
+    }
 }

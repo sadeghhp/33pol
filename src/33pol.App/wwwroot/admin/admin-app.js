@@ -41,6 +41,9 @@ function adminApp() {
     keysFilter: 'active',
     requests: [],
     configStatus: null,
+    rateLimits: null,
+    rateLimitPlanRows: [],
+    rateLimitFieldError: '',
     healthLive: null,
     healthReady: null,
     confirmDialog: null,
@@ -356,7 +359,7 @@ function adminApp() {
 
     async loadSettings() {
       await this.runApi('settings', 'Loading settings…', async () => {
-        const tasks = [this.fetchTenantGrants(), this.fetchConfigStatus()];
+        const tasks = [this.fetchTenantGrants(), this.fetchConfigStatus(), this.fetchRateLimits()];
         if (!this.models?.length) tasks.unshift(this.fetchModels());
         await Promise.all(tasks);
       });
@@ -695,6 +698,68 @@ function adminApp() {
 
     async fetchConfigStatus() {
       this.configStatus = await this.apiJson('/admin/api/config/status');
+    },
+
+    async fetchRateLimits() {
+      const data = await this.apiJson('/admin/api/rate-limits');
+      this.rateLimits = data;
+      this.rateLimitPlanRows = Object.entries(data?.plans || {}).map(([slug, tier]) => ({
+        slug,
+        rpm: tier.rpm,
+        burst: tier.burst,
+        maxConcurrentStreams: tier.maxConcurrentStreams
+      }));
+      this.rateLimitFieldError = '';
+    },
+
+    addRateLimitPlanRow() {
+      this.rateLimitPlanRows = [
+        ...this.rateLimitPlanRows,
+        { slug: '', rpm: 60, burst: 10, maxConcurrentStreams: 5 }
+      ];
+    },
+
+    removeRateLimitPlanRow(index) {
+      this.rateLimitPlanRows = this.rateLimitPlanRows.filter((_, i) => i !== index);
+    },
+
+    buildRateLimitsPayload() {
+      const plans = {};
+      for (const row of this.rateLimitPlanRows) {
+        const slug = (row.slug || '').trim();
+        if (!slug) continue;
+        plans[slug] = {
+          rpm: Number(row.rpm),
+          burst: Number(row.burst),
+          maxConcurrentStreams: Number(row.maxConcurrentStreams)
+        };
+      }
+      const d = this.rateLimits?.default || {};
+      return {
+        default: {
+          rpm: Number(d.rpm),
+          burst: Number(d.burst),
+          maxConcurrentStreams: Number(d.maxConcurrentStreams)
+        },
+        plans
+      };
+    },
+
+    async saveRateLimits() {
+      await this.runApi('settings', 'Saving rate limits…', async () => {
+        this.rateLimitFieldError = '';
+        try {
+          const body = await this.apiJson('/admin/api/rate-limits', {
+            method: 'PUT',
+            body: JSON.stringify(this.buildRateLimitsPayload())
+          });
+          this.toast(body?.message || 'Rate limits saved.');
+          await this.fetchRateLimits();
+        } catch (e) {
+          this.rateLimitFieldError = e.message || 'Failed to save rate limits.';
+          throw e;
+        }
+      }, { localOnly: true });
     },
 
     async loadConfigStatus() {

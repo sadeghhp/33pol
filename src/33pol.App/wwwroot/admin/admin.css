@@ -625,6 +625,26 @@ code, pre, .mono { font-family: var(--font-mono); }
 
 /* --- Cards --- */
 
+.rate-limits-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr));
+  gap: 0.75rem 1rem;
+  align-items: end;
+  margin-top: 0.75rem;
+}
+
+.rate-limits-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.85rem;
+}
+
+.rate-limits-plan-row {
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--border-subtle, rgba(128, 128, 128, 0.25));
+}
+
 .card {
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
