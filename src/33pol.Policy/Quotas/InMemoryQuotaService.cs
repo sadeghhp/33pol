@@ -12,6 +12,7 @@ public sealed class InMemoryQuotaService(
 {
     private readonly ConcurrentDictionary<string, long> _usage = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _committedRequestIds = new(StringComparer.Ordinal);
+    private readonly Queue<string> _committedRequestOrder = new();
     private readonly object _commitSync = new();
 
     public QuotaCheckResult CheckBeforeForward(string partitionKey, string modelId)
@@ -54,8 +55,20 @@ public sealed class InMemoryQuotaService(
             {
                 return;
             }
+
+            _committedRequestOrder.Enqueue(requestId);
+            TrimCommittedRequestIdsIfNeeded();
         }
 
         _usage.AddOrUpdate(partitionKey, totalTokens, (_, existing) => existing + totalTokens);
+    }
+
+    private void TrimCommittedRequestIdsIfNeeded()
+    {
+        var retentionLimit = Math.Max(1, options.Value.CommittedRequestIdRetentionLimit);
+        while (_committedRequestIds.Count > retentionLimit && _committedRequestOrder.TryDequeue(out var oldest))
+        {
+            _committedRequestIds.Remove(oldest);
+        }
     }
 }

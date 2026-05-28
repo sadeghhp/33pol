@@ -37,6 +37,11 @@ public static class GatewayOptionsValidation
             errors.Add($"{nameof(GatewayOptions.Resilience)}.{nameof(GatewayResilienceOptions.MaxConcurrentForwardsPerModel)} must be at least 1.");
         }
 
+        if (options.Resilience.MaxTrackedResilienceModels < 1)
+        {
+            errors.Add($"{nameof(GatewayOptions.Resilience)}.{nameof(GatewayResilienceOptions.MaxTrackedResilienceModels)} must be at least 1.");
+        }
+
         if (options.Resilience.CircuitBreakerFailureThreshold < 1)
         {
             errors.Add($"{nameof(GatewayOptions.Resilience)}.{nameof(GatewayResilienceOptions.CircuitBreakerFailureThreshold)} must be at least 1.");

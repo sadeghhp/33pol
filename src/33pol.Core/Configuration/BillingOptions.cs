@@ -14,6 +14,10 @@ public sealed class BillingOptions
 
     public int UsageWriterFlushIntervalMs { get; set; } = 1000;
 
+    public int BudgetWarningTrackerRetentionLimit { get; set; } = 100_000;
+
+    public int DailyWebhookTrackerRetentionLimit { get; set; } = 100_000;
+
     /// <summary>UTC hour (0–23) when the scheduled <c>usage.daily</c> webhook runs for the previous day.</summary>
     public int DailyWebhookUtcHour { get; set; } = 1;
 

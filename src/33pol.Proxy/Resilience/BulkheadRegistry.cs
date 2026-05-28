@@ -9,20 +9,31 @@ public sealed class BulkheadRegistry
 {
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _semaphores = new(StringComparer.Ordinal);
     private readonly int _maxConcurrent;
+    private readonly int _maxTrackedModels;
     private readonly IGatewayMetricsCollector _metrics;
 
     public BulkheadRegistry(IOptions<GatewayOptions> options, IGatewayMetricsCollector metrics)
     {
         _maxConcurrent = options.Value.Resilience.MaxConcurrentForwardsPerModel;
+        _maxTrackedModels = options.Value.Resilience.MaxTrackedResilienceModels;
         _metrics = metrics;
     }
 
     public async ValueTask<IDisposable?> TryAcquireAsync(string modelId, CancellationToken cancellationToken)
     {
-        var semaphore = _semaphores.GetOrAdd(
-            modelId,
-            static (id, max) => new SemaphoreSlim(max, max),
-            _maxConcurrent);
+        if (!_semaphores.TryGetValue(modelId, out var semaphore))
+        {
+            if (_semaphores.Count >= _maxTrackedModels)
+            {
+                _metrics.RecordBulkheadRejection(modelId);
+                return null;
+            }
+
+            semaphore = _semaphores.GetOrAdd(
+                modelId,
+                static (_, max) => new SemaphoreSlim(max, max),
+                _maxConcurrent);
+        }
 
         if (!await semaphore.WaitAsync(0, cancellationToken).ConfigureAwait(false))
         {

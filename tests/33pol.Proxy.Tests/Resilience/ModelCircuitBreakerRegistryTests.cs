@@ -43,4 +43,25 @@ public sealed class ModelCircuitBreakerRegistryTests
         var states = registry.GetStates();
         states.Should().ContainSingle(s => s.ModelId == "m1" && s.State == 2);
     }
+
+    [Fact]
+    public void RecordFailure_WhenTrackedModelLimitReached_DoesNotGrowRegistry()
+    {
+        var options = Options.Create(new GatewayOptions
+        {
+            Resilience = new GatewayResilienceOptions
+            {
+                CircuitBreakerFailureThreshold = 1,
+                MaxTrackedResilienceModels = 1,
+            },
+        });
+        var registry = new ModelCircuitBreakerRegistry(options, Substitute.For<IGatewayMetricsCollector>());
+
+        registry.RecordFailure("m1");
+        registry.RecordFailure("m2");
+
+        var states = registry.GetStates();
+        states.Should().ContainSingle(s => s.ModelId == "m1");
+        states.Should().NotContain(s => s.ModelId == "m2");
+    }
 }

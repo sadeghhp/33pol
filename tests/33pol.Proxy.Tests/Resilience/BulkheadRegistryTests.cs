@@ -46,4 +46,29 @@ public sealed class BulkheadRegistryTests
         third.Should().NotBeNull();
         third!.Dispose();
     }
+
+    [Fact]
+    public async Task TryAcquireAsync_WhenTrackedModelLimitReached_RejectsNewModel()
+    {
+        var metrics = Substitute.For<IGatewayMetricsCollector>();
+        var registry = new BulkheadRegistry(
+            Options.Create(new GatewayOptions
+            {
+                Resilience = new GatewayResilienceOptions
+                {
+                    MaxConcurrentForwardsPerModel = 1,
+                    MaxTrackedResilienceModels = 1,
+                },
+            }),
+            metrics);
+
+        var first = await registry.TryAcquireAsync("m1", CancellationToken.None);
+        first.Should().NotBeNull();
+
+        var secondModel = await registry.TryAcquireAsync("m2", CancellationToken.None);
+        secondModel.Should().BeNull();
+        metrics.Received(1).RecordBulkheadRejection("m2");
+
+        first!.Dispose();
+    }
 }

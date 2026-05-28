@@ -10,6 +10,8 @@ public sealed class GatewayResilienceOptions
 
     public int MaxConcurrentForwardsPerModel { get; set; } = 64;
 
+    public int MaxTrackedResilienceModels { get; set; } = 1024;
+
     public int CircuitBreakerFailureThreshold { get; set; } = 5;
 
     public int CircuitBreakerBreakDurationSeconds { get; set; } = 30;

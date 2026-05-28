@@ -10,6 +10,7 @@ public sealed class ModelCircuitBreakerRegistry : ICircuitBreakerStateSource
 {
     private readonly ConcurrentDictionary<string, CircuitBreaker> _breakers = new(StringComparer.Ordinal);
     private readonly CircuitBreakerPolicyOptions _policyOptions;
+    private readonly int _maxTrackedModels;
     private readonly IGatewayMetricsCollector _metrics;
 
     public ModelCircuitBreakerRegistry(
@@ -17,11 +18,25 @@ public sealed class ModelCircuitBreakerRegistry : ICircuitBreakerStateSource
         IGatewayMetricsCollector metrics)
     {
         _policyOptions = CircuitBreakerPolicyOptions.FromGatewayResilience(options.Value.Resilience);
+        _maxTrackedModels = options.Value.Resilience.MaxTrackedResilienceModels;
         _metrics = metrics;
     }
 
-    public CircuitBreaker GetBreaker(string modelId) =>
-        _breakers.GetOrAdd(modelId, static (_, policy) => new CircuitBreaker(policy), _policyOptions);
+    public CircuitBreaker GetBreaker(string modelId)
+    {
+        if (_breakers.TryGetValue(modelId, out var existing))
+        {
+            return existing;
+        }
+
+        if (_breakers.Count >= _maxTrackedModels)
+        {
+            // Guardrail mode: do not grow registry cardinality past configured limit.
+            return new CircuitBreaker(_policyOptions);
+        }
+
+        return _breakers.GetOrAdd(modelId, static (_, policy) => new CircuitBreaker(policy), _policyOptions);
+    }
 
     public bool TryEnter(string modelId)
     {

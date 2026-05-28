@@ -96,10 +96,10 @@ public sealed class StreamingHttpTransformer : HttpTransformer
         CancellationToken cancellationToken)
     {
         var contentType = proxyResponse.Content!.Headers.ContentType;
-        var originalStream = await proxyResponse.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
 
         if (_isStreaming)
         {
+            var originalStream = await proxyResponse.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
             var capturingStream = new UsageCapturingStream(
                 originalStream,
                 sseText => _usageCapture!.CaptureFromSseText(sseText));
@@ -112,9 +112,7 @@ public sealed class StreamingHttpTransformer : HttpTransformer
             return;
         }
 
-        using var buffer = new MemoryStream();
-        await originalStream.CopyToAsync(buffer, cancellationToken).ConfigureAwait(false);
-        var body = buffer.ToArray();
+        var body = await proxyResponse.Content.ReadAsByteArrayAsync(cancellationToken).ConfigureAwait(false);
         _usageCapture!.CaptureFromJsonBody(body);
         proxyResponse.Content = new ByteArrayContent(body);
         if (contentType is not null)

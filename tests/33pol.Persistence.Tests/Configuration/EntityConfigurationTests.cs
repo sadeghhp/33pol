@@ -51,6 +51,31 @@ public sealed class EntityConfigurationTests
 
         model.FindEntityType(typeof(Pol33.Persistence.Entities.DailyUsageRollupEntity))!
             .GetTableName().Should().Be("daily_usage_rollups");
+
+        model.FindEntityType(typeof(Pol33.Persistence.Entities.QuotaAllocationEntity))!
+            .GetTableName().Should().Be("quota_allocations");
+
+        model.FindEntityType(typeof(Pol33.Persistence.Entities.QuotaUsageEntity))!
+            .GetTableName().Should().Be("quota_usages");
+    }
+
+    [Fact]
+    public void Model_HasQuotaIndexes()
+    {
+        using var db = PersistenceTestDbContextFactory.CreateInMemory(nameof(Model_HasQuotaIndexes));
+        var model = db.Model;
+
+        var allocations = model.FindEntityType(typeof(Pol33.Persistence.Entities.QuotaAllocationEntity))!;
+        var allocationIndexColumns = new[] { "TenantId", "PeriodStart", "PeriodEnd" };
+        allocations.GetIndexes().Should().Contain(i =>
+            i.IsUnique &&
+            i.Properties.Select(p => p.Name).SequenceEqual(allocationIndexColumns));
+
+        var usage = model.FindEntityType(typeof(Pol33.Persistence.Entities.QuotaUsageEntity))!;
+        var usageIndexColumns = new[] { "TenantId", "PeriodStart" };
+        usage.GetIndexes().Should().Contain(i =>
+            i.IsUnique &&
+            i.Properties.Select(p => p.Name).SequenceEqual(usageIndexColumns));
     }
 
     [Fact]

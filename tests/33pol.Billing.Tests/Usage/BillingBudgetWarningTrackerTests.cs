@@ -21,4 +21,24 @@ public sealed class BillingBudgetWarningTrackerTests
         tracker.TryMarkSent(key).Should().BeTrue();
         tracker.TryMarkSent(key).Should().BeFalse();
     }
+
+    [Fact]
+    public void TryMarkSent_WhenRetentionLimitExceeded_EvictsOldestKeys()
+    {
+        var tracker = new BillingBudgetWarningTracker(retentionLimit: 1);
+
+        tracker.TryMarkSent("k1").Should().BeTrue();
+        tracker.TryMarkSent("k2").Should().BeTrue();
+        tracker.TryMarkSent("k1").Should().BeTrue();
+    }
+
+    [Fact]
+    public void TryMarkSent_WhenRetentionLimitIsInvalid_UsesMinimumRetention()
+    {
+        var tracker = new BillingBudgetWarningTracker(retentionLimit: 0);
+
+        tracker.TryMarkSent("k1").Should().BeTrue();
+        tracker.TryMarkSent("k2").Should().BeTrue();
+        tracker.TryMarkSent("k1").Should().BeTrue();
+    }
 }

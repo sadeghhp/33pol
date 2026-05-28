@@ -28,6 +28,10 @@ public sealed class GatewayDbContext : DbContext
 
     public DbSet<DailyUsageRollupEntity> DailyUsageRollups => Set<DailyUsageRollupEntity>();
 
+    public DbSet<QuotaAllocationEntity> QuotaAllocations => Set<QuotaAllocationEntity>();
+
+    public DbSet<QuotaUsageEntity> QuotaUsages => Set<QuotaUsageEntity>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.ApplyConfigurationsFromAssembly(typeof(GatewayDbContext).Assembly);

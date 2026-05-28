@@ -11,6 +11,10 @@ public sealed class RateLimitingOptions
 
     public Dictionary<string, RateLimitTierOptions> Tenants { get; set; } =
         new(StringComparer.OrdinalIgnoreCase);
+
+    public int InMemoryPartitionRetentionSeconds { get; set; } = 3600;
+
+    public int InMemoryCompactionEveryOperations { get; set; } = 256;
 }
 
 public sealed class RateLimitTierOptions
