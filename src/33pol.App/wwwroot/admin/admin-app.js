@@ -44,6 +44,7 @@ function adminApp() {
     rateLimits: null,
     rateLimitPlanRows: [],
     rateLimitFieldError: '',
+    rateLimitsLoadError: '',
     healthLive: null,
     healthReady: null,
     confirmDialog: null,
@@ -359,7 +360,7 @@ function adminApp() {
 
     async loadSettings() {
       await this.runApi('settings', 'Loading settings…', async () => {
-        const tasks = [this.fetchTenantGrants(), this.fetchConfigStatus(), this.fetchRateLimits()];
+        const tasks = [this.fetchTenantGrants(), this.fetchConfigStatus(), this.loadRateLimits()];
         if (!this.models?.length) tasks.unshift(this.fetchModels());
         await Promise.all(tasks);
       });
@@ -700,16 +701,61 @@ function adminApp() {
       this.configStatus = await this.apiJson('/admin/api/config/status');
     },
 
-    async fetchRateLimits() {
-      const data = await this.apiJson('/admin/api/rate-limits');
-      this.rateLimits = data;
-      this.rateLimitPlanRows = Object.entries(data?.plans || {}).map(([slug, tier]) => ({
+    normalizeRateLimitsPayload(data) {
+      if (!data) return null;
+      const d = data.default || data.Default || {};
+      const plans = data.plans || data.Plans || {};
+      const tier = (t) => ({
+        rpm: t.rpm ?? t.Rpm ?? 60,
+        burst: t.burst ?? t.Burst ?? 0,
+        maxConcurrentStreams: t.maxConcurrentStreams ?? t.MaxConcurrentStreams ?? 0
+      });
+      return {
+        default: tier(d),
+        plans: Object.fromEntries(
+          Object.entries(plans).map(([slug, t]) => [slug, tier(t)])
+        )
+      };
+    },
+
+    applyRateLimitsData(data) {
+      const normalized = this.normalizeRateLimitsPayload(data);
+      if (!normalized) {
+        this.rateLimits = null;
+        return;
+      }
+      this.rateLimits = normalized;
+      this.rateLimitPlanRows = Object.entries(normalized.plans).map(([slug, t]) => ({
         slug,
-        rpm: tier.rpm,
-        burst: tier.burst,
-        maxConcurrentStreams: tier.maxConcurrentStreams
+        rpm: t.rpm,
+        burst: t.burst,
+        maxConcurrentStreams: t.maxConcurrentStreams
       }));
       this.rateLimitFieldError = '';
+      this.rateLimitsLoadError = '';
+    },
+
+    async fetchRateLimits() {
+      const data = await this.apiJson('/admin/api/rate-limits');
+      this.applyRateLimitsData(data);
+    },
+
+    async loadRateLimits() {
+      this.rateLimitsLoadError = '';
+      try {
+        await this.fetchRateLimits();
+      } catch (e) {
+        this.rateLimits = null;
+        this.rateLimitPlanRows = [];
+        if (String(e.title || '').startsWith('404') || e.message?.includes('404') || /not found/i.test(e.message || '')) {
+          this.rateLimitsLoadError =
+            'Rate limit API is not available on this gateway (rebuild/restart the server with the latest image).';
+        } else if (e.title === 'Authentication failed' || e.message?.includes('401')) {
+          this.rateLimitsLoadError = 'Connect with an Admin API key to load rate limits.';
+        } else {
+          this.rateLimitsLoadError = e.message || 'Could not load rate limits.';
+        }
+      }
     },
 
     addRateLimitPlanRow() {
@@ -754,7 +800,7 @@ function adminApp() {
             body: JSON.stringify(this.buildRateLimitsPayload())
           });
           this.toast(body?.message || 'Rate limits saved.');
-          await this.fetchRateLimits();
+          await this.loadRateLimits();
         } catch (e) {
           this.rateLimitFieldError = e.message || 'Failed to save rate limits.';
           throw e;

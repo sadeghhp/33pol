@@ -13,7 +13,7 @@
   <script defer src="admin-icons.js?v=7"></script>
   <script defer src="admin-errors.js?v=7"></script>
   <script defer src="admin-store.js?v=8"></script>
-  <script defer src="admin-app.js?v=12"></script>
+  <script defer src="admin-app.js?v=13"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.9/dist/cdn.min.js"></script>
 </head>
 <body x-data="adminApp()" x-init="init()" x-cloak :class="{ dark: darkMode }" @keydown.window="onModalKeydown($event)">
@@ -494,31 +494,37 @@
           <div class="toolbar">
             <button type="button" class="action" @click="confirmReloadConfig()" :disabled="isLoading('settings')">Reload config from disk</button>
           </div>
-          <div class="card rate-limits-card" style="margin-top: 1rem" x-show="rateLimits">
+          <div class="card rate-limits-card" style="margin-top: 1rem">
             <h3>Rate limits</h3>
             <p class="hint">Default tier and plan tiers (RPM, burst, max concurrent streams). Changes are written to appsettings and applied without restart.</p>
-            <div class="rate-limits-grid">
-              <strong>Default</strong>
-              <label>RPM <input type="number" min="1" x-model.number="rateLimits.default.rpm" /></label>
-              <label>Burst <input type="number" min="0" x-model.number="rateLimits.default.burst" /></label>
-              <label>Max streams <input type="number" min="0" x-model.number="rateLimits.default.maxConcurrentStreams" /></label>
-            </div>
-            <h4 style="margin-top: 1rem">Plans</h4>
-            <template x-for="(row, index) in rateLimitPlanRows" :key="index">
-              <div class="rate-limits-grid rate-limits-plan-row">
-                <label>Slug <input type="text" x-model="row.slug" placeholder="standard" /></label>
-                <label>RPM <input type="number" min="1" x-model.number="row.rpm" /></label>
-                <label>Burst <input type="number" min="0" x-model.number="row.burst" /></label>
-                <label>Max streams <input type="number" min="0" x-model.number="row.maxConcurrentStreams" /></label>
-                <button type="button" class="action secondary" @click="removeRateLimitPlanRow(index)">Remove</button>
+            <p class="hint" x-show="rateLimitsLoadError" x-text="rateLimitsLoadError"></p>
+            <p class="hint" x-show="!rateLimits && !rateLimitsLoadError && isLoading('settings')">Loading rate limits…</p>
+            <template x-if="rateLimits">
+              <div>
+                <div class="rate-limits-grid">
+                  <strong>Default</strong>
+                  <label>RPM <input type="number" min="1" x-model.number="rateLimits.default.rpm" /></label>
+                  <label>Burst <input type="number" min="0" x-model.number="rateLimits.default.burst" /></label>
+                  <label>Max streams <input type="number" min="0" x-model.number="rateLimits.default.maxConcurrentStreams" /></label>
+                </div>
+                <h4 style="margin-top: 1rem">Plans</h4>
+                <template x-for="(row, index) in rateLimitPlanRows" :key="index">
+                  <div class="rate-limits-grid rate-limits-plan-row">
+                    <label>Slug <input type="text" x-model="row.slug" placeholder="standard" /></label>
+                    <label>RPM <input type="number" min="1" x-model.number="row.rpm" /></label>
+                    <label>Burst <input type="number" min="0" x-model.number="row.burst" /></label>
+                    <label>Max streams <input type="number" min="0" x-model.number="row.maxConcurrentStreams" /></label>
+                    <button type="button" class="action secondary" @click="removeRateLimitPlanRow(index)">Remove</button>
+                  </div>
+                </template>
+                <div class="toolbar" style="margin-top: 0.75rem">
+                  <button type="button" class="action secondary" @click="addRateLimitPlanRow()">Add plan</button>
+                  <button type="button" class="action" @click="saveRateLimits()" :disabled="isLoading('settings')">Save rate limits</button>
+                  <button type="button" class="action secondary" @click="loadRateLimits()" :disabled="isLoading('settings')">Reload</button>
+                </div>
+                <p class="field-error" x-show="rateLimitFieldError" x-text="rateLimitFieldError"></p>
               </div>
             </template>
-            <div class="toolbar" style="margin-top: 0.75rem">
-              <button type="button" class="action secondary" @click="addRateLimitPlanRow()">Add plan</button>
-              <button type="button" class="action" @click="saveRateLimits()" :disabled="isLoading('settings')">Save rate limits</button>
-              <button type="button" class="action secondary" @click="fetchRateLimits()" :disabled="isLoading('settings')">Reload</button>
-            </div>
-            <p class="field-error" x-show="rateLimitFieldError" x-text="rateLimitFieldError"></p>
           </div>
           <div class="card" style="margin-top: 1rem">
             <h3>Tenant model access</h3>
