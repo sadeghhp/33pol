@@ -88,6 +88,39 @@ public sealed class AdminKeyService : IAdminKeyService
         _validator.InvalidateCache(keyId);
     }
 
+    public async Task<int> RevokeManyAsync(
+        Guid tenantId,
+        IReadOnlyCollection<Guid> keyIds,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(keyIds);
+        if (keyIds.Count == 0)
+        {
+            return 0;
+        }
+
+        var distinctIds = keyIds
+            .Where(static id => id != Guid.Empty)
+            .Distinct()
+            .ToArray();
+
+        var revokedCount = 0;
+        foreach (var keyId in distinctIds)
+        {
+            var record = await _apiKeys.GetByIdAsync(keyId, cancellationToken).ConfigureAwait(false);
+            if (record is null || record.TenantId != tenantId || record.RevokedAt is not null)
+            {
+                continue;
+            }
+
+            await _apiKeys.RevokeAsync(keyId, DateTimeOffset.UtcNow, cancellationToken).ConfigureAwait(false);
+            _validator.InvalidateCache(keyId);
+            revokedCount++;
+        }
+
+        return revokedCount;
+    }
+
     internal static string GenerateSecret() =>
         $"sk-33pol-{Convert.ToHexString(RandomNumberGenerator.GetBytes(24)).ToLowerInvariant()}";
 }

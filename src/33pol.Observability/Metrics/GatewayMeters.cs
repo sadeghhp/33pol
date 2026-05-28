@@ -17,6 +17,9 @@ public static class GatewayMeters
     public static readonly Histogram<double> InferenceDuration =
         Meter.CreateHistogram<double>("gateway_inference_duration_seconds");
 
+    public static readonly Histogram<double> TimeToFirstToken =
+        Meter.CreateHistogram<double>("gateway_time_to_first_token_seconds");
+
     public static readonly UpDownCounter<long> ActiveStreams =
         Meter.CreateUpDownCounter<long>("gateway_active_streams");
 

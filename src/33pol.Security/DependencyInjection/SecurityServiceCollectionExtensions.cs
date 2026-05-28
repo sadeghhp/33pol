@@ -157,4 +157,10 @@ internal sealed class NullAdminKeyService : IAdminKeyService
 
     public Task RevokeAsync(Guid tenantId, Guid keyId, CancellationToken cancellationToken = default) =>
         throw NotConfigured();
+
+    public Task<int> RevokeManyAsync(
+        Guid tenantId,
+        IReadOnlyCollection<Guid> keyIds,
+        CancellationToken cancellationToken = default) =>
+        throw NotConfigured();
 }

@@ -50,6 +50,29 @@ public sealed class AdminKeyServiceTests
         }
     }
 
+    [Fact]
+    public async Task RevokeManyAsync_RevokesExistingTenantKeys_AndSkipsInvalidIds()
+    {
+        var (sut, tenantId, validator, db) = await CreateSutAsync();
+        await using (db)
+        {
+            var first = await sut.CreateAsync(
+                tenantId,
+                new CreateAdminApiKeyRequest { Role = ApiKeyRole.Inference });
+            var second = await sut.CreateAsync(
+                tenantId,
+                new CreateAdminApiKeyRequest { Role = ApiKeyRole.Inference });
+
+            var revokedCount = await sut.RevokeManyAsync(
+                tenantId,
+                [first.Id, second.Id, Guid.Empty, first.Id, Guid.NewGuid()]);
+
+            revokedCount.Should().Be(2);
+            (await validator.ValidateAsync(first.Secret, CancellationToken.None)).IsSuccess.Should().BeFalse();
+            (await validator.ValidateAsync(second.Secret, CancellationToken.None)).IsSuccess.Should().BeFalse();
+        }
+    }
+
     private static async Task<(AdminKeyService Sut, Guid TenantId, ApiKeyValidator Validator, GatewayDbContext Db)> CreateSutAsync()
     {
         var options = new DbContextOptionsBuilder<GatewayDbContext>()

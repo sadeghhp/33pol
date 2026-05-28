@@ -66,6 +66,12 @@ public sealed class OperatorConsoleKeysInteractorTests
 
         public Task RevokeAsync(Guid tenantId, Guid keyId, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
+
+        public Task<int> RevokeManyAsync(
+            Guid tenantId,
+            IReadOnlyCollection<Guid> keyIds,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(0);
     }
 
     private sealed class FakeTenantRepository(TenantRecord? tenant) : ITenantRepository

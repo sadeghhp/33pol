@@ -81,15 +81,14 @@ public sealed class StreamingHttpTransformer : HttpTransformer
             await PrepareUsageCapturingContentAsync(proxyResponse, cancellationToken).ConfigureAwait(false);
         }
 
-        // Streaming headers and body copy are handled by InferenceHttpForwarder so we do not
-        // call base here — YARP's default transform would re-add Content-Length and block SSE.
-        if (_isStreaming)
-        {
-            return true;
-        }
-
-        return await base.TransformResponseAsync(httpContext, proxyResponse, cancellationToken)
-            .ConfigureAwait(false);
+        // Response headers and body copy are handled by InferenceHttpForwarder for both
+        // streaming and non-streaming responses.
+        // Calling YARP's default response transform here can re-apply transfer headers
+        // before we copy the response body ourselves.
+        _ = httpContext;
+        _ = proxyResponse;
+        _ = cancellationToken;
+        return true;
     }
 
     private async Task PrepareUsageCapturingContentAsync(

@@ -17,6 +17,7 @@ public static class AdminKeyEndpoints
 
         group.MapPost("/", CreateKeyAsync);
         group.MapGet("/", ListKeysAsync);
+        group.MapPost("/revoke", RevokeKeysAsync);
         group.MapPost("/{id:guid}/revoke", RevokeKeyAsync);
         return endpoints;
     }
@@ -90,6 +91,43 @@ public static class AdminKeyEndpoints
         {
             return Results.Forbid();
         }
+    }
+
+    private static async Task<IResult> RevokeKeysAsync(
+        BatchRevokeAdminApiKeysRequest request,
+        HttpContext httpContext,
+        IAdminKeyService adminKeys,
+        IAuditLogger audit,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetTenantId(httpContext, out var tenantId))
+        {
+            return Results.Unauthorized();
+        }
+
+        var keyIds = request.KeyIds
+            .Where(static id => id != Guid.Empty)
+            .Distinct()
+            .ToArray();
+
+        if (keyIds.Length == 0)
+        {
+            return Results.BadRequest(new { message = "At least one key id is required." });
+        }
+
+        var revokedCount = await adminKeys.RevokeManyAsync(tenantId, keyIds, cancellationToken).ConfigureAwait(false);
+        audit.LogAdminAction(
+            "api_key.revoke_batch",
+            new AuditLogEntry(
+                tenantId.ToString(),
+                httpContext.User.FindFirst(GatewayAuthClaims.ApiKeyId)?.Value,
+                new { RevokedCount = revokedCount, KeyIds = keyIds }));
+
+        return Results.Json(
+            new BatchRevokeAdminApiKeysResponse
+            {
+                RevokedCount = revokedCount,
+            });
     }
 
     private static bool TryGetTenantId(HttpContext context, out Guid tenantId)

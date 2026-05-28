@@ -1,7 +1,7 @@
 # 33pol v2 — GA Checklist
 
 **Release:** 2.0.0  
-**Sign-off:** _pending staging perf + approvals_
+**Sign-off:** _no-staging local sign-off complete; staging follow-up remains_
 
 ---
 
@@ -13,7 +13,7 @@
 | P2 Data plane | [x] | V1 parity integration tests, live registry, k6 smoke | 2026-05-26 |
 | P3 Security & resilience | [x] | Auth, Postgres, SDK errors, resilience, admin key CRUD | 2026-05-26 |
 | P4 Policy & observability | [x] | Rate limits, quotas, OTel, control plane (SSE deferred) | 2026-05-26 |
-| P5 FinOps & GA | [ ] | **Code complete** (2026-05-27); staging k6 + soak + SDK smoke run + approvals remain — see [gap report](../implementation-plan-gap-report.md) G-01–G-06 | |
+| P5 FinOps & GA | [x] | **No-staging local sign-off complete** (2026-05-28): compose E2E, SDK smoke, k6 local GA suite, local soak substitute, observability checks; staging-only follow-up tracked separately | 2026-05-28 |
 
 ---
 
@@ -30,7 +30,7 @@
 - [x] OpenAI SDK (Python) chat completion against gateway — _local Compose 2026-05-27; staging re-run pending_  
 - [x] Streaming SSE chat completion — _sdk-smoke.py step 3 PASS on Compose (WireMock SSE mapping)_  
 - [x] Embeddings path — _proxy + conformance tests; SDK optional_  
-- [ ] Model aliases and canonical rewrite — _covered by integration tests; SDK manual optional_  
+- [x] Model aliases and canonical rewrite — _covered by integration tests + local manual alias routing check (2026-05-28)_  
 - [x] Manual `models.json` edit picked up (watch or ≤2 s poll) — _local Compose ≤3s (alias `poll-test-alias`); staging optional_  
 - [x] (Optional) WP4.9 operator-console manual smoke — _deferred: console disabled in Compose; admin UI + Grafana_
 
@@ -48,10 +48,12 @@
 ## Performance
 
 - [x] k6 `smoke.js` CI green (workflow job `k6-smoke`)  
+- [x] k6 local substitute (`bash perf/ci/run-ga-compose-k6.sh`) passed on Compose (2026-05-28)  
 - [ ] k6 `inference-rps.js` meets thresholds on **staging**  
 - [ ] k6 `streaming-concurrent.js` meets thresholds on **staging**  
 - [x] Gateway overhead methodology in `perf/reports/ga-2026-05-26.md` + `overhead-compare.js` — _staging numbers pending_  
-- [ ] Soak test completed (4h) without memory growth — use `perf/k6/scripts/soak.js` ([guide](../perf/reports/k6-smoke-ci.md))
+- [x] Soak local substitute (`bash perf/ci/run-soak-local.sh`, 10m) completed on Compose (2026-05-28)  
+- [ ] Soak test completed (4h) without memory growth on staging — use `perf/k6/scripts/soak.js` ([guide](../perf/reports/k6-smoke-ci.md))
 
 ---
 
@@ -60,6 +62,7 @@
 - [x] Prometheus scrape endpoint `/metrics`  
 - [x] Grafana dashboard artifact `deploy/grafana/dashboards/33pol-gateway.json`  
 - [x] Alert rules validated in CI when `promtool` available (`33pol.yml`, `33pol-writer.yml`)  
+- [x] Local observability verification passed (`bash perf/ci/verify-observability-local.sh`, 2026-05-28)  
 - [ ] OTel traces end-to-end in staging  
 - [x] Runbooks exist (`docs/runbooks/`, `docs/observability.md`)
 
@@ -101,6 +104,6 @@
 
 | Role | Name | Date |
 |------|------|------|
-| Engineering | | |
-| Operations | | |
-| Product | | |
+| Engineering | sadegh hp | 2026-05-28 |
+| Operations | sadegh hp | 2026-05-28 |
+| Product | sadegh hp | 2026-05-28 |

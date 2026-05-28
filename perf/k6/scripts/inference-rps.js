@@ -1,6 +1,6 @@
 import http from "k6/http";
 import { check, sleep } from "k6";
-import { chatCompletionPayload, jsonHeaders } from "../lib/helpers.js";
+import { applyApiKeyAuth, chatCompletionPayload, jsonHeaders } from "../lib/helpers.js";
 
 const baseUrl = __ENV.BASE_URL || "http://localhost:8080";
 const model = __ENV.MODEL || "gpt-local";
@@ -22,10 +22,7 @@ export const options = {
 };
 
 export default function () {
-  const headers = jsonHeaders();
-  if (apiKey) {
-    headers["X-API-Key"] = apiKey;
-  }
+  const headers = applyApiKeyAuth(jsonHeaders(), apiKey);
 
   const response = http.post(
     `${baseUrl}/v1/chat/completions`,

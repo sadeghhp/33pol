@@ -836,6 +836,20 @@ th, td {
   vertical-align: middle;
 }
 
+th.cell-select,
+td.cell-select {
+  width: 2.75rem;
+  text-align: center;
+  padding-left: 0.5rem;
+  padding-right: 0.5rem;
+}
+
+th.cell-select input,
+td.cell-select input {
+  width: auto;
+  margin: 0;
+}
+
 tbody tr {
   transition: background var(--duration-fast);
 }

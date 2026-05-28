@@ -37,6 +37,7 @@ function adminApp() {
     tenantGrantRestricted: false,
     tenantGrantSelected: [],
     keys: [],
+    selectedKeyIds: [],
     keysFilter: 'active',
     requests: [],
     configStatus: null,
@@ -332,6 +333,7 @@ function adminApp() {
       this.backends = [];
       this.models = [];
       this.keys = [];
+      this.selectedKeyIds = [];
       this.requests = [];
       this.createdKey = '';
       this.modelDrawerOpen = false;
@@ -420,6 +422,57 @@ function adminApp() {
       if (this.keysFilter === 'active') filtered = list.filter(k => !k.isRevoked);
       else if (this.keysFilter === 'revoked') filtered = list.filter(k => k.isRevoked);
       return this.sortedList(filtered, 'keys');
+    },
+
+    isKeySelected(id) {
+      return this.selectedKeyIds.includes(id);
+    },
+
+    selectableFilteredKeys() {
+      return this.filteredKeys().filter(k => !k.isRevoked);
+    },
+
+    toggleKeySelection(id, shouldSelect) {
+      if (!id) return;
+      const set = new Set(this.selectedKeyIds);
+      if (shouldSelect) set.add(id);
+      else set.delete(id);
+      this.selectedKeyIds = [...set];
+    },
+
+    toggleSelectAllFilteredKeys(shouldSelect) {
+      const visibleIds = this.selectableFilteredKeys().map(k => k.id);
+      if (visibleIds.length === 0) return;
+      if (shouldSelect) {
+        this.selectedKeyIds = [...new Set([...this.selectedKeyIds, ...visibleIds])];
+        return;
+      }
+
+      const visibleSet = new Set(visibleIds);
+      this.selectedKeyIds = this.selectedKeyIds.filter(id => !visibleSet.has(id));
+    },
+
+    allFilteredActiveKeysSelected() {
+      const visibleIds = this.selectableFilteredKeys().map(k => k.id);
+      if (visibleIds.length === 0) return false;
+      const selected = new Set(this.selectedKeyIds);
+      return visibleIds.every(id => selected.has(id));
+    },
+
+    someFilteredActiveKeysSelected() {
+      const visibleIds = this.selectableFilteredKeys().map(k => k.id);
+      if (visibleIds.length === 0) return false;
+      const selected = new Set(this.selectedKeyIds);
+      return visibleIds.some(id => selected.has(id));
+    },
+
+    selectedActiveKeyIds() {
+      const activeIds = new Set((this.keys || []).filter(k => !k.isRevoked).map(k => k.id));
+      return this.selectedKeyIds.filter(id => activeIds.has(id));
+    },
+
+    selectedActiveKeyCount() {
+      return this.selectedActiveKeyIds().length;
     },
 
     sortedRequests() {
@@ -834,6 +887,8 @@ function adminApp() {
     async fetchKeys() {
       const list = (await this.apiJson('/admin/api/keys')) ?? [];
       this.keys = this.normalizeApiKeyList(list);
+      const existingIds = new Set(this.keys.map(k => k.id));
+      this.selectedKeyIds = this.selectedKeyIds.filter(id => existingIds.has(id));
     },
 
     async loadKeys() {
@@ -863,6 +918,18 @@ function adminApp() {
       this.revokeConfirmId = id;
     },
 
+    confirmRevokeSelected() {
+      const count = this.selectedActiveKeyCount();
+      if (count === 0) return;
+      this.openConfirm({
+        title: 'Revoke selected API keys?',
+        message: 'This will revoke ' + count + ' key' + (count === 1 ? '' : 's') + '. This cannot be undone.',
+        confirmLabel: 'Revoke selected',
+        danger: true,
+        onConfirm: () => this.revokeSelectedKeys()
+      });
+    },
+
     cancelRevoke() {
       this.revokeConfirmId = null;
     },
@@ -873,7 +940,23 @@ function adminApp() {
       this.revokeConfirmId = null;
       await this.runApi('keys', 'Revoking…', async () => {
         await this.store.apiFetch('/admin/api/keys/' + id + '/revoke', { method: 'POST' }, this.editModelUrl());
+        this.selectedKeyIds = this.selectedKeyIds.filter(existingId => existingId !== id);
         this.toast('API key revoked.');
+        await this.fetchKeys();
+      });
+    },
+
+    async revokeSelectedKeys() {
+      const keyIds = this.selectedActiveKeyIds();
+      if (keyIds.length === 0) return;
+      await this.runApi('keys', 'Revoking selected…', async () => {
+        const body = await this.apiJson('/admin/api/keys/revoke', {
+          method: 'POST',
+          body: JSON.stringify({ keyIds })
+        });
+        const revokedCount = Number(body?.revokedCount ?? 0);
+        this.selectedKeyIds = this.selectedKeyIds.filter(id => !keyIds.includes(id));
+        this.toast('Revoked ' + revokedCount + ' API key' + (revokedCount === 1 ? '' : 's') + '.');
         await this.fetchKeys();
       });
     },

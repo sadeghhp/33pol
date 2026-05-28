@@ -21,4 +21,6 @@ public interface IGatewayMetricsCollector
     void RecordBulkheadRejection(string modelId);
 
     void RecordBulkheadInflightChange(string modelId, int delta);
+
+    void RecordTimeToFirstToken(string modelId, double seconds);
 }

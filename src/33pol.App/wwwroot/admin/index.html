@@ -9,11 +9,11 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" />
-  <link rel="stylesheet" href="admin.css?v=7" />
+  <link rel="stylesheet" href="admin.css?v=8" />
   <script defer src="admin-icons.js?v=7"></script>
   <script defer src="admin-errors.js?v=7"></script>
   <script defer src="admin-store.js?v=8"></script>
-  <script defer src="admin-app.js?v=11"></script>
+  <script defer src="admin-app.js?v=12"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.9/dist/cdn.min.js"></script>
 </head>
 <body x-data="adminApp()" x-init="init()" x-cloak :class="{ dark: darkMode }" @keydown.window="onModalKeydown($event)">
@@ -419,6 +419,11 @@
                 <option value="all">All</option>
               </select>
             </label>
+            <button type="button" class="action danger"
+              @click="confirmRevokeSelected()"
+              :disabled="isLoading('keys') || selectedActiveKeyCount() === 0">
+              Revoke selected (<span x-text="selectedActiveKeyCount()"></span>)
+            </button>
             <button type="button" class="action secondary" @click="loadKeys()" :disabled="isLoading('keys')">
               <span class="icon" x-html="icon('refresh')"></span> Refresh
             </button>
@@ -427,6 +432,13 @@
             <table x-show="filteredKeys().length">
               <thead>
                 <tr>
+                  <th class="cell-select">
+                    <input type="checkbox"
+                      :checked="allFilteredActiveKeysSelected()"
+                      :indeterminate.prop="someFilteredActiveKeysSelected() && !allFilteredActiveKeysSelected()"
+                      @change="toggleSelectAllFilteredKeys($event.target.checked)"
+                      aria-label="Select all visible active API keys" />
+                  </th>
                   <th class="sortable" @click="sortToggle('keys','keyPrefix')">Prefix<span x-html="sortIndicator('keys','keyPrefix')"></span></th>
                   <th>Role</th>
                   <th class="sortable" @click="sortToggle('keys','createdAt')">Created<span x-html="sortIndicator('keys','createdAt')"></span></th>
@@ -436,6 +448,13 @@
               <tbody>
                 <template x-for="k in filteredKeys()" :key="k.id">
                   <tr>
+                    <td class="cell-select">
+                      <input type="checkbox"
+                        :disabled="k.isRevoked"
+                        :checked="isKeySelected(k.id)"
+                        @change="toggleKeySelection(k.id, $event.target.checked)"
+                        :aria-label="'Select key ' + k.keyPrefix" />
+                    </td>
                     <td x-text="k.keyPrefix"></td><td x-text="k.role"></td>
                     <td x-text="formatTime(k.createdAt)"></td>
                     <td>

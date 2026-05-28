@@ -23,8 +23,24 @@ if [[ -z "${API_KEY:-}" ]]; then
     -H "Authorization: Bearer ${ADMIN_KEY}" \
     -H "Content-Type: application/json" \
     -d '{"name":"soak-local","scopes":["inference"]}')"
+  KEY_ID="$(python3 -c "import json,sys; print(json.load(sys.stdin)['id'])" <<<"${resp}")"
   export API_KEY="$(python3 -c "import json,sys; print(json.load(sys.stdin)['secret'])" <<<"${resp}")"
+
+  curl -sf -X PUT "${BASE_URL}/admin/api/keys/${KEY_ID}/model-grants" \
+    -H "Authorization: Bearer ${ADMIN_KEY}" \
+    -H "Content-Type: application/json" \
+    -d "{\"modelIds\":[\"${COMPOSE_MODEL}\"]}" >/dev/null
 fi
+
+for _ in $(seq 1 10); do
+  if curl -sf -X POST "${BASE_URL}/v1/chat/completions" \
+    -H "Authorization: Bearer ${API_KEY}" \
+    -H "Content-Type: application/json" \
+    -d "{\"model\":\"${COMPOSE_MODEL}\",\"messages\":[{\"role\":\"user\",\"content\":\"warmup\"}],\"stream\":false}" >/dev/null; then
+    break
+  fi
+  sleep 1
+done
 
 echo "Soak local — duration=${SOAK_DURATION} vus=${SOAK_VUS} model=${COMPOSE_MODEL}"
 k6 run perf/k6/scripts/soak.js \

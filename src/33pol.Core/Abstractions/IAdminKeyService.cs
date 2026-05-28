@@ -14,4 +14,9 @@ public interface IAdminKeyService
         CancellationToken cancellationToken = default);
 
     Task RevokeAsync(Guid tenantId, Guid keyId, CancellationToken cancellationToken = default);
+
+    Task<int> RevokeManyAsync(
+        Guid tenantId,
+        IReadOnlyCollection<Guid> keyIds,
+        CancellationToken cancellationToken = default);
 }

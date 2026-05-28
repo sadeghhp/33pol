@@ -37,4 +37,15 @@ public sealed class GatewayMetricsCollectorTests
 
         act.Should().NotThrow();
     }
+
+    [Fact]
+    public void RecordTimeToFirstToken_DoesNotThrow()
+    {
+        var runtime = new GatewayRuntimeState();
+        var collector = new GatewayMetricsCollector(runtime);
+
+        var act = () => collector.RecordTimeToFirstToken("m1", 0.12);
+
+        act.Should().NotThrow();
+    }
 }

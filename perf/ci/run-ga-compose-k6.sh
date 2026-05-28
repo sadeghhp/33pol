@@ -30,7 +30,13 @@ if [[ -z "${API_KEY:-}" ]]; then
     -H "Authorization: Bearer ${ADMIN_KEY}" \
     -H "Content-Type: application/json" \
     -d '{"name":"k6-ga-compose","scopes":["inference"]}')"
+  KEY_ID="$(python3 -c "import json,sys; print(json.load(sys.stdin)['id'])" <<<"${resp}")"
   export API_KEY="$(python3 -c "import json,sys; print(json.load(sys.stdin)['secret'])" <<<"${resp}")"
+
+  curl -sf -X PUT "${BASE_URL}/admin/api/keys/${KEY_ID}/model-grants" \
+    -H "Authorization: Bearer ${ADMIN_KEY}" \
+    -H "Content-Type: application/json" \
+    -d "{\"modelIds\":[\"${COMPOSE_MODEL}\"]}" >/dev/null
 fi
 
 K6_EXTRA=(--no-thresholds)

@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Pol33.Core.Abstractions;
 using Pol33.Core.Configuration;
+using Pol33.Core.Forwarding;
 using Pol33.Core.Errors;
 using Pol33.Core.Models;
 using Pol33.Core.Identity;
@@ -215,6 +216,8 @@ public sealed class ModelRouterMiddleware
                 context.Request.Body.Position = 0;
 
             var started = DateTimeOffset.UtcNow;
+            context.Items[InferenceForwardingContextKeys.StartedUtc] = started;
+            context.Items[InferenceForwardingContextKeys.ModelId] = modelConfig.Id;
             using var inferenceScope = _requestTracker.BeginInferenceRequest(modelConfig.Id, requestInfo.Stream);
 
             var requestId = ResolveRequestId(context);

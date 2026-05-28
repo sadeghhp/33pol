@@ -40,3 +40,13 @@ public sealed class AdminApiKeyListItem
 
     public bool IsRevoked => RevokedAt is not null;
 }
+
+public sealed class BatchRevokeAdminApiKeysRequest
+{
+    public IReadOnlyList<Guid> KeyIds { get; init; } = [];
+}
+
+public sealed class BatchRevokeAdminApiKeysResponse
+{
+    public required int RevokedCount { get; init; }
+}

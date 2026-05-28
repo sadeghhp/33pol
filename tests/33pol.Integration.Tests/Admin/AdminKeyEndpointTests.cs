@@ -76,6 +76,51 @@ public sealed class AdminKeyEndpointTests
     }
 
     [Fact]
+    public async Task RevokeKeysBatch_SubsequentInferenceWithAllKeys_Returns401()
+    {
+        await using var factory = GatewayWebApplicationFactory.CreateWithInMemoryDatabase(AdminKey);
+        await GatewayWebApplicationFactory.EnsureAuthReadyAsync(factory);
+        var adminClient = CreateAuthenticatedClient(factory, AdminKey);
+
+        var firstKey = await CreateInferenceKeyAsync(adminClient);
+        var secondKey = await CreateInferenceKeyAsync(adminClient);
+
+        var response = await adminClient.PostAsJsonAsync(
+            "/admin/api/keys/revoke",
+            new { keyIds = new[] { firstKey.Id, secondKey.Id } });
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        json.RootElement.GetProperty("revokedCount").GetInt32().Should().Be(2);
+
+        var firstInference = factory.CreateClient();
+        firstInference.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", firstKey.Secret);
+        using var firstBody = new StringContent("""{"model":"gpt-local","stream":false}""", System.Text.Encoding.UTF8, "application/json");
+        var firstResponse = await firstInference.PostAsync("/v1/chat/completions", firstBody);
+        firstResponse.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+
+        var secondInference = factory.CreateClient();
+        secondInference.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", secondKey.Secret);
+        using var secondBody = new StringContent("""{"model":"gpt-local","stream":false}""", System.Text.Encoding.UTF8, "application/json");
+        var secondResponse = await secondInference.PostAsync("/v1/chat/completions", secondBody);
+        secondResponse.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+    }
+
+    [Fact]
+    public async Task RevokeKeysBatch_WithoutIds_Returns400()
+    {
+        await using var factory = GatewayWebApplicationFactory.CreateWithInMemoryDatabase(AdminKey);
+        await GatewayWebApplicationFactory.EnsureAuthReadyAsync(factory);
+        var client = CreateAuthenticatedClient(factory, AdminKey);
+
+        var response = await client.PostAsJsonAsync(
+            "/admin/api/keys/revoke",
+            new { keyIds = Array.Empty<Guid>() });
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
     public async Task PostConfigReload_WithoutAuth_Returns401()
     {
         await using var factory = GatewayWebApplicationFactory.CreateWithInMemoryDatabase(AdminKey);
@@ -92,5 +137,17 @@ public sealed class AdminKeyEndpointTests
         var client = factory.CreateClient();
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
         return client;
+    }
+
+    private static async Task<(Guid Id, string Secret)> CreateInferenceKeyAsync(HttpClient adminClient)
+    {
+        var response = await adminClient.PostAsJsonAsync(
+            "/admin/api/keys",
+            new { role = "Inference" });
+        response.EnsureSuccessStatusCode();
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        return (
+            json.RootElement.GetProperty("id").GetGuid(),
+            json.RootElement.GetProperty("secret").GetString()!);
     }
 }

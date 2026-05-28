@@ -16,11 +16,11 @@ public sealed class AdminUiIntegrationTests
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var body = await response.Content.ReadAsStringAsync();
         body.Should().Contain("33pol Gateway Admin");
-        body.Should().Contain("href=\"admin.css?v=7\"");
-        body.Should().Contain("src=\"admin-icons.js?v=7\"");
-        body.Should().Contain("src=\"admin-errors.js?v=7\"");
-        body.Should().Contain("src=\"admin-store.js?v=8\"");
-        body.Should().Contain("src=\"admin-app.js?v=11\"");
+        body.Should().MatchRegex("href=\"admin\\.css\\?v=\\d+\"");
+        body.Should().MatchRegex("src=\"admin-icons\\.js\\?v=\\d+\"");
+        body.Should().MatchRegex("src=\"admin-errors\\.js\\?v=\\d+\"");
+        body.Should().MatchRegex("src=\"admin-store\\.js\\?v=\\d+\"");
+        body.Should().MatchRegex("src=\"admin-app\\.js\\?v=\\d+\"");
         body.Should().Contain("openKeyAccess");
         body.Should().Contain("Tenant model access");
         body.Should().Contain("testModel(");

@@ -1,8 +1,10 @@
-using System.Net.Http.Headers;
 using System.Buffers;
+using System.Net.Http.Headers;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.Extensions.Logging;
+using Pol33.Core.Abstractions;
+using Pol33.Core.Forwarding;
 using Pol33.Proxy.Routing;
 using Yarp.ReverseProxy.Forwarder;
 
@@ -21,6 +23,7 @@ public interface IInferenceHttpForwarder
 
 public sealed class InferenceHttpForwarder(
     IHttpClientFactory httpClientFactory,
+    IGatewayMetricsCollector metricsCollector,
     ILogger<InferenceHttpForwarder> logger) : IInferenceHttpForwarder
 {
     public const string HttpClientName = Core.Http.UpstreamHttpClientNames.Inference;
@@ -121,6 +124,7 @@ public sealed class InferenceHttpForwarder(
                     await CopyStreamWithFlushAsync(
                             upstreamBody,
                             context.Response.Body,
+                            onFirstByteWritten: () => RecordTimeToFirstTokenIfNeeded(context),
                             cancellationToken)
                         .ConfigureAwait(false);
                 }
@@ -201,12 +205,39 @@ public sealed class InferenceHttpForwarder(
                string.Equals(headerName, "Content-Length", StringComparison.OrdinalIgnoreCase);
     }
 
+    private void RecordTimeToFirstTokenIfNeeded(HttpContext context)
+    {
+        if (!context.Items.TryGetValue(InferenceForwardingContextKeys.StartedUtc, out var startedValue) ||
+            startedValue is not DateTimeOffset startedUtc)
+        {
+            return;
+        }
+
+        if (!context.Items.TryGetValue(InferenceForwardingContextKeys.ModelId, out var modelValue) ||
+            modelValue is not string modelId ||
+            string.IsNullOrWhiteSpace(modelId))
+        {
+            return;
+        }
+
+        if (context.Items.ContainsKey(InferenceForwardingContextKeys.TimeToFirstTokenRecorded))
+        {
+            return;
+        }
+
+        context.Items[InferenceForwardingContextKeys.TimeToFirstTokenRecorded] = true;
+        var elapsedSeconds = Math.Max(0, (DateTimeOffset.UtcNow - startedUtc).TotalSeconds);
+        metricsCollector.RecordTimeToFirstToken(modelId, elapsedSeconds);
+    }
+
     private static async Task CopyStreamWithFlushAsync(
         Stream source,
         Stream destination,
+        Action? onFirstByteWritten,
         CancellationToken cancellationToken)
     {
         var buffer = ArrayPool<byte>.Shared.Rent(16 * 1024);
+        var firstByteWritten = false;
         try
         {
             int read;
@@ -216,6 +247,12 @@ public sealed class InferenceHttpForwarder(
             {
                 await destination.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
                 await destination.FlushAsync(cancellationToken).ConfigureAwait(false);
+
+                if (!firstByteWritten)
+                {
+                    firstByteWritten = true;
+                    onFirstByteWritten?.Invoke();
+                }
             }
         }
         finally

@@ -1,4 +1,5 @@
 using FluentAssertions;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Pol33.Core.Abstractions;
@@ -15,6 +16,7 @@ public sealed class RegistryServiceCollectionExtensionsTests
     {
         var services = new ServiceCollection();
         services.AddLogging();
+        services.AddSingleton<IConfiguration>(new ConfigurationBuilder().Build());
         services.AddOptions<GatewayOptions>().Configure(o =>
         {
             o.ModelsConfigPath = "config/models.json";

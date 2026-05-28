@@ -79,7 +79,7 @@ public sealed class AdminModelTestEndpointTests
                     url = "https://api.openai.com/v1",
                     aliases = Array.Empty<string>(),
                     maxContextLength = 8192,
-                    upstreamAuth = new { type = "bearer", envVar = "OPENAI_API_KEY" }
+                    upstreamAuth = new { type = "bearer", envVar = "TEST_MISSING_UPSTREAM_KEY" }
                 }
             });
         create.StatusCode.Should().Be(HttpStatusCode.OK);

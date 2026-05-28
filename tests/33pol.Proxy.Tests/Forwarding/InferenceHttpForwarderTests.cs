@@ -3,6 +3,8 @@ using System.Net.Http.Headers;
 using System.Text;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging.Abstractions;
+using Pol33.Core.Abstractions;
+using Pol33.Core.Forwarding;
 using Pol33.Proxy.Forwarding;
 using Yarp.ReverseProxy.Forwarder;
 
@@ -16,6 +18,7 @@ public sealed class InferenceHttpForwarderTests
         var handler = new DelayedSseUpstreamHandler();
         var forwarder = new InferenceHttpForwarder(
             new SingleHandlerClientFactory(handler),
+            NoOpGatewayMetricsCollector.Instance,
             NullLogger<InferenceHttpForwarder>.Instance);
 
         var context = CreatePostContext("""{"model":"gpt","stream":true}""");
@@ -59,6 +62,7 @@ public sealed class InferenceHttpForwarderTests
         var handler = new ImmediateJsonUpstreamHandler();
         var forwarder = new InferenceHttpForwarder(
             new SingleHandlerClientFactory(handler),
+            NoOpGatewayMetricsCollector.Instance,
             NullLogger<InferenceHttpForwarder>.Instance);
 
         var context = CreatePostContext("""{"model":"gpt","stream":false}""");
@@ -83,11 +87,42 @@ public sealed class InferenceHttpForwarderTests
     }
 
     [Fact]
+    public async Task SendAsync_NonStreaming_SkipsTransferEncodingHeader()
+    {
+        var handler = new NonStreamingChunkedHeaderUpstreamHandler();
+        var forwarder = new InferenceHttpForwarder(
+            new SingleHandlerClientFactory(handler),
+            NoOpGatewayMetricsCollector.Instance,
+            NullLogger<InferenceHttpForwarder>.Instance);
+
+        var context = CreatePostContext("""{"model":"gpt","stream":false}""");
+        var transformer = new StreamingHttpTransformer(
+            isStreaming: false,
+            clientModelName: "gpt",
+            canonicalModelId: "gpt");
+
+        var error = await forwarder.SendAsync(
+            context,
+            "http://backend:8000",
+            upstreamBearerToken: null,
+            transformer,
+            isStreaming: false,
+            CancellationToken.None);
+
+        error.Should().Be(ForwarderError.None);
+        context.Response.Headers.ContainsKey("Transfer-Encoding").Should().BeFalse();
+        context.Response.Body.Position = 0;
+        var body = await new StreamReader(context.Response.Body).ReadToEndAsync();
+        body.Should().Contain("non-stream-upstream");
+    }
+
+    [Fact]
     public async Task SendAsync_UpstreamTimeout_ReturnsRequestTimedOut()
     {
         var handler = new HangingUpstreamHandler();
         var forwarder = new InferenceHttpForwarder(
             new SingleHandlerClientFactory(handler),
+            NoOpGatewayMetricsCollector.Instance,
             NullLogger<InferenceHttpForwarder>.Instance);
 
         var context = CreatePostContext("""{"model":"gpt","stream":true}""");
@@ -111,6 +146,7 @@ public sealed class InferenceHttpForwarderTests
         var handler = new DelayedSseUpstreamHandler();
         var forwarder = new InferenceHttpForwarder(
             new SingleHandlerClientFactory(handler),
+            NoOpGatewayMetricsCollector.Instance,
             NullLogger<InferenceHttpForwarder>.Instance);
 
         var context = CreatePostContext("""{"model":"gpt","stream":true}""");
@@ -134,6 +170,7 @@ public sealed class InferenceHttpForwarderTests
         var handler = new StreamingHeadersUpstreamHandler();
         var forwarder = new InferenceHttpForwarder(
             new SingleHandlerClientFactory(handler),
+            NoOpGatewayMetricsCollector.Instance,
             NullLogger<InferenceHttpForwarder>.Instance);
 
         var context = CreatePostContext("""{"model":"gpt","stream":true}""");
@@ -161,6 +198,7 @@ public sealed class InferenceHttpForwarderTests
         var handler = new DelayedSseUpstreamHandler();
         var forwarder = new InferenceHttpForwarder(
             new SingleHandlerClientFactory(handler),
+            NoOpGatewayMetricsCollector.Instance,
             NullLogger<InferenceHttpForwarder>.Instance);
 
         var tasks = Enumerable.Range(0, 8).Select(async _ =>
@@ -183,6 +221,35 @@ public sealed class InferenceHttpForwarderTests
         });
 
         await Task.WhenAll(tasks);
+    }
+
+    [Fact]
+    public async Task SendAsync_Streaming_RecordsTimeToFirstTokenOnce()
+    {
+        var handler = new DelayedSseUpstreamHandler();
+        var metrics = new CapturingGatewayMetricsCollector();
+        var forwarder = new InferenceHttpForwarder(
+            new SingleHandlerClientFactory(handler),
+            metrics,
+            NullLogger<InferenceHttpForwarder>.Instance);
+
+        var context = CreatePostContext("""{"model":"gpt","stream":true}""");
+        context.Items[InferenceForwardingContextKeys.StartedUtc] = DateTimeOffset.UtcNow;
+        context.Items[InferenceForwardingContextKeys.ModelId] = "gpt";
+        var transformer = new StreamingHttpTransformer(true, "gpt", "gpt");
+
+        var error = await forwarder.SendAsync(
+            context,
+            "http://backend:8000",
+            upstreamBearerToken: null,
+            transformer,
+            isStreaming: true,
+            CancellationToken.None);
+
+        error.Should().Be(ForwarderError.None);
+        metrics.TimeToFirstTokenRecords.Should().HaveCount(1);
+        metrics.TimeToFirstTokenRecords[0].ModelId.Should().Be("gpt");
+        metrics.TimeToFirstTokenRecords[0].Seconds.Should().BeGreaterThanOrEqualTo(0);
     }
 
     private static DefaultHttpContext CreatePostContext(string jsonBody)
@@ -245,6 +312,42 @@ public sealed class InferenceHttpForwarderTests
     private sealed class SingleHandlerClientFactory(HttpMessageHandler handler) : IHttpClientFactory
     {
         public HttpClient CreateClient(string name) => new(handler, disposeHandler: false);
+    }
+
+    private sealed class NoOpGatewayMetricsCollector : IGatewayMetricsCollector
+    {
+        public static readonly NoOpGatewayMetricsCollector Instance = new();
+
+        public void RecordRateLimitRejection(string reason) { }
+        public void RecordQuotaRejection() { }
+        public void RecordTokenUsage(string modelId, long promptTokens, long completionTokens) { }
+        public void RecordUsageParseFailure(string modelId) { }
+        public void RecordInferenceRouted(string modelId, string route, bool isStreaming) { }
+        public void RecordForwardAttempt(string modelId, string outcome) { }
+        public void RecordModelResolve(string result) { }
+        public void RecordCircuitBreakerTransition(string modelId, string toState) { }
+        public void RecordBulkheadRejection(string modelId) { }
+        public void RecordBulkheadInflightChange(string modelId, int delta) { }
+        public void RecordTimeToFirstToken(string modelId, double seconds) { }
+    }
+
+    private sealed class CapturingGatewayMetricsCollector : IGatewayMetricsCollector
+    {
+        public List<(string ModelId, double Seconds)> TimeToFirstTokenRecords { get; } = [];
+
+        public void RecordRateLimitRejection(string reason) { }
+        public void RecordQuotaRejection() { }
+        public void RecordTokenUsage(string modelId, long promptTokens, long completionTokens) { }
+        public void RecordUsageParseFailure(string modelId) { }
+        public void RecordInferenceRouted(string modelId, string route, bool isStreaming) { }
+        public void RecordForwardAttempt(string modelId, string outcome) { }
+        public void RecordModelResolve(string result) { }
+        public void RecordCircuitBreakerTransition(string modelId, string toState) { }
+        public void RecordBulkheadRejection(string modelId) { }
+        public void RecordBulkheadInflightChange(string modelId, int delta) { }
+
+        public void RecordTimeToFirstToken(string modelId, double seconds) =>
+            TimeToFirstTokenRecords.Add((modelId, seconds));
     }
 
     private sealed class DelayedSseUpstreamHandler : HttpMessageHandler
@@ -376,6 +479,24 @@ public sealed class InferenceHttpForwarderTests
                     Encoding.UTF8,
                     "application/json"),
             });
+    }
+
+    private sealed class NonStreamingChunkedHeaderUpstreamHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            var response = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    """{"marker":"non-stream-upstream"}""",
+                    Encoding.UTF8,
+                    "application/json"),
+            };
+            response.Headers.TransferEncodingChunked = true;
+            return Task.FromResult(response);
+        }
     }
 
     private sealed class HangingUpstreamHandler : HttpMessageHandler

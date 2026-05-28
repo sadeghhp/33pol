@@ -54,4 +54,9 @@ public sealed class GatewayMetricsCollector(GatewayRuntimeState runtimeState) : 
         GatewayMeters.BulkheadInflight.Add(
             delta,
             new KeyValuePair<string, object?>("model", modelId));
+
+    public void RecordTimeToFirstToken(string modelId, double seconds) =>
+        GatewayMeters.TimeToFirstToken.Record(
+            seconds,
+            new KeyValuePair<string, object?>("model", modelId));
 }
