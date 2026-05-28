@@ -16,7 +16,7 @@ One URL for every model. Policy, tenancy, and FinOps built in — without changi
 [![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?style=for-the-badge&logo=docker&logoColor=white)](./deploy/docker/README.md)
 [![Prometheus](https://img.shields.io/badge/Metrics-Prometheus-E6522C?style=for-the-badge&logo=prometheus&logoColor=white)](./docs/observability.md)
 
-[Quick start](#-quick-start) · [How it works](#-how-it-works) · [Features](#-features) · [Deploy](#-deployment) · [Docs](#-documentation)
+[Quick start](#-quick-start) · [How it works](#-how-it-works) · [Features](#-features) · [Deploy](#-deployment) · [Docs](#-documentation) · [Security](SECURITY.md)
 
 </div>
 
@@ -399,7 +399,7 @@ dotnet test tests/33pol.Conformance.Tests
 |-------|----------|
 | Architecture | [docs/architecture.md](./docs/architecture.md) |
 | Integrations (K8s, LangChain, k6) | [docs/integrations.md](./docs/integrations.md) |
-| Security & threat model | [docs/security.md](./docs/security.md) |
+| Security & threat model | [SECURITY.md](./SECURITY.md) · [docs/security.md](./docs/security.md) |
 | Error catalog | [docs/errors.md](./docs/errors.md) |
 | Implementation plan (phases 1–5) | [docs/implementation-plan/README.md](./docs/implementation-plan/README.md) |
 | GA sign-off checklist | [docs/ga-signoff.md](./docs/ga-signoff.md) |
@@ -410,11 +410,11 @@ dotnet test tests/33pol.Conformance.Tests
 
 ## Disclaimer
 
-> **Internal use only — not production-ready for public exposure**
+> **Open source — harden before production on the public internet**
 >
-> 33pol was built for **internal** LLM routing, operations, and experimentation within our organization. It has **not** been fully validated for untrusted, internet-facing, or multi-tenant public production workloads. GA sign-off items (staging performance, full E2E in Compose, SDK smoke runs, and formal approvals) may still be open — see [GA checklist](./docs/implementation-plan/GA-CHECKLIST.md).
+> This repository is intended to be **public** for learning, contribution, and self-hosted deployments. It has **not** been fully validated for untrusted, internet-facing, or multi-tenant production workloads. GA sign-off items (staging performance, full E2E in Compose, SDK smoke runs, and formal approvals) may still be open — see [GA checklist](./docs/implementation-plan/GA-CHECKLIST.md).
 >
-> Before any production or customer-facing deployment, run your own security review, load testing, hardening (TLS, secrets, CORS, key rotation), and operational runbooks. **Do not** expose admin endpoints or default bootstrap credentials to the public internet.
+> Before any production or customer-facing deployment: copy `models.json.example` and `upstream-secrets.enc.example`, rotate all secrets (never use dev defaults), terminate TLS at the edge, and follow [security.md](./docs/security.md). **Do not** expose admin endpoints or bootstrap credentials to the public internet.
 
 ---
 

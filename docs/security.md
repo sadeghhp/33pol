@@ -63,6 +63,23 @@ Expect `Access-Control-Allow-Origin: http://localhost:5173` when that origin is 
 - Use `Gateway:Security:KeyPepper` from environment or secret store.
 - Bootstrap admin key (`Gateway:Bootstrap`) is for first-run only; rotate after provisioning.
 
+### Going public (checklist)
+
+**Repository (Git):**
+
+- Operator paths are gitignored: `models.json`, `upstream-secrets.enc`, `.env`.
+- Committed templates only: `models.json.example`, `upstream-secrets.enc.example`.
+- History must not contain operator registry or encrypted upstream files (verify with `git log origin/main -- deploy/docker/config/models.json` and `upstream-secrets.enc` — both empty).
+
+**Operators (each deployment):**
+
+1. Copy examples: `models.json.example` → `models.json`, `upstream-secrets.enc.example` → `upstream-secrets.enc`.
+2. **Rotate** any provider keys that ever lived in old Git history; prefer `OPENROUTER_API_KEY` in `.env` with `upstreamAuth.envVar` in `models.json`.
+3. Replace dev defaults: admin API key, `KeyPepper`, Postgres password.
+4. Reapply or restart gateway after secret changes.
+
+**Collaborators after a history rewrite:** `git fetch && git reset --hard origin/main` or re-clone.
+
 ## Admin UI
 
 The static admin UI (`/admin`) stores the API key in **localStorage**. Treat the workstation as trusted; prefer short-lived keys and network isolation.
