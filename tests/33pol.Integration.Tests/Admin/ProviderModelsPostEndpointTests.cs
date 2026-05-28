@@ -46,6 +46,47 @@ public sealed class ProviderModelsPostEndpointTests
     }
 
     [Fact]
+    public async Task PostCustomModels_WithoutEnvVar_ReturnsList()
+    {
+        const string adminKey = "sk-33pol-post-custom-noauth-admin";
+        using var factory = CreateFactory(adminKey);
+        using var client = await CreateAdminClientAsync(factory, adminKey);
+
+        var response = await client.PostAsJsonAsync(
+            "/admin/api/providers/models",
+            new { modelsUrl = "https://api.example.com/v1/models" });
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var json = await response.Content.ReadAsStringAsync();
+        json.Should().Contain("\"provider\":\"custom\"");
+    }
+
+    [Fact]
+    public async Task PostCustomModels_Upstream401_Returns502()
+    {
+        const string adminKey = "sk-33pol-post-custom-401-admin";
+        using var factory = CreateFactory(
+            adminKey,
+            settings => settings["CUSTOM_PROVIDER_KEY"] = "custom_token",
+            services => services.AddSingleton(
+                new OpenAiCompatibleProviderModelsClient(
+                    new HttpClient(new UnauthorizedModelsHandler()))));
+        using var client = await CreateAdminClientAsync(factory, adminKey);
+
+        var response = await client.PostAsJsonAsync(
+            "/admin/api/providers/models",
+            new
+            {
+                modelsUrl = "https://api.example.com/v1/models",
+                envVar = "CUSTOM_PROVIDER_KEY",
+            });
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadGateway);
+        var json = await response.Content.ReadAsStringAsync();
+        json.Should().Contain("401");
+    }
+
+    [Fact]
     public async Task PostCustomModels_WithValidBody_ReturnsList()
     {
         const string adminKey = "sk-33pol-post-custom-admin";
@@ -69,7 +110,8 @@ public sealed class ProviderModelsPostEndpointTests
 
     private static WebApplicationFactory<Program> CreateFactory(
         string adminApiKey,
-        Action<IDictionary<string, string?>>? configureSettings = null)
+        Action<IDictionary<string, string?>>? configureSettings = null,
+        Action<IServiceCollection>? configureServices = null)
     {
         return GatewayWebApplicationFactory.CreateWithInMemoryDatabase(
                 adminApiKey: adminApiKey,
@@ -79,7 +121,12 @@ public sealed class ProviderModelsPostEndpointTests
                 builder.ConfigureServices(services =>
                 {
                     services.RemoveAll<OpenAiCompatibleProviderModelsClient>();
-                    services.AddSingleton(new OpenAiCompatibleProviderModelsClient(new HttpClient(new StubModelsHandler())));
+                    configureServices?.Invoke(services);
+                    if (!services.Any(d => d.ServiceType == typeof(OpenAiCompatibleProviderModelsClient)))
+                    {
+                        services.AddSingleton(
+                            new OpenAiCompatibleProviderModelsClient(new HttpClient(new StubModelsHandler())));
+                    }
                 });
             });
     }
@@ -110,5 +157,13 @@ public sealed class ProviderModelsPostEndpointTests
                 Content = new StringContent(body, Encoding.UTF8, "application/json")
             });
         }
+    }
+
+    private sealed class UnauthorizedModelsHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.Unauthorized));
     }
 }

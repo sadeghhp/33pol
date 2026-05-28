@@ -41,7 +41,7 @@ public static class AdminProviderEndpoints
                 string.Empty,
                 string.Empty,
                 string.Empty,
-                RequiresUpstreamAuth: true)));
+                RequiresUpstreamAuth: false)));
 
         return Results.Json(new { data = providers });
     }
@@ -126,15 +126,14 @@ public static class AdminProviderEndpoints
                 statusCode: StatusCodes.Status500InternalServerError);
         }
 
-        var models = await client.ListModelsAsync(modelsListUri, token ?? string.Empty, cancellationToken)
-            .ConfigureAwait(false);
-
-        return Results.Json(new
-        {
-            provider = definition.Id,
-            upstreamBaseUrl = definition.UpstreamBaseUrl,
-            data = models,
-        });
+        return await ListModelsOrUpstreamProblemAsync(
+            () => client.ListModelsAsync(modelsListUri, token ?? string.Empty, cancellationToken),
+            models => Results.Json(new
+            {
+                provider = definition.Id,
+                upstreamBaseUrl = definition.UpstreamBaseUrl,
+                data = models,
+            })).ConfigureAwait(false);
     }
 
     private static Task<IResult> PostCustomProviderModels(
@@ -161,29 +160,51 @@ public static class AdminProviderEndpoints
             return Results.Problem(detail: urlError, statusCode: StatusCodes.Status400BadRequest);
         }
 
-        if (!EnvVarNameValidator.TryValidate(envVar, out var resolvedEnvVar, out var envError))
+        string? bearerToken = null;
+        if (!string.IsNullOrWhiteSpace(envVar))
         {
-            return Results.Problem(detail: envError, statusCode: StatusCodes.Status400BadRequest);
-        }
+            if (!EnvVarNameValidator.TryValidate(envVar, out var resolvedEnvVar, out var envError))
+            {
+                return Results.Problem(detail: envError, statusCode: StatusCodes.Status400BadRequest);
+            }
 
-        var token = ResolveBearerToken(configuration, resolvedEnvVar);
-        if (string.IsNullOrWhiteSpace(token))
-        {
-            return Results.Problem(
-                detail: $"Missing API token. Set environment variable '{resolvedEnvVar}'.",
-                statusCode: StatusCodes.Status400BadRequest);
+            bearerToken = ResolveBearerToken(configuration, resolvedEnvVar);
+            if (string.IsNullOrWhiteSpace(bearerToken))
+            {
+                return Results.Problem(
+                    detail: $"Missing API token. Set environment variable '{resolvedEnvVar}'.",
+                    statusCode: StatusCodes.Status400BadRequest);
+            }
         }
-
-        var models = await client.ListModelsAsync(modelsListUri!, token, cancellationToken).ConfigureAwait(false);
 
         var upstreamBaseUrl = DeriveUpstreamBaseUrl(modelsListUri!);
 
-        return Results.Json(new
+        return await ListModelsOrUpstreamProblemAsync(
+            () => client.ListModelsAsync(modelsListUri!, bearerToken ?? string.Empty, cancellationToken),
+            models => Results.Json(new
+            {
+                provider = ProviderCatalog.CustomProviderId,
+                upstreamBaseUrl,
+                data = models,
+            })).ConfigureAwait(false);
+    }
+
+    private static async Task<IResult> ListModelsOrUpstreamProblemAsync(
+        Func<Task<IReadOnlyList<ProviderModelListItem>>> listModels,
+        Func<IReadOnlyList<ProviderModelListItem>, IResult> onSuccess)
+    {
+        try
         {
-            provider = ProviderCatalog.CustomProviderId,
-            upstreamBaseUrl,
-            data = models,
-        });
+            var models = await listModels().ConfigureAwait(false);
+            return onSuccess(models);
+        }
+        catch (ProviderModelsUpstreamException ex)
+        {
+            return Results.Problem(
+                title: "Upstream model list failed",
+                detail: $"The provider returned HTTP {(int)ex.StatusCode} ({ex.StatusCode}).",
+                statusCode: StatusCodes.Status502BadGateway);
+        }
     }
 
     private static Task<IResult> PostOpenRouterModelsLegacy(

@@ -1,5 +1,3 @@
-using System.Text;
-
 namespace Pol33.Proxy.Forwarding;
 
 /// <summary>
@@ -10,11 +8,11 @@ internal sealed class UsageCapturingStream : Stream
     private const int MaxBufferBytes = 512 * 1024;
 
     private readonly Stream _inner;
-    private readonly Action<string> _onComplete;
+    private readonly Action<ReadOnlyMemory<byte>> _onComplete;
     private readonly MemoryStream _buffer = new();
     private bool _completed;
 
-    public UsageCapturingStream(Stream inner, Action<string> onComplete)
+    public UsageCapturingStream(Stream inner, Action<ReadOnlyMemory<byte>> onComplete)
     {
         _inner = inner;
         _onComplete = onComplete;
@@ -77,8 +75,14 @@ internal sealed class UsageCapturingStream : Stream
         }
 
         _completed = true;
-        var text = Encoding.UTF8.GetString(_buffer.GetBuffer(), 0, (int)_buffer.Length);
-        _onComplete(text);
+        var length = (int)_buffer.Length;
+        if (length == 0)
+        {
+            _onComplete(ReadOnlyMemory<byte>.Empty);
+            return;
+        }
+
+        _onComplete(_buffer.GetBuffer().AsMemory(0, length));
     }
 
     protected override void Dispose(bool disposing)

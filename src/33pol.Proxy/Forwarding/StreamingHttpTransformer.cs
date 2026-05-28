@@ -97,24 +97,16 @@ public sealed class StreamingHttpTransformer : HttpTransformer
     {
         var contentType = proxyResponse.Content!.Headers.ContentType;
 
-        if (_isStreaming)
-        {
-            var originalStream = await proxyResponse.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-            var capturingStream = new UsageCapturingStream(
+        var originalStream = await proxyResponse.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        var capturingStream = _isStreaming
+            ? new UsageCapturingStream(
                 originalStream,
-                sseText => _usageCapture!.CaptureFromSseText(sseText));
-            proxyResponse.Content = new StreamContent(capturingStream);
-            if (contentType is not null)
-            {
-                proxyResponse.Content.Headers.ContentType = contentType;
-            }
+                captured => _usageCapture!.CaptureFromSseText(Encoding.UTF8.GetString(captured.Span)))
+            : new UsageCapturingStream(
+                originalStream,
+                captured => _usageCapture!.CaptureFromJsonBody(captured.Span));
 
-            return;
-        }
-
-        var body = await proxyResponse.Content.ReadAsByteArrayAsync(cancellationToken).ConfigureAwait(false);
-        _usageCapture!.CaptureFromJsonBody(body);
-        proxyResponse.Content = new ByteArrayContent(body);
+        proxyResponse.Content = new StreamContent(capturingStream);
         if (contentType is not null)
         {
             proxyResponse.Content.Headers.ContentType = contentType;

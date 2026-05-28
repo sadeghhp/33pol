@@ -26,9 +26,9 @@ public static class ProviderModelsListUrlValidator
             return false;
         }
 
-        if (parsed.IsLoopback)
+        if (parsed.IsLoopback || BlockedProviderModelsListHost.IsBlocked(parsed, out error))
         {
-            error = "modelsUrl must not target loopback addresses.";
+            error ??= "modelsUrl must not target loopback addresses.";
             return false;
         }
 
