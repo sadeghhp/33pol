@@ -133,6 +133,7 @@ cmd_doctor() {
   init_logging
   resolve_install_dir
   install_ensure_models_json "${INSTALL_DIR:-$(pwd)}"
+  install_ensure_upstream_secrets "${INSTALL_DIR:-$(pwd)}"
   install_run_doctor "${INSTALL_GATEWAY_PORT:-8080}" "${INSTALL_POSTGRES_PORT:-5432}"
   if [[ -f "${INSTALL_STATE_DIR}/install.state.json" ]]; then
     log "State file: ${INSTALL_STATE_DIR}/install.state.json"
@@ -204,6 +205,8 @@ cmd_install() {
   fi
 
   install_ensure_models_json "${INSTALL_DIR}"
+
+  install_ensure_upstream_secrets "${INSTALL_DIR}"
 
   local env_content
   env_content="$(install_build_env_content \
@@ -281,6 +284,7 @@ cmd_upgrade() {
     log "Skipping git pull (not a git clone)"
   fi
   install_ensure_models_json "${INSTALL_DIR}"
+  install_ensure_upstream_secrets "${INSTALL_DIR}"
   install_compose_build "${INSTALL_DIR}"
   install_compose_up "${INSTALL_DIR}"
   install_wait_for_gateway "${GATEWAY_PORT:-8080}"

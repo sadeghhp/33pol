@@ -59,6 +59,7 @@ Expect `Access-Control-Allow-Origin: http://localhost:5173` when that origin is 
 
 - Do not commit API keys, peppers, or connection strings.
 - **`deploy/docker/config/models.json` is gitignored** — copy from `models.json.example` locally; never commit internal upstream URLs or production model topology.
+- **`deploy/docker/config/upstream-secrets.enc` is gitignored** — copy from `upstream-secrets.enc.example`; never commit encrypted upstream API keys. Rotate provider keys if they ever appeared in Git history.
 - Use `Gateway:Security:KeyPepper` from environment or secret store.
 - Bootstrap admin key (`Gateway:Bootstrap`) is for first-run only; rotate after provisioning.
 

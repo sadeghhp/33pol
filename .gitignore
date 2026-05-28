@@ -15,9 +15,11 @@ TestResults-*
 perf/*
 .env
 
-# Operator registry (never commit internal upstream URLs)
+# Operator config (never commit registry or encrypted upstream keys)
 deploy/docker/config/models.json
 deploy/docker/config/models.json.local
+deploy/docker/config/upstream-secrets.enc
+deploy/docker/config/upstream-secrets.enc.local
 
 # Secret audit artifacts (local only)
 gitleaks-report.json

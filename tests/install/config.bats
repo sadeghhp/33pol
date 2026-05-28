@@ -92,3 +92,23 @@ BAR=2"
   install_ensure_models_json "${tmpdir}"
   grep -q keep-me "${tmpdir}/deploy/docker/config/models.json"
 }
+
+@test "install_ensure_upstream_secrets copies example when dest missing" {
+  local tmpdir="${BATS_TEST_TMPDIR}/ensure-secrets-$$"
+  mkdir -p "${tmpdir}/deploy/docker/config"
+  cp "${REPO_ROOT}/deploy/docker/config/upstream-secrets.enc.example" \
+    "${tmpdir}/deploy/docker/config/upstream-secrets.enc.example"
+  install_ensure_upstream_secrets "${tmpdir}"
+  [[ -f "${tmpdir}/deploy/docker/config/upstream-secrets.enc" ]]
+  grep -q '"Secrets": {}' "${tmpdir}/deploy/docker/config/upstream-secrets.enc"
+}
+
+@test "install_ensure_upstream_secrets does not overwrite existing dest" {
+  local tmpdir="${BATS_TEST_TMPDIR}/ensure-secrets-skip-$$"
+  mkdir -p "${tmpdir}/deploy/docker/config"
+  cp "${REPO_ROOT}/deploy/docker/config/upstream-secrets.enc.example" \
+    "${tmpdir}/deploy/docker/config/upstream-secrets.enc.example"
+  printf '{"Version":1,"Secrets":{"keep":"x"}}' >"${tmpdir}/deploy/docker/config/upstream-secrets.enc"
+  install_ensure_upstream_secrets "${tmpdir}"
+  grep -q keep "${tmpdir}/deploy/docker/config/upstream-secrets.enc"
+}

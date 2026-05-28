@@ -54,6 +54,36 @@ install_ensure_models_json() {
   log "Created ${dest} from models.json.example"
 }
 
+install_upstream_secrets_path() {
+  local install_dir="$1"
+  printf '%s/deploy/docker/config/upstream-secrets.enc' "${install_dir}"
+}
+
+install_upstream_secrets_example_path() {
+  local install_dir="$1"
+  printf '%s/deploy/docker/config/upstream-secrets.enc.example' "${install_dir}"
+}
+
+# Create empty upstream-secrets.enc from example when missing (non-destructive).
+install_ensure_upstream_secrets() {
+  local install_dir="$1"
+  local dest example
+  dest="$(install_upstream_secrets_path "${install_dir}")"
+  example="$(install_upstream_secrets_example_path "${install_dir}")"
+  if [[ -f "${dest}" ]]; then
+    return 0
+  fi
+  if [[ ! -f "${example}" ]]; then
+    return 0
+  fi
+  if [[ "${INSTALL_DRY_RUN:-false}" == true ]]; then
+    log "[dry-run] would copy ${example} -> ${dest}"
+    return 0
+  fi
+  cp "${example}" "${dest}"
+  log "Created ${dest} from upstream-secrets.enc.example"
+}
+
 # Substitute model id and upstream port into GPU models template (safe JSON; no sed on user input).
 install_render_models_gpu_json() {
   local example_file="$1"

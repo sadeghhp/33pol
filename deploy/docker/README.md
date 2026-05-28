@@ -86,7 +86,7 @@ The whole `deploy/docker/config/` directory is mounted at `/app/config` (includi
 2. **Routing → Add model** — model name (e.g. `anthropic/claude-3.5-sonnet`), URL `https://openrouter.ai/api`, paste your OpenRouter API key.
 3. **API keys → Create** an inference key for clients.
 
-The gateway writes `config/upstream-secrets.enc` on the mounted `config/` volume (writable). Restart preserves secrets.
+The gateway writes `config/upstream-secrets.enc` on the mounted `config/` volume (writable). Restart preserves secrets. **`upstream-secrets.enc` is gitignored** — copy from `upstream-secrets.enc.example` on first run; Admin UI creates encrypted entries at runtime. **Never commit** this file (historical ciphertext + default dev pepper = weak protection).
 
 **Optional GitOps:** set provider keys in `.env` (see `.env.example` for `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `TOGETHER_API_KEY`, `GROQ_API_KEY`, `DEEPSEEK_API_KEY`, `MISTRAL_API_KEY`, `FIREWORKS_API_KEY`, `DASHSCOPE_API_KEY`) and reference the matching `upstreamAuth.envVar` in `models.json` instead of the admin API key field. Provider discovery HTTP API is still available for automation (not exposed in the UI).
 
@@ -108,6 +108,7 @@ Equivalent stack when you prefer to run Compose from `deploy/docker/`:
 cd deploy/docker
 cp .env.example .env
 cp config/models.json.example config/models.json
+cp config/upstream-secrets.enc.example config/upstream-secrets.enc
 docker compose up -d --build
 ```
 
@@ -116,6 +117,7 @@ docker compose up -d --build
 | Path | Purpose |
 |------|---------|
 | `docker-compose.yml` | Service definitions (also included from repo root) |
+| `config/upstream-secrets.enc.example` | Empty encrypted store template (copy locally; gitignored at runtime) |
 | `config/models.json.example` | Registry template (copy to `models.json` locally) |
 | `config/models.json` | Operator registry (gitignored; volume-mounted into gateway) |
 | `config/prometheus.yml` | Scrape config (gateway job) |
