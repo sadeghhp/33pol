@@ -1,21 +1,34 @@
-# Local Compose overrides
-deploy/docker/.env
-
 # Build artifacts
 **/bin/**
 **/obj/**
 TestResults/
-
-# Local dev secrets (Postgres connection string)
-src/33pol.App/appsettings.Development.local.json
-
-# Local Compose overrides
-deploy/docker/.env
 TestResults-*
 perf/*
-.env
 
-# Operator config (never commit registry or encrypted upstream keys)
+# API keys, tokens, and environment secrets
+.env
+.env.*
+!.env.example
+deploy/docker/.env
+deploy/docker/.env.*
+!deploy/docker/.env.example
+
+# Local ASP.NET settings (connection strings, keys, peppers)
+**/appsettings.*.local.json
+!**/appsettings.*.local.json.example
+
+# Key material and credential files
+*.pem
+*.key
+*.p12
+*.pfx
+**/secrets.json
+**/api-keys.json
+**/apikeys.json
+**/*-api-keys.json
+*credentials*.json
+
+# Operator config (registry and encrypted upstream API keys)
 deploy/docker/config/models.json
 deploy/docker/config/models.json.local
 deploy/docker/config/upstream-secrets.enc
