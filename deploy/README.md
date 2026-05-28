@@ -37,4 +37,11 @@ helm upgrade --install 33pol deploy/helm/33pol -f my-values.yaml
 
 **Grafana:** not included in the Helm chart. Use [grafana/](./grafana/) JSON + provisioning with your own Grafana/Prometheus stack, or run the full local stack via [docker/README.md](./docker/README.md).
 
-Container images are built from the repo [Dockerfile](../Dockerfile); CI publishes to `ghcr.io/<repository>` on `main` (see `.github/workflows/docker-image.yml`).
+Container images are built from the repo [Dockerfile](../Dockerfile).
+
+| Workflow | When | Image tags |
+|----------|------|------------|
+| [docker-image.yml](../.github/workflows/docker-image.yml) | Push to `main` | `latest`, branch, commit SHA |
+| [release.yml](../.github/workflows/release.yml) | Push tag `v*` | Semver (e.g. `2.0.0`, `2.0`) |
+
+**Production:** pin `image.repository` and `image.tag` to a semver release (see [docs/release.md](../docs/release.md)), not `latest`.

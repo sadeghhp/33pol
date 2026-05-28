@@ -11,53 +11,7 @@ permissions:
 
 jobs:
   build-test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: "10.0.x"
-
-      - name: Restore
-        run: dotnet restore 33pol.sln
-
-      - name: Build
-        run: dotnet build 33pol.sln -c Release --no-restore
-
-      - name: Test with coverage
-        run: >
-          dotnet test 33pol.sln -c Release --no-build
-          --collect:"XPlat Code Coverage"
-          --results-directory ./TestResults
-
-      - name: Coverage threshold
-        run: bash build/check-coverage.sh TestResults
-
-      - name: Validate Prometheus alert rules
-        run: |
-          if command -v promtool >/dev/null 2>&1; then
-            promtool check rules deploy/prometheus/alerts/33pol.yml
-            promtool check rules deploy/prometheus/alerts/33pol-writer.yml
-          else
-            echo "promtool not installed; skipping alert rule validation"
-          fi
-
-      - name: Dependency vulnerability audit
-        run: |
-          dotnet list 33pol.sln package --vulnerable --include-transitive 2>&1 | tee vulnerability-audit.txt
-          if grep -q "has the following vulnerable" vulnerability-audit.txt; then
-            echo "::warning::Vulnerable packages reported — see docs/security.md and vulnerability-audit.txt"
-          fi
-
-      - name: Upload coverage artifacts
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: coverage-reports
-          path: TestResults/**/coverage.cobertura.xml
-          if-no-files-found: warn
+    uses: ./.github/workflows/ci-reusable.yml
 
   install-scripts:
     runs-on: ubuntu-latest

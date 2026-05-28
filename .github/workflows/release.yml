@@ -1,0 +1,158 @@
+# Tag-gated release: tests → publish tarball → GHCR semver image → GitHub Release.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    outputs:
+      semver: ${{ steps.version.outputs.semver }}
+      assembly_version: ${{ steps.version.outputs.assembly_version }}
+    steps:
+      - name: Parse semver from tag
+        id: version
+        run: |
+          ref="${GITHUB_REF_NAME}"
+          semver="${ref#v}"
+          if ! [[ "$semver" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Tag must be vMAJOR.MINOR.PATCH (optional -prerelease); got: $ref"
+            exit 1
+          fi
+          # MSBuild Version must be numeric x.y.z; prerelease/build metadata go in InformationalVersion only.
+          assembly_version="${semver%%-*}"
+          assembly_version="${assembly_version%%+*}"
+          echo "semver=$semver" >> "$GITHUB_OUTPUT"
+          echo "assembly_version=$assembly_version" >> "$GITHUB_OUTPUT"
+          echo "Release version: $semver (assembly $assembly_version)"
+
+  ci:
+    needs: validate
+    uses: ./.github/workflows/ci-reusable.yml
+
+  publish:
+    needs: [validate, ci]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Publish gateway bundle
+        run: |
+          VERSION="${{ needs.validate.outputs.semver }}"
+          ASSEMBLY="${{ needs.validate.outputs.assembly_version }}"
+          dotnet publish src/33pol.App/33pol.App.csproj \
+            -c Release \
+            -o artifacts/gateway \
+            -p:Version="$ASSEMBLY" \
+            -p:InformationalVersion="$VERSION" \
+            -p:UseAppHost=false
+          tar -czf "33pol-gateway-${VERSION}-linux-x64.tar.gz" -C artifacts gateway
+
+      - name: Upload publish artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gateway-release-${{ needs.validate.outputs.semver }}
+          path: 33pol-gateway-${{ needs.validate.outputs.semver }}-linux-x64.tar.gz
+          retention-days: 90
+
+  docker:
+    needs: [validate, ci]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: true
+          sbom: true
+          build-args: |
+            APP_VERSION=${{ needs.validate.outputs.semver }}
+            APP_ASSEMBLY_VERSION=${{ needs.validate.outputs.assembly_version }}
+
+  github-release:
+    needs: [validate, publish, docker]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download gateway tarball
+        uses: actions/download-artifact@v4
+        with:
+          name: gateway-release-${{ needs.validate.outputs.semver }}
+          path: dist
+
+      - name: Build release notes
+        run: |
+          VERSION="${{ needs.validate.outputs.semver }}"
+          if [[ -f CHANGELOG.md ]]; then
+            body=$(awk -v ver="$VERSION" '
+              BEGIN { found=0 }
+              $0 ~ "^## \\[" ver "\\]" || $0 ~ "^## " ver "($| )" { found=1; next }
+              found && /^## / { exit }
+              found { print }
+            ' CHANGELOG.md)
+          fi
+          if [[ -z "${body// }" ]]; then
+            body="See repository CHANGELOG.md for release notes."
+          fi
+          {
+            printf '%s\n\n' "$body"
+            echo "**Container:**"
+            echo '```'
+            echo "docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${VERSION}"
+            echo '```'
+            echo ""
+            echo "**Binary bundle:** \`33pol-gateway-${VERSION}-linux-x64.tar.gz\` (framework-dependent; requires ASP.NET runtime 10 — see docs/release.md)."
+          } > release-notes.md
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: v${{ needs.validate.outputs.semver }}
+          tag_name: ${{ github.ref_name }}
+          body_path: release-notes.md
+          files: dist/33pol-gateway-${{ needs.validate.outputs.semver }}-linux-x64.tar.gz
+          generate_release_notes: false
+          fail_on_unmatched_files: true

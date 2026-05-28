@@ -160,7 +160,7 @@ Compose auto-provisions Grafana dashboards from `deploy/grafana/dashboards/` (fo
 ```bash
 helm upgrade --install 33pol deploy/helm/33pol \
   --set image.repository=ghcr.io/<org>/33pol \
-  --set image.tag=latest \
+  --set image.tag=2.0.0 \
   --set postgresql.enabled=true \
   --set postgresql.existingSecret=gateway-db
 ```

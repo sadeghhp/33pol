@@ -11,6 +11,8 @@ bash perf/ci/run-smoke.sh
 
 CI on `main`: `build-test`, `k6-smoke`, dependency vulnerability audit.
 
+**Production release:** after GA criteria are met, follow [release.md](./release.md) (tag `v*`, GHCR semver image, GitHub Release tarball).
+
 ## 2. Staging performance
 
 1. Deploy gateway + mock or vLLM upstream.

@@ -2,6 +2,8 @@
 # Layer order: manifests → restore (cached when only .cs changes) → full src → publish.
 # Requires BuildKit (default in Docker 24+): NuGet package cache mount across builds.
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+ARG APP_VERSION=2.0.0
+ARG APP_ASSEMBLY_VERSION=2.0.0
 WORKDIR /src
 ENV DOTNET_CLI_TELEMETRY_OPTOUT=1 \
     DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 \
@@ -27,7 +29,8 @@ RUN --mount=type=cache,target=/root/.nuget/packages \
 
 COPY src/ src/
 RUN --mount=type=cache,target=/root/.nuget/packages \
-    dotnet publish src/33pol.App/33pol.App.csproj -c Release -o /app/publish /p:UseAppHost=false --no-restore
+    dotnet publish src/33pol.App/33pol.App.csproj -c Release -o /app/publish \
+    /p:UseAppHost=false /p:Version=${APP_ASSEMBLY_VERSION} /p:InformationalVersion=${APP_VERSION} --no-restore
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS final
 WORKDIR /app

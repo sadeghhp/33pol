@@ -23,6 +23,7 @@ public sealed class RootEndpointTests : IClassFixture<WebApplicationFactory<Prog
         body.Should().NotBeNull();
         body!.Name.Should().Be("33pol");
         body.Version.Should().NotBeNullOrWhiteSpace();
+        body.Version.Should().MatchRegex(@"^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$");
         body.Documentation.Should().NotBeNull();
         body.Documentation!.ImplementationPlan.Should().Contain("implementation-plan");
     }

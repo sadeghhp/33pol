@@ -1,8 +1,9 @@
 replicaCount: 1
 
 image:
-  repository: 33pol-gateway
-  tag: latest
+  # Override repository if your GHCR org differs (default matches github.com/sadeghhp/33pol).
+  repository: ghcr.io/sadeghhp/33pol
+  tag: "2.0.0"
   pullPolicy: IfNotPresent
 
 service:
