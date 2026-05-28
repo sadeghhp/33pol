@@ -18,7 +18,6 @@ HEALTH_JSON=false
 HEALTH_USE_COLOR=false
 HEALTH_LOG_FILE=""
 HEALTH_JSON_RESULTS=()
-# shellcheck enable=SC2034
 
 # Config thresholds (defaults; overridden by config files)
 DISK_WARN_PCT=85
