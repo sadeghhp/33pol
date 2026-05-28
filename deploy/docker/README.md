@@ -68,7 +68,7 @@ The whole `deploy/docker/config/` directory is mounted at `/app/config` (includi
 
 The gateway writes `config/upstream-secrets.enc` on the mounted `config/` volume (writable). Restart preserves secrets.
 
-**Optional GitOps:** set `OPENROUTER_API_KEY` in `.env` and use `upstreamAuth.envVar` in `models.json` instead of the admin API key field. Provider discovery HTTP API is still available for automation (not exposed in the UI).
+**Optional GitOps:** set provider keys in `.env` (see `.env.example` for `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `TOGETHER_API_KEY`, `GROQ_API_KEY`, `DEEPSEEK_API_KEY`, `MISTRAL_API_KEY`, `FIREWORKS_API_KEY`, `DASHSCOPE_API_KEY`) and reference the matching `upstreamAuth.envVar` in `models.json` instead of the admin API key field. Provider discovery HTTP API is still available for automation (not exposed in the UI).
 
 See [docs/integrations.md](../../docs/integrations.md#openrouter).
 

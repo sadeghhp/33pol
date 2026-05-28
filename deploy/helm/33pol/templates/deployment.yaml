@@ -43,6 +43,13 @@ spec:
                   name: {{ required "postgresql.existingSecret required when postgresql.enabled" .Values.postgresql.existingSecret }}
                   key: {{ .Values.postgresql.secretKey }}
             {{- end }}
+            {{- with .Values.providerApiKeys.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with .Values.providerApiKeys.extraEnvFrom }}
+          envFrom:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           livenessProbe:
             httpGet:
               path: {{ .Values.probes.livenessPath }}

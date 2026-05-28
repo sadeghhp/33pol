@@ -48,6 +48,24 @@ gateway:
   operatorConsole:
     enabled: false
 
+# Optional upstream provider API keys for models.json upstreamAuth.envVar.
+# Prefer Kubernetes Secrets via extraEnvFrom (do not commit secrets in values.yaml).
+providerApiKeys:
+  extraEnv: []
+  # extraEnv:
+  #   - name: OPENROUTER_API_KEY
+  #     valueFrom:
+  #       secretKeyRef:
+  #         name: gateway-provider-keys
+  #         key: openrouter
+  extraEnvFrom: []
+  # extraEnvFrom:
+  #   - secretRef:
+  #       name: gateway-provider-keys
+  # Supported envVar names (ProviderCatalog): OPENROUTER_API_KEY, OPENAI_API_KEY,
+  # TOGETHER_API_KEY, GROQ_API_KEY, DEEPSEEK_API_KEY, MISTRAL_API_KEY, FIREWORKS_API_KEY,
+  # DASHSCOPE_API_KEY, plus any custom envVar for POST /admin/api/providers/models.
+
 postgresql:
   enabled: false
   host: ""

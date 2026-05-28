@@ -308,6 +308,38 @@ public sealed class ModelRouterMiddlewareTests
     }
 
     [Fact]
+    public async Task InvokeAsync_UpstreamAuthConfiguredButTokenMissing_Returns502()
+    {
+        var registry = Substitute.For<IModelRegistry>();
+        registry.TryGetModel("cloud-model", out Arg.Any<ModelConfig?>())
+            .Returns(call =>
+            {
+                call[1] = new ModelConfig
+                {
+                    Id = "cloud-model",
+                    Url = "http://backend:8000",
+                    UpstreamAuth = new UpstreamAuthConfig { Type = "bearer", EnvVar = "OPENAI_API_KEY" },
+                };
+                return true;
+            });
+
+        var tokenResolver = Substitute.For<IUpstreamBearerTokenResolver>();
+        tokenResolver.ResolveBearerToken(Arg.Any<UpstreamAuthConfig?>()).Returns((string?)null);
+
+        var middleware = CreateMiddleware(registry: registry, upstreamTokenResolver: tokenResolver);
+        var context = CreateContext(
+            HttpMethods.Post,
+            "/v1/chat/completions",
+            """{"model":"cloud-model","stream":false}""");
+
+        await middleware.InvokeAsync(context);
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status502BadGateway);
+        var body = await ReadResponseBodyAsync(context);
+        body.Should().Contain("Upstream auth token not configured");
+    }
+
+    [Fact]
     public async Task InvokeAsync_RoutedInference_BeginsRequestTracking()
     {
         var registry = Substitute.For<IModelRegistry>();
@@ -343,7 +375,8 @@ public sealed class ModelRouterMiddlewareTests
         IRecentRequestStore? recentRequestStore = null,
         IServiceScopeFactory? scopeFactory = null,
         IGatewayAuthenticationState? authState = null,
-        BulkheadRegistry? bulkhead = null)
+        BulkheadRegistry? bulkhead = null,
+        IUpstreamBearerTokenResolver? upstreamTokenResolver = null)
     {
         next ??= _ => Task.CompletedTask;
         registry ??= Substitute.For<IModelRegistry>();
@@ -398,7 +431,7 @@ public sealed class ModelRouterMiddlewareTests
             rateLimitStore,
             forwarder,
             gatewayOptions,
-            Substitute.For<IUpstreamBearerTokenResolver>(),
+            upstreamTokenResolver ?? Substitute.For<IUpstreamBearerTokenResolver>(),
             NullLogger<ModelRouterMiddleware>.Instance);
     }
 

@@ -53,10 +53,9 @@ public sealed class GatewayApiServiceCollectionExtensionsTests
 
     private static HttpClient GetInjectedHttpClient(OpenAiCompatibleProviderModelsClient client)
     {
-        var field = typeof(OpenAiCompatibleProviderModelsClient).GetField(
-            "http",
-            BindingFlags.Instance | BindingFlags.NonPublic);
-        field.Should().NotBeNull();
-        return (HttpClient)field!.GetValue(client)!;
+        var field = typeof(OpenAiCompatibleProviderModelsClient)
+            .GetFields(BindingFlags.Instance | BindingFlags.NonPublic)
+            .Single(f => f.FieldType == typeof(HttpClient));
+        return (HttpClient)field.GetValue(client)!;
     }
 }
