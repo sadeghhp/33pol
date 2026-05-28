@@ -71,6 +71,8 @@ install_check_compose() {
   log "Docker Compose: ${version}"
 }
 
+# Optional $1: minimum free MB (default 5120). Called with no args from install_run_doctor.
+# shellcheck disable=SC2120
 install_check_disk() {
   local min_mb="${1:-5120}"
   local check_dir="${INSTALL_DIR:-.}"

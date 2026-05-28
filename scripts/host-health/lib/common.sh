@@ -9,7 +9,8 @@ HEALTH_WARN_COUNT=0
 HEALTH_FAIL_COUNT=0
 HEALTH_SKIP_COUNT=0
 
-# Runtime options (set by entry script)
+# Runtime options (set by entry script; read in this file and checks-*.sh)
+# shellcheck disable=SC2034
 HEALTH_MODE="quick"
 HEALTH_SKIP_EXTERNAL=false
 HEALTH_STRICT=false
@@ -17,6 +18,7 @@ HEALTH_JSON=false
 HEALTH_USE_COLOR=false
 HEALTH_LOG_FILE=""
 HEALTH_JSON_RESULTS=()
+# shellcheck enable=SC2034
 
 # Config thresholds (defaults; overridden by config files)
 DISK_WARN_PCT=85
@@ -67,7 +69,8 @@ health_color() {
 }
 
 health_log() {
-  local line="[$(date '+%H:%M:%S')] $*"
+  local line
+  line="[$(date '+%H:%M:%S')] $*"
   printf '%s\n' "${line}"
   if [[ -n "${HEALTH_LOG_FILE}" ]]; then
     printf '%s\n' "${line}" >>"${HEALTH_LOG_FILE}" 2>/dev/null || true

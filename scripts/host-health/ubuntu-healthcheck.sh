@@ -42,6 +42,8 @@ EOF
 }
 
 health_parse_args() {
+  # Assignments consumed in health_main / common.sh after parse (SC2034 false positive).
+  # shellcheck disable=SC2034
   HEALTH_MODE="quick"
   HEALTH_EXTRA_CONFIG=""
   HEALTH_NO_COLOR=false

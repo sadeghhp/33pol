@@ -103,8 +103,6 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          provenance: true
-          sbom: true
           build-args: |
             APP_VERSION=${{ needs.validate.outputs.semver }}
             APP_ASSEMBLY_VERSION=${{ needs.validate.outputs.assembly_version }}

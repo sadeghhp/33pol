@@ -8,8 +8,10 @@ using Pol33.Core.Abstractions;
 using Pol33.Core.Identity;
 using Pol33.Core.Models;
 using Pol33.Core.Errors;
+using Pol33.Core.Security;
 using Pol33.Security.Authentication;
 using Pol33.Security.Errors;
+using Pol33.Security.Hosting;
 
 namespace Pol33.Security.Tests.Authentication;
 

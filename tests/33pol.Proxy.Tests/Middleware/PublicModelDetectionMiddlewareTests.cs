@@ -75,7 +75,7 @@ public sealed class PublicModelDetectionMiddlewareTests
 
         await middleware.InvokeAsync(context);
 
-        await registry.DidNotReceive().TryGetModel(Arg.Any<string>(), out Arg.Any<ModelConfig?>());
+        registry.DidNotReceive().TryGetModel(Arg.Any<string>(), out Arg.Any<ModelConfig?>());
     }
 
     private static DefaultHttpContext CreatePostContext(string body)

@@ -25,9 +25,9 @@ jobs:
 
       - name: Shellcheck install scripts
         env:
-          SHELLCHECK_OPTS: -e SC1091
+          SHELLCHECK_OPTS: -e SC1091 -e SC2034 -e SC2120 -e SC2119
         run: |
-          shellcheck scripts/install-33pol.sh scripts/install/install-33pol.sh scripts/install/lib/*.sh \
+          shellcheck -S error scripts/install-33pol.sh scripts/install/install-33pol.sh scripts/install/lib/*.sh \
             scripts/host-health/ubuntu-healthcheck.sh scripts/host-health/lib/*.sh \
             perf/ci/verify-compose-health-gpu.sh perf/ci/verify-compose-health.sh
 

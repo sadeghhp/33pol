@@ -35,9 +35,10 @@ install_run_verify_script() {
   install_load_env "${install_dir}"
   export GATEWAY_PORT="${GATEWAY_PORT:-8080}"
   if [[ "${INSTALL_DRY_RUN:-false}" == true ]]; then
-    log "[dry-run] skip verify scripts"
+    log "[dry-run] skip verify scripts (profile=${profile})"
     return 0
   fi
+  log "Running post-install verify (profile=${profile})"
   bash "${script_dir}/verify-compose-health.sh"
 }
 
