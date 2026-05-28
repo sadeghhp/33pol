@@ -148,6 +148,7 @@ No local .NET SDK required. Gateway, Postgres, mock upstream, Prometheus, and Gr
 
 ```bash
 cp .env.example .env
+cp deploy/docker/config/models.json.example deploy/docker/config/models.json
 docker compose up -d --build
 bash perf/ci/verify-compose-health.sh
 ```

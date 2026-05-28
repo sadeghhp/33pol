@@ -72,3 +72,23 @@ BAR=2"
   output="$(install_generate_admin_key)"
   [[ "${output}" == sk-33pol-* ]]
 }
+
+@test "install_ensure_models_json copies example when dest missing" {
+  local tmpdir="${BATS_TEST_TMPDIR}/ensure-models-$$"
+  mkdir -p "${tmpdir}/deploy/docker/config"
+  cp "${REPO_ROOT}/deploy/docker/config/models.json.example" \
+    "${tmpdir}/deploy/docker/config/models.json.example"
+  install_ensure_models_json "${tmpdir}"
+  [[ -f "${tmpdir}/deploy/docker/config/models.json" ]]
+  grep -q mock-upstream "${tmpdir}/deploy/docker/config/models.json"
+}
+
+@test "install_ensure_models_json does not overwrite existing dest" {
+  local tmpdir="${BATS_TEST_TMPDIR}/ensure-models-skip-$$"
+  mkdir -p "${tmpdir}/deploy/docker/config"
+  cp "${REPO_ROOT}/deploy/docker/config/models.json.example" \
+    "${tmpdir}/deploy/docker/config/models.json.example"
+  printf '{"models":[{"id":"keep-me"}]}' >"${tmpdir}/deploy/docker/config/models.json"
+  install_ensure_models_json "${tmpdir}"
+  grep -q keep-me "${tmpdir}/deploy/docker/config/models.json"
+}

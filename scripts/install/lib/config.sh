@@ -28,6 +28,32 @@ install_models_gpu_example_path() {
   printf '%s/deploy/docker/config/models.gpu.json.example' "${install_dir}"
 }
 
+install_models_compose_example_path() {
+  local install_dir="$1"
+  printf '%s/deploy/docker/config/models.json.example' "${install_dir}"
+}
+
+# Create deploy/docker/config/models.json from example when missing (non-destructive).
+install_ensure_models_json() {
+  local install_dir="$1"
+  local dest example
+  dest="$(install_models_gpu_path "${install_dir}")"
+  example="$(install_models_compose_example_path "${install_dir}")"
+  if [[ -f "${dest}" ]]; then
+    return 0
+  fi
+  if [[ ! -f "${example}" ]]; then
+    log "No models.json at ${dest} and no ${example}; copy models.json.example after clone"
+    return 0
+  fi
+  if [[ "${INSTALL_DRY_RUN:-false}" == true ]]; then
+    log "[dry-run] would copy ${example} -> ${dest}"
+    return 0
+  fi
+  cp "${example}" "${dest}"
+  log "Created ${dest} from models.json.example"
+}
+
 # Substitute model id and upstream port into GPU models template (safe JSON; no sed on user input).
 install_render_models_gpu_json() {
   local example_file="$1"

@@ -66,7 +66,13 @@ curl -s http://localhost:8080/health/live
 curl -s http://localhost:8080/v1/models -H "Authorization: Bearer <api-key>"
 ```
 
-`models.json` is mounted from `deploy/docker/config/models.json` and points at `http://mock-upstream:8080`.
+`models.json` is **local operator config** (gitignored). Copy the committed template before first run:
+
+```bash
+cp deploy/docker/config/models.json.example deploy/docker/config/models.json
+```
+
+The default points at `http://mock-upstream:8080` (full-stack profile). Edit on the host for your upstreams — **do not commit** internal URLs or production topology.
 
 `host.docker.internal` is configured so backends running on the host machine are reachable from the gateway container.
 
@@ -101,6 +107,7 @@ Equivalent stack when you prefer to run Compose from `deploy/docker/`:
 ```bash
 cd deploy/docker
 cp .env.example .env
+cp config/models.json.example config/models.json
 docker compose up -d --build
 ```
 
@@ -109,7 +116,8 @@ docker compose up -d --build
 | Path | Purpose |
 |------|---------|
 | `docker-compose.yml` | Service definitions (also included from repo root) |
-| `config/models.json` | Registry sample (volume-mounted into gateway) |
+| `config/models.json.example` | Registry template (copy to `models.json` locally) |
+| `config/models.json` | Operator registry (gitignored; volume-mounted into gateway) |
 | `config/prometheus.yml` | Scrape config (gateway job) |
 | `wiremock/` | Mock upstream mappings |
 | `../grafana/` | Provisioning + dashboard JSON (Phase 4+) |

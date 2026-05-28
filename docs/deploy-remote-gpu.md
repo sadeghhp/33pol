@@ -45,7 +45,7 @@ Clients → http://<server>:8080/v1/...  →  33pol gateway (Docker)
 
 1. Start your inference server on the host (example: vLLM on port `8000`).
 2. During install, pick the matching preset or custom port.
-3. The installer seeds `deploy/docker/config/models.json` with `host.docker.internal`.
+3. The installer seeds `deploy/docker/config/models.json` from `models.gpu.json.example` with `host.docker.internal` (file is **gitignored** — never commit operator registry).
 
 Verify from the server:
 

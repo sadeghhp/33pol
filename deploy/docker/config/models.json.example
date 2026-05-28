@@ -1,0 +1,16 @@
+{
+  "models": [
+    {
+      "id": "mock-gpt",
+      "url": "http://mock-upstream:8080",
+      "maxContextLength": 8192,
+      "aliases": ["mock", "gpt-local"]
+    },
+    {
+      "id": "host-llm",
+      "url": "http://host.docker.internal:1234",
+      "maxContextLength": 32768,
+      "aliases": []
+    }
+  ]
+}

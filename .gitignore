@@ -14,3 +14,15 @@ deploy/docker/.env
 TestResults-*
 perf/*
 .env
+
+# Operator registry (never commit internal upstream URLs)
+deploy/docker/config/models.json
+deploy/docker/config/models.json.local
+
+# Secret audit artifacts (local only)
+gitleaks-report.json
+trufflehog-report.json
+audit-refs.txt
+audit-summary.txt
+gitleaks-stdout.txt
+trufflehog-stderr.txt
