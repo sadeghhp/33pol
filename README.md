@@ -10,6 +10,10 @@ One URL for every model. Policy, tenancy, and FinOps built in — without changi
 
 <br/>
 
+[![CI](https://github.com/sadeghhp/33pol/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/sadeghhp/33pol/actions/workflows/ci.yml)
+
+<br/>
+
 [![.NET](https://img.shields.io/badge/.NET-10.0-512BD4?style=for-the-badge&logo=dotnet&logoColor=white)](https://dotnet.microsoft.com/)
 [![ASP.NET Core](https://img.shields.io/badge/ASP.NET%20Core-Kestrel-512BD4?style=for-the-badge)](https://learn.microsoft.com/aspnet/core/)
 [![OpenAI API](https://img.shields.io/badge/API-OpenAI%20compatible-412991?style=for-the-badge)](https://platform.openai.com/docs/api-reference)
