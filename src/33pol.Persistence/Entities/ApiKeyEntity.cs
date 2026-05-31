@@ -25,4 +25,12 @@ public sealed class ApiKeyEntity
     public DateTimeOffset CreatedAt { get; set; }
 
     public DateTimeOffset? LastUsedAt { get; set; }
+
+    public string? Label { get; set; }
+
+    public string? Assignee { get; set; }
+
+    public string? Description { get; set; }
+
+    public string? CostCenter { get; set; }
 }

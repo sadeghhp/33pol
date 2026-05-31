@@ -10,4 +10,8 @@ public sealed record ApiKeyRecord(
     DateTimeOffset? ExpiresAt,
     DateTimeOffset? RevokedAt,
     DateTimeOffset CreatedAt,
-    DateTimeOffset? LastUsedAt);
+    DateTimeOffset? LastUsedAt,
+    string? Label = null,
+    string? Assignee = null,
+    string? Description = null,
+    string? CostCenter = null);

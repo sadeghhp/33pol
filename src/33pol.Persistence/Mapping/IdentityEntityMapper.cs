@@ -40,7 +40,11 @@ internal static class IdentityEntityMapper
             entity.ExpiresAt,
             entity.RevokedAt,
             entity.CreatedAt,
-            entity.LastUsedAt);
+            entity.LastUsedAt,
+            entity.Label,
+            entity.Assignee,
+            entity.Description,
+            entity.CostCenter);
 
     public static ApiKeyEntity ToEntity(ApiKeyRecord record) =>
         new()
@@ -55,6 +59,10 @@ internal static class IdentityEntityMapper
             RevokedAt = record.RevokedAt,
             CreatedAt = record.CreatedAt,
             LastUsedAt = record.LastUsedAt,
+            Label = record.Label,
+            Assignee = record.Assignee,
+            Description = record.Description,
+            CostCenter = record.CostCenter,
         };
 
     public static ModelGrantRecord ToRecord(ModelGrantEntity entity) =>

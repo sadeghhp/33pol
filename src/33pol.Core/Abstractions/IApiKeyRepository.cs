@@ -13,4 +13,11 @@ public interface IApiKeyRepository
     Task<ApiKeyRecord> CreateAsync(ApiKeyRecord apiKey, CancellationToken cancellationToken = default);
 
     Task RevokeAsync(Guid id, DateTimeOffset revokedAt, CancellationToken cancellationToken = default);
+
+    Task<ApiKeyRecord> UpdateMetadataAsync(
+        Guid id,
+        ApiKeyMetadataUpdate update,
+        CancellationToken cancellationToken = default);
+
+    Task TouchLastUsedAsync(Guid id, DateTimeOffset atUtc, CancellationToken cancellationToken = default);
 }

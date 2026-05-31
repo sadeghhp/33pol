@@ -62,6 +62,7 @@ public static class SecurityServiceCollectionExtensions
         services.AddScoped<IModelGrantService, ModelGrantService>();
         services.AddScoped<IModelGrantAdminService, ModelGrantAdminService>();
         services.AddScoped<IAdminKeyService, AdminKeyService>();
+        services.AddScoped<IApiKeyLastUsedTracker, DebouncedApiKeyLastUsedTracker>();
         services.AddHostedService<GatewayAuthenticationInitializer>();
 
         return services;
@@ -152,6 +153,22 @@ internal sealed class NullAdminKeyService : IAdminKeyService
 
     public Task<IReadOnlyList<AdminApiKeyListItem>> ListAsync(
         Guid tenantId,
+        bool includeUsageSummary = false,
+        CancellationToken cancellationToken = default) =>
+        throw NotConfigured();
+
+    public Task<AdminApiKeyListItem> UpdateAsync(
+        Guid tenantId,
+        Guid keyId,
+        UpdateAdminApiKeyRequest request,
+        CancellationToken cancellationToken = default) =>
+        throw NotConfigured();
+
+    public Task<AdminApiKeyUsageResponse> GetUsageAsync(
+        Guid tenantId,
+        Guid keyId,
+        DateOnly? fromDate,
+        DateOnly? toDate,
         CancellationToken cancellationToken = default) =>
         throw NotConfigured();
 

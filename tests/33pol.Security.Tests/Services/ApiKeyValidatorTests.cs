@@ -47,6 +47,36 @@ public sealed class ApiKeyValidatorTests
     }
 
     [Fact]
+    public async Task ValidateAsync_KeyCostCenterOverride_WinsOverTenant()
+    {
+        await using var db = CreateDb();
+        var tenantId = await SeedTenantAsync(db, costCenter: "tenant-cc");
+        const string secret = "sk-33pol-key-cost-center";
+        await SeedKeyAsync(db, tenantId, secret, ApiKeyRole.Inference, keyCostCenter: "key-cc");
+
+        var sut = CreateValidator(db);
+        var result = await sut.ValidateAsync(secret);
+
+        result.IsSuccess.Should().BeTrue();
+        result.CostCenter.Should().Be("key-cc");
+    }
+
+    [Fact]
+    public async Task ValidateAsync_KeyWithoutCostCenter_FallsBackToTenant()
+    {
+        await using var db = CreateDb();
+        var tenantId = await SeedTenantAsync(db, costCenter: "tenant-cc");
+        const string secret = "sk-33pol-key-fallback";
+        await SeedKeyAsync(db, tenantId, secret, ApiKeyRole.Inference);
+
+        var sut = CreateValidator(db);
+        var result = await sut.ValidateAsync(secret);
+
+        result.IsSuccess.Should().BeTrue();
+        result.CostCenter.Should().Be("tenant-cc");
+    }
+
+    [Fact]
     public async Task ValidateAsync_RevokedKey_ReturnsRevokedFailure()
     {
         await using var db = CreateDb();
@@ -136,7 +166,8 @@ public sealed class ApiKeyValidatorTests
         string secret,
         ApiKeyRole role,
         bool revoked = false,
-        DateTimeOffset? expiresAt = null)
+        DateTimeOffset? expiresAt = null,
+        string? keyCostCenter = null)
     {
         var keyId = Guid.NewGuid();
         db.ApiKeys.Add(new Pol33.Persistence.Entities.ApiKeyEntity
@@ -146,6 +177,7 @@ public sealed class ApiKeyValidatorTests
             KeyHash = ApiKeyHashing.Hash(secret, Pepper),
             KeyPrefix = ApiKeyHashing.CreatePrefix(secret),
             Role = role,
+            CostCenter = keyCostCenter,
             CreatedAt = DateTimeOffset.UtcNow,
             RevokedAt = revoked ? DateTimeOffset.UtcNow : null,
             ExpiresAt = expiresAt,

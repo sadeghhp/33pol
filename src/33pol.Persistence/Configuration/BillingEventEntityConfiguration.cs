@@ -40,6 +40,8 @@ internal sealed class BillingEventEntityConfiguration : IEntityTypeConfiguration
 
         builder.HasIndex(e => new { e.TenantId, e.RecordedAt });
 
+        builder.HasIndex(e => new { e.ApiKeyId, e.RecordedAt });
+
         builder.HasIndex(e => new { e.CostCenter, e.RecordedAt });
     }
 }

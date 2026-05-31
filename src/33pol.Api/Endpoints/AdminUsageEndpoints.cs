@@ -28,11 +28,18 @@ public static class AdminUsageEndpoints
         DateOnly? from,
         DateOnly? to,
         Guid? tenantId,
+        string? costCenter,
         CancellationToken cancellationToken)
     {
         var report = await usageService
             .GetUsageReportAsync(
-                new UsageReportRequest { FromDate = from, ToDate = to, TenantId = tenantId },
+                new UsageReportRequest
+                {
+                    FromDate = from,
+                    ToDate = to,
+                    TenantId = tenantId,
+                    CostCenter = costCenter,
+                },
                 cancellationToken)
             .ConfigureAwait(false);
 
@@ -57,12 +64,14 @@ public static class AdminUsageEndpoints
         DateOnly? from,
         DateOnly? to,
         Guid? tenantId,
+        Guid? apiKeyId,
+        string? costCenter,
         int? limit,
         CancellationToken cancellationToken)
     {
         var page = await usageService
             .QueryEventsAsync(
-                new BillingEventQuery(from, to, tenantId, limit ?? 100),
+                new BillingEventQuery(from, to, tenantId, apiKeyId, costCenter, limit ?? 100),
                 cancellationToken)
             .ConfigureAwait(false);
 
@@ -74,12 +83,19 @@ public static class AdminUsageEndpoints
         DateOnly? from,
         DateOnly? to,
         Guid? tenantId,
+        string? costCenter,
         string? format,
         CancellationToken cancellationToken)
     {
         var report = await usageService
             .GetUsageReportAsync(
-                new UsageReportRequest { FromDate = from, ToDate = to, TenantId = tenantId },
+                new UsageReportRequest
+                {
+                    FromDate = from,
+                    ToDate = to,
+                    TenantId = tenantId,
+                    CostCenter = costCenter,
+                },
                 cancellationToken)
             .ConfigureAwait(false);
 

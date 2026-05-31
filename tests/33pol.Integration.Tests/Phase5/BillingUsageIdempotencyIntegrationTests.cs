@@ -49,10 +49,8 @@ public sealed class BillingUsageIdempotencyIntegrationTests
 
         var storedEvents = await events.QueryAsync(
             new BillingEventQuery(
-                null,
-                null,
-                tenantId,
-                10));
+                TenantId: tenantId,
+                Limit: 10));
 
         storedEvents.Should().ContainSingle();
         storedEvents[0].RequestId.Should().Be("req-idempotent-integration");

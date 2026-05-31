@@ -60,4 +60,38 @@ public sealed class ApiKeyRepository : IApiKeyRepository
         entity.RevokedAt = revokedAt;
         await _db.SaveChangesAsync(cancellationToken);
     }
+
+    public async Task<ApiKeyRecord> UpdateMetadataAsync(
+        Guid id,
+        ApiKeyMetadataUpdate update,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(update);
+
+        var entity = await _db.ApiKeys.FirstOrDefaultAsync(k => k.Id == id, cancellationToken)
+            ?? throw new KeyNotFoundException($"API key '{id}' was not found.");
+
+        entity.Label = NormalizeOptional(update.Label);
+        entity.Assignee = NormalizeOptional(update.Assignee);
+        entity.Description = NormalizeOptional(update.Description);
+        entity.CostCenter = NormalizeOptional(update.CostCenter);
+
+        await _db.SaveChangesAsync(cancellationToken);
+        return IdentityEntityMapper.ToRecord(entity);
+    }
+
+    public async Task TouchLastUsedAsync(Guid id, DateTimeOffset atUtc, CancellationToken cancellationToken = default)
+    {
+        var entity = await _db.ApiKeys.FirstOrDefaultAsync(k => k.Id == id, cancellationToken);
+        if (entity is null)
+        {
+            return;
+        }
+
+        entity.LastUsedAt = atUtc;
+        await _db.SaveChangesAsync(cancellationToken);
+    }
+
+    private static string? NormalizeOptional(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 }

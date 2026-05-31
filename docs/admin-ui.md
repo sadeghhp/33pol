@@ -33,9 +33,9 @@ Files under `src/33pol.App/wwwroot/admin/` (served at `/admin/`):
 | Section | Hash | Content |
 |---------|------|---------|
 | Overview | `#/dashboard` | Metrics (2s poll while active + visible), health chips, recent requests |
-| Usage | `#/usage` | Date presets, unified **Apply range**, rollups, events, forecast, export |
+| Usage | `#/usage` | Date presets, cost center / API key filters, rollups, enriched billing events, forecast, export |
 | Routing | `#/routing` | **Models** (registry, quick-add drawer) and **Backends** (health table) |
-| API keys | `#/keys` | List, create (drawer), per-key model access (drawer), revoke (modal) |
+| API keys | `#/keys` | List (assignee, MTD usage, last used), create/edit metadata, per-key model access, revoke, view usage |
 | Settings | `#/settings` | Config status, rate limits (default + plans), tenant model allowlist, observability links |
 
 ## Errors and feedback
@@ -48,6 +48,22 @@ Files under `src/33pol.App/wwwroot/admin/` (served at `/admin/`):
 | Success actions | Toast (top-right, auto-dismiss) |
 | Unhandled 5xx / HTML errors | Global banner; stack/detail under **Technical details** |
 
+### Gateway inference errors (Overview)
+
+| Data | Where shown |
+|------|-------------|
+| Aggregate error count | **Errors** metric card (red when &gt; 0) |
+| Per-model error counts | **Errors by model** table (from `summary.errorsPerModel`; hidden when zero) |
+| Recent failed forwards | **Recent requests** — **Error** column (`errorCode` from `X-33pol-Error-Code`) |
+| Request correlation | **Request ID** column (copy button; click row for full ID, tenant, streaming flag) |
+| Filter failures | **Errors only** checkbox on Recent requests |
+
+Overview **polls every 2s** while the tab is visible (summary metrics, errors-by-model, and recent requests).
+
+**Limitation:** Recent requests only include inference routes that reached the forward path (success or upstream failure). Pre-forward rejects (e.g. `model_not_found`, unhealthy backend, circuit open) and middleware-only failures (rate limit, quota, invalid API key before routing) do **not** appear in the ring buffer — use aggregate metrics, **Errors by model**, Grafana, or structured logs with `X-Request-Id`.
+
+If the gateway error body was not written (e.g. forward failed after the upstream response already started), **Error** may be empty even when **Status** is 4xx/5xx.
+
 GET requests retry once on network failure. Usage export uses `downloadBlob` with the same error mapping as JSON APIs.
 
 ## API surface (by section)
@@ -55,13 +71,17 @@ GET requests retry once on network failure. Usage export uses `downloadBlob` wit
 | Section | Endpoints |
 |---------|-----------|
 | Overview | `GET /admin/api/summary`, `GET /admin/api/requests?limit=25`, `GET /health/live`, `GET /health/ready` |
-| Usage | `GET /admin/api/usage`, `/usage/events`, `/usage/forecast`, `GET /usage/export` |
+| Usage | `GET /admin/api/usage?costCenter=`, `/usage/events?apiKeyId=&costCenter=`, `/usage/forecast`, `GET /usage/export` |
 | Routing — Models | `GET/POST/PATCH/DELETE /admin/api/models` (write body: `{ model, apiKey?, clearApiKey? }`; GET returns `{ model, hasUpstreamCredential }`) |
 | Routing — Backends | `GET /admin/api/backends` |
-| API keys | `GET/POST /admin/api/keys`, `POST …/revoke`, `GET/PUT …/keys/{id}/model-grants` |
+| API keys | `GET/POST /admin/api/keys`, `PATCH …/keys/{id}`, `GET …/keys/{id}/usage`, `POST …/revoke`, `GET/PUT …/keys/{id}/model-grants` |
 | Tenant model access | `GET/PUT /admin/api/tenant/model-grants` (optional ceiling; empty = all registry models) |
 
 **Per-key model access:** Inference keys start with **no models** allowed. Open **Models** on a key, check the registry models it may call, and save. `GET /v1/models` and inference only expose models in that allowlist (intersected with tenant policy when the tenant is restricted).
+
+**API key metadata:** Create or **Edit** keys with **Label**, **Assignee**, **Cost center**, and **Description**. Assignee is for ownership display; cost center is independent and drives FinOps rollups when set (overrides tenant default on inference). List with `GET /admin/api/keys?includeUsageSummary=true` for month-to-date cost/request counts and **Last used**.
+
+**Usage filters:** Usage tab supports **Cost center** and **API key** filters on rollups (cost center) and billing events (both). Use **Usage** on a key row to jump here filtered to that key.
 | Settings | `GET /admin/api/config/status`, `POST /admin/api/config/reload`, `GET/PUT /admin/api/rate-limits` |
 
 Rate limit changes are written to `appsettings.json` and applied via configuration reload (see [rate-limit-admin.md](./runbooks/rate-limit-admin.md)).
@@ -133,6 +153,8 @@ When the gateway runs in Docker, upstream URLs must use `http://host.docker.inte
 ## Manual test checklist
 
 - [ ] Connect with admin API key → **Connected**; Overview metrics load automatically
+- [ ] Overview **Errors by model** appears when any model has errors since process start
+- [ ] Overview **Recent requests** shows Request ID and Error columns; **Errors only** filter works
 - [ ] `#/routing` — Models and Backends sub-tabs; legacy `#/models` / `#/backends` still work
 - [ ] **Usage:** presets → **Apply range** → rollups + events; export JSON/CSV
 - [ ] **Routing:** Add model (name + URL + API key) → save → `GET /v1/models` lists id

@@ -1,12 +1,14 @@
 using Pol33.Core.Abstractions;
 using Pol33.Core.Billing;
 using Pol33.Core.Models;
+using Pol33.Core.Usage;
 
 namespace Pol33.Billing.Usage;
 
 public sealed class BillingUsageService(
     IDailyUsageRollupRepository rollups,
-    IBillingEventRepository billingEvents) : IBillingUsageService
+    IBillingEventRepository billingEvents,
+    IApiKeyRepository apiKeys) : IBillingUsageService
 {
     public async Task<UsageReportResponse> GetUsageReportAsync(
         UsageReportRequest request,
@@ -17,6 +19,14 @@ public sealed class BillingUsageService(
         var rollupRecords = await rollups
             .GetRollupsAsync(request.FromDate, request.ToDate, request.TenantId, cancellationToken)
             .ConfigureAwait(false);
+
+        if (!string.IsNullOrWhiteSpace(request.CostCenter))
+        {
+            var costCenter = request.CostCenter.Trim();
+            rollupRecords = rollupRecords
+                .Where(r => string.Equals(r.CostCenter, costCenter, StringComparison.Ordinal))
+                .ToList();
+        }
 
         return new UsageReportResponse
         {
@@ -44,6 +54,9 @@ public sealed class BillingUsageService(
         var limit = Math.Clamp(query.Limit, 1, 5000);
         var normalized = query with { Limit = limit };
         var events = await billingEvents.QueryAsync(normalized, cancellationToken).ConfigureAwait(false);
-        return new BillingEventsPage { Events = events, Limit = limit };
+        var enriched = await AdminBillingEventMapper
+            .EnrichAsync(events, apiKeys, cancellationToken)
+            .ConfigureAwait(false);
+        return new BillingEventsPage { Events = enriched, Limit = limit };
     }
 }

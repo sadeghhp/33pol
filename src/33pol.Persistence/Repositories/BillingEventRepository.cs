@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Npgsql;
 using Pol33.Core.Abstractions;
 using Pol33.Core.Billing;
+using Pol33.Core.Models;
 using Pol33.Persistence.Mapping;
 
 namespace Pol33.Persistence.Repositories;
@@ -56,6 +57,17 @@ public sealed class BillingEventRepository(GatewayDbContext dbContext) : IBillin
             dbQuery = dbQuery.Where(e => e.TenantId == query.TenantId.Value);
         }
 
+        if (query.ApiKeyId is not null)
+        {
+            dbQuery = dbQuery.Where(e => e.ApiKeyId == query.ApiKeyId.Value);
+        }
+
+        if (!string.IsNullOrWhiteSpace(query.CostCenter))
+        {
+            var costCenter = query.CostCenter.Trim();
+            dbQuery = dbQuery.Where(e => e.CostCenter == costCenter);
+        }
+
         if (query.FromDate is not null)
         {
             var from = query.FromDate.Value.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
@@ -75,6 +87,42 @@ public sealed class BillingEventRepository(GatewayDbContext dbContext) : IBillin
             .ConfigureAwait(false);
 
         return entities.Select(BillingEntityMapper.ToRecord).ToList();
+    }
+
+    public async Task<IReadOnlyDictionary<Guid, ApiKeyUsageSummary>> GetUsageSummariesAsync(
+        Guid tenantId,
+        DateOnly fromDate,
+        DateOnly toDate,
+        CancellationToken cancellationToken = default)
+    {
+        var from = fromDate.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
+        var to = toDate.ToDateTime(TimeOnly.MaxValue, DateTimeKind.Utc);
+
+        var rows = await dbContext.BillingEvents
+            .AsNoTracking()
+            .Where(e => e.TenantId == tenantId && e.ApiKeyId != null)
+            .Where(e => e.RecordedAt >= from && e.RecordedAt <= to)
+            .GroupBy(e => e.ApiKeyId!.Value)
+            .Select(g => new
+            {
+                ApiKeyId = g.Key,
+                RequestCount = g.Count(),
+                PromptTokens = g.Sum(e => e.PromptTokens),
+                CompletionTokens = g.Sum(e => e.CompletionTokens),
+                TotalCost = g.Sum(e => e.TotalCost ?? 0m),
+            })
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        return rows.ToDictionary(
+            row => row.ApiKeyId,
+            row => new ApiKeyUsageSummary
+            {
+                RequestCount = row.RequestCount,
+                PromptTokens = row.PromptTokens,
+                CompletionTokens = row.CompletionTokens,
+                TotalCost = row.TotalCost,
+            });
     }
 
     private static bool IsDuplicateRequestId(DbUpdateException exception)

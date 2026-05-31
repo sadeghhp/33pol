@@ -67,4 +67,67 @@ public sealed class ApiKeyRepositoryTests
         var loaded = await sut.GetByIdAsync(keyId);
         loaded!.RevokedAt.Should().Be(revokedAt);
     }
+
+    [Fact]
+    public async Task UpdateMetadataAsync_PersistsFields()
+    {
+        await using var db = PersistenceTestDbContextFactory.CreateInMemory(nameof(UpdateMetadataAsync_PersistsFields));
+        var tenantRepo = new TenantRepository(db);
+        var sut = new ApiKeyRepository(db);
+        var now = DateTimeOffset.UtcNow;
+        var tenantId = Guid.NewGuid();
+        var keyId = Guid.NewGuid();
+
+        await tenantRepo.CreateAsync(new TenantRecord(tenantId, "t1", "Tenant 1", null, null, true, now, now));
+        await sut.CreateAsync(new ApiKeyRecord(
+            keyId,
+            tenantId,
+            "hash",
+            "sk-prefix",
+            ApiKeyRole.Inference,
+            [],
+            null,
+            null,
+            now,
+            null));
+
+        var updated = await sut.UpdateMetadataAsync(
+            keyId,
+            new ApiKeyMetadataUpdate("prod-bot", "Platform team", "Notes", "eng-platform"));
+
+        updated.Label.Should().Be("prod-bot");
+        updated.Assignee.Should().Be("Platform team");
+        updated.Description.Should().Be("Notes");
+        updated.CostCenter.Should().Be("eng-platform");
+    }
+
+    [Fact]
+    public async Task TouchLastUsedAsync_SetsTimestamp()
+    {
+        await using var db = PersistenceTestDbContextFactory.CreateInMemory(nameof(TouchLastUsedAsync_SetsTimestamp));
+        var tenantRepo = new TenantRepository(db);
+        var sut = new ApiKeyRepository(db);
+        var now = DateTimeOffset.UtcNow;
+        var tenantId = Guid.NewGuid();
+        var keyId = Guid.NewGuid();
+        var touchedAt = now.AddHours(1);
+
+        await tenantRepo.CreateAsync(new TenantRecord(tenantId, "t1", "Tenant 1", null, null, true, now, now));
+        await sut.CreateAsync(new ApiKeyRecord(
+            keyId,
+            tenantId,
+            "hash",
+            "sk-prefix",
+            ApiKeyRole.Inference,
+            [],
+            null,
+            null,
+            now,
+            null));
+
+        await sut.TouchLastUsedAsync(keyId, touchedAt);
+
+        var loaded = await sut.GetByIdAsync(keyId);
+        loaded!.LastUsedAt.Should().Be(touchedAt);
+    }
 }

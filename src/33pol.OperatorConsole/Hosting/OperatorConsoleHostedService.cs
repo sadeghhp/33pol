@@ -181,6 +181,7 @@ public sealed class OperatorConsoleHostedService(
         table.AddColumn("Time");
         table.AddColumn("Model");
         table.AddColumn("Status");
+        table.AddColumn("Error");
         table.AddColumn("Duration");
         foreach (var request in requests)
         {
@@ -188,6 +189,7 @@ public sealed class OperatorConsoleHostedService(
                 request.TimestampUtc.ToString("O"),
                 request.ModelId ?? "-",
                 request.StatusCode.ToString(),
+                request.ErrorCode ?? "-",
                 $"{request.DurationMs:F0}ms");
         }
 

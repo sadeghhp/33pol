@@ -295,6 +295,7 @@ public sealed class ModelRouterMiddleware
                         CancellationToken.None).ConfigureAwait(false);
                 }
 
+                RecordRecentRequest(context, modelConfig.Id, started, requestInfo.Stream, success: false);
                 return;
             }
             finally
@@ -352,6 +353,7 @@ public sealed class ModelRouterMiddleware
 
         var durationMs = (DateTimeOffset.UtcNow - started).TotalMilliseconds;
         var statusCode = context.Response.HasStarted ? context.Response.StatusCode : (success ? 200 : 502);
+        var errorCode = ResolveErrorCode(context);
 
         _recentRequestStore.Record(new RecentRequestEntry
         {
@@ -363,8 +365,20 @@ public sealed class ModelRouterMiddleware
             StatusCode = statusCode,
             DurationMs = durationMs,
             IsStreaming = isStreaming,
+            ErrorCode = errorCode,
             TimestampUtc = DateTimeOffset.UtcNow,
         });
+    }
+
+    private static string? ResolveErrorCode(HttpContext context)
+    {
+        if (!context.Response.Headers.TryGetValue(GatewayHeaders.ErrorCode, out var values))
+        {
+            return null;
+        }
+
+        var code = values.ToString();
+        return string.IsNullOrWhiteSpace(code) ? null : code;
     }
 
     private static string ResolveRequestId(HttpContext context) =>

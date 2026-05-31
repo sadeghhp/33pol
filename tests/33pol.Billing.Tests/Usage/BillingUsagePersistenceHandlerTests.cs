@@ -19,7 +19,8 @@ public sealed class BillingUsagePersistenceHandlerTests
         IBudgetRepository? budgets = null,
         IBillingWebhookDispatcher? webhooks = null,
         BillingBudgetWarningTracker? warningTracker = null,
-        BillingDailyUsageWebhookTracker? dailyTracker = null) =>
+        BillingDailyUsageWebhookTracker? dailyTracker = null,
+        IApiKeyLastUsedTracker? lastUsedTracker = null) =>
         new(
             billingEvents,
             rollups,
@@ -30,6 +31,7 @@ public sealed class BillingUsagePersistenceHandlerTests
             webhooks ?? Substitute.For<IBillingWebhookDispatcher>(),
             warningTracker ?? new BillingBudgetWarningTracker(),
             dailyTracker ?? new BillingDailyUsageWebhookTracker(),
+            lastUsedTracker ?? Substitute.For<IApiKeyLastUsedTracker>(),
             Options.Create(new BillingOptions { DefaultCurrency = "USD" }));
 
     [Fact]
@@ -60,6 +62,36 @@ public sealed class BillingUsagePersistenceHandlerTests
         await rollups.Received(1).UpsertRollupsAsync(
             Arg.Is<IReadOnlyList<DailyUsageRollupRecord>>(list => list.Count == 1 && list[0].RequestCount == 1),
             Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task PersistAsync_WithApiKeyId_TouchesLastUsed()
+    {
+        var apiKeyId = Guid.NewGuid();
+        var billingEvents = Substitute.For<IBillingEventRepository>();
+        billingEvents.TryAppendAsync(Arg.Any<BillingEventRecord>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+
+        var rollups = Substitute.For<IDailyUsageRollupRepository>();
+        rollups.GetRollupsAsync(Arg.Any<DateOnly?>(), Arg.Any<DateOnly?>(), Arg.Any<Guid?>(), Arg.Any<CancellationToken>())
+            .Returns(Array.Empty<DailyUsageRollupRecord>());
+
+        var lastUsed = Substitute.For<IApiKeyLastUsedTracker>();
+        var handler = CreateHandler(billingEvents, rollups, lastUsedTracker: lastUsed);
+
+        await handler.PersistAsync(new UsageEvent
+        {
+            RequestId = "req-touch",
+            TenantId = Guid.NewGuid().ToString(),
+            ApiKeyId = apiKeyId.ToString(),
+            ModelId = "gpt-4o",
+            PromptTokens = 10,
+            CompletionTokens = 5,
+            DurationMs = 1,
+            TimestampUtc = DateTimeOffset.UtcNow,
+        });
+
+        await lastUsed.Received(1).TouchAsync(apiKeyId, Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]

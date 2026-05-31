@@ -15,7 +15,7 @@ public sealed class NoOpBillingServicesTests
         var report = await service.GetUsageReportAsync(new UsageReportRequest());
         report.Rollups.Should().BeEmpty();
 
-        var events = await service.QueryEventsAsync(new BillingEventQuery(null, null, null, 10));
+        var events = await service.QueryEventsAsync(new BillingEventQuery(Limit: 10));
         events.Events.Should().BeEmpty();
     }
 

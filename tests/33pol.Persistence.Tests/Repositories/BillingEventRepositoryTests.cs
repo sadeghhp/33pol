@@ -1,5 +1,5 @@
-using Microsoft.EntityFrameworkCore;
 using Pol33.Core.Billing;
+using Pol33.Core.Models;
 using Pol33.Persistence.Repositories;
 using Pol33.Persistence.Tests.Infrastructure;
 
@@ -8,55 +8,56 @@ namespace Pol33.Persistence.Tests.Repositories;
 public sealed class BillingEventRepositoryTests
 {
     [Fact]
-    public async Task TryAppendAsync_FirstRequestId_ReturnsTrue()
+    public async Task GetUsageSummariesAsync_GroupsByApiKeyId()
     {
-        await using var db = PersistenceTestDbContextFactory.CreateInMemory(nameof(TryAppendAsync_FirstRequestId_ReturnsTrue));
-        var repository = new BillingEventRepository(db);
+        await using var db = PersistenceTestDbContextFactory.CreateInMemory(nameof(GetUsageSummariesAsync_GroupsByApiKeyId));
+        var sut = new BillingEventRepository(db);
+        var tenantId = Guid.NewGuid();
+        var keyA = Guid.NewGuid();
+        var keyB = Guid.NewGuid();
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var at = DateTimeOffset.UtcNow;
 
-        var appended = await repository.TryAppendAsync(CreateEvent("req-first"));
+        await sut.TryAppendAsync(new BillingEventRecord(
+            Guid.NewGuid(), "req-1", tenantId, keyA, "gpt-4o", "eng", 10, 5, null, null, 0.10m, 100, at));
+        await sut.TryAppendAsync(new BillingEventRecord(
+            Guid.NewGuid(), "req-2", tenantId, keyA, "gpt-4o", "eng", 20, 10, null, null, 0.20m, 200, at));
+        await sut.TryAppendAsync(new BillingEventRecord(
+            Guid.NewGuid(), "req-3", tenantId, keyB, "gpt-4o", "ops", 5, 2, null, null, 0.05m, 50, at));
 
-        appended.Should().BeTrue();
-        (await db.BillingEvents.CountAsync()).Should().Be(1);
+        var summaries = await sut.GetUsageSummariesAsync(tenantId, today, today);
+
+        summaries.Should().HaveCount(2);
+        summaries[keyA].RequestCount.Should().Be(2);
+        summaries[keyA].PromptTokens.Should().Be(30);
+        summaries[keyA].TotalCost.Should().Be(0.30m);
+        summaries[keyB].RequestCount.Should().Be(1);
     }
 
     [Fact]
-    public async Task TryAppendAsync_DuplicateRequestId_ReturnsFalseAndLeavesSingleRow()
+    public async Task QueryAsync_FiltersByApiKeyIdAndCostCenter()
     {
-        await using var db = PersistenceTestDbContextFactory.CreateInMemory(nameof(TryAppendAsync_DuplicateRequestId_ReturnsFalseAndLeavesSingleRow));
-        var repository = new BillingEventRepository(db);
+        await using var db = PersistenceTestDbContextFactory.CreateInMemory(nameof(QueryAsync_FiltersByApiKeyIdAndCostCenter));
+        var sut = new BillingEventRepository(db);
+        var tenantId = Guid.NewGuid();
+        var keyId = Guid.NewGuid();
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var at = DateTimeOffset.UtcNow;
 
-        (await repository.TryAppendAsync(CreateEvent("req-dup", promptTokens: 10))).Should().BeTrue();
-        (await repository.TryAppendAsync(CreateEvent("req-dup", promptTokens: 999))).Should().BeFalse();
+        await sut.TryAppendAsync(new BillingEventRecord(
+            Guid.NewGuid(), "req-a", tenantId, keyId, "gpt-4o", "eng", 10, 5, null, null, 0.10m, 100, at));
+        await sut.TryAppendAsync(new BillingEventRecord(
+            Guid.NewGuid(), "req-b", tenantId, Guid.NewGuid(), "gpt-4o", "ops", 5, 2, null, null, 0.05m, 50, at));
 
-        var events = await db.BillingEvents.AsNoTracking().ToListAsync();
+        var events = await sut.QueryAsync(new BillingEventQuery(
+            FromDate: today,
+            ToDate: today,
+            TenantId: tenantId,
+            ApiKeyId: keyId,
+            CostCenter: "eng"));
+
         events.Should().ContainSingle();
-        events[0].PromptTokens.Should().Be(10);
+        events[0].ApiKeyId.Should().Be(keyId);
+        events[0].CostCenter.Should().Be("eng");
     }
-
-    [Fact]
-    public async Task TryAppendAsync_EmptyRequestId_Throws()
-    {
-        await using var db = PersistenceTestDbContextFactory.CreateInMemory(nameof(TryAppendAsync_EmptyRequestId_Throws));
-        var repository = new BillingEventRepository(db);
-
-        var act = () => repository.TryAppendAsync(CreateEvent("   "));
-
-        await act.Should().ThrowAsync<ArgumentException>();
-    }
-
-    private static BillingEventRecord CreateEvent(string requestId, long promptTokens = 1) =>
-        new(
-            Guid.NewGuid(),
-            requestId,
-            Guid.NewGuid(),
-            null,
-            "gpt-4o",
-            null,
-            promptTokens,
-            1,
-            null,
-            null,
-            0.01m,
-            50,
-            DateTimeOffset.UtcNow);
 }

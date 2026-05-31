@@ -1079,6 +1079,64 @@ tr.row-warn  td { color: var(--warning-500); }
 }
 .metric.metric-warn strong { color: var(--warning-500); }
 
+.errors-by-model {
+  margin-top: var(--space-6);
+}
+
+.subsection-header {
+  margin-top: var(--space-6);
+  margin-bottom: var(--space-3);
+  align-items: center;
+}
+
+.subsection-header h3 {
+  margin: 0;
+}
+
+.filter-inline {
+  margin: 0;
+  font-size: var(--text-sm);
+}
+
+tr.request-row {
+  cursor: pointer;
+}
+
+tr.request-row:focus-visible {
+  outline: 2px solid var(--accent-500);
+  outline-offset: -2px;
+}
+
+tr.request-detail-row td {
+  background: var(--bg-sunken);
+  padding-top: 0;
+  padding-bottom: var(--space-3);
+}
+
+.request-detail-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+  gap: var(--space-2) var(--space-4);
+  margin: 0;
+  font-size: var(--text-sm);
+}
+
+.request-detail-list div {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.request-detail-list dt {
+  margin: 0;
+  color: var(--text-muted);
+  font-weight: var(--font-medium);
+}
+
+.request-detail-list dd {
+  margin: 0;
+}
+
 /* --- Code --- */
 
 code {

@@ -18,5 +18,7 @@ public sealed class RecentRequestEntry
 
     public bool IsStreaming { get; init; }
 
+    public string? ErrorCode { get; init; }
+
     public DateTimeOffset TimestampUtc { get; init; }
 }

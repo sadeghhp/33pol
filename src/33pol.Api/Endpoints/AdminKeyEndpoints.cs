@@ -17,6 +17,8 @@ public static class AdminKeyEndpoints
 
         group.MapPost("/", CreateKeyAsync);
         group.MapGet("/", ListKeysAsync);
+        group.MapPatch("/{id:guid}", UpdateKeyAsync);
+        group.MapGet("/{id:guid}/usage", GetKeyUsageAsync);
         group.MapPost("/revoke", RevokeKeysAsync);
         group.MapPost("/{id:guid}/revoke", RevokeKeyAsync);
         return endpoints;
@@ -40,7 +42,7 @@ public static class AdminKeyEndpoints
             new AuditLogEntry(
                 tenantId.ToString(),
                 httpContext.User.FindFirst(GatewayAuthClaims.ApiKeyId)?.Value,
-                new { created.Id, created.KeyPrefix }));
+                new { created.Id, created.KeyPrefix, created.Label, created.Assignee, created.CostCenter }));
 
         return Results.Json(created, statusCode: StatusCodes.Status201Created);
     }
@@ -48,6 +50,7 @@ public static class AdminKeyEndpoints
     private static async Task<IResult> ListKeysAsync(
         HttpContext httpContext,
         IAdminKeyService adminKeys,
+        bool? includeUsageSummary,
         CancellationToken cancellationToken)
     {
         if (!TryGetTenantId(httpContext, out var tenantId))
@@ -55,8 +58,86 @@ public static class AdminKeyEndpoints
             return Results.Unauthorized();
         }
 
-        var keys = await adminKeys.ListAsync(tenantId, cancellationToken).ConfigureAwait(false);
+        var keys = await adminKeys
+            .ListAsync(tenantId, includeUsageSummary == true, cancellationToken)
+            .ConfigureAwait(false);
         return Results.Json(keys);
+    }
+
+    private static async Task<IResult> UpdateKeyAsync(
+        Guid id,
+        UpdateAdminApiKeyRequest request,
+        HttpContext httpContext,
+        IAdminKeyService adminKeys,
+        IAuditLogger audit,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetTenantId(httpContext, out var tenantId))
+        {
+            return Results.Unauthorized();
+        }
+
+        try
+        {
+            var updated = await adminKeys.UpdateAsync(tenantId, id, request, cancellationToken).ConfigureAwait(false);
+            audit.LogAdminAction(
+                "api_key.update",
+                new AuditLogEntry(
+                    tenantId.ToString(),
+                    httpContext.User.FindFirst(GatewayAuthClaims.ApiKeyId)?.Value,
+                    new
+                    {
+                        KeyId = id,
+                        request.Label,
+                        request.Assignee,
+                        request.Description,
+                        request.CostCenter,
+                    }));
+
+            return Results.Json(updated);
+        }
+        catch (KeyNotFoundException)
+        {
+            return Results.NotFound();
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Results.Forbid();
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(new { message = ex.Message });
+        }
+    }
+
+    private static async Task<IResult> GetKeyUsageAsync(
+        Guid id,
+        HttpContext httpContext,
+        IAdminKeyService adminKeys,
+        DateOnly? from,
+        DateOnly? to,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetTenantId(httpContext, out var tenantId))
+        {
+            return Results.Unauthorized();
+        }
+
+        try
+        {
+            var usage = await adminKeys
+                .GetUsageAsync(tenantId, id, from, to, cancellationToken)
+                .ConfigureAwait(false);
+            return Results.Json(usage);
+        }
+        catch (KeyNotFoundException)
+        {
+            return Results.NotFound();
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Results.Forbid();
+        }
     }
 
     private static async Task<IResult> RevokeKeyAsync(

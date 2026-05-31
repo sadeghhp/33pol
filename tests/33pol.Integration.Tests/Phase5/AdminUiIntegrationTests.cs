@@ -22,6 +22,9 @@ public sealed class AdminUiIntegrationTests
         body.Should().MatchRegex("src=\"admin-store\\.js\\?v=\\d+\"");
         body.Should().MatchRegex("src=\"admin-app\\.js\\?v=\\d+\"");
         body.Should().Contain("openKeyAccess");
+        body.Should().Contain("keysEditDrawerOpen");
+        body.Should().Contain("usageFilterApiKeyId");
+        body.Should().Contain("Assignee");
         body.Should().Contain("Tenant model access");
         body.Should().Contain("testModel(");
         body.Should().Contain("model-test-title");
@@ -31,6 +34,12 @@ public sealed class AdminUiIntegrationTests
         body.Should().Contain("x-model=\"editModel.apiKey\"");
         body.Should().NotMatchRegex(@"<label[^>]*x-text=[^>]*>[\s\S]*?x-model=""editModel\.apiKey""");
         body.Should().Contain("auth-hint");
+        body.Should().Contain("Errors by model");
+        body.Should().Contain("x-model=\"requestsErrorsOnly\"");
+        body.Should().Contain("Errors only");
+        body.Should().Contain("Request ID");
+        body.Should().Contain("errors-by-model");
+        body.Should().Contain("aria-expanded");
         body.Should().Contain("showModelApiKey");
         body.Should().Contain("x-cloak");
         body.Should().Contain("role=\"tabpanel\"");
@@ -86,7 +95,8 @@ public sealed class AdminUiIntegrationTests
         body.Should().Contain("--accent");
         body.Should().Contain("app-shell");
         body.Should().Contain(".auth-hint");
-        body.Should().Contain(".cell-code");
+        body.Should().Contain(".errors-by-model");
+        body.Should().Contain(".request-detail-row");
     }
 
     [Fact]
@@ -106,6 +116,9 @@ public sealed class AdminUiIntegrationTests
         body.Should().Contain("normalizeApiKeyList");
         body.Should().Contain("normalizeApiKeyRole");
         body.Should().Contain("async fetchKeys()");
+        body.Should().Contain("includeUsageSummary=true");
+        body.Should().Contain("saveKeyEdit");
+        body.Should().Contain("viewKeyUsage");
         body.Should().Contain("async fetchBackends()");
         body.Should().Contain("async loadSettings()");
         body.Should().MatchRegex("async revokeKeyConfirmed\\(\\)[\\s\\S]*?await this\\.fetchKeys\\(\\)");
@@ -114,6 +127,10 @@ public sealed class AdminUiIntegrationTests
         body.Should().Contain("/models/");
         body.Should().Contain("apiKey");
         body.Should().Contain("gateApiKey");
+        body.Should().Contain("errorsByModelRows");
+        body.Should().Contain("requestsErrorsOnly");
+        body.Should().Contain("shortRequestId");
+        body.Should().MatchRegex("loadSummary\\([\\s\\S]*?/admin/api/requests");
         body.Should().Contain("downloadBlob");
         body.Should().NotContain("confirm(");
         body.Should().NotContain("openDiscover");

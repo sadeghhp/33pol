@@ -16,6 +16,7 @@ public sealed class BillingUsagePersistenceHandler(
     IBillingWebhookDispatcher webhooks,
     BillingBudgetWarningTracker warningTracker,
     BillingDailyUsageWebhookTracker dailyWebhookTracker,
+    IApiKeyLastUsedTracker lastUsedTracker,
     IOptions<BillingOptions> billingOptions) : IUsagePersistenceHandler
 {
     public async ValueTask PersistAsync(UsageEvent usageEvent, CancellationToken cancellationToken = default)
@@ -71,6 +72,11 @@ public sealed class BillingUsagePersistenceHandler(
         if (!await billingEvents.TryAppendAsync(record, cancellationToken).ConfigureAwait(false))
         {
             return null;
+        }
+
+        if (record.ApiKeyId is Guid apiKeyId)
+        {
+            await lastUsedTracker.TouchAsync(apiKeyId, record.RecordedAt, cancellationToken).ConfigureAwait(false);
         }
 
         var usageDate = DateOnly.FromDateTime(record.RecordedAt.UtcDateTime);

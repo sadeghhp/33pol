@@ -29,7 +29,7 @@ public sealed class NoOpBillingUsageService : IBillingUsageService
         _ = cancellationToken;
         return Task.FromResult(new BillingEventsPage
         {
-            Events = Array.Empty<BillingEventRecord>(),
+            Events = Array.Empty<AdminBillingEventListItem>(),
             Limit = 0,
         });
     }

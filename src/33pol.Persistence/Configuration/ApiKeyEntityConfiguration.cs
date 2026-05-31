@@ -41,5 +41,17 @@ internal sealed class ApiKeyEntityConfiguration : IEntityTypeConfiguration<ApiKe
 
         builder.Property(k => k.LastUsedAt)
             .HasColumnType("timestamptz");
+
+        builder.Property(k => k.Label)
+            .HasMaxLength(128);
+
+        builder.Property(k => k.Assignee)
+            .HasMaxLength(128);
+
+        builder.Property(k => k.Description)
+            .HasMaxLength(512);
+
+        builder.Property(k => k.CostCenter)
+            .HasMaxLength(128);
     }
 }

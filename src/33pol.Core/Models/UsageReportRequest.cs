@@ -7,4 +7,6 @@ public sealed class UsageReportRequest
     public DateOnly? ToDate { get; init; }
 
     public Guid? TenantId { get; init; }
+
+    public string? CostCenter { get; init; }
 }

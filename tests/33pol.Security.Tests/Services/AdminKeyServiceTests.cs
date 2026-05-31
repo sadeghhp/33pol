@@ -51,6 +51,50 @@ public sealed class AdminKeyServiceTests
     }
 
     [Fact]
+    public async Task CreateAsync_WithMetadata_PersistsOnList()
+    {
+        var (sut, tenantId, _, db) = await CreateSutAsync();
+        await using (db)
+        {
+            var created = await sut.CreateAsync(
+                tenantId,
+                new CreateAdminApiKeyRequest
+                {
+                    Role = ApiKeyRole.Inference,
+                    Label = "bot",
+                    Assignee = "Platform",
+                    CostCenter = "eng",
+                });
+
+            var list = await sut.ListAsync(tenantId);
+            var item = list.Single(x => x.Id == created.Id);
+            item.Label.Should().Be("bot");
+            item.Assignee.Should().Be("Platform");
+            item.CostCenter.Should().Be("eng");
+        }
+    }
+
+    [Fact]
+    public async Task UpdateAsync_RevokedKey_Throws()
+    {
+        var (sut, tenantId, _, db) = await CreateSutAsync();
+        await using (db)
+        {
+            var created = await sut.CreateAsync(
+                tenantId,
+                new CreateAdminApiKeyRequest { Role = ApiKeyRole.Inference });
+            await sut.RevokeAsync(tenantId, created.Id);
+
+            var act = () => sut.UpdateAsync(
+                tenantId,
+                created.Id,
+                new UpdateAdminApiKeyRequest { Label = "x" });
+
+            await act.Should().ThrowAsync<InvalidOperationException>();
+        }
+    }
+
+    [Fact]
     public async Task RevokeManyAsync_RevokesExistingTenantKeys_AndSkipsInvalidIds()
     {
         var (sut, tenantId, validator, db) = await CreateSutAsync();
@@ -98,7 +142,8 @@ public sealed class AdminKeyServiceTests
         var memoryCache = new Microsoft.Extensions.Caching.Memory.MemoryCache(
             new Microsoft.Extensions.Caching.Memory.MemoryCacheOptions());
         var validator = new ApiKeyValidator(apiKeys, tenants, memoryCache, securityOptions);
-        var sut = new AdminKeyService(apiKeys, validator, securityOptions);
+        var billingEvents = new BillingEventRepository(db);
+        var sut = new AdminKeyService(apiKeys, validator, billingEvents, securityOptions);
         return (sut, tenantId, validator, db);
     }
 }

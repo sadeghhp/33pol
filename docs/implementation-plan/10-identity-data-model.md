@@ -47,7 +47,13 @@ Plan (Phase 5) ── referenced by Tenant.PlanSlug (string, Phase 3–4)
 | `ExpiresAt` | timestamptz nullable | → `expired_api_key` |
 | `RevokedAt` | timestamptz nullable | → `invalid_api_key` after cache TTL |
 | `CreatedAt` | timestamptz | |
-| `LastUsedAt` | timestamptz nullable | Optional |
+| `LastUsedAt` | timestamptz nullable | Updated on inference usage (debounced) |
+| `Label` | string nullable | Short display name (admin UI) |
+| `Assignee` | string nullable | Person or team using the key |
+| `Description` | string nullable | Optional notes |
+| `CostCenter` | string nullable | Per-key FinOps override; falls back to tenant `CostCenter` on auth |
+
+**Cost center resolution:** `effectiveCostCenter = ApiKey.CostCenter ?? Tenant.CostCenter` — stamped on usage events at request time.
 
 **Storage rules (MUST):**
 

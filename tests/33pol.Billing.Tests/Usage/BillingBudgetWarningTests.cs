@@ -122,6 +122,7 @@ public sealed class BillingBudgetWarningTests
             webhooks,
             new BillingBudgetWarningTracker(),
             new BillingDailyUsageWebhookTracker(),
+            Substitute.For<IApiKeyLastUsedTracker>(),
             Options.Create(new BillingOptions()));
     }
 

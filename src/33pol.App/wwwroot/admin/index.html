@@ -9,11 +9,11 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" />
-  <link rel="stylesheet" href="admin.css?v=8" />
+  <link rel="stylesheet" href="admin.css?v=9" />
   <script defer src="admin-icons.js?v=7"></script>
   <script defer src="admin-errors.js?v=7"></script>
   <script defer src="admin-store.js?v=8"></script>
-  <script defer src="admin-app.js?v=13"></script>
+  <script defer src="admin-app.js?v=15"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.9/dist/cdn.min.js"></script>
 </head>
 <body x-data="adminApp()" x-init="init()" x-cloak :class="{ dark: darkMode }" @keydown.window="onModalKeydown($event)">
@@ -171,37 +171,88 @@
               <strong x-text="summary?.rateLimitRejections ?? 0"></strong>
             </div>
           </div>
-          <h3>Recent requests</h3>
+          <div x-show="errorsByModelRows().length" class="errors-by-model">
+            <h3>Errors by model</h3>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr><th>Model</th><th>Errors</th></tr>
+                </thead>
+                <tbody>
+                  <template x-for="row in errorsByModelRows()" :key="row.modelId">
+                    <tr class="row-error">
+                      <td class="cell-code"><code x-text="row.modelId"></code></td>
+                      <td x-text="row.count"></td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <div class="page-header subsection-header">
+            <h3>Recent requests</h3>
+            <label class="checkbox filter-inline">
+              <input type="checkbox" x-model="requestsErrorsOnly" />
+              Errors only
+            </label>
+          </div>
           <div class="table-wrap">
-            <table x-show="requests?.length">
+            <table x-show="sortedRequests().length">
               <thead>
                 <tr>
                   <th class="sortable" @click="sortToggle('requests','timestampUtc')">Time<span x-html="sortIndicator('requests','timestampUtc')"></span></th>
+                  <th>Request ID</th>
                   <th>Method</th><th>Path</th><th>Model</th>
                   <th class="sortable" @click="sortToggle('requests','statusCode')">Status<span x-html="sortIndicator('requests','statusCode')"></span></th>
+                  <th>Error</th>
                   <th>ms</th>
                 </tr>
               </thead>
               <tbody>
                 <template x-for="r in sortedRequests()" :key="r.requestId">
-                  <tr :class="requestStatusClass(r.statusCode)">
+                  <tr class="request-row" role="button" tabindex="0"
+                    :class="requestRowClass(r)"
+                    :aria-expanded="isRequestExpanded(r.requestId) ? 'true' : 'false'"
+                    :aria-label="'Request ' + shortRequestId(r.requestId) + (r.errorCode ? ', error ' + r.errorCode : '')"
+                    @click="toggleRequestDetails(r.requestId)"
+                    @keydown.enter.prevent="toggleRequestDetails(r.requestId)"
+                    @keydown.space.prevent="toggleRequestDetails(r.requestId)">
                     <td x-text="formatTime(r.timestampUtc)"></td>
+                    <td class="cell-code" @click.stop>
+                      <span class="cell-code-inner">
+                        <code x-text="shortRequestId(r.requestId)" :title="r.requestId"></code>
+                        <button type="button" class="icon-btn" @click="copyText(r.requestId,'Request ID copied.')" title="Copy request ID" aria-label="Copy request ID">
+                          <span class="icon" x-html="icon('copy')"></span>
+                        </button>
+                      </span>
+                    </td>
                     <td x-text="r.method"></td>
                     <td class="col-truncate" x-text="r.path" :title="r.path"></td>
                     <td x-text="r.modelId ?? '—'"></td>
                     <td x-text="r.statusCode"></td>
+                    <td :class="r.errorCode ? 'error' : ''" x-text="r.errorCode ?? '—'"></td>
                     <td x-text="r.durationMs?.toFixed?.(0) ?? r.durationMs"></td>
+                  </tr>
+                  <tr x-show="isRequestExpanded(r.requestId)" class="request-detail-row">
+                    <td colspan="8">
+                      <dl class="request-detail-list">
+                        <div><dt>Request ID</dt><dd><code x-text="r.requestId"></code></dd></div>
+                        <div><dt>Error code</dt><dd x-text="r.errorCode ?? '—'"></dd></div>
+                        <div><dt>Tenant</dt><dd x-text="r.tenantId ?? '—'"></dd></div>
+                        <div><dt>Streaming</dt><dd x-text="r.isStreaming ? 'Yes' : 'No'"></dd></div>
+                      </dl>
+                    </td>
                   </tr>
                 </template>
               </tbody>
             </table>
-            <table x-show="isLoading('overview') && !requests?.length">
-              <tbody><tr class="skeleton-row"><td colspan="6"></td></tr></tbody>
+            <table x-show="isLoading('overview') && !sortedRequests().length">
+              <tbody><tr class="skeleton-row"><td colspan="8"></td></tr></tbody>
             </table>
           </div>
-          <div class="empty-state" x-show="!isLoading('overview') && (!requests || requests.length === 0)">
+          <div class="empty-state" x-show="!isLoading('overview') && sortedRequests().length === 0">
             <span class="empty-state-icon icon" x-html="icon('activity')"></span>
-            <p>No recent requests in the gateway buffer.</p>
+            <p x-text="requestsErrorsOnly ? 'No error requests in the gateway buffer.' : 'No recent requests in the gateway buffer.'"></p>
           </div>
         </section>
 
@@ -216,9 +267,20 @@
           <div class="grid">
             <label>From <input type="date" x-model="usageFrom" /></label>
             <label>To <input type="date" x-model="usageTo" /></label>
+            <label>Cost center <input x-model="usageFilterCostCenter" placeholder="Filter rollups &amp; events" /></label>
+            <label>API key
+              <select x-model="usageFilterApiKeyId">
+                <option value="">All keys</option>
+                <template x-for="k in keys" :key="k.id">
+                  <option :value="k.id" x-text="(k.label || k.keyPrefix) + (k.assignee ? ' · ' + k.assignee : '')"></option>
+                </template>
+              </select>
+            </label>
           </div>
+          <p class="hint" x-show="usageFilterApiKeyId">Rollups are grouped by cost center; use billing events below for per-key detail.</p>
           <div class="toolbar">
             <button type="button" class="action" @click="applyUsageRange()" :disabled="isLoading('usage')">Apply range</button>
+            <button type="button" class="action secondary" @click="clearUsageFilters()" :disabled="isLoading('usage')">Clear filters</button>
             <button type="button" class="action secondary" @click="downloadExport('json')" :disabled="isLoading('usage')">Export JSON</button>
             <button type="button" class="action secondary" @click="downloadExport('csv')" :disabled="isLoading('usage')">Export CSV</button>
           </div>
@@ -265,11 +327,14 @@
           <h3>Recent billing events</h3>
           <div class="table-wrap">
             <table x-show="usageEvents?.length">
-              <thead><tr><th>Time</th><th>Model</th><th>Prompt</th><th>Completion</th><th>Cost</th></tr></thead>
+              <thead><tr><th>Time</th><th>Key</th><th>Assignee</th><th>Model</th><th>Prompt</th><th>Completion</th><th>Cost</th></tr></thead>
               <tbody>
                 <template x-for="ev in usageEvents ?? []" :key="ev.id">
                   <tr>
-                    <td x-text="formatTime(ev.recordedAt)"></td><td x-text="ev.modelId ?? '—'"></td>
+                    <td x-text="formatTime(ev.recordedAt)"></td>
+                    <td x-text="ev.keyPrefix ?? '—'"></td>
+                    <td x-text="ev.assignee ?? '—'"></td>
+                    <td x-text="ev.modelId ?? '—'"></td>
                     <td x-text="ev.promptTokens ?? '—'"></td><td x-text="ev.completionTokens ?? '—'"></td>
                     <td x-text="formatCost(ev.totalCost, forecast?.currency)"></td>
                   </tr>
@@ -420,6 +485,10 @@
                 <option value="all">All</option>
               </select>
             </label>
+            <label class="filter-field">
+              <span class="icon" x-html="icon('search')"></span> Filter
+              <input x-model="keysTextFilter" placeholder="prefix, label, assignee…" />
+            </label>
             <button type="button" class="action danger"
               @click="confirmRevokeSelected()"
               :disabled="isLoading('keys') || selectedActiveKeyCount() === 0">
@@ -441,7 +510,12 @@
                       aria-label="Select all visible active API keys" />
                   </th>
                   <th class="sortable" @click="sortToggle('keys','keyPrefix')">Prefix<span x-html="sortIndicator('keys','keyPrefix')"></span></th>
+                  <th class="sortable" @click="sortToggle('keys','label')">Label<span x-html="sortIndicator('keys','label')"></span></th>
+                  <th class="sortable" @click="sortToggle('keys','assignee')">Assignee<span x-html="sortIndicator('keys','assignee')"></span></th>
                   <th>Role</th>
+                  <th class="sortable" @click="sortToggle('keys','lastUsedAt')">Last used<span x-html="sortIndicator('keys','lastUsedAt')"></span></th>
+                  <th>MTD cost</th>
+                  <th>MTD req</th>
                   <th class="sortable" @click="sortToggle('keys','createdAt')">Created<span x-html="sortIndicator('keys','createdAt')"></span></th>
                   <th>Status</th><th>Access</th><th></th>
                 </tr>
@@ -456,14 +530,24 @@
                         @change="toggleKeySelection(k.id, $event.target.checked)"
                         :aria-label="'Select key ' + k.keyPrefix" />
                     </td>
-                    <td x-text="k.keyPrefix"></td><td x-text="k.role"></td>
+                    <td x-text="k.keyPrefix"></td>
+                    <td x-text="k.label || '—'"></td>
+                    <td x-text="k.assignee || '—'"></td>
+                    <td x-text="k.role"></td>
+                    <td x-text="k.lastUsedAt ? formatTime(k.lastUsedAt) : '—'"></td>
+                    <td x-text="keyMtdCost(k) != null ? formatCost(keyMtdCost(k), forecast?.currency) : '—'"></td>
+                    <td x-text="keyMtdRequests(k) ?? '—'"></td>
                     <td x-text="formatTime(k.createdAt)"></td>
                     <td>
                       <span class="status-chip" :class="k.isRevoked ? 'fail' : 'ok'" x-text="k.isRevoked ? 'Revoked' : 'Active'"></span>
                     </td>
-                    <td>
-                      <button type="button" class="action secondary" x-show="!k.isRevoked && k.role !== 'Admin'"
-                        @click="openKeyAccess(k)">Models</button>
+                    <td class="cell-actions">
+                      <span class="cell-actions-inner">
+                        <button type="button" class="action secondary" x-show="!k.isRevoked" @click="openKeyEditDrawer(k)">Edit</button>
+                        <button type="button" class="action secondary" x-show="!k.isRevoked && k.role !== 'Admin'"
+                          @click="openKeyAccess(k)">Models</button>
+                        <button type="button" class="action secondary" x-show="!k.isRevoked" @click="viewKeyUsage(k)">Usage</button>
+                      </span>
                     </td>
                     <td>
                       <button type="button" class="action danger" x-show="!k.isRevoked" @click="confirmRevoke(k.id)">Revoke</button>
@@ -685,6 +769,10 @@
               <option value="Admin">Admin</option>
             </select>
           </label>
+          <label>Label <input x-model="newKey.label" placeholder="e.g. prod-chatbot" /></label>
+          <label>Assignee <input x-model="newKey.assignee" placeholder="Person or team name" /></label>
+          <label>Cost center <input x-model="newKey.costCenter" placeholder="FinOps grouping (optional)" /></label>
+          <label>Description <textarea x-model="newKey.description" rows="2" placeholder="Optional notes"></textarea></label>
           <button type="button" class="action" @click="createKey()" :disabled="isLoading('keys')">Create key</button>
         </div>
       </template>
@@ -702,6 +790,27 @@
           </label>
         </div>
       </template>
+    </div>
+  </div>
+
+  <!-- Key edit drawer -->
+  <div class="drawer-backdrop" x-show="keysEditDrawerOpen" x-transition.opacity @click.self="closeKeyEditDrawer()" role="presentation">
+    <div class="drawer" role="dialog" aria-modal="true" aria-labelledby="keys-edit-drawer-title" @click.stop>
+      <div class="drawer-header">
+        <h3 id="keys-edit-drawer-title">Edit API key</h3>
+        <button type="button" class="icon-btn" @click="closeKeyEditDrawer()" aria-label="Close">
+          <span class="icon" x-html="icon('x')"></span>
+        </button>
+      </div>
+      <p class="hint">Key <code x-text="keyEdit.keyPrefix"></code></p>
+      <label>Label <input x-model="keyEdit.label" placeholder="Short name" /></label>
+      <label>Assignee <input x-model="keyEdit.assignee" placeholder="Person or team name" /></label>
+      <label>Cost center <input x-model="keyEdit.costCenter" placeholder="FinOps grouping (optional)" /></label>
+      <label>Description <textarea x-model="keyEdit.description" rows="2" placeholder="Optional notes"></textarea></label>
+      <div class="toolbar" style="margin-top: 1rem">
+        <button type="button" class="action" @click="saveKeyEdit()" :disabled="isLoading('keys')">Save</button>
+        <button type="button" class="action secondary" @click="closeKeyEditDrawer()">Cancel</button>
+      </div>
     </div>
   </div>
 

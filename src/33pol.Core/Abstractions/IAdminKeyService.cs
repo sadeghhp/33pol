@@ -11,6 +11,20 @@ public interface IAdminKeyService
 
     Task<IReadOnlyList<AdminApiKeyListItem>> ListAsync(
         Guid tenantId,
+        bool includeUsageSummary = false,
+        CancellationToken cancellationToken = default);
+
+    Task<AdminApiKeyListItem> UpdateAsync(
+        Guid tenantId,
+        Guid keyId,
+        UpdateAdminApiKeyRequest request,
+        CancellationToken cancellationToken = default);
+
+    Task<AdminApiKeyUsageResponse> GetUsageAsync(
+        Guid tenantId,
+        Guid keyId,
+        DateOnly? fromDate,
+        DateOnly? toDate,
         CancellationToken cancellationToken = default);
 
     Task RevokeAsync(Guid tenantId, Guid keyId, CancellationToken cancellationToken = default);

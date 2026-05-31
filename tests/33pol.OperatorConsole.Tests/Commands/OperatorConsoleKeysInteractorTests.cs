@@ -61,8 +61,24 @@ public sealed class OperatorConsoleKeysInteractorTests
 
         public Task<IReadOnlyList<AdminApiKeyListItem>> ListAsync(
             Guid tenantId,
+            bool includeUsageSummary = false,
             CancellationToken cancellationToken = default) =>
             Task.FromResult<IReadOnlyList<AdminApiKeyListItem>>([]);
+
+        public Task<AdminApiKeyListItem> UpdateAsync(
+            Guid tenantId,
+            Guid keyId,
+            UpdateAdminApiKeyRequest request,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<AdminApiKeyUsageResponse> GetUsageAsync(
+            Guid tenantId,
+            Guid keyId,
+            DateOnly? fromDate,
+            DateOnly? toDate,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
 
         public Task RevokeAsync(Guid tenantId, Guid keyId, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();

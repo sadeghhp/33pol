@@ -39,7 +39,14 @@ function adminApp() {
     keys: [],
     selectedKeyIds: [],
     keysFilter: 'active',
+    keysTextFilter: '',
+    keysEditDrawerOpen: false,
+    keyEdit: { id: '', keyPrefix: '', label: '', assignee: '', description: '', costCenter: '' },
+    usageFilterCostCenter: '',
+    usageFilterApiKeyId: '',
     requests: [],
+    requestsErrorsOnly: false,
+    expandedRequestId: null,
     configStatus: null,
     rateLimits: null,
     rateLimitPlanRows: [],
@@ -57,7 +64,7 @@ function adminApp() {
       publicAccess: false, upstreamAuth: null, _existing: false
     },
     modelFieldError: '',
-    newKey: { role: 'Inference' },
+    newKey: { role: 'Inference', label: '', assignee: '', description: '', costCenter: '' },
     createdKey: '',
     sort: {
       models: { key: 'id', dir: 1 },
@@ -227,8 +234,21 @@ function adminApp() {
       const q = new URLSearchParams();
       if (this.usageFrom) q.set('from', this.usageFrom);
       if (this.usageTo) q.set('to', this.usageTo);
+      const costCenter = (this.usageFilterCostCenter || '').trim();
+      if (costCenter) q.set('costCenter', costCenter);
       const s = q.toString();
       return s ? '?' + s : '';
+    },
+
+    usageEventsQuery() {
+      const params = new URLSearchParams();
+      if (this.usageFrom) params.set('from', this.usageFrom);
+      if (this.usageTo) params.set('to', this.usageTo);
+      const costCenter = (this.usageFilterCostCenter || '').trim();
+      if (costCenter) params.set('costCenter', costCenter);
+      if (this.usageFilterApiKeyId) params.set('apiKeyId', this.usageFilterApiKeyId);
+      params.set('limit', '50');
+      return params.toString();
     },
 
     async setUsagePreset(days) {
@@ -273,7 +293,7 @@ function adminApp() {
       const { key, dir } = this.sort[table];
       arr.sort((a, b) => {
         let av = a[key]; let bv = b[key];
-        if (key === 'createdAt' || key === 'timestampUtc') {
+        if (key === 'createdAt' || key === 'timestampUtc' || key === 'lastUsedAt') {
           av = av ? new Date(av).getTime() : 0;
           bv = bv ? new Date(bv).getTime() : 0;
         } else {
@@ -292,6 +312,34 @@ function adminApp() {
       if (c >= 500) return 'row-error';
       if (c >= 400) return 'row-warn';
       return '';
+    },
+
+    requestRowClass(r) {
+      const statusClass = this.requestStatusClass(r?.statusCode);
+      if (r?.errorCode) return statusClass || 'row-error';
+      return statusClass;
+    },
+
+    errorsByModelRows() {
+      const map = this.summary?.errorsPerModel;
+      if (!map || typeof map !== 'object') return [];
+      return Object.entries(map)
+        .filter(([, count]) => Number(count) > 0)
+        .map(([modelId, count]) => ({ modelId, count: Number(count) }))
+        .sort((a, b) => b.count - a.count);
+    },
+
+    shortRequestId(id) {
+      if (!id) return '—';
+      return id.length > 8 ? id.slice(0, 8) : id;
+    },
+
+    toggleRequestDetails(id) {
+      this.expandedRequestId = this.expandedRequestId === id ? null : id;
+    },
+
+    isRequestExpanded(id) {
+      return this.expandedRequestId === id;
     },
 
     syncPoll() {
@@ -349,7 +397,10 @@ function adminApp() {
     onTabActivated(name) {
       if (!this.apiKey) return;
       if (name === 'dashboard') this.loadOverviewData();
-      if (name === 'usage') this.applyUsageRange();
+      if (name === 'usage') {
+        if (!this.keys?.length) this.fetchKeys();
+        this.applyUsageRange();
+      }
       if (name === 'routing') {
         if (this.routingSubTab === 'backends') this.loadBackends();
         else this.loadModels();
@@ -425,7 +476,24 @@ function adminApp() {
       let filtered = list;
       if (this.keysFilter === 'active') filtered = list.filter(k => !k.isRevoked);
       else if (this.keysFilter === 'revoked') filtered = list.filter(k => k.isRevoked);
+      const q = (this.keysTextFilter || '').trim().toLowerCase();
+      if (q) {
+        filtered = filtered.filter(k =>
+          (k.keyPrefix || '').toLowerCase().includes(q) ||
+          (k.label || '').toLowerCase().includes(q) ||
+          (k.assignee || '').toLowerCase().includes(q) ||
+          (k.costCenter || '').toLowerCase().includes(q));
+      }
       return this.sortedList(filtered, 'keys');
+    },
+
+    keyMtdCost(key) {
+      const cost = key?.usageSummary?.totalCost;
+      return cost != null ? cost : null;
+    },
+
+    keyMtdRequests(key) {
+      return key?.usageSummary?.requestCount ?? null;
     },
 
     isKeySelected(id) {
@@ -480,7 +548,11 @@ function adminApp() {
     },
 
     sortedRequests() {
-      return this.sortedList(this.requests || [], 'requests');
+      let list = this.requests || [];
+      if (this.requestsErrorsOnly) {
+        list = list.filter(r => Number(r.statusCode) >= 400 || r.errorCode);
+      }
+      return this.sortedList(list, 'requests');
     },
 
     urlLooksLocalhost() {
@@ -519,6 +591,7 @@ function adminApp() {
         else if (this.modelTestDialog) this.closeModelTestDialog();
         else if (this.modelDrawerOpen) this.closeModelDrawer();
         else if (this.keyAccessDrawerOpen) this.closeKeyAccessDrawer();
+        else if (this.keysEditDrawerOpen) this.closeKeyEditDrawer();
         else if (this.keysDrawerOpen) this.closeKeysDrawer();
       }
     },
@@ -565,9 +638,61 @@ function adminApp() {
     },
 
     openKeysDrawer() {
+      this.newKey = { role: 'Inference', label: '', assignee: '', description: '', costCenter: '' };
       this.keysDrawerOpen = true;
       this.createdKey = '';
       this.keysCreatedAck = false;
+    },
+
+    openKeyEditDrawer(key) {
+      if (!key?.id || key.isRevoked) return;
+      this.keyEdit = {
+        id: key.id,
+        keyPrefix: key.keyPrefix || '',
+        label: key.label || '',
+        assignee: key.assignee || '',
+        description: key.description || '',
+        costCenter: key.costCenter || ''
+      };
+      this.keysEditDrawerOpen = true;
+    },
+
+    closeKeyEditDrawer() {
+      this.keysEditDrawerOpen = false;
+      this.keyEdit = { id: '', keyPrefix: '', label: '', assignee: '', description: '', costCenter: '' };
+    },
+
+    async saveKeyEdit() {
+      const key = this.keyEdit;
+      if (!key?.id) return;
+      await this.runApi('keys', 'Saving key…', async () => {
+        await this.apiJson('/admin/api/keys/' + key.id, {
+          method: 'PATCH',
+          body: JSON.stringify({
+            label: key.label || null,
+            assignee: key.assignee || null,
+            description: key.description || null,
+            costCenter: key.costCenter || null
+          })
+        });
+        this.toast('API key updated.');
+        this.closeKeyEditDrawer();
+        await this.fetchKeys();
+      });
+    },
+
+    viewKeyUsage(key) {
+      if (!key?.id) return;
+      this.usageFilterApiKeyId = key.id;
+      this.usageFilterCostCenter = key.costCenter || '';
+      this.setUsagePreset('mtd');
+      this.setTab('usage');
+    },
+
+    clearUsageFilters() {
+      this.usageFilterApiKeyId = '';
+      this.usageFilterCostCenter = '';
+      if (this.apiKey) this.applyUsageRange();
     },
 
     closeKeysDrawer() {
@@ -846,14 +971,9 @@ function adminApp() {
       await this.runApi('usage', 'Loading usage…', async () => {
         await Promise.all([
           this.apiJson('/admin/api/usage' + this.usageQuery()).then(u => { this.usage = u; }),
-          (async () => {
-            const params = new URLSearchParams();
-            if (this.usageFrom) params.set('from', this.usageFrom);
-            if (this.usageTo) params.set('to', this.usageTo);
-            params.set('limit', '50');
-            const page = await this.apiJson('/admin/api/usage/events?' + params.toString());
+          this.apiJson('/admin/api/usage/events?' + this.usageEventsQuery()).then(page => {
             this.usageEvents = page?.events ?? page?.Events ?? [];
-          })(),
+          }),
           this.apiJson('/admin/api/usage/forecast?days=7').then(f => { this.forecast = f; })
         ]);
       });
@@ -998,7 +1118,7 @@ function adminApp() {
     },
 
     async fetchKeys() {
-      const list = (await this.apiJson('/admin/api/keys')) ?? [];
+      const list = (await this.apiJson('/admin/api/keys?includeUsageSummary=true')) ?? [];
       this.keys = this.normalizeApiKeyList(list);
       const existingIds = new Set(this.keys.map(k => k.id));
       this.selectedKeyIds = this.selectedKeyIds.filter(id => existingIds.has(id));
@@ -1015,7 +1135,14 @@ function adminApp() {
         await this.runApi('keys', 'Creating key…', async () => {
           const body = await this.apiJson('/admin/api/keys', {
             method: 'POST',
-            body: JSON.stringify({ role: this.newKey.role, scopes: [] })
+            body: JSON.stringify({
+              role: this.newKey.role,
+              scopes: [],
+              label: this.newKey.label || null,
+              assignee: this.newKey.assignee || null,
+              description: this.newKey.description || null,
+              costCenter: this.newKey.costCenter || null
+            })
           });
           this.createdKey = body?.secret || '';
           this.keysCreatedAck = false;
@@ -1079,6 +1206,8 @@ function adminApp() {
         const params = new URLSearchParams();
         if (this.usageFrom) params.set('from', this.usageFrom);
         if (this.usageTo) params.set('to', this.usageTo);
+        const costCenter = (this.usageFilterCostCenter || '').trim();
+        if (costCenter) params.set('costCenter', costCenter);
         params.set('format', format);
         const ext = format === 'csv' ? 'csv' : 'json';
         await this.store.downloadBlob(

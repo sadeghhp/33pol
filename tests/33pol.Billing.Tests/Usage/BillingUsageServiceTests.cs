@@ -9,11 +9,12 @@ public sealed class BillingUsageServiceTests
 {
     private readonly IDailyUsageRollupRepository _rollups = Substitute.For<IDailyUsageRollupRepository>();
     private readonly IBillingEventRepository _events = Substitute.For<IBillingEventRepository>();
+    private readonly IApiKeyRepository _apiKeys = Substitute.For<IApiKeyRepository>();
     private readonly BillingUsageService _service;
 
     public BillingUsageServiceTests()
     {
-        _service = new BillingUsageService(_rollups, _events);
+        _service = new BillingUsageService(_rollups, _events, _apiKeys);
     }
 
     [Fact]
@@ -103,13 +104,34 @@ public sealed class BillingUsageServiceTests
     }
 
     [Fact]
+    public async Task GetUsageReportAsync_FiltersByCostCenter()
+    {
+        var tenantId = Guid.NewGuid();
+        var rollupRecords = new[]
+        {
+            new DailyUsageRollupRecord(new DateOnly(2026, 5, 26), tenantId, "gpt-4o", "eng", 100, 50, 0.15m, 2),
+            new DailyUsageRollupRecord(new DateOnly(2026, 5, 26), tenantId, "gpt-4o", "ops", 200, 100, 0.25m, 3),
+        };
+
+        _rollups
+            .GetRollupsAsync(null, null, null, Arg.Any<CancellationToken>())
+            .Returns(rollupRecords);
+
+        var report = await _service.GetUsageReportAsync(new UsageReportRequest { CostCenter = "eng" });
+
+        report.Rollups.Should().ContainSingle();
+        report.Rollups[0].CostCenter.Should().Be("eng");
+        report.Summary.TotalRequests.Should().Be(2);
+    }
+
+    [Fact]
     public async Task QueryEventsAsync_DelegatesToRepository()
     {
         var query = new BillingEventQuery(
             new DateOnly(2026, 5, 1),
             new DateOnly(2026, 5, 31),
             Guid.NewGuid(),
-            50);
+            Limit: 50);
 
         _events.QueryAsync(query, Arg.Any<CancellationToken>())
             .Returns(Array.Empty<BillingEventRecord>());
@@ -127,7 +149,7 @@ public sealed class BillingUsageServiceTests
         _events.QueryAsync(Arg.Any<BillingEventQuery>(), Arg.Any<CancellationToken>())
             .Returns(Array.Empty<BillingEventRecord>());
 
-        var page = await _service.QueryEventsAsync(new BillingEventQuery(null, null, null, 9999));
+        var page = await _service.QueryEventsAsync(new BillingEventQuery(Limit: 9999));
 
         page.Limit.Should().Be(5000);
         await _events.Received(1).QueryAsync(

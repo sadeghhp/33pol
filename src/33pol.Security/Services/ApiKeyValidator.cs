@@ -71,12 +71,16 @@ public sealed class ApiKeyValidator : IApiKeyValidator
             return ApiKeyValidationResult.Fail(ApiKeyValidationFailure.Invalid);
         }
 
+        var effectiveCostCenter = string.IsNullOrWhiteSpace(record.CostCenter)
+            ? tenant.CostCenter
+            : record.CostCenter.Trim();
+
         var success = ApiKeyValidationResult.Success(
             tenant.Id,
             record.Id,
             tenant.Slug,
             tenant.PlanSlug,
-            tenant.CostCenter,
+            effectiveCostCenter,
             record.Role);
 
         _cache.Set(cacheKey, success, TimeSpan.FromMinutes(_options.CacheTtlMinutes));
