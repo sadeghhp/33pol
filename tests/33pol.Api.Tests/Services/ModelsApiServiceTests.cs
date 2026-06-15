@@ -149,4 +149,59 @@ public sealed class ModelsApiServiceTests
         error!.Error.Code.Should().Be("model_not_found");
         error.Error.Type.Should().Be("invalid_request_error");
     }
+
+    [Fact]
+    public async Task ListHealthyModelsAsync_GrantDenied_ExcludesPrivateModel()
+    {
+        var registry = Substitute.For<IModelRegistry>();
+        registry.GetAllModels().Returns(
+        [
+            new ModelConfig { Id = "public-a", Url = "http://a", PublicAccess = true },
+            new ModelConfig { Id = "private-b", Url = "http://b" },
+            new ModelConfig { Id = "private-c", Url = "http://c" },
+        ]);
+
+        var health = Substitute.For<IBackendHealthStore>();
+        health.IsBackendHealthy(Arg.Any<string>()).Returns(true);
+
+        var grants = Substitute.For<IModelGrantService>();
+        grants.IsModelAllowedAsync(Arg.Any<Guid>(), Arg.Any<Guid>(), "private-b", Arg.Any<CancellationToken>())
+            .Returns(true);
+        grants.IsModelAllowedAsync(Arg.Any<Guid>(), Arg.Any<Guid>(), "private-c", Arg.Any<CancellationToken>())
+            .Returns(false);
+
+        var service = new ModelsApiService(registry, health, grants);
+        var list = await service.ListHealthyModelsAsync(Guid.NewGuid(), Guid.NewGuid());
+
+        list.Data.Select(m => m.Id).Should().BeEquivalentTo(["public-a", "private-b"]);
+    }
+
+    [Fact]
+    public async Task TryGetModelAsync_GrantDenied_ReturnsNotFound()
+    {
+        var model = new ModelConfig { Id = "private-b", Url = "http://b" };
+        var registry = Substitute.For<IModelRegistry>();
+        registry.TryGetModel("private-b", out Arg.Any<ModelConfig?>())
+            .Returns(call =>
+            {
+                call[1] = model;
+                return true;
+            });
+
+        var health = Substitute.For<IBackendHealthStore>();
+        health.IsBackendHealthy("private-b").Returns(true);
+
+        var grants = Substitute.For<IModelGrantService>();
+        grants.IsModelAllowedAsync(Arg.Any<Guid>(), Arg.Any<Guid>(), "private-b", Arg.Any<CancellationToken>())
+            .Returns(false);
+
+        var service = new ModelsApiService(registry, health, grants);
+        var (response, error) = await service.TryGetModelAsync(
+            "private-b",
+            Guid.NewGuid(),
+            Guid.NewGuid());
+
+        response.Should().BeNull();
+        error!.Error.Code.Should().Be("model_not_found");
+    }
 }

@@ -349,6 +349,33 @@ public sealed class ModelRouterMiddlewareTests
     }
 
     [Fact]
+    public async Task InvokeAsync_AuthRequired_NoKey_Returns401InvalidApiKey()
+    {
+        var registry = Substitute.For<IModelRegistry>();
+        registry.TryGetModel("m1", out Arg.Any<ModelConfig?>())
+            .Returns(call =>
+            {
+                call[1] = new ModelConfig { Id = "m1", Url = "http://backend:8000" };
+                return true;
+            });
+
+        var authState = Substitute.For<IGatewayAuthenticationState>();
+        authState.IsAuthenticationRequired.Returns(true);
+
+        var middleware = CreateMiddleware(registry: registry, authState: authState);
+        var context = CreateContext(
+            HttpMethods.Post,
+            "/v1/chat/completions",
+            """{"model":"m1"}""");
+
+        await middleware.InvokeAsync(context);
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status401Unauthorized);
+        var body = await ReadResponseBodyAsync(context);
+        body.Should().Contain("invalid_api_key");
+    }
+
+    [Fact]
     public async Task InvokeAsync_GrantDenied_Returns403InsufficientScope()
     {
         var registry = Substitute.For<IModelRegistry>();

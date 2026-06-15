@@ -115,21 +115,29 @@ public sealed class ModelGrantAdminService : IModelGrantAdminService
 
     private IReadOnlyList<string> ValidateModelIds(IReadOnlyList<string> modelIds)
     {
-        var normalized = modelIds
-            .Where(id => !string.IsNullOrWhiteSpace(id))
-            .Select(id => id.Trim())
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
+        var canonicalIds = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var id in normalized)
+        foreach (var rawId in modelIds)
         {
-            if (!_registry.TryGetModel(id, out var model) || model is null)
+            if (string.IsNullOrWhiteSpace(rawId))
             {
-                throw new ArgumentException($"Model '{id}' is not registered.", nameof(modelIds));
+                continue;
+            }
+
+            var trimmed = rawId.Trim();
+            if (!_registry.TryGetModel(trimmed, out var model) || model is null)
+            {
+                throw new ArgumentException($"Model '{trimmed}' is not registered.", nameof(modelIds));
+            }
+
+            if (seen.Add(model.Id))
+            {
+                canonicalIds.Add(model.Id);
             }
         }
 
-        return normalized;
+        return canonicalIds;
     }
 
     private static ModelGrantsResponse ToTenantResponse(IReadOnlyList<string> modelIds) =>

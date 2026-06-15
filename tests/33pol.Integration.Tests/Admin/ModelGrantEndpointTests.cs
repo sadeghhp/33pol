@@ -118,6 +118,47 @@ public sealed class ModelGrantEndpointTests
     }
 
     [Fact]
+    public async Task PutApiKeyGrants_WithAlias_CanAccessViaCanonicalId()
+    {
+        await using var factory = CreateGrantTestFactory();
+        await GatewayWebApplicationFactory.EnsureAuthReadyAsync(factory);
+        var adminClient = CreateAuthenticatedClient(factory, AdminKey);
+        var createResponse = await adminClient.PostAsJsonAsync("/admin/api/keys", new { role = "Inference" });
+        createResponse.EnsureSuccessStatusCode();
+        using var created = JsonDocument.Parse(await createResponse.Content.ReadAsStringAsync());
+        var keyId = created.RootElement.GetProperty("id").GetGuid();
+        var secret = created.RootElement.GetProperty("secret").GetString()!;
+
+        var putGrants = await adminClient.PutAsJsonAsync(
+            $"/admin/api/keys/{keyId}/model-grants",
+            new { modelIds = new[] { RequestModelAlias } });
+        putGrants.EnsureSuccessStatusCode();
+        using var grantsDoc = JsonDocument.Parse(await putGrants.Content.ReadAsStringAsync());
+        grantsDoc.RootElement.GetProperty("modelIds").EnumerateArray()
+            .Select(e => e.GetString())
+            .Should().ContainSingle()
+            .Which.Should().Be(CanonicalModelId);
+
+        var inferenceClient = factory.CreateClient();
+        inferenceClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", secret);
+
+        var modelsResponse = await inferenceClient.GetAsync("/v1/models");
+        modelsResponse.EnsureSuccessStatusCode();
+        using var modelsDoc = JsonDocument.Parse(await modelsResponse.Content.ReadAsStringAsync());
+        modelsDoc.RootElement.GetProperty("data").EnumerateArray()
+            .Select(e => e.GetProperty("id").GetString())
+            .Should().ContainSingle()
+            .Which.Should().Be(CanonicalModelId);
+
+        using var chatBody = new StringContent(
+            $$"""{"model":"{{RequestModelAlias}}","stream":false}""",
+            System.Text.Encoding.UTF8,
+            "application/json");
+        var chat = await inferenceClient.PostAsync("/v1/chat/completions", chatBody);
+        chat.StatusCode.Should().Be(HttpStatusCode.OK);
+    }
+
+    [Fact]
     public async Task GetModels_WithRestrictedKey_ReturnsSubset()
     {
         await using var factory = CreateGrantTestFactory();
