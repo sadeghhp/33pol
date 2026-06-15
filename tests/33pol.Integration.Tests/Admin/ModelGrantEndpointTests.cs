@@ -185,6 +185,57 @@ public sealed class ModelGrantEndpointTests
         ids.Should().ContainSingle().Which.Should().Be(CanonicalModelId);
     }
 
+    [Fact]
+    public async Task GetModel_WithRestrictedKey_GrantedModel_ReturnsCanonicalId()
+    {
+        await using var factory = CreateGrantTestFactory();
+        await GatewayWebApplicationFactory.EnsureAuthReadyAsync(factory);
+        var adminClient = CreateAuthenticatedClient(factory, AdminKey);
+        var createResponse = await adminClient.PostAsJsonAsync("/admin/api/keys", new { role = "Inference" });
+        createResponse.EnsureSuccessStatusCode();
+        using var created = JsonDocument.Parse(await createResponse.Content.ReadAsStringAsync());
+        var keyId = created.RootElement.GetProperty("id").GetGuid();
+        var secret = created.RootElement.GetProperty("secret").GetString()!;
+
+        await adminClient.PutAsJsonAsync(
+            $"/admin/api/keys/{keyId}/model-grants",
+            new { modelIds = new[] { CanonicalModelId } });
+
+        var inferenceClient = factory.CreateClient();
+        inferenceClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", secret);
+
+        var response = await inferenceClient.GetAsync($"/v1/models/{RequestModelAlias}");
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        doc.RootElement.GetProperty("id").GetString().Should().Be(CanonicalModelId);
+        doc.RootElement.GetProperty("available").GetBoolean().Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task GetModel_WithRestrictedKey_UngrantedModel_Returns404ModelNotFound()
+    {
+        await using var factory = CreateGrantTestFactory();
+        await GatewayWebApplicationFactory.EnsureAuthReadyAsync(factory);
+        var adminClient = CreateAuthenticatedClient(factory, AdminKey);
+        var createResponse = await adminClient.PostAsJsonAsync("/admin/api/keys", new { role = "Inference" });
+        createResponse.EnsureSuccessStatusCode();
+        using var created = JsonDocument.Parse(await createResponse.Content.ReadAsStringAsync());
+        var keyId = created.RootElement.GetProperty("id").GetGuid();
+        var secret = created.RootElement.GetProperty("secret").GetString()!;
+
+        await adminClient.PutAsJsonAsync(
+            $"/admin/api/keys/{keyId}/model-grants",
+            new { modelIds = new[] { CanonicalModelId } });
+
+        var inferenceClient = factory.CreateClient();
+        inferenceClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", secret);
+
+        var response = await inferenceClient.GetAsync($"/v1/models/{OtherRegistryModel}");
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        doc.RootElement.GetProperty("error").GetProperty("code").GetString().Should().Be("model_not_found");
+    }
+
     private static WebApplicationFactory<Program> CreateGrantTestFactory()
     {
         var configPath = IntegrationModelsConfig.WriteStandardModelsConfig();
