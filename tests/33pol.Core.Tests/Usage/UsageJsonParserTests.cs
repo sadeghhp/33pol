@@ -27,6 +27,24 @@ public sealed class UsageJsonParserTests
     }
 
     [Fact]
+    public void TryParseUsage_TotalTokensOnly_MapsToPromptTokens()
+    {
+        var json = """{"usage":{"total_tokens":56}}"""u8.ToArray();
+        UsageJsonParser.TryParseUsage(json, out var prompt, out var completion).Should().BeTrue();
+        prompt.Should().Be(56);
+        completion.Should().Be(0);
+    }
+
+    [Fact]
+    public void TryParseUsage_PromptAndTotalTokens_PrefersPromptTokens()
+    {
+        var json = """{"usage":{"prompt_tokens":3,"total_tokens":99}}"""u8.ToArray();
+        UsageJsonParser.TryParseUsage(json, out var prompt, out var completion).Should().BeTrue();
+        prompt.Should().Be(3);
+        completion.Should().Be(0);
+    }
+
+    [Fact]
     public void TryParseUsageFromSseText_LastDataLineWithUsage_ReturnsCounts()
     {
         const string sse = """

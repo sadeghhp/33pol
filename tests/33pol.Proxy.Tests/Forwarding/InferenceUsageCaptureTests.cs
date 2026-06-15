@@ -31,6 +31,30 @@ public sealed class InferenceUsageCaptureTests
     }
 
     [Fact]
+    public void CaptureFromJsonBody_TotalTokensOnly_EnqueuesUsageEvent()
+    {
+        var recorder = Substitute.For<IUsageRecorder>();
+        var metrics = Substitute.For<IGatewayMetricsCollector>();
+        var capture = new InferenceUsageCapture(
+            recorder,
+            metrics,
+            "reranker",
+            "req-rerank",
+            DateTimeOffset.UtcNow.AddSeconds(-1),
+            tenant: null);
+
+        var body = """{"usage":{"total_tokens":56}}"""u8.ToArray();
+        capture.CaptureFromJsonBody(body);
+
+        recorder.Received(1).Enqueue(Arg.Is<UsageEvent>(e =>
+            e.RequestId == "req-rerank" &&
+            e.ModelId == "reranker" &&
+            e.PromptTokens == 56 &&
+            e.CompletionTokens == 0));
+        metrics.DidNotReceive().RecordUsageParseFailure(Arg.Any<string>());
+    }
+
+    [Fact]
     public void CaptureFromJsonBody_WhenMissingUsage_RecordsParseFailure()
     {
         var recorder = Substitute.For<IUsageRecorder>();

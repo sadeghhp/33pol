@@ -67,21 +67,31 @@ public sealed class AdminModelTestService(
 
         var prompt = NormalizePrompt(request?.Prompt);
         var maxTokens = ClampMaxTokens(request?.MaxTokens);
-        var chatUri = BuildChatCompletionsUri(model.Url);
+        var useRerankTest = ShouldUseRerankTest(model);
+        var requestUri = useRerankTest
+            ? BuildRerankUri(model.Url)
+            : BuildChatCompletionsUri(model.Url);
 
-        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, chatUri);
+        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, requestUri);
         if (!string.IsNullOrWhiteSpace(bearer))
         {
             httpRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearer);
         }
 
-        httpRequest.Content = JsonContent.Create(new
-        {
-            model = model.Id,
-            messages = new[] { new { role = "user", content = prompt } },
-            max_tokens = maxTokens,
-            stream = false,
-        });
+        httpRequest.Content = useRerankTest
+            ? JsonContent.Create(new
+            {
+                model = model.Id,
+                query = prompt,
+                documents = new[] { "test document" },
+            })
+            : JsonContent.Create(new
+            {
+                model = model.Id,
+                messages = new[] { new { role = "user", content = prompt } },
+                max_tokens = maxTokens,
+                stream = false,
+            });
 
         var client = httpClientFactory.CreateClient(HttpClientName);
         var stopwatch = Stopwatch.StartNew();
@@ -112,7 +122,10 @@ public sealed class AdminModelTestService(
                 ModelId = model.Id,
                 LatencyMs = stopwatch.ElapsedMilliseconds,
                 StatusCode = statusCode,
-                Content = TruncateContent(TryExtractAssistantContent(body)),
+                Content = TruncateContent(
+                    useRerankTest
+                        ? TryExtractRerankScore(body)
+                        : TryExtractAssistantContent(body)),
                 SuggestedStatusCode = StatusCodes.Status200OK,
             };
         }
@@ -147,6 +160,17 @@ public sealed class AdminModelTestService(
         var normalizedBase = baseUrl.EndsWith('/') ? baseUrl : baseUrl + "/";
         return new Uri(new Uri(normalizedBase, UriKind.Absolute), "v1/chat/completions");
     }
+
+    public static Uri BuildRerankUri(string baseUrl)
+    {
+        var normalizedBase = baseUrl.EndsWith('/') ? baseUrl : baseUrl + "/";
+        return new Uri(new Uri(normalizedBase, UriKind.Absolute), "v1/rerank");
+    }
+
+    public static bool ShouldUseRerankTest(ModelConfig model) =>
+        model.Capabilities.Count > 0 &&
+        model.HasCapability("rerank") &&
+        !model.HasCapability("chat");
 
     public static int ClampMaxTokens(int? maxTokens)
     {
@@ -212,6 +236,41 @@ public sealed class AdminModelTestService(
                 {
                     return text;
                 }
+            }
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+
+        return null;
+    }
+
+    public static string? TryExtractRerankScore(string body)
+    {
+        if (string.IsNullOrWhiteSpace(body))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var json = JsonDocument.Parse(body);
+            if (!json.RootElement.TryGetProperty("results", out var results) ||
+                results.ValueKind != JsonValueKind.Array)
+            {
+                return null;
+            }
+
+            foreach (var result in results.EnumerateArray())
+            {
+                if (!result.TryGetProperty("relevance_score", out var score) ||
+                    score.ValueKind != JsonValueKind.Number)
+                {
+                    continue;
+                }
+
+                return score.GetDouble().ToString(System.Globalization.CultureInfo.InvariantCulture);
             }
         }
         catch (JsonException)

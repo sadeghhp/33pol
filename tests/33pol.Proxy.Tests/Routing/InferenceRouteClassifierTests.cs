@@ -40,12 +40,23 @@ public sealed class InferenceRouteClassifierTests
     [Theory]
     [InlineData("/v1/completions")]
     [InlineData("/v1/embeddings")]
+    [InlineData("/v1/rerank")]
     [InlineData("/api/v1/chat/completions")]
     public void IsRoutableInference_PostInferenceSuffixes_ReturnsTrue(string path)
     {
         var context = new DefaultHttpContext();
         context.Request.Method = HttpMethods.Post;
         context.Request.Path = path;
+
+        InferenceRouteClassifier.IsRoutableInference(context).Should().BeTrue();
+    }
+
+    [Fact]
+    public void IsRoutableInference_PostRerank_ReturnsTrue()
+    {
+        var context = new DefaultHttpContext();
+        context.Request.Method = HttpMethods.Post;
+        context.Request.Path = "/v1/rerank";
 
         InferenceRouteClassifier.IsRoutableInference(context).Should().BeTrue();
     }

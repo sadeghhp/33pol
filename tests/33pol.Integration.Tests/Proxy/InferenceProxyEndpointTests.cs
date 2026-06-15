@@ -164,6 +164,36 @@ public sealed class InferenceProxyEndpointTests
     }
 
     [Fact]
+    public async Task PostRerank_ForwardsToBackendPath()
+    {
+        var handler = new MockUpstreamHandler();
+        using var factory = GatewayWebApplicationFactory.Create(handler);
+        using var client = factory.CreateClient();
+
+        var response = await client.PostAsync(
+            "/v1/rerank",
+            JsonBody("""{"model":"local-mock","query":"test","documents":["doc1"]}"""));
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        handler.LastRequest!.RequestUri!.AbsolutePath.Should().Be("/v1/rerank");
+    }
+
+    [Fact]
+    public async Task PostRerank_AliasModel_RewritesCanonicalIdForUpstream()
+    {
+        var handler = new MockUpstreamHandler();
+        using var factory = GatewayWebApplicationFactory.Create(handler);
+        using var client = factory.CreateClient();
+
+        await client.PostAsync(
+            "/v1/rerank",
+            JsonBody("""{"model":"gpt-local","query":"test","documents":["doc1"]}"""));
+
+        handler.LastRequestBody.Should().Contain("\"model\":\"local-mock\"");
+        handler.LastRequestBody.Should().NotContain("gpt-local");
+    }
+
+    [Fact]
     public async Task PostChatCompletions_UnknownModel_Returns404()
     {
         var handler = new MockUpstreamHandler();

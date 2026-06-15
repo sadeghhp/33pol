@@ -404,6 +404,11 @@ public sealed class ModelRouterMiddleware
             return "embeddings";
         }
 
+        if (value.EndsWith("/v1/rerank", StringComparison.OrdinalIgnoreCase))
+        {
+            return "rerank";
+        }
+
         return "unknown";
     }
 

@@ -28,6 +28,12 @@ public static class UsageJsonParser
                 completionTokens = completion.GetInt64();
             }
 
+            if (promptTokens == 0 && completionTokens == 0 &&
+                usage.TryGetProperty("total_tokens", out var total))
+            {
+                promptTokens = total.GetInt64();
+            }
+
             return promptTokens > 0 || completionTokens > 0;
         }
         catch (JsonException)

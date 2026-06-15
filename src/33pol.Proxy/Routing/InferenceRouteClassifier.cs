@@ -19,6 +19,7 @@ public static class InferenceRouteClassifier
         "/v1/chat/completions",
         "/v1/completions",
         "/v1/embeddings",
+        "/v1/rerank",
     ];
 
     public static bool IsPassthroughPath(PathString path)

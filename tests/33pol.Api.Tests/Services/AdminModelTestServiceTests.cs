@@ -19,6 +19,14 @@ public sealed class AdminModelTestServiceTests
     }
 
     [Theory]
+    [InlineData("http://localhost:8080", "http://localhost:8080/v1/rerank")]
+    [InlineData("http://localhost:8080/", "http://localhost:8080/v1/rerank")]
+    public void BuildRerankUri_NormalizesBase(string baseUrl, string expected)
+    {
+        AdminModelTestService.BuildRerankUri(baseUrl).ToString().Should().Be(expected);
+    }
+
+    [Theory]
     [InlineData(null, 5)]
     [InlineData(0, 1)]
     [InlineData(3, 3)]
@@ -110,6 +118,31 @@ public sealed class AdminModelTestServiceTests
         result.SuggestedStatusCode.Should().Be(200);
     }
 
+    [Fact]
+    public async Task TestAsync_RerankModel_SendsRerankPayload()
+    {
+        var handler = new CapturingHandler(
+            HttpStatusCode.OK,
+            """
+            {
+              "results": [
+                { "index": 0, "relevance_score": 0.87, "document": { "text": "test document" } }
+              ]
+            }
+            """);
+        var model = CreateModel("reranker", "http://upstream.test");
+        model.Capabilities = ["rerank"];
+        var service = CreateService(handler, model);
+
+        var result = await service.TestAsync("reranker", new() { Prompt = "test query" });
+
+        result.Ok.Should().BeTrue();
+        result.Content.Should().Be("0.87");
+        handler.LastRequestUri!.AbsolutePath.Should().Be("/v1/rerank");
+        handler.LastRequestBody.Should().Contain("\"query\":\"test query\"");
+        handler.LastRequestBody.Should().Contain("\"documents\":[\"test document\"]");
+    }
+
     private static AdminModelTestService CreateService(
         HttpMessageHandler handler,
         params ModelConfig[] models) =>
@@ -175,6 +208,28 @@ public sealed class AdminModelTestServiceTests
             {
                 Content = new StringContent(body, Encoding.UTF8, "application/json"),
             });
+        }
+    }
+
+    private sealed class CapturingHandler(HttpStatusCode statusCode, string body) : HttpMessageHandler
+    {
+        public Uri? LastRequestUri { get; private set; }
+
+        public string? LastRequestBody { get; private set; }
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            LastRequestUri = request.RequestUri;
+            LastRequestBody = request.Content is null
+                ? null
+                : await request.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+
+            return new HttpResponseMessage(statusCode)
+            {
+                Content = new StringContent(body, Encoding.UTF8, "application/json"),
+            };
         }
     }
 }

@@ -24,6 +24,17 @@ public sealed class ModelConfig
     /// </summary>
     [JsonPropertyName("publicAccess")]
     public bool PublicAccess { get; set; }
+
+    /// <summary>
+    /// Supported inference capabilities (e.g. chat, completions, embeddings, rerank).
+    /// Empty list means all routes are supported (backward-compatible default).
+    /// </summary>
+    [JsonPropertyName("capabilities")]
+    public List<string> Capabilities { get; set; } = [];
+
+    public bool HasCapability(string capability) =>
+        Capabilities.Count == 0 ||
+        Capabilities.Contains(capability, StringComparer.OrdinalIgnoreCase);
 }
 
 public sealed class UpstreamAuthConfig

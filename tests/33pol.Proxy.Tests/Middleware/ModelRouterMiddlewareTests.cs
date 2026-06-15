@@ -188,6 +188,55 @@ public sealed class ModelRouterMiddlewareTests
     }
 
     [Fact]
+    public async Task InvokeAsync_PostRerank_ForwardsToBackend()
+    {
+        var configPath = Path.Combine(Path.GetTempPath(), $"33pol-mw-rerank-{Guid.NewGuid():N}.json");
+        await File.WriteAllTextAsync(configPath, """
+            { "models": [ { "id": "reranker", "url": "http://backend:8000", "aliases": [] } ] }
+            """);
+
+        try
+        {
+            var registry = new Pol33.Registry.Services.ModelRegistryService(
+                NullLogger<Pol33.Registry.Services.ModelRegistryService>.Instance);
+            await registry.LoadModelsAsync(configPath);
+
+            var health = Substitute.For<IBackendHealthStore>();
+            health.IsBackendHealthy("reranker").Returns(true);
+
+            var forwarder = Substitute.For<IInferenceHttpForwarder>();
+            forwarder.SendAsync(
+                    Arg.Any<HttpContext>(),
+                    Arg.Any<string>(),
+                    Arg.Any<string?>(),
+                    Arg.Any<StreamingHttpTransformer>(),
+                    Arg.Any<bool>(),
+                    Arg.Any<CancellationToken>())
+                .Returns(ForwarderError.None);
+
+            var middleware = CreateMiddleware(registry: registry, healthStore: health, forwarder: forwarder);
+            var context = CreateContext(
+                HttpMethods.Post,
+                "/v1/rerank",
+                """{"model":"reranker","query":"test","documents":["doc"]}""");
+
+            await middleware.InvokeAsync(context);
+
+            await forwarder.Received(1).SendAsync(
+                Arg.Any<HttpContext>(),
+                "http://backend:8000",
+                Arg.Any<string?>(),
+                Arg.Any<StreamingHttpTransformer>(),
+                false,
+                Arg.Any<CancellationToken>());
+        }
+        finally
+        {
+            File.Delete(configPath);
+        }
+    }
+
+    [Fact]
     public async Task InvokeAsync_InvalidJson_Returns400()
     {
         var middleware = CreateMiddleware();

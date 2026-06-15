@@ -26,12 +26,13 @@ Full narrative remains in v1 docs; this file is the **acceptance checklist** for
 | POST | `/v1/chat/completions` | **MUST** proxy via `IHttpForwarder` |
 | POST | `/v1/completions` | **MUST** |
 | POST | `/v1/embeddings` | **MUST** |
+| POST | `/v1/rerank` | **MUST** |
 | GET | `/v1/models` | **MUST** — gateway-generated (Phase 2) |
 | GET | `/v1/models/{model}` | **MUST** — alias lookup (Phase 2) |
 
 **BREAKING / out of scope (v2.0 GA):** `/v1/responses`, audio, images, batches, Azure `api-version` shim.
 
-**Upstream path preservation:** Client `POST /v1/chat/completions` → upstream `POST {backendBaseUrl}/v1/chat/completions` (**MUST**).
+**Upstream path preservation:** Client `POST /v1/chat/completions` → upstream `POST {backendBaseUrl}/v1/chat/completions` (**MUST**). Same rule applies to `/v1/completions`, `/v1/embeddings`, and `/v1/rerank` (e.g. `POST /v1/rerank` → `{backendBaseUrl}/v1/rerank`).
 
 ---
 
@@ -64,6 +65,7 @@ v2 **MUST** use `/admin/api/` for control-plane HTTP (v1 used `/admin/reload`, `
 /v1/chat/completions
 /v1/completions
 /v1/embeddings
+/v1/rerank
 ```
 
 All other requests → `next()` unless handled by minimal APIs.
@@ -150,6 +152,7 @@ When `stream: true`:
 | `url` | Yes | Base URL (no trailing slash required) |
 | `maxContextLength` | No | `0` if omitted; exposed as `max_model_len` on models API |
 | `aliases` | No | Case-insensitive lookup keys |
+| `capabilities` | No | Supported routes: `chat`, `completions`, `embeddings`, `rerank`; empty = all routes; used for admin smoke-test selection |
 
 **Load behavior (MUST):**
 
@@ -277,6 +280,7 @@ Minimum **V1Parity** integration coverage:
 - [ ] POST chat/completions non-stream 200 (mock upstream)
 - [ ] POST stream SSE chunks + headers
 - [ ] POST embeddings
+- [ ] POST rerank
 - [ ] Alias in body rewritten to canonical upstream body
 - [ ] Unknown model 404; unhealthy 502
 - [ ] `GET /v1/models` golden JSON; unhealthy omitted from list
