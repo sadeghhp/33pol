@@ -40,6 +40,16 @@ public sealed class ProviderModelsListUrlValidatorTests
         error.Should().Contain("private");
     }
 
+    [Theory]
+    [InlineData("http://[::1]/v1/models")]
+    [InlineData("http://[::]/v1/models")]
+    public void TryValidate_IPv6LoopbackOrUnspecified_ReturnsFalse(string url)
+    {
+        ProviderModelsListUrlValidator.TryValidate(url, out _, out var error).Should().BeFalse();
+
+        error.Should().NotBeNull();
+    }
+
     [Fact]
     public void TryValidate_LocalhostHost_ReturnsFalse()
     {

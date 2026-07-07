@@ -2,6 +2,8 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Options;
 using Pol33.Core.Abstractions;
 using Pol33.Core.Models;
 using Pol33.Core.Security;
@@ -52,6 +54,7 @@ public static class SecurityServiceCollectionExtensions
         }
 
         services.AddMemoryCache();
+        services.AddSingleton<IValidateOptions<GatewaySecurityOptions>, GatewaySecurityOptionsValidator>();
         services
             .AddOptions<GatewaySecurityOptions>()
             .Bind(configuration.GetSection(GatewaySecurityOptions.SectionName))
@@ -81,6 +84,36 @@ public static class SecurityServiceCollectionExtensions
         }
 
         return app;
+    }
+}
+
+public sealed class GatewaySecurityOptionsValidator : IValidateOptions<GatewaySecurityOptions>
+{
+    private readonly IHostEnvironment _environment;
+
+    public GatewaySecurityOptionsValidator(IHostEnvironment environment) => _environment = environment;
+
+    public ValidateOptionsResult Validate(string? name, GatewaySecurityOptions options)
+    {
+        // The key pepper is only a development convenience default. Outside Development it protects
+        // every stored API-key hash, so refuse to start with an empty, default, or too-short value
+        // rather than silently hashing keys with a publicly-known secret.
+        if (_environment.IsDevelopment())
+        {
+            return ValidateOptionsResult.Success;
+        }
+
+        var pepper = options.KeyPepper?.Trim();
+        if (string.IsNullOrEmpty(pepper)
+            || string.Equals(pepper, GatewaySecurityOptions.DefaultKeyPepper, StringComparison.Ordinal)
+            || pepper.Length < GatewaySecurityOptions.MinimumPepperLength)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{GatewaySecurityOptions.SectionName}:KeyPepper must be set to a strong, non-default "
+                + $"value of at least {GatewaySecurityOptions.MinimumPepperLength} characters outside Development.");
+        }
+
+        return ValidateOptionsResult.Success;
     }
 }
 

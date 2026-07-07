@@ -5,6 +5,9 @@ namespace Pol33.Core.Providers;
 
 internal static class BlockedProviderModelsListHost
 {
+    private const string BlockedAddressError =
+        "modelsUrl must not target private, link-local, loopback, unspecified, or metadata addresses.";
+
     public static bool IsBlocked(Uri uri, out string? error)
     {
         error = null;
@@ -23,11 +26,52 @@ internal static class BlockedProviderModelsListHost
 
         if (IsBlockedAddress(address))
         {
-            error = "modelsUrl must not target private, link-local, loopback, or metadata addresses.";
+            error = BlockedAddressError;
             return true;
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Resolves a DNS hostname and rejects the request if any resolved address is private/internal.
+    /// This closes the SSRF bypass where a public-looking hostname resolves to an internal or
+    /// cloud-metadata address. Literal-IP and localhost hosts are handled synchronously by <see
+    /// cref="IsBlocked"/>. Returns an error string when blocked, otherwise <c>null</c>.
+    /// </summary>
+    public static async Task<string?> ValidateResolvedHostAsync(Uri uri, CancellationToken cancellationToken)
+    {
+        if (IsBlocked(uri, out var error))
+        {
+            return error;
+        }
+
+        // Literal IPs are already validated by IsBlocked; only DNS names need resolution.
+        if (IPAddress.TryParse(uri.Host, out _))
+        {
+            return null;
+        }
+
+        IPAddress[] addresses;
+        try
+        {
+            addresses = await Dns.GetHostAddressesAsync(uri.Host, cancellationToken).ConfigureAwait(false);
+        }
+        catch (SocketException)
+        {
+            // Unresolvable host: let the actual HTTP request fail naturally with its own DNS error.
+            return null;
+        }
+
+        foreach (var address in addresses)
+        {
+            if (IsBlockedAddress(address))
+            {
+                return BlockedAddressError;
+            }
+        }
+
+        return null;
     }
 
     internal static bool IsBlockedAddress(IPAddress address)
@@ -79,5 +123,6 @@ internal static class BlockedProviderModelsListHost
     private static bool IsBlockedIPv6(IPAddress address) =>
         address.IsIPv6LinkLocal ||
         address.IsIPv6UniqueLocal ||
+        address.Equals(IPAddress.IPv6Any) ||
         IPAddress.IsLoopback(address);
 }

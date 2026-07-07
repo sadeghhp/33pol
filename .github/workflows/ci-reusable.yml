@@ -46,7 +46,8 @@ jobs:
         run: |
           dotnet list 33pol.sln package --vulnerable --include-transitive 2>&1 | tee vulnerability-audit.txt
           if grep -q "has the following vulnerable" vulnerability-audit.txt; then
-            echo "::warning::Vulnerable packages reported — see docs/security.md and vulnerability-audit.txt"
+            echo "::error::Vulnerable packages reported — see docs/security.md and vulnerability-audit.txt"
+            exit 1
           fi
 
       - name: Upload coverage artifacts

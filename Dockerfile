@@ -42,4 +42,8 @@ RUN chmod +x /app/healthcheck.sh
 ENV ASPNETCORE_URLS=http://+:8080
 EXPOSE 8080
 
+# Run as the non-root user provided by the aspnet base image (uid 1654) to limit blast radius.
+# The mounted ./config volume must be writable by this uid on the host.
+USER $APP_UID
+
 ENTRYPOINT ["dotnet", "33pol.App.dll"]

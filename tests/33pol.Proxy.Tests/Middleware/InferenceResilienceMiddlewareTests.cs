@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.Extensions.Options;
 using Pol33.Core.Abstractions;
 using Pol33.Core.Configuration;
@@ -35,6 +36,27 @@ public sealed class InferenceResilienceMiddlewareTests
 
         context.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
         context.Response.Headers[GatewayHeaders.ErrorCode].ToString().Should().Be("request_too_large");
+    }
+
+    [Fact]
+    public async Task InvokeAsync_ChunkedInferenceWithoutContentLength_AppliesBodySizeCap()
+    {
+        var nextCalled = false;
+        var middleware = CreateMiddleware(next: _ =>
+        {
+            nextCalled = true;
+            return Task.CompletedTask;
+        });
+        var context = CreateInferenceContext();
+        context.Request.ContentLength = null; // chunked transfer: bypasses the Content-Length check
+        var bodySizeFeature = new FakeMaxRequestBodySizeFeature();
+        context.Features.Set<IHttpMaxRequestBodySizeFeature>(bodySizeFeature);
+
+        await middleware.InvokeAsync(context);
+
+        nextCalled.Should().BeTrue();
+        // The configured MaxRequestBodyBytes (1024) is enforced during body read.
+        bodySizeFeature.MaxRequestBodySize.Should().Be(1024);
     }
 
     [Fact]
@@ -77,5 +99,11 @@ public sealed class InferenceResilienceMiddlewareTests
         context.Request.ContentType = "application/json";
         context.Response.Body = new MemoryStream();
         return context;
+    }
+
+    private sealed class FakeMaxRequestBodySizeFeature : IHttpMaxRequestBodySizeFeature
+    {
+        public bool IsReadOnly => false;
+        public long? MaxRequestBodySize { get; set; }
     }
 }

@@ -19,8 +19,13 @@ public static class GatewayApiServiceCollectionExtensions
         services.AddSingleton<GatewayStatsService>();
         services.AddSingleton<AdminModelProvisioningService>();
         services.AddSingleton<AdminModelTestService>();
+        services.AddTransient<Core.Providers.SsrfGuardingHttpHandler>();
         services.AddHttpClient<OpenAiCompatibleProviderModelsClient>()
-            .ConfigureHttpClient(static client => client.Timeout = TimeSpan.FromSeconds(30));
+            .ConfigureHttpClient(static client => client.Timeout = TimeSpan.FromSeconds(30))
+            // Do not auto-follow redirects: a 3xx to an internal host would otherwise bypass the
+            // host blocklist. Combined with the SSRF guard that resolves + validates the target host.
+            .ConfigurePrimaryHttpMessageHandler(static () => new SocketsHttpHandler { AllowAutoRedirect = false })
+            .AddHttpMessageHandler<Core.Providers.SsrfGuardingHttpHandler>();
         return services;
     }
 

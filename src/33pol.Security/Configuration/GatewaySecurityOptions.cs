@@ -4,7 +4,13 @@ public sealed class GatewaySecurityOptions
 {
     public const string SectionName = "Gateway:Security";
 
-    public string KeyPepper { get; set; } = "dev-pepper-change-me";
+    /// <summary>Well-known development default; rejected at startup outside Development.</summary>
+    public const string DefaultKeyPepper = "dev-pepper-change-me";
+
+    /// <summary>Minimum accepted pepper length outside Development.</summary>
+    public const int MinimumPepperLength = 16;
+
+    public string KeyPepper { get; set; } = DefaultKeyPepper;
 
     public int CacheTtlMinutes { get; set; } = 2;
 

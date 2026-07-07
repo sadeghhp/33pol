@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.Extensions.Options;
 using Pol33.Core.Abstractions;
 using Pol33.Core.Configuration;
@@ -50,6 +51,15 @@ public sealed class InferenceResilienceMiddleware
                 _errors.Write(GatewayErrorCode.RequestTooLarge),
                 context.RequestAborted).ConfigureAwait(false);
             return;
+        }
+
+        // Enforce the cap during body read as well, so a chunked request with no Content-Length header
+        // cannot bypass the check above and buffer an unbounded body (EnableBuffering + JSON parse) into
+        // memory/disk. The server enforces this while the body is streamed.
+        var maxBodySizeFeature = context.Features.Get<IHttpMaxRequestBodySizeFeature>();
+        if (maxBodySizeFeature is { IsReadOnly: false })
+        {
+            maxBodySizeFeature.MaxRequestBodySize = _maxRequestBodyBytes;
         }
 
         await _next(context).ConfigureAwait(false);
