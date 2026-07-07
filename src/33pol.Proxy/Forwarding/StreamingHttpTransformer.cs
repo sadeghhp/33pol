@@ -101,7 +101,9 @@ public sealed class StreamingHttpTransformer : HttpTransformer
         var capturingStream = _isStreaming
             ? new UsageCapturingStream(
                 originalStream,
-                captured => _usageCapture!.CaptureFromSseText(Encoding.UTF8.GetString(captured.Span)))
+                captured => _usageCapture!.CaptureFromSseText(Encoding.UTF8.GetString(captured.Span)),
+                // SSE usage arrives in the final chunk: retain the tail, not the head.
+                retainTail: true)
             : new UsageCapturingStream(
                 originalStream,
                 captured => _usageCapture!.CaptureFromJsonBody(captured.Span));

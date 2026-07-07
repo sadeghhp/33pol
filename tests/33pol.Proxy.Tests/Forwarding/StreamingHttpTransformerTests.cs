@@ -78,6 +78,54 @@ public sealed class StreamingHttpTransformerTests
     }
 
     [Fact]
+    public async Task TransformResponseAsync_Streaming_LargeBodyWithTrailingUsage_CapturesUsage()
+    {
+        var usageRecorder = Substitute.For<IUsageRecorder>();
+        var metrics = Substitute.For<IGatewayMetricsCollector>();
+        var usageCapture = new InferenceUsageCapture(
+            usageRecorder,
+            metrics,
+            canonicalModelId: "mock-gpt",
+            requestId: "req-1",
+            startedUtc: DateTimeOffset.UtcNow,
+            tenant: null);
+
+        var transformer = new StreamingHttpTransformer(
+            isStreaming: true,
+            clientModelName: null,
+            canonicalModelId: "mock-gpt",
+            usageCapture: usageCapture);
+
+        // SSE body larger than the 512 KB capture buffer, with the usage chunk at the very end.
+        var builder = new System.Text.StringBuilder();
+        var filler = "data: " + new string('x', 900) + "\n\n";
+        while (builder.Length < (512 * 1024) + 100_000)
+        {
+            builder.Append(filler);
+        }
+
+        builder.Append("data: {\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2}}\n\n");
+        builder.Append("data: [DONE]\n\n");
+        var payload = builder.ToString();
+
+        using var response = new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(payload, System.Text.Encoding.UTF8, "text/event-stream"),
+        };
+
+        await transformer.TransformResponseAsync(
+            new DefaultHttpContext(),
+            response,
+            CancellationToken.None);
+        _ = await response.Content.ReadAsStringAsync();
+
+        // The trailing usage chunk survives because the streaming path retains the buffer tail.
+        usageRecorder.Received(1).Enqueue(Arg.Is<Pol33.Core.Models.UsageEvent>(
+            e => e.PromptTokens == 3 && e.CompletionTokens == 2));
+        metrics.DidNotReceive().RecordUsageParseFailure(Arg.Any<string>());
+    }
+
+    [Fact]
     public async Task TransformResponseAsync_NonStreaming_WhenBodyExceedsCaptureLimit_RecordsParseFailure()
     {
         var usageRecorder = Substitute.For<IUsageRecorder>();

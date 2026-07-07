@@ -1,7 +1,11 @@
 namespace Pol33.Proxy.Forwarding;
 
 /// <summary>
-/// Buffers proxied response bytes (bounded) so SSE usage can be parsed after the stream completes.
+/// Buffers proxied response bytes (bounded) so usage can be parsed after the stream completes.
+/// For non-streaming JSON responses the leading bytes are retained (the whole small body fits).
+/// For streaming SSE responses the <em>trailing</em> bytes are retained instead, because the
+/// terminal <c>usage</c> chunk arrives at the end of the stream — keeping the head would drop it
+/// on any response larger than the buffer and silently under-bill the request.
 /// </summary>
 internal sealed class UsageCapturingStream : Stream
 {
@@ -9,13 +13,28 @@ internal sealed class UsageCapturingStream : Stream
 
     private readonly Stream _inner;
     private readonly Action<ReadOnlyMemory<byte>> _onComplete;
-    private readonly MemoryStream _buffer = new();
+    private readonly bool _retainTail;
+    private readonly MemoryStream? _head;
+    private readonly byte[]? _tail;
+    private long _tailWritten;
     private bool _completed;
 
-    public UsageCapturingStream(Stream inner, Action<ReadOnlyMemory<byte>> onComplete)
+    public UsageCapturingStream(
+        Stream inner,
+        Action<ReadOnlyMemory<byte>> onComplete,
+        bool retainTail = false)
     {
         _inner = inner;
         _onComplete = onComplete;
+        _retainTail = retainTail;
+        if (retainTail)
+        {
+            _tail = new byte[MaxBufferBytes];
+        }
+        else
+        {
+            _head = new MemoryStream();
+        }
     }
 
     public override bool CanRead => _inner.CanRead;
@@ -57,14 +76,82 @@ internal sealed class UsageCapturingStream : Stream
 
     private void Append(ReadOnlySpan<byte> chunk)
     {
-        if (chunk.Length == 0 || _buffer.Length >= MaxBufferBytes)
+        if (chunk.Length == 0)
         {
             return;
         }
 
-        var remaining = MaxBufferBytes - (int)_buffer.Length;
+        if (_retainTail)
+        {
+            AppendTail(chunk);
+            return;
+        }
+
+        if (_head!.Length >= MaxBufferBytes)
+        {
+            return;
+        }
+
+        var remaining = MaxBufferBytes - (int)_head.Length;
         var toWrite = Math.Min(remaining, chunk.Length);
-        _buffer.Write(chunk[..toWrite]);
+        _head.Write(chunk[..toWrite]);
+    }
+
+    private void AppendTail(ReadOnlySpan<byte> chunk)
+    {
+        var tail = _tail!;
+        if (chunk.Length >= tail.Length)
+        {
+            // Only the final MaxBufferBytes bytes can ever be retained.
+            chunk[^tail.Length..].CopyTo(tail);
+            _tailWritten = tail.Length; // ring is full, aligned at index 0
+            return;
+        }
+
+        var pos = (int)(_tailWritten % tail.Length);
+        var firstRun = Math.Min(chunk.Length, tail.Length - pos);
+        chunk[..firstRun].CopyTo(tail.AsSpan(pos));
+        if (firstRun < chunk.Length)
+        {
+            chunk[firstRun..].CopyTo(tail.AsSpan(0));
+        }
+
+        _tailWritten += chunk.Length;
+    }
+
+    private ReadOnlyMemory<byte> SnapshotBuffer()
+    {
+        if (!_retainTail)
+        {
+            var length = (int)_head!.Length;
+            return length == 0
+                ? ReadOnlyMemory<byte>.Empty
+                : _head.GetBuffer().AsMemory(0, length);
+        }
+
+        var tail = _tail!;
+        if (_tailWritten == 0)
+        {
+            return ReadOnlyMemory<byte>.Empty;
+        }
+
+        if (_tailWritten < tail.Length)
+        {
+            // Never wrapped: bytes are in order at [0.._tailWritten).
+            return tail.AsMemory(0, (int)_tailWritten);
+        }
+
+        var start = (int)(_tailWritten % tail.Length);
+        if (start == 0)
+        {
+            return tail.AsMemory(0, tail.Length);
+        }
+
+        // Wrapped: reassemble oldest-to-newest across the ring boundary.
+        var ordered = new byte[tail.Length];
+        tail.AsSpan(start).CopyTo(ordered);
+        tail.AsSpan(0, start).CopyTo(ordered.AsSpan(tail.Length - start));
+        return ordered;
     }
 
     private void CompleteIfNeeded()
@@ -75,14 +162,7 @@ internal sealed class UsageCapturingStream : Stream
         }
 
         _completed = true;
-        var length = (int)_buffer.Length;
-        if (length == 0)
-        {
-            _onComplete(ReadOnlyMemory<byte>.Empty);
-            return;
-        }
-
-        _onComplete(_buffer.GetBuffer().AsMemory(0, length));
+        _onComplete(SnapshotBuffer());
     }
 
     protected override void Dispose(bool disposing)
@@ -91,7 +171,7 @@ internal sealed class UsageCapturingStream : Stream
         {
             CompleteIfNeeded();
             _inner.Dispose();
-            _buffer.Dispose();
+            _head?.Dispose();
         }
 
         base.Dispose(disposing);
