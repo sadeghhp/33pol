@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Pol33.Core.Billing;
 using Pol33.Core.Identity;
 using Pol33.Persistence.Repositories;
 using Pol33.Persistence.Tests.Infrastructure;
@@ -50,6 +51,34 @@ public sealed class PostgresRepositoryIntegrationTests : IAsyncLifetime
         var loaded = await sut.GetBySlugAsync("docker-tenant");
         loaded.Should().NotBeNull();
         loaded!.Name.Should().Be("Docker Tenant");
+    }
+
+    [Fact]
+    public async Task DailyUsageRollup_NullTenant_MergesInsteadOfDuplicatingOnPostgres()
+    {
+        _postgres.Should().NotBeNull();
+
+        await using var db = PersistenceTestDbContextFactory.CreateNpgsql(_postgres!.GetConnectionString());
+        await db.Database.MigrateAsync();
+
+        var repo = new DailyUsageRollupRepository(db);
+        var usageDate = new DateOnly(2026, 5, 26);
+
+        // On real Postgres, the previous `tenantIds.Contains(r.TenantId)` never matched NULL-tenant
+        // rows (SQL NULL semantics), so the second upsert re-inserted the already-merged cumulative
+        // total as a duplicate row and double-counted anonymous usage. InMemory cannot reproduce this.
+        await repo.UpsertRollupsAsync([
+            new DailyUsageRollupRecord(usageDate, null, "gpt-4o", null, 100, 50, 0.10m, 1),
+        ]);
+        await repo.UpsertRollupsAsync([
+            new DailyUsageRollupRecord(usageDate, null, "gpt-4o", null, 300, 150, 0.30m, 3),
+        ]);
+
+        var rollups = await repo.GetRollupsAsync(usageDate, usageDate, null);
+
+        rollups.Should().ContainSingle();
+        rollups[0].PromptTokens.Should().Be(300);
+        rollups[0].RequestCount.Should().Be(3);
     }
 
     [Fact]

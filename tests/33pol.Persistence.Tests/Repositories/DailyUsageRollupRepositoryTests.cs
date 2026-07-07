@@ -30,6 +30,30 @@ public sealed class DailyUsageRollupRepositoryTests
     }
 
     [Fact]
+    public async Task UpsertRollupsAsync_NullTenant_MergesInsteadOfDuplicating()
+    {
+        await using var db = PersistenceTestDbContextFactory.CreateInMemory(
+            nameof(UpsertRollupsAsync_NullTenant_MergesInsteadOfDuplicating));
+        var repository = new DailyUsageRollupRepository(db);
+        var usageDate = new DateOnly(2026, 5, 26);
+
+        // Anonymous (null-tenant) traffic: the second upsert for the same key must update the existing
+        // row, not insert a duplicate (which previously double-counted the cumulative total).
+        await repository.UpsertRollupsAsync([
+            new DailyUsageRollupRecord(usageDate, null, "gpt-4o", null, 100, 50, 0.10m, 1),
+        ]);
+        await repository.UpsertRollupsAsync([
+            new DailyUsageRollupRecord(usageDate, null, "gpt-4o", null, 300, 150, 0.30m, 3),
+        ]);
+
+        var rollups = await repository.GetRollupsAsync(usageDate, usageDate, null);
+
+        rollups.Should().ContainSingle();
+        rollups[0].PromptTokens.Should().Be(300);
+        rollups[0].RequestCount.Should().Be(3);
+    }
+
+    [Fact]
     public async Task GetRollupsAsync_FiltersByDateRangeAndTenant()
     {
         await using var db = PersistenceTestDbContextFactory.CreateInMemory(nameof(GetRollupsAsync_FiltersByDateRangeAndTenant));

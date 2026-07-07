@@ -14,6 +14,10 @@ public sealed class BillingUsageBatchPersistenceHandler(
     ILogger<BillingUsageBatchPersistenceHandler> logger) : IUsagePersistenceHandler, IHostedService
 {
     private readonly object _gate = new();
+    // Serializes the two flush paths (size-triggered from PersistAsync on the channel-reader thread,
+    // and the periodic timer loop) so they cannot run overlapping read-modify-write updates against
+    // the same daily rollup row and lose one another's increments.
+    private readonly SemaphoreSlim _flushGate = new(1, 1);
     private readonly List<UsageEvent> _pending = [];
     private Task? _flushLoop;
     private CancellationTokenSource? _cts;
@@ -103,6 +107,16 @@ public sealed class BillingUsageBatchPersistenceHandler(
     {
         try
         {
+            await _flushGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            logger.LogWarning("Flush of {Count} usage events skipped due to shutdown", batch.Count);
+            return;
+        }
+
+        try
+        {
             await using var scope = scopeFactory.CreateAsyncScope();
             var handler = scope.ServiceProvider.GetRequiredService<BillingUsagePersistenceHandler>();
             await handler.PersistBatchAsync(batch, cancellationToken).ConfigureAwait(false);
@@ -110,6 +124,10 @@ public sealed class BillingUsageBatchPersistenceHandler(
         catch (Exception ex)
         {
             logger.LogError(ex, "Failed to persist {Count} usage events", batch.Count);
+        }
+        finally
+        {
+            _flushGate.Release();
         }
     }
 }
