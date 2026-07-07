@@ -44,3 +44,6 @@ audit-refs.txt
 audit-summary.txt
 gitleaks-stdout.txt
 trufflehog-stderr.txt
+
+# Deploy runtime state (versions, backups, generated overrides)
+deploy/docker/.deploy/

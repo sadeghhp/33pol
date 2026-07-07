@@ -78,6 +78,28 @@ The default points at `http://mock-upstream:8080` (full-stack profile). Edit on 
 
 The whole `deploy/docker/config/` directory is mounted at `/app/config` (including `models.json`) so the Admin UI (**Models** tab) can persist registry changes. A single-file bind mount cannot be atomically replaced on Docker Desktop (EBUSY).
 
+## Versioned deploy & instant rollback
+
+For managed deployments, use **[`33pol-deploy.sh`](33pol-deploy.sh)** instead of raw `docker compose up --build`. It builds an immutable, version-tagged gateway image (`33pol-gateway:<git-sha>-<utc>`), snapshots the database before every rollout, health-gates the deploy, and **auto-rolls-back** if the gateway does not come up. Rolling back to a prior version is a seconds-long image swap — no rebuild.
+
+```bash
+cd deploy/docker
+./33pol-deploy.sh deploy                 # snapshot DB → build tagged image → roll out → verify
+./33pol-deploy.sh status                 # current/previous version + health
+./33pol-deploy.sh rollback               # instant swap to the previous version
+./33pol-deploy.sh versions               # list built image versions
+./33pol-deploy.sh history                # deploy/rollback audit log
+./33pol-deploy.sh backup                 # database snapshot on demand
+./33pol-deploy.sh restore <file>         # restore a database snapshot
+./33pol-deploy.sh help                   # all commands and flags
+```
+
+Key flags: `--version <v>` (explicit tag, e.g. a release semver), `--profiles observability|full`, `--to <v>` (rollback target), `--restore-db <file>` (restore DB during rollback), `--no-backup`, `--timeout <sec>`, `--yes`, `--dry-run`.
+
+**Rollback and the database:** the app image rolls back instantly, but EF Core migrations auto-apply on startup and are **not** auto-reverted. The pre-deploy snapshot is your schema rollback — for a release that changed the schema, roll back with `./33pol-deploy.sh rollback --to <prev> --restore-db <pre-deploy-snapshot>`. Keeping migrations backward-compatible (add nullable columns; avoid drop/rename in the same release the code needs) lets an image-only rollback always be safe.
+
+Runtime state (versions, snapshots, the generated image-pin override) lives in the gitignored `deploy/docker/.deploy/` directory.
+
 ### OpenRouter (cloud)
 
 **Recommended (no provider key in `.env`):**
