@@ -58,6 +58,28 @@ public sealed class InMemoryQuotaServiceTests
         service.CheckBeforeForward("t1", "m").IsAllowed.Should().BeFalse();
     }
 
+    [Fact]
+    public void CheckBeforeForward_AfterMonthRollover_ResetsUsage()
+    {
+        var now = new DateTimeOffset(2026, 1, 31, 12, 0, 0, TimeSpan.Zero);
+        var metrics = Substitute.For<IGatewayMetricsCollector>();
+        var options = Options.Create(new QuotaOptions
+        {
+            DefaultMonthlyTokenLimit = 10,
+            SoftLimitRatio = 0.9,
+            CommittedRequestIdRetentionLimit = 100_000,
+        });
+        var service = new InMemoryQuotaService(options, metrics, () => now);
+
+        service.CommitUsage("t1", "m", 10, "req-jan");
+        service.CheckBeforeForward("t1", "m").IsAllowed.Should().BeFalse(); // January exhausted
+
+        now = new DateTimeOffset(2026, 2, 1, 0, 0, 0, TimeSpan.Zero); // UTC month rollover
+
+        // A "monthly" limit must reset at the month boundary rather than blocking forever.
+        service.CheckBeforeForward("t1", "m").IsAllowed.Should().BeTrue();
+    }
+
     private static InMemoryQuotaService CreateService(
         long limit,
         int committedRequestRetentionLimit = 100_000)

@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Globalization;
 using Microsoft.Extensions.Options;
 using Pol33.Core.Abstractions;
 using Pol33.Core.Configuration;
@@ -8,12 +9,17 @@ namespace Pol33.Policy.Quotas;
 
 public sealed class InMemoryQuotaService(
     IOptions<QuotaOptions> options,
-    IGatewayMetricsCollector metricsCollector) : IQuotaService
+    IGatewayMetricsCollector metricsCollector,
+    Func<DateTimeOffset>? clock = null) : IQuotaService
 {
-    private readonly ConcurrentDictionary<string, long> _usage = new(StringComparer.OrdinalIgnoreCase);
+    // Usage is scoped to the current billing month so a "monthly" limit actually resets at the UTC
+    // month boundary. Previously usage accumulated for the process lifetime, so once a partition
+    // crossed the limit it was hard-blocked forever (until restart) regardless of month rollover.
+    private readonly ConcurrentDictionary<string, PeriodUsage> _usage = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _committedRequestIds = new(StringComparer.Ordinal);
     private readonly Queue<string> _committedRequestOrder = new();
     private readonly object _commitSync = new();
+    private readonly Func<DateTimeOffset> _clock = clock ?? (static () => DateTimeOffset.UtcNow);
 
     public QuotaCheckResult CheckBeforeForward(string partitionKey, string modelId)
     {
@@ -24,7 +30,11 @@ public sealed class InMemoryQuotaService(
             return QuotaCheckResult.Allowed;
         }
 
-        var used = _usage.GetOrAdd(partitionKey, static _ => 0);
+        var period = CurrentPeriod();
+        var used = _usage.TryGetValue(partitionKey, out var entry) && entry.Period == period
+            ? entry.Used
+            : 0;
+
         if (used >= limit)
         {
             metricsCollector.RecordQuotaRejection();
@@ -60,8 +70,16 @@ public sealed class InMemoryQuotaService(
             TrimCommittedRequestIdsIfNeeded();
         }
 
-        _usage.AddOrUpdate(partitionKey, totalTokens, (_, existing) => existing + totalTokens);
+        var period = CurrentPeriod();
+        _usage.AddOrUpdate(
+            partitionKey,
+            _ => new PeriodUsage(period, totalTokens),
+            (_, existing) => existing.Period == period
+                ? existing with { Used = existing.Used + totalTokens }
+                : new PeriodUsage(period, totalTokens));
     }
+
+    private string CurrentPeriod() => _clock().UtcDateTime.ToString("yyyy-MM", CultureInfo.InvariantCulture);
 
     private void TrimCommittedRequestIdsIfNeeded()
     {
@@ -71,4 +89,6 @@ public sealed class InMemoryQuotaService(
             _committedRequestIds.Remove(oldest);
         }
     }
+
+    private readonly record struct PeriodUsage(string Period, long Used);
 }
