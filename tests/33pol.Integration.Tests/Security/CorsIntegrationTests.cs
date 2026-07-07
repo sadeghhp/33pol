@@ -17,6 +17,9 @@ public sealed class CorsIntegrationTests
             configureSettings: settings =>
             {
                 settings["Gateway:Cors:AllowedOrigins:0"] = AllowedOrigin;
+                // No database is configured in this CORS-only test; opt into anonymous mode so the
+                // Production host starts (default behavior now fails closed).
+                settings["Gateway:Security:AllowAnonymous"] = "true";
             });
 
         using var request = new HttpRequestMessage(HttpMethod.Options, "/v1/chat/completions");
@@ -40,6 +43,9 @@ public sealed class CorsIntegrationTests
             configureSettings: settings =>
             {
                 settings["Gateway:Cors:AllowedOrigins:0"] = AllowedOrigin;
+                // No database is configured in this CORS-only test; opt into anonymous mode so the
+                // Production host starts (default behavior now fails closed).
+                settings["Gateway:Security:AllowAnonymous"] = "true";
             });
 
         using var request = new HttpRequestMessage(HttpMethod.Options, "/v1/chat/completions");

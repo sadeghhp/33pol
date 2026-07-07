@@ -51,4 +51,38 @@ public sealed class PostgresRepositoryIntegrationTests : IAsyncLifetime
         loaded.Should().NotBeNull();
         loaded!.Name.Should().Be("Docker Tenant");
     }
+
+    [Fact]
+    public async Task ApiKeyRepository_CreateWithScopes_RoundTripsJsonbOnPostgres()
+    {
+        _postgres.Should().NotBeNull();
+
+        await using var db = PersistenceTestDbContextFactory.CreateNpgsql(_postgres!.GetConnectionString());
+        await db.Database.MigrateAsync();
+
+        var now = DateTimeOffset.UtcNow;
+        var tenantId = Guid.NewGuid();
+        await new TenantRepository(db).CreateAsync(new TenantRecord(
+            tenantId, "scoped-tenant", "Scoped Tenant", null, null, true, now, now));
+
+        var keys = new ApiKeyRepository(db);
+        // Writing List<string> Scopes to the jsonb column throws NotSupportedException on Npgsql 8+
+        // unless EnableDynamicJson() is configured — this test guards that wiring.
+        var created = await keys.CreateAsync(new ApiKeyRecord(
+            Guid.NewGuid(),
+            tenantId,
+            KeyHash: "hash-value",
+            KeyPrefix: "sk-33pol-abc",
+            Role: ApiKeyRole.Both,
+            Scopes: new[] { "admin", "inference" },
+            ExpiresAt: null,
+            RevokedAt: null,
+            CreatedAt: now,
+            LastUsedAt: null));
+
+        var loaded = await keys.FindByPrefixAsync("sk-33pol-abc");
+        loaded.Should().NotBeNull();
+        loaded!.Id.Should().Be(created.Id);
+        loaded.Scopes.Should().BeEquivalentTo("admin", "inference");
+    }
 }

@@ -35,21 +35,24 @@ public sealed class ApiKeyValidator : IApiKeyValidator
         }
 
         var normalized = apiKey.Trim();
-        var prefix = ApiKeyHashing.CreatePrefix(normalized);
-        var cacheKey = $"api-key:{prefix}";
+        // Cache by the full key hash, never by the (low-entropy, semi-public) prefix. A prefix-keyed
+        // cache would let any key sharing a victim's 12-char prefix hit a warm success entry and be
+        // authenticated as that victim without the hash ever being verified.
+        var hash = ApiKeyHashing.Hash(normalized, _options.KeyPepper);
+        var cacheKey = $"api-key:{hash}";
 
         if (_cache.TryGetValue(cacheKey, out ApiKeyValidationResult? cached) && cached is not null)
         {
             return cached;
         }
 
+        var prefix = ApiKeyHashing.CreatePrefix(normalized);
         var record = await _apiKeys.FindByPrefixAsync(prefix, cancellationToken).ConfigureAwait(false);
         if (record is null)
         {
             return ApiKeyValidationResult.Fail(ApiKeyValidationFailure.Invalid);
         }
 
-        var hash = ApiKeyHashing.Hash(normalized, _options.KeyPepper);
         if (!ApiKeyHashing.FixedTimeEquals(record.KeyHash, hash))
         {
             return ApiKeyValidationResult.Fail(ApiKeyValidationFailure.Invalid);

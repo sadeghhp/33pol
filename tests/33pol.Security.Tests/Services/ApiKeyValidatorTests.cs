@@ -125,6 +125,29 @@ public sealed class ApiKeyValidatorTests
         (await sut.ValidateAsync(secret)).Failure.Should().Be(ApiKeyValidationFailure.Revoked);
     }
 
+    [Fact]
+    public async Task ValidateAsync_KeySharingPrefixWithWarmedKey_DoesNotImpersonate()
+    {
+        await using var db = CreateDb();
+        var tenantId = await SeedTenantAsync(db);
+
+        // Both secrets share the same 12-char prefix ("sk-33pol-aaa") but are otherwise different keys.
+        const string victimSecret = "sk-33pol-aaa-victim-admin";
+        const string attackerSecret = "sk-33pol-aaa-attacker-guess";
+        ApiKeyHashing.CreatePrefix(victimSecret).Should().Be(ApiKeyHashing.CreatePrefix(attackerSecret));
+
+        await SeedKeyAsync(db, tenantId, victimSecret, ApiKeyRole.Admin);
+
+        var sut = CreateValidator(db);
+        // Warm the cache with the victim's successful validation.
+        (await sut.ValidateAsync(victimSecret)).IsSuccess.Should().BeTrue();
+
+        // The attacker's key shares only the prefix; it must never resolve to the victim's cached result.
+        var result = await sut.ValidateAsync(attackerSecret);
+        result.IsSuccess.Should().BeFalse();
+        result.Failure.Should().Be(ApiKeyValidationFailure.Invalid);
+    }
+
     private static ApiKeyValidator CreateValidator(Pol33.Persistence.GatewayDbContext db) =>
         new(
             new ApiKeyRepository(db),

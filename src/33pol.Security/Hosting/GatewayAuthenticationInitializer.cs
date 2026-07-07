@@ -8,6 +8,7 @@ using Microsoft.Extensions.Options;
 using Pol33.Persistence;
 using Pol33.Persistence.Bootstrap;
 using Pol33.Persistence.DependencyInjection;
+using Pol33.Security.Configuration;
 using Pol33.Security.Hosting;
 
 namespace Pol33.Security.Hosting;
@@ -37,8 +38,27 @@ public sealed class GatewayAuthenticationInitializer : IHostedService
 
         if (string.IsNullOrWhiteSpace(connectionString))
         {
+            // Fail closed: running with authentication disabled is only acceptable for local
+            // development or when an operator has *explicitly* opted into anonymous mode. Otherwise a
+            // production deploy that ships the default (empty) connection string would silently leave
+            // every endpoint — including the admin control plane — open to anonymous callers.
+            var allowAnonymous = bool.TryParse(
+                configuration[$"{GatewaySecurityOptions.SectionName}:AllowAnonymous"],
+                out var anonymousOptIn) && anonymousOptIn;
+
+            if (!_environment.IsDevelopment() && !allowAnonymous)
+            {
+                throw new InvalidOperationException(
+                    "Gateway requires a configured database connection string "
+                    + $"('ConnectionStrings:{PersistenceServiceCollectionExtensions.ConnectionStringName}') "
+                    + $"outside Development. To intentionally run without authentication, set "
+                    + $"'{GatewaySecurityOptions.SectionName}:AllowAnonymous=true'.");
+            }
+
             authState.IsAuthenticationRequired = false;
-            _logger.LogInformation("Gateway API key authentication disabled (no database configured)");
+            _logger.LogWarning(
+                "Gateway API key authentication disabled (no database configured; {Reason})",
+                _environment.IsDevelopment() ? "Development" : "AllowAnonymous opt-in");
             return;
         }
 
