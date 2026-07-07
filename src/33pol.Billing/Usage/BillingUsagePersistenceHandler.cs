@@ -17,6 +17,7 @@ public sealed class BillingUsagePersistenceHandler(
     BillingBudgetWarningTracker warningTracker,
     BillingDailyUsageWebhookTracker dailyWebhookTracker,
     IApiKeyLastUsedTracker lastUsedTracker,
+    BudgetReservationLedger reservationLedger,
     IOptions<BillingOptions> billingOptions) : IUsagePersistenceHandler
 {
     public async ValueTask PersistAsync(UsageEvent usageEvent, CancellationToken cancellationToken = default)
@@ -71,6 +72,8 @@ public sealed class BillingUsagePersistenceHandler(
         var record = BillingEventFactory.FromUsageEvent(usageEvent, costs);
         if (!await billingEvents.TryAppendAsync(record, cancellationToken).ConfigureAwait(false))
         {
+            // Duplicate: the actual cost was already persisted for this request, so free its reservation.
+            reservationLedger.Release(usageEvent.RequestId);
             return null;
         }
 
@@ -105,6 +108,10 @@ public sealed class BillingUsagePersistenceHandler(
         }
 
         await rollups.UpsertRollupsAsync([merged], cancellationToken).ConfigureAwait(false);
+
+        // Actual cost is now in the rollups; release the in-flight reservation (no accounting gap
+        // between reservation and persisted spend).
+        reservationLedger.Release(usageEvent.RequestId);
 
         if (record.TenantId is not Guid tenantId)
         {

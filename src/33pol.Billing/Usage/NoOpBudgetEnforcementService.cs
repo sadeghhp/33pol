@@ -13,4 +13,16 @@ public sealed class NoOpBudgetEnforcementService : IBudgetEnforcementService
         _ = cancellationToken;
         return ValueTask.FromResult(BudgetCheckResult.Allowed);
     }
+
+    public ValueTask<BudgetCheckResult> TryReserveAsync(
+        string? tenantId,
+        string requestId,
+        string canonicalModelId,
+        long? requestedMaxTokens,
+        CancellationToken cancellationToken = default) =>
+        ValueTask.FromResult(BudgetCheckResult.Allowed);
+
+    public void ReleaseReservation(string requestId)
+    {
+    }
 }

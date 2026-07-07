@@ -713,7 +713,8 @@ public sealed class ModelRouterMiddlewareTests
         IGatewayAuthenticationState? authState = null,
         BulkheadRegistry? bulkhead = null,
         IUpstreamBearerTokenResolver? upstreamTokenResolver = null,
-        GatewayOptions? gatewayOptions = null)
+        GatewayOptions? gatewayOptions = null,
+        IBudgetEnforcementService? budgetEnforcement = null)
     {
         next ??= _ => Task.CompletedTask;
         registry ??= Substitute.For<IModelRegistry>();
@@ -770,7 +771,19 @@ public sealed class ModelRouterMiddlewareTests
             forwarder,
             gatewayOptionsWrapper,
             upstreamTokenResolver ?? Substitute.For<IUpstreamBearerTokenResolver>(),
+            budgetEnforcement ?? CreateAllowAllBudgetEnforcement(),
             NullLogger<ModelRouterMiddleware>.Instance);
+    }
+
+    private static IBudgetEnforcementService CreateAllowAllBudgetEnforcement()
+    {
+        var enforcement = Substitute.For<IBudgetEnforcementService>();
+        enforcement.CheckBeforeForwardAsync(Arg.Any<string?>(), Arg.Any<CancellationToken>())
+            .Returns(BudgetCheckResult.Allowed);
+        enforcement.TryReserveAsync(
+                Arg.Any<string?>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<long?>(), Arg.Any<CancellationToken>())
+            .Returns(BudgetCheckResult.Allowed);
+        return enforcement;
     }
 
     private static IServiceScopeFactory CreateGrantScopeFactory(IModelGrantService modelGrants)

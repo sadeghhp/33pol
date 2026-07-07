@@ -27,4 +27,26 @@ public sealed class InferenceRequestParserTests
 
         info.Stream.Should().BeFalse();
     }
+
+    [Theory]
+    [InlineData("""{"model":"gpt","max_tokens":256}""", 256)]
+    [InlineData("""{"model":"gpt","max_completion_tokens":512}""", 512)]
+    public async Task ParseAsync_MaxTokens_IsCaptured(string json, int expected)
+    {
+        await using var body = new MemoryStream(Encoding.UTF8.GetBytes(json));
+
+        var info = await InferenceRequestParser.ParseAsync(body, CancellationToken.None);
+
+        info.MaxTokens.Should().Be(expected);
+    }
+
+    [Fact]
+    public async Task ParseAsync_MaxTokensOmitted_IsNull()
+    {
+        await using var body = new MemoryStream(Encoding.UTF8.GetBytes("""{"model":"gpt"}"""));
+
+        var info = await InferenceRequestParser.ParseAsync(body, CancellationToken.None);
+
+        info.MaxTokens.Should().BeNull();
+    }
 }

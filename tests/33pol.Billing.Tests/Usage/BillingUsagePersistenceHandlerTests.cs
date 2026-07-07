@@ -32,6 +32,7 @@ public sealed class BillingUsagePersistenceHandlerTests
             warningTracker ?? new BillingBudgetWarningTracker(),
             dailyTracker ?? new BillingDailyUsageWebhookTracker(),
             lastUsedTracker ?? Substitute.For<IApiKeyLastUsedTracker>(),
+            new BudgetReservationLedger(TimeSpan.FromMinutes(2)),
             Options.Create(new BillingOptions { DefaultCurrency = "USD" }));
 
     [Fact]

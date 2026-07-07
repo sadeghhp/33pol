@@ -123,6 +123,7 @@ public sealed class BillingBudgetWarningTests
             new BillingBudgetWarningTracker(),
             new BillingDailyUsageWebhookTracker(),
             Substitute.For<IApiKeyLastUsedTracker>(),
+            new BudgetReservationLedger(TimeSpan.FromMinutes(2)),
             Options.Create(new BillingOptions()));
     }
 
@@ -143,12 +144,22 @@ internal static class BillingBudgetEnforcementServiceTestsHelper
 {
     internal static BillingBudgetEnforcementService CreateService(
         IBudgetRepository budgets,
-        IDailyUsageRollupRepository rollups)
+        IDailyUsageRollupRepository rollups,
+        BudgetReservationLedger? ledger = null,
+        IRateCardRepository? rateCards = null)
     {
         var services = new ServiceCollection();
         services.AddSingleton(budgets);
         services.AddSingleton(rollups);
+        if (rateCards is not null)
+        {
+            services.AddSingleton(rateCards);
+        }
+
         var provider = services.BuildServiceProvider();
-        return new BillingBudgetEnforcementService(provider.GetRequiredService<IServiceScopeFactory>());
+        return new BillingBudgetEnforcementService(
+            provider.GetRequiredService<IServiceScopeFactory>(),
+            ledger ?? new BudgetReservationLedger(TimeSpan.FromMinutes(2)),
+            Microsoft.Extensions.Options.Options.Create(new Pol33.Core.Configuration.BillingOptions()));
     }
 }

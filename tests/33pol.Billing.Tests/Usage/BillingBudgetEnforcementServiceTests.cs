@@ -90,11 +90,77 @@ public sealed class BillingBudgetEnforcementServiceTests
     }
 
     [Fact]
+    public async Task TryReserveAsync_ConcurrentReservationsExceedingBudget_SecondIsRejected()
+    {
+        var tenantId = Guid.NewGuid();
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+
+        var budgets = Substitute.For<IBudgetRepository>();
+        budgets.GetByTenantAsync(tenantId, Arg.Any<CancellationToken>())
+            .Returns([
+                new BudgetRecord(Guid.NewGuid(), tenantId, "Cap", 100m, "USD", 0.8m,
+                    HardStopEnabled: true, 1, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow),
+            ]);
+
+        var rollups = Substitute.For<IDailyUsageRollupRepository>();
+        rollups.GetRollupsAsync(Arg.Any<DateOnly?>(), Arg.Any<DateOnly?>(), tenantId, Arg.Any<CancellationToken>())
+            .Returns([]); // no persisted spend yet
+
+        // Rate card prices tokens so 4096 default tokens => an estimate near the whole budget.
+        var rateCards = Substitute.For<IRateCardRepository>();
+        rateCards.GetActiveForModelAsync("gpt-4o", Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>())
+            .Returns(new RateCardRecord(Guid.NewGuid(), "rc", "RC", "gpt-4o",
+                InputPricePerMillionTokens: 0m, OutputPricePerMillionTokens: 20_000m, "USD",
+                DateTimeOffset.UtcNow, null, true, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow));
+
+        var ledger = new BudgetReservationLedger(TimeSpan.FromMinutes(2));
+        var service = BillingBudgetEnforcementServiceTestsHelper.CreateService(budgets, rollups, ledger, rateCards);
+
+        // Each reservation estimates 4096 / 1e6 * 20000 = ~81.9 => two cannot both fit under 100.
+        var first = await service.TryReserveAsync(tenantId.ToString(), "req-1", "gpt-4o", null);
+        var second = await service.TryReserveAsync(tenantId.ToString(), "req-2", "gpt-4o", null);
+
+        first.IsAllowed.Should().BeTrue();
+        second.IsAllowed.Should().BeFalse();
+
+        // Releasing the first frees headroom for a subsequent request.
+        service.ReleaseReservation("req-1");
+        var third = await service.TryReserveAsync(tenantId.ToString(), "req-3", "gpt-4o", null);
+        third.IsAllowed.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task TryReserveAsync_NoRateCard_DoesNotBlock()
+    {
+        var tenantId = Guid.NewGuid();
+        var budgets = Substitute.For<IBudgetRepository>();
+        budgets.GetByTenantAsync(tenantId, Arg.Any<CancellationToken>())
+            .Returns([
+                new BudgetRecord(Guid.NewGuid(), tenantId, "Cap", 100m, "USD", 0.8m,
+                    HardStopEnabled: true, 1, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow),
+            ]);
+        var rollups = Substitute.For<IDailyUsageRollupRepository>();
+        rollups.GetRollupsAsync(Arg.Any<DateOnly?>(), Arg.Any<DateOnly?>(), tenantId, Arg.Any<CancellationToken>())
+            .Returns([]);
+        var rateCards = Substitute.For<IRateCardRepository>();
+        rateCards.GetActiveForModelAsync(Arg.Any<string>(), Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>())
+            .Returns((RateCardRecord?)null);
+
+        var service = BillingBudgetEnforcementServiceTestsHelper.CreateService(
+            budgets, rollups, new BudgetReservationLedger(TimeSpan.FromMinutes(2)), rateCards);
+
+        (await service.TryReserveAsync(tenantId.ToString(), "req-1", "unpriced", 4096)).IsAllowed.Should().BeTrue();
+    }
+
+    [Fact]
     public async Task CheckBeforeForwardAsync_WhenRepositoriesNotRegistered_ReturnsAllowed()
     {
         var services = new ServiceCollection();
         var provider = services.BuildServiceProvider();
-        var service = new BillingBudgetEnforcementService(provider.GetRequiredService<IServiceScopeFactory>());
+        var service = new BillingBudgetEnforcementService(
+            provider.GetRequiredService<IServiceScopeFactory>(),
+            new BudgetReservationLedger(TimeSpan.FromMinutes(2)),
+            Microsoft.Extensions.Options.Options.Create(new Pol33.Core.Configuration.BillingOptions()));
 
         var result = await service.CheckBeforeForwardAsync(Guid.NewGuid().ToString());
 

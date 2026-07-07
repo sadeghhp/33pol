@@ -141,6 +141,7 @@ public sealed class BillingUsageBatchPersistenceHandlerTests
         services.AddSingleton<BillingBudgetWarningTracker>();
         services.AddSingleton<BillingDailyUsageWebhookTracker>();
         services.AddSingleton<IApiKeyLastUsedTracker>(Substitute.For<IApiKeyLastUsedTracker>());
+        services.AddSingleton(new BudgetReservationLedger(TimeSpan.FromMinutes(2)));
         services.AddSingleton(Options.Create(new BillingOptions
         {
             UsageWriterBatchSize = batchSize,

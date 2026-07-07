@@ -23,4 +23,17 @@ public sealed class BillingOptions
 
     /// <summary>How often the background loop checks whether to send scheduled daily webhooks.</summary>
     public int DailyWebhookPollIntervalSeconds { get; set; } = 900;
+
+    /// <summary>
+    /// Assumed max output tokens when a request does not specify <c>max_tokens</c>, used to estimate
+    /// the reserved cost for hard-stop budget enforcement.
+    /// </summary>
+    public int BudgetReservationDefaultMaxTokens { get; set; } = 4096;
+
+    /// <summary>
+    /// How long a budget reservation is held before it is reclaimed if the request never persists
+    /// usage (e.g. an upstream error). Prevents leaked reservations from permanently reducing a
+    /// tenant's available budget.
+    /// </summary>
+    public int BudgetReservationTtlSeconds { get; set; } = 120;
 }

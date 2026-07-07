@@ -28,6 +28,12 @@ public static class BillingServiceCollectionExtensions
         services.AddHttpClient(nameof(BillingWebhookDispatcher));
         services.AddSingleton<IRateCardCostCalculator, RateCardCostCalculator>();
         services.AddSingleton<IDailyUsageRollupAggregator, DailyUsageRollupAggregator>();
+        services.AddSingleton<BudgetReservationLedger>(sp =>
+        {
+            var billingOptions = sp.GetRequiredService<IOptions<BillingOptions>>().Value;
+            return new BudgetReservationLedger(
+                TimeSpan.FromSeconds(Math.Max(1, billingOptions.BudgetReservationTtlSeconds)));
+        });
         services.AddSingleton<BillingBudgetWarningTracker>(sp =>
         {
             var billingOptions = sp.GetRequiredService<IOptions<BillingOptions>>().Value;

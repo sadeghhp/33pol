@@ -40,6 +40,7 @@ public sealed class ModelRouterMiddleware
     private readonly IInferenceHttpForwarder _forwarder;
     private readonly TimeSpan _forwardTimeout;
     private readonly IUpstreamBearerTokenResolver _upstreamBearerTokenResolver;
+    private readonly IBudgetEnforcementService _budgetEnforcement;
     private readonly ILogger<ModelRouterMiddleware> _logger;
 
     public ModelRouterMiddleware(
@@ -60,6 +61,7 @@ public sealed class ModelRouterMiddleware
         IInferenceHttpForwarder forwarder,
         IOptions<GatewayOptions> options,
         IUpstreamBearerTokenResolver upstreamBearerTokenResolver,
+        IBudgetEnforcementService budgetEnforcement,
         ILogger<ModelRouterMiddleware> logger)
     {
         _next = next;
@@ -79,6 +81,7 @@ public sealed class ModelRouterMiddleware
         _forwarder = forwarder;
         _forwardTimeout = TimeSpan.FromSeconds(options.Value.Resilience.ForwardTimeoutSeconds);
         _upstreamBearerTokenResolver = upstreamBearerTokenResolver;
+        _budgetEnforcement = budgetEnforcement;
         _logger = logger;
     }
 
@@ -252,6 +255,25 @@ public sealed class ModelRouterMiddleware
                     _errors.Write(
                         GatewayErrorCode.UpstreamError,
                         message: "Upstream auth token not configured for this model."),
+                    context.RequestAborted).ConfigureAwait(false);
+                return;
+            }
+
+            // Reserve the estimated max cost against hard-stop budgets before forwarding, so concurrent
+            // requests (whose actual cost is unknown until the response returns) cannot collectively
+            // overshoot a hard cap. Released once the actual cost is persisted (or via TTL on failure).
+            var budgetReservation = await _budgetEnforcement.TryReserveAsync(
+                usageTenant?.TenantId,
+                requestId,
+                modelConfig.Id,
+                requestInfo.MaxTokens,
+                context.RequestAborted).ConfigureAwait(false);
+            if (!budgetReservation.IsAllowed)
+            {
+                inferenceScope.SetOutcome(false, "budget_exceeded");
+                _metricsCollector.RecordForwardAttempt(modelConfig.Id, "budget_exceeded");
+                await context.WriteGatewayErrorAsync(
+                    _errors.Write(GatewayErrorCode.QuotaExceeded),
                     context.RequestAborted).ConfigureAwait(false);
                 return;
             }
