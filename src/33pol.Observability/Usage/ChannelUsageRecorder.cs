@@ -16,7 +16,9 @@ public sealed class ChannelUsageRecorder : IUsageRecorder, IHostedService
     private readonly Channel<UsageEvent> _channel = Channel.CreateBounded<UsageEvent>(
         new BoundedChannelOptions(ChannelCapacity)
         {
-            FullMode = BoundedChannelFullMode.DropOldest,
+            // Wait (not DropOldest): a full channel makes TryWrite report failure so the drop is
+            // explicit and metered, instead of silently evicting the oldest unpersisted billing event.
+            FullMode = BoundedChannelFullMode.Wait,
             SingleReader = true,
             SingleWriter = false,
         });
@@ -46,26 +48,16 @@ public sealed class ChannelUsageRecorder : IUsageRecorder, IHostedService
             usageEvent.PromptTokens,
             usageEvent.CompletionTokens);
 
-        var wasFull = _channel.Reader.CanCount && _channel.Reader.Count >= ChannelCapacity;
-
-        if (!_channel.Writer.TryWrite(usageEvent))
+        if (_channel.Writer.TryWrite(usageEvent))
         {
-            GatewayMeters.UsageWriterDropped.Add(1);
-            _logger.LogWarning("Usage event dropped for request {RequestId}", usageEvent.RequestId);
+            GatewayMeters.UsageWriterQueueDepth.Add(1);
             return;
         }
 
-        if (wasFull)
-        {
-            GatewayMeters.UsageWriterDropped.Add(1);
-            _logger.LogWarning(
-                "Usage queue saturated; dropped oldest event while enqueueing {RequestId}",
-                usageEvent.RequestId);
-        }
-        else
-        {
-            GatewayMeters.UsageWriterQueueDepth.Add(1);
-        }
+        // Channel saturated: in Wait mode TryWrite reports failure rather than evicting, so this drop
+        // is accurate and counted (the previous DropOldest path lost the oldest event silently).
+        GatewayMeters.UsageWriterDropped.Add(1);
+        _logger.LogWarning("Usage event dropped (queue saturated) for request {RequestId}", usageEvent.RequestId);
     }
 
     public Task StartAsync(CancellationToken cancellationToken)
@@ -89,13 +81,26 @@ public sealed class ChannelUsageRecorder : IUsageRecorder, IHostedService
         {
             GatewayMeters.UsageWriterQueueDepth.Add(-1);
 
-            var totalTokens = usage.PromptTokens + usage.CompletionTokens;
-            var partition = usage.TenantId ?? "anonymous";
-            _quotaService.CommitUsage(partition, usage.ModelId, totalTokens, usage.RequestId);
+            try
+            {
+                var totalTokens = usage.PromptTokens + usage.CompletionTokens;
+                var partition = usage.TenantId ?? "anonymous";
+                _quotaService.CommitUsage(partition, usage.ModelId, totalTokens, usage.RequestId);
 
-            await using var scope = _scopeFactory.CreateAsyncScope();
-            var persistence = scope.ServiceProvider.GetRequiredService<IUsagePersistenceHandler>();
-            await persistence.PersistAsync(usage, cancellationToken).ConfigureAwait(false);
+                await using var scope = _scopeFactory.CreateAsyncScope();
+                var persistence = scope.ServiceProvider.GetRequiredService<IUsagePersistenceHandler>();
+                await persistence.PersistAsync(usage, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw; // shutdown requested: stop draining
+            }
+            catch (Exception ex)
+            {
+                // A single failing event must not tear down the writer loop (which would silently stop
+                // all usage persistence until process restart). Log and continue to the next event.
+                _logger.LogError(ex, "Failed to persist usage event for request {RequestId}", usage.RequestId);
+            }
         }
     }
 }

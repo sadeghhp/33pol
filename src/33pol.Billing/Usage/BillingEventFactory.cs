@@ -24,6 +24,12 @@ public static class BillingEventFactory
             ? parsedApiKeyId
             : null;
 
+        // Guard against an unset timestamp: a default(DateTimeOffset) would otherwise record the event
+        // and its daily rollup under year 0001, hiding it from current-period usage and budget totals.
+        var recordedAt = usageEvent.TimestampUtc == default
+            ? DateTimeOffset.UtcNow
+            : usageEvent.TimestampUtc;
+
         return new BillingEventRecord(
             billingEventId ?? Guid.NewGuid(),
             usageEvent.RequestId,
@@ -37,6 +43,6 @@ public static class BillingEventFactory
             costs?.OutputCost,
             costs?.TotalCost,
             usageEvent.DurationMs,
-            usageEvent.TimestampUtc);
+            recordedAt);
     }
 }

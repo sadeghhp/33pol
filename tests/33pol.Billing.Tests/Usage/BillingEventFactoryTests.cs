@@ -53,6 +53,40 @@ public sealed class BillingEventFactoryTests
     }
 
     [Fact]
+    public void FromUsageEvent_DefaultTimestamp_NormalizesToUtcNow()
+    {
+        var usage = new UsageEvent
+        {
+            RequestId = "req_no_timestamp",
+            ModelId = "gpt-4o",
+            PromptTokens = 1,
+            CompletionTokens = 1,
+            // TimestampUtc left unset (default(DateTimeOffset) => year 0001).
+        };
+
+        var billingEvent = BillingEventFactory.FromUsageEvent(usage);
+
+        billingEvent.RecordedAt.Year.Should().BeGreaterThan(1);
+        billingEvent.RecordedAt.Should().BeCloseTo(DateTimeOffset.UtcNow, TimeSpan.FromMinutes(1));
+    }
+
+    [Fact]
+    public void FromUsageEvent_ExplicitTimestamp_IsPreserved()
+    {
+        var timestamp = new DateTimeOffset(2026, 3, 1, 12, 0, 0, TimeSpan.Zero);
+        var usage = new UsageEvent
+        {
+            RequestId = "req_with_timestamp",
+            ModelId = "gpt-4o",
+            PromptTokens = 1,
+            CompletionTokens = 1,
+            TimestampUtc = timestamp,
+        };
+
+        BillingEventFactory.FromUsageEvent(usage).RecordedAt.Should().Be(timestamp);
+    }
+
+    [Fact]
     public void FromUsageEvent_EmptyRequestId_Throws()
     {
         var invalid = new UsageEvent
