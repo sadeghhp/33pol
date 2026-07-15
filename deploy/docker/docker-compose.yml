@@ -1,5 +1,9 @@
 # 33pol local stack — gateway, Postgres, Prometheus, Grafana, mock upstream (WP5.4).
 # Usage: repo root `docker compose up -d --build` or see deploy/docker/README.md
+#
+# Local-dev defaults below (POSTGRES_PASSWORD, GATEWAY_ADMIN_API_KEY, GATEWAY_KEY_PEPPER)
+# let `docker compose up` work without a .env file. Override via .env for non-local deploys.
+# Admin UI sign-in key (default): sk-33pol-4aa283ddb877adaccc60cb53314fa15cfd41f01084df064c
 
 name: 33pol
 
@@ -9,7 +13,7 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-gateway}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set (see deploy/docker/.env.example)}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ysHAsRWXYv6pGtd3tANleZKc2Bf6I0Z}
       POSTGRES_DB: ${POSTGRES_DB:-gateway}
     volumes:
       - postgres-data:/var/lib/postgresql/data
@@ -57,9 +61,12 @@ services:
       ASPNETCORE_URLS: http://+:8080
       ConnectionStrings__GatewayDb: >-
         Host=postgres;Port=5432;Database=${POSTGRES_DB:-gateway};
-        Username=${POSTGRES_USER:-gateway};Password=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+        Username=${POSTGRES_USER:-gateway};Password=${POSTGRES_PASSWORD:-ysHAsRWXYv6pGtd3tANleZKc2Bf6I0Z}
       Gateway__ModelsConfigPath: /app/config/models.json
-      Gateway__Bootstrap__AdminApiKey: ${GATEWAY_ADMIN_API_KEY:?GATEWAY_ADMIN_API_KEY must be set (see deploy/docker/.env.example)}
+      Gateway__Bootstrap__AdminApiKey: ${GATEWAY_ADMIN_API_KEY:-sk-33pol-4aa283ddb877adaccc60cb53314fa15cfd41f01084df064c}
+      # Production requires GATEWAY_KEY_PEPPER (>=16 chars, not dev-pepper-change-me). Development may omit it.
+      Gateway__Security__KeyPepper: ${GATEWAY_KEY_PEPPER:-oJHJdzSvNdVFbFd8fDrexL3bf6n9ggW}
+      Gateway__Bootstrap__KeyPepper: ${GATEWAY_KEY_PEPPER:-oJHJdzSvNdVFbFd8fDrexL3bf6n9ggW}
       Gateway__OperatorConsole__Enabled: "false"
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}

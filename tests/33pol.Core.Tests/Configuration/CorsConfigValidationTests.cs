@@ -44,6 +44,25 @@ public sealed class CorsConfigValidationTests
     }
 
     [Fact]
+    public void TryValidate_GithubPagesWildcard_ReturnsNormalized()
+    {
+        CorsConfigValidation.TryValidate(["https://*.github.io/"], out var error, out var normalized)
+            .Should()
+            .BeTrue();
+        error.Should().BeNull();
+        normalized.Should().Equal("https://*.github.io");
+    }
+
+    [Fact]
+    public void TryValidate_InvalidWildcardPattern_ReturnsFalse()
+    {
+        CorsConfigValidation.TryValidate(["https://*"], out var error, out _)
+            .Should()
+            .BeFalse();
+        error.Should().Contain("subdomain pattern");
+    }
+
+    [Fact]
     public void TryValidate_Path_ReturnsFalse()
     {
         CorsConfigValidation.TryValidate(["https://app.example.com/admin"], out var error, out _)

@@ -36,7 +36,7 @@ public sealed class GatewayCorsPolicyProvider(
         var allowedOrigins = optionsMonitor.CurrentValue.Cors.GetNormalizedOrigins();
         if (allowedOrigins.Length > 0)
         {
-            builder.WithOrigins(allowedOrigins)
+            builder.SetIsOriginAllowed(origin => CorsOriginMatcher.IsOriginAllowed(origin, allowedOrigins))
                 .AllowAnyHeader()
                 .AllowAnyMethod()
                 .SetPreflightMaxAge(TimeSpan.FromSeconds(PreflightMaxAgeSeconds));

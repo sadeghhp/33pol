@@ -50,8 +50,18 @@ public static class CorsConfigValidation
 
             if (trimmed == "*")
             {
-                error = "Wildcard origin '*' is not allowed; list exact origins.";
+                error = "Wildcard origin '*' is not allowed; list exact origins or subdomain patterns (e.g. https://*.github.io).";
                 return false;
+            }
+
+            if (trimmed.Contains('*'))
+            {
+                if (!TryValidateWildcardOrigin(trimmed, i, out error))
+                {
+                    return false;
+                }
+
+                continue;
             }
 
             if (!Uri.TryCreate(trimmed, UriKind.Absolute, out var uri) ||
@@ -81,6 +91,56 @@ public static class CorsConfigValidation
         }
 
         normalized = GatewayCorsOptions.NormalizeOrigins(list);
+        return true;
+    }
+
+    private static bool TryValidateWildcardOrigin(string trimmed, int index, out string? error)
+    {
+        error = null;
+
+        const string delimiter = "://";
+        var delimiterIndex = trimmed.IndexOf(delimiter, StringComparison.Ordinal);
+        if (delimiterIndex < 0)
+        {
+            error = $"allowedOrigins[{index}] wildcard pattern must be an absolute http or https origin pattern.";
+            return false;
+        }
+
+        var scheme = trimmed[..delimiterIndex];
+        if (!string.Equals(scheme, Uri.UriSchemeHttp, StringComparison.Ordinal) &&
+            !string.Equals(scheme, Uri.UriSchemeHttps, StringComparison.Ordinal))
+        {
+            error = $"allowedOrigins[{index}] must use http or https scheme.";
+            return false;
+        }
+
+        var hostPattern = trimmed[(delimiterIndex + delimiter.Length)..].TrimEnd('/');
+        if (!hostPattern.StartsWith("*.", StringComparison.Ordinal))
+        {
+            error =
+                $"allowedOrigins[{index}] wildcard must be a subdomain pattern (e.g. https://*.github.io).";
+            return false;
+        }
+
+        if (hostPattern.Length > 1 && hostPattern.IndexOf('*', 1) >= 0)
+        {
+            error = $"allowedOrigins[{index}] supports only one subdomain wildcard (*.suffix).";
+            return false;
+        }
+
+        var suffix = hostPattern[2..];
+        if (suffix.Length == 0 || suffix.Contains('*') || suffix.Contains('/'))
+        {
+            error = $"allowedOrigins[{index}] wildcard suffix is invalid.";
+            return false;
+        }
+
+        if (!suffix.Contains('.'))
+        {
+            error = $"allowedOrigins[{index}] wildcard suffix must be a valid domain.";
+            return false;
+        }
+
         return true;
     }
 }

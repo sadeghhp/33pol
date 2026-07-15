@@ -6,7 +6,7 @@
 #   cp docker-compose.cors.override.example.yml docker-compose.override.yml
 #
 # Then in .env:
-#   GATEWAY_CORS_ALLOWED_ORIGIN_0=https://sadeghhp.github.io
+#   GATEWAY_CORS_ALLOWED_ORIGIN_0=https://*.github.io
 #   GATEWAY_CORS_ALLOWED_ORIGIN_1=http://localhost:5173
 
 services:
