@@ -13,7 +13,7 @@
   <script defer src="admin-icons.js?v=7"></script>
   <script defer src="admin-errors.js?v=7"></script>
   <script defer src="admin-store.js?v=8"></script>
-  <script defer src="admin-app.js?v=15"></script>
+  <script defer src="admin-app.js?v=16"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.9/dist/cdn.min.js"></script>
 </head>
 <body x-data="adminApp()" x-init="init()" x-cloak :class="{ dark: darkMode }" @keydown.window="onModalKeydown($event)">
@@ -608,6 +608,35 @@
                   <button type="button" class="action secondary" @click="loadRateLimits()" :disabled="isLoading('settings')">Reload</button>
                 </div>
                 <p class="field-error" x-show="rateLimitFieldError" x-text="rateLimitFieldError"></p>
+              </div>
+            </template>
+          </div>
+          <div class="card cors-card" style="margin-top: 1rem">
+            <h3>CORS allowed origins</h3>
+            <p class="hint">
+              Browser SPA origins that may call <code>/v1/*</code> in Production (exact match: no path, no trailing slash;
+              <code>localhost</code> ≠ <code>127.0.0.1</code>). Changes are written to appsettings and applied without restart.
+              For Docker durability across image redeploys, also set <code>GATEWAY_CORS_ALLOWED_ORIGIN_*</code> via
+              <code>docker-compose.cors.override.example.yml</code>.
+            </p>
+            <p class="hint" x-show="corsLoadError" x-text="corsLoadError"></p>
+            <p class="hint" x-show="corsOrigins === null && !corsLoadError && isLoading('settings')">Loading CORS settings…</p>
+            <template x-if="corsOrigins !== null">
+              <div>
+                <template x-for="(row, index) in corsOrigins" :key="index">
+                  <div class="toolbar" style="margin-top: 0.5rem; gap: 0.5rem; align-items: center">
+                    <label style="flex: 1">Origin
+                      <input type="text" x-model="corsOrigins[index]" placeholder="https://sadeghhp.github.io" style="width: 100%" />
+                    </label>
+                    <button type="button" class="action secondary" @click="removeCorsOriginRow(index)">Remove</button>
+                  </div>
+                </template>
+                <div class="toolbar" style="margin-top: 0.75rem">
+                  <button type="button" class="action secondary" @click="addCorsOriginRow()">Add origin</button>
+                  <button type="button" class="action" @click="saveCors()" :disabled="isLoading('settings')">Save CORS</button>
+                  <button type="button" class="action secondary" @click="loadCors()" :disabled="isLoading('settings')">Reload</button>
+                </div>
+                <p class="field-error" x-show="corsFieldError" x-text="corsFieldError"></p>
               </div>
             </template>
           </div>

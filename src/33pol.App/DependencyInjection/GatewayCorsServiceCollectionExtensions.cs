@@ -1,5 +1,6 @@
+using Microsoft.AspNetCore.Cors.Infrastructure;
 using Microsoft.Extensions.Hosting;
-using Pol33.Core.Configuration;
+using Pol33.App.Cors;
 
 namespace Pol33.App.DependencyInjection;
 
@@ -10,36 +11,11 @@ public static class GatewayCorsServiceCollectionExtensions
         IConfiguration configuration,
         IHostEnvironment environment)
     {
-        var corsOptions = configuration
-            .GetSection($"{GatewayOptions.SectionName}:{GatewayCorsOptions.SectionName}")
-            .Get<GatewayCorsOptions>() ?? new GatewayCorsOptions();
+        _ = configuration;
+        _ = environment;
 
-        var allowedOrigins = corsOptions.GetNormalizedOrigins();
-
-        services.AddCors(options =>
-        {
-            options.AddDefaultPolicy(policy =>
-            {
-                if (environment.IsDevelopment())
-                {
-                    policy.AllowAnyOrigin()
-                        .AllowAnyHeader()
-                        .AllowAnyMethod();
-                    return;
-                }
-
-                if (allowedOrigins.Length > 0)
-                {
-                    policy.WithOrigins(allowedOrigins)
-                        .AllowAnyHeader()
-                        .AllowAnyMethod();
-                    return;
-                }
-
-                policy.SetIsOriginAllowed(_ => false);
-            });
-        });
-
+        services.AddCors();
+        services.AddSingleton<ICorsPolicyProvider, GatewayCorsPolicyProvider>();
         services.AddHostedService<GatewayCorsStartupWarningHostedService>();
 
         return services;

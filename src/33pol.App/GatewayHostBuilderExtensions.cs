@@ -54,6 +54,7 @@ public static class GatewayHostBuilderExtensions
         app.MapHealthChecks("/health/live");
         app.MapConfigAdminEndpoints();
         app.MapAdminRateLimitEndpoints();
+        app.MapAdminCorsEndpoints();
         app.MapAdminKeyEndpoints();
         app.MapAdminModelGrantEndpoints();
         app.MapAdminControlPlaneEndpoints();

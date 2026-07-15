@@ -52,6 +52,9 @@ function adminApp() {
     rateLimitPlanRows: [],
     rateLimitFieldError: '',
     rateLimitsLoadError: '',
+    corsOrigins: null,
+    corsFieldError: '',
+    corsLoadError: '',
     healthLive: null,
     healthReady: null,
     confirmDialog: null,
@@ -411,7 +414,12 @@ function adminApp() {
 
     async loadSettings() {
       await this.runApi('settings', 'Loading settings…', async () => {
-        const tasks = [this.fetchTenantGrants(), this.fetchConfigStatus(), this.loadRateLimits()];
+        const tasks = [
+          this.fetchTenantGrants(),
+          this.fetchConfigStatus(),
+          this.loadRateLimits(),
+          this.loadCors()
+        ];
         if (!this.models?.length) tasks.unshift(this.fetchModels());
         await Promise.all(tasks);
       });
@@ -928,6 +936,72 @@ function adminApp() {
           await this.loadRateLimits();
         } catch (e) {
           this.rateLimitFieldError = e.message || 'Failed to save rate limits.';
+          throw e;
+        }
+      }, { localOnly: true });
+    },
+
+    applyCorsData(data) {
+      if (!data) {
+        this.corsOrigins = null;
+        return;
+      }
+      const origins = data.allowedOrigins || data.AllowedOrigins || [];
+      this.corsOrigins = Array.isArray(origins) ? origins.map((o) => String(o ?? '')) : [];
+      this.corsFieldError = '';
+      this.corsLoadError = '';
+    },
+
+    async fetchCors() {
+      const data = await this.apiJson('/admin/api/cors');
+      this.applyCorsData(data);
+    },
+
+    async loadCors() {
+      this.corsLoadError = '';
+      try {
+        await this.fetchCors();
+      } catch (e) {
+        this.corsOrigins = null;
+        if (String(e.title || '').startsWith('404') || e.message?.includes('404') || /not found/i.test(e.message || '')) {
+          this.corsLoadError =
+            'CORS API is not available on this gateway (rebuild/restart the server with the latest image).';
+        } else if (e.title === 'Authentication failed' || e.message?.includes('401')) {
+          this.corsLoadError = 'Connect with an Admin API key to load CORS settings.';
+        } else {
+          this.corsLoadError = e.message || 'Could not load CORS settings.';
+        }
+      }
+    },
+
+    addCorsOriginRow() {
+      this.corsOrigins = [...(this.corsOrigins || []), ''];
+    },
+
+    removeCorsOriginRow(index) {
+      this.corsOrigins = (this.corsOrigins || []).filter((_, i) => i !== index);
+    },
+
+    buildCorsPayload() {
+      return {
+        allowedOrigins: (this.corsOrigins || [])
+          .map((o) => String(o || '').trim())
+          .filter((o) => o.length > 0)
+      };
+    },
+
+    async saveCors() {
+      await this.runApi('settings', 'Saving CORS…', async () => {
+        this.corsFieldError = '';
+        try {
+          const body = await this.apiJson('/admin/api/cors', {
+            method: 'PUT',
+            body: JSON.stringify(this.buildCorsPayload())
+          });
+          this.toast(body?.message || 'CORS origins saved.');
+          await this.loadCors();
+        } catch (e) {
+          this.corsFieldError = e.message || 'Failed to save CORS origins.';
           throw e;
         }
       }, { localOnly: true });

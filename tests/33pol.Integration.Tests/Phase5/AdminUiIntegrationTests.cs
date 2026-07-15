@@ -26,6 +26,8 @@ public sealed class AdminUiIntegrationTests
         body.Should().Contain("usageFilterApiKeyId");
         body.Should().Contain("Assignee");
         body.Should().Contain("Tenant model access");
+        body.Should().Contain("CORS allowed origins");
+        body.Should().Contain("cors-card");
         body.Should().Contain("testModel(");
         body.Should().Contain("model-test-title");
         body.Should().Contain("Hello world");
@@ -121,6 +123,9 @@ public sealed class AdminUiIntegrationTests
         body.Should().Contain("viewKeyUsage");
         body.Should().Contain("async fetchBackends()");
         body.Should().Contain("async loadSettings()");
+        body.Should().Contain("async loadCors()");
+        body.Should().Contain("async saveCors()");
+        body.Should().Contain("/admin/api/cors");
         body.Should().MatchRegex("async revokeKeyConfirmed\\(\\)[\\s\\S]*?await this\\.fetchKeys\\(\\)");
         body.Should().MatchRegex("async removeModel\\(id\\)[\\s\\S]*?await this\\.fetchModels\\(\\)");
         body.Should().Contain("testModel");

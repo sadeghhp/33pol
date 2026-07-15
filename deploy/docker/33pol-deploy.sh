@@ -45,8 +45,10 @@ HEALTH_TIMEOUT=120
 KEEP=5
 ASSUME_YES=false
 DRY_RUN=false
+INTERACTIVE=false
 ROLLBACK_TO=""
 RESTORE_DB_FILE=""
+CHOICE_INDEX=0   # set by choose() to the 1-based index of the selection
 
 # --- Pretty logging ---------------------------------------------------------
 if [[ -t 1 ]]; then

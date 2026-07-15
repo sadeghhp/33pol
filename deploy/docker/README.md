@@ -152,20 +152,30 @@ docker compose up -d --build
 
 | `ASPNETCORE_ENVIRONMENT` | Configuration |
 |--------------------------|---------------|
-| **Development** (default in `.env.example`) | Any browser origin allowed; no `GATEWAY_CORS_ALLOWED_ORIGIN_*` needed. |
-| **Production** | Set `GATEWAY_CORS_ALLOWED_ORIGIN_0` (and `_1`, `_2` if needed) to the SPA origin, e.g. `http://localhost:5173`. Must match the browser address bar exactly (`localhost` ≠ `127.0.0.1`). |
+| **Development** (default in `.env.example`) | Any browser origin allowed; no origin list needed. |
+| **Production** | Allowlist exact SPA origins (no path, no trailing slash). `localhost` ≠ `127.0.0.1`. |
 
-Verify after changing `.env`:
+**Preferred:** Admin UI **Settings → CORS**, or `GET`/`PUT` `/admin/api/cors` (writes `Gateway:Cors:AllowedOrigins` in appsettings and hot-reloads).
+
+**Compose env (optional):** Do not leave empty `GATEWAY_CORS_ALLOWED_ORIGIN_*` vars in compose — empty env slots override appsettings. Copy [`docker-compose.cors.override.example.yml`](docker-compose.cors.override.example.yml) to `docker-compose.override.yml` (or merge) and set for example:
+
+```bash
+ASPNETCORE_ENVIRONMENT=Production
+GATEWAY_CORS_ALLOWED_ORIGIN_0=https://sadeghhp.github.io
+GATEWAY_CORS_ALLOWED_ORIGIN_1=http://localhost:5173
+```
+
+Verify after changing config / restarting the gateway:
 
 ```bash
 docker compose up -d gateway
 curl -i -X OPTIONS "http://localhost:${GATEWAY_PORT:-8080}/v1/chat/completions" \
-  -H "Origin: http://localhost:5173" \
+  -H "Origin: https://sadeghhp.github.io" \
   -H "Access-Control-Request-Method: POST" \
   -H "Access-Control-Request-Headers: authorization,content-type"
 ```
 
-Production with a configured origin should return `Access-Control-Allow-Origin`. See [docs/security.md](../../docs/security.md).
+Production with a configured origin should return `Access-Control-Allow-Origin`. See [docs/security.md](../../docs/security.md) and [docs/runbooks/cors-admin.md](../../docs/runbooks/cors-admin.md).
 
 ## Stop and reset
 

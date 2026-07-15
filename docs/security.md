@@ -23,7 +23,7 @@ Cross-Origin Resource Sharing applies only to **browser** clients calling the ga
 | Environment | Policy |
 |-------------|--------|
 | **Development** | `AllowAnyOrigin` — browser SPAs need no origin list. |
-| **Production / Staging** | Only origins in `Gateway:Cors:AllowedOrigins` are allowed. Empty list blocks all cross-origin browser traffic (startup logs a warning). |
+| **Production / Staging** | Only origins in `Gateway:Cors:AllowedOrigins` are allowed. Empty list blocks all cross-origin browser traffic (startup logs a warning). Preflight responses include `Access-Control-Max-Age: 86400`. |
 
 Do not use `AllowAnyOrigin` in production. The built-in admin UI (`/admin`) is same-origin and does not need CORS configuration.
 
@@ -37,21 +37,25 @@ Do not use `AllowAnyOrigin` in production. The built-in admin UI (`/admin`) is s
 
 | Mechanism | Example |
 |-----------|---------|
-| `appsettings` | `Gateway:Cors:AllowedOrigins: ["http://localhost:5173"]` |
-| Environment | `Gateway__Cors__AllowedOrigins__0=http://localhost:5173` |
-| Docker Compose (`.env`) | `GATEWAY_CORS_ALLOWED_ORIGIN_0=http://localhost:5173` (with `ASPNETCORE_ENVIRONMENT=Production`) |
+| Admin UI | **Settings → CORS allowed origins** |
+| Admin API | `GET` / `PUT` `/admin/api/cors` — see [runbooks/cors-admin.md](runbooks/cors-admin.md) |
+| `appsettings` | `Gateway:Cors:AllowedOrigins: ["https://sadeghhp.github.io"]` |
+| Environment | `Gateway__Cors__AllowedOrigins__0=https://sadeghhp.github.io` |
+| Docker Compose (optional override) | Copy `deploy/docker/docker-compose.cors.override.example.yml` and set `GATEWAY_CORS_ALLOWED_ORIGIN_0=…` |
 | Helm | `gateway.cors.allowedOrigins` in `values.yaml` |
+
+Changes via admin UI/API write appsettings and **hot-reload** the CORS policy (no restart).
 
 **Verify preflight**
 
 ```bash
 curl -i -X OPTIONS 'http://localhost:8080/v1/chat/completions' \
-  -H 'Origin: http://localhost:5173' \
+  -H 'Origin: https://sadeghhp.github.io' \
   -H 'Access-Control-Request-Method: POST' \
   -H 'Access-Control-Request-Headers: authorization,content-type'
 ```
 
-Expect `Access-Control-Allow-Origin: http://localhost:5173` when that origin is configured (or `*` in Development).
+Expect `Access-Control-Allow-Origin: https://sadeghhp.github.io` when that origin is configured (or `*` in Development).
 
 **Alternative:** serve the SPA behind the same host as the gateway (reverse proxy) so requests are same-origin and CORS is unnecessary.
 

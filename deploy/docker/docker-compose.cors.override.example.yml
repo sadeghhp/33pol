@@ -1,0 +1,17 @@
+# Optional: apply CORS origins via environment variables.
+# Copy to docker-compose.override.yml (or merge into your override) only when
+# GATEWAY_CORS_ALLOWED_ORIGIN_* is set in .env. Do not leave unused empty slots —
+# empty Gateway__Cors__AllowedOrigins__N values override appsettings / admin UI.
+#
+#   cp docker-compose.cors.override.example.yml docker-compose.override.yml
+#
+# Then in .env:
+#   GATEWAY_CORS_ALLOWED_ORIGIN_0=https://sadeghhp.github.io
+#   GATEWAY_CORS_ALLOWED_ORIGIN_1=http://localhost:5173
+
+services:
+  gateway:
+    environment:
+      Gateway__Cors__AllowedOrigins__0: ${GATEWAY_CORS_ALLOWED_ORIGIN_0}
+      Gateway__Cors__AllowedOrigins__1: ${GATEWAY_CORS_ALLOWED_ORIGIN_1:-}
+      Gateway__Cors__AllowedOrigins__2: ${GATEWAY_CORS_ALLOWED_ORIGIN_2:-}
