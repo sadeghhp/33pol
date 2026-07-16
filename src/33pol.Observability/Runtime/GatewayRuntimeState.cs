@@ -108,4 +108,68 @@ public sealed class GatewayRuntimeState
 
     public IReadOnlyDictionary<string, long> GetErrorsPerModel() =>
         new Dictionary<string, long>(_errorsPerModel, StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Captures the process-lifetime counters for durable persistence. Uptime (<see cref="StartedUtc"/>)
+    /// and active streams are intentionally excluded — both should reset with the process.
+    /// </summary>
+    public GatewayRuntimeSnapshot Export()
+    {
+        lock (_statsSync)
+        {
+            return new GatewayRuntimeSnapshot
+            {
+                TotalRequests = _totalRequests,
+                TotalErrors = _totalErrors,
+                TotalLatencyMs = _totalLatencyMs,
+                RateLimitRejections = Interlocked.Read(ref _rateLimitRejections),
+                QuotaRejections = Interlocked.Read(ref _quotaRejections),
+                RequestsPerModel = new Dictionary<string, long>(_requestsPerModel, StringComparer.OrdinalIgnoreCase),
+                ErrorsPerModel = new Dictionary<string, long>(_errorsPerModel, StringComparer.OrdinalIgnoreCase),
+                Recent = _recentRequests.ToList(),
+            };
+        }
+    }
+
+    /// <summary>
+    /// Seeds the counters from a persisted snapshot so live recording continues from the restored
+    /// totals (absolute, not delta — subsequent increments add on top). Call once at startup before
+    /// traffic is recorded.
+    /// </summary>
+    public void Hydrate(GatewayRuntimeSnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+
+        lock (_statsSync)
+        {
+            _totalRequests = snapshot.TotalRequests;
+            _totalErrors = snapshot.TotalErrors;
+            _totalLatencyMs = snapshot.TotalLatencyMs;
+            Interlocked.Exchange(ref _rateLimitRejections, snapshot.RateLimitRejections);
+            Interlocked.Exchange(ref _quotaRejections, snapshot.QuotaRejections);
+
+            _requestsPerModel.Clear();
+            foreach (var (model, count) in snapshot.RequestsPerModel)
+            {
+                _requestsPerModel[model] = count;
+            }
+
+            _errorsPerModel.Clear();
+            foreach (var (model, count) in snapshot.ErrorsPerModel)
+            {
+                _errorsPerModel[model] = count;
+            }
+
+            while (_recentRequests.TryDequeue(out _))
+            {
+            }
+
+            // Snapshot.Recent is oldest-first; enqueue in order so the queue's ordering is preserved
+            // and EnqueueRecent's newest-first read continues to work.
+            foreach (var entry in snapshot.Recent)
+            {
+                EnqueueRecent(entry);
+            }
+        }
+    }
 }

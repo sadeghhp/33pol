@@ -114,4 +114,102 @@ public sealed class PostgresRepositoryIntegrationTests : IAsyncLifetime
         loaded!.Id.Should().Be(created.Id);
         loaded.Scopes.Should().BeEquivalentTo("admin", "inference");
     }
+
+    [Fact]
+    public async Task GatewayStatsSnapshot_SurvivesAcrossContexts_OnPostgres()
+    {
+        _postgres.Should().NotBeNull();
+
+        var connectionString = _postgres!.GetConnectionString();
+        await using (var db = PersistenceTestDbContextFactory.CreateNpgsql(connectionString))
+        {
+            // Applies ALL migrations including DashboardStatsPersistence — exercises the real jsonb /
+            // timestamptz / identity DDL, which InMemory (EnsureCreated from the model) never does.
+            await db.Database.MigrateAsync();
+        }
+
+        var t0 = new DateTimeOffset(2026, 7, 16, 10, 0, 0, TimeSpan.Zero);
+        var snapshot = new Pol33.Core.Models.GatewayRuntimeSnapshot
+        {
+            TotalRequests = 42,
+            TotalErrors = 5,
+            TotalLatencyMs = 8400,
+            RateLimitRejections = 2,
+            QuotaRejections = 1,
+            RequestsPerModel = new Dictionary<string, long> { ["gpt-4o"] = 30, ["llama"] = 12 },
+            ErrorsPerModel = new Dictionary<string, long> { ["gpt-4o"] = 5 },
+            Recent =
+            [
+                new Pol33.Core.Models.RecentRequestEntry
+                {
+                    RequestId = "req-1", Method = "POST", Path = "/v1/chat/completions",
+                    ModelId = "gpt-4o", TenantId = "t1", StatusCode = 200, DurationMs = 12.5,
+                    IsStreaming = true, TimestampUtc = t0,
+                },
+                new Pol33.Core.Models.RecentRequestEntry
+                {
+                    RequestId = "req-2", Method = "POST", Path = "/v1/chat/completions",
+                    ModelId = "llama", StatusCode = 502, DurationMs = 40, ErrorCode = "upstream_error",
+                    TimestampUtc = t0.AddSeconds(1),
+                },
+            ],
+        };
+
+        // Write with one context, read back with a fresh one — this is what a container recreation does.
+        await using (var db = PersistenceTestDbContextFactory.CreateNpgsql(connectionString))
+        {
+            await new GatewayStatsSnapshotStore(db).SaveAsync(snapshot);
+        }
+
+        await using (var db = PersistenceTestDbContextFactory.CreateNpgsql(connectionString))
+        {
+            var loaded = await new GatewayStatsSnapshotStore(db).LoadAsync();
+
+            loaded.Should().NotBeNull();
+            loaded!.TotalRequests.Should().Be(42);
+            loaded.TotalLatencyMs.Should().Be(8400);
+            loaded.RateLimitRejections.Should().Be(2);
+            loaded.RequestsPerModel["gpt-4o"].Should().Be(30);
+            loaded.ErrorsPerModel["gpt-4o"].Should().Be(5);
+            loaded.Recent.Select(e => e.RequestId).Should().ContainInOrder("req-1", "req-2");
+            loaded.Recent[0].IsStreaming.Should().BeTrue();
+            loaded.Recent[1].ErrorCode.Should().Be("upstream_error");
+        }
+    }
+
+    [Fact]
+    public async Task QuotaUsageSnapshot_UpsertsAndSurvivesAcrossContexts_OnPostgres()
+    {
+        _postgres.Should().NotBeNull();
+
+        var connectionString = _postgres!.GetConnectionString();
+        await using (var db = PersistenceTestDbContextFactory.CreateNpgsql(connectionString))
+        {
+            await db.Database.MigrateAsync();
+        }
+
+        await using (var db = PersistenceTestDbContextFactory.CreateNpgsql(connectionString))
+        {
+            await new QuotaUsageSnapshotStore(db).SaveAsync([
+                new Pol33.Core.Models.QuotaUsageSnapshot("key-a", "2026-07", 100),
+            ]);
+        }
+
+        // Second save for the same partition must update the existing row (varchar PK), not insert.
+        await using (var db = PersistenceTestDbContextFactory.CreateNpgsql(connectionString))
+        {
+            await new QuotaUsageSnapshotStore(db).SaveAsync([
+                new Pol33.Core.Models.QuotaUsageSnapshot("key-a", "2026-07", 250),
+            ]);
+        }
+
+        await using (var db = PersistenceTestDbContextFactory.CreateNpgsql(connectionString))
+        {
+            var loaded = await new QuotaUsageSnapshotStore(db).LoadAsync();
+
+            loaded.Should().ContainSingle();
+            loaded[0].PartitionKey.Should().Be("key-a");
+            loaded[0].Used.Should().Be(250);
+        }
+    }
 }

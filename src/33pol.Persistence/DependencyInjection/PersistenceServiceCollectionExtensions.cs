@@ -48,6 +48,8 @@ public static class PersistenceServiceCollectionExtensions
         services.AddScoped<IBillingEventRepository, BillingEventRepository>();
         services.AddScoped<IRateCardRepository, RateCardRepository>();
         services.AddScoped<IBudgetRepository, BudgetRepository>();
+        services.AddScoped<IGatewayStatsSnapshotStore, GatewayStatsSnapshotStore>();
+        services.AddScoped<IQuotaUsageSnapshotStore, QuotaUsageSnapshotStore>();
         services.AddScoped<GatewayDbBootstrap>();
         services.AddHostedService<GatewayDbInitializer>();
 

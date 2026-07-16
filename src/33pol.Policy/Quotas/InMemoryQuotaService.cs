@@ -10,7 +10,7 @@ namespace Pol33.Policy.Quotas;
 public sealed class InMemoryQuotaService(
     IOptions<QuotaOptions> options,
     IGatewayMetricsCollector metricsCollector,
-    Func<DateTimeOffset>? clock = null) : IQuotaService
+    Func<DateTimeOffset>? clock = null) : IQuotaService, IQuotaUsageSnapshotSource
 {
     // Usage is scoped to the current billing month so a "monthly" limit actually resets at the UTC
     // month boundary. Previously usage accumulated for the process lifetime, so once a partition
@@ -77,6 +77,29 @@ public sealed class InMemoryQuotaService(
             (_, existing) => existing.Period == period
                 ? existing with { Used = existing.Used + totalTokens }
                 : new PeriodUsage(period, totalTokens));
+    }
+
+    public IReadOnlyList<QuotaUsageSnapshot> ExportUsage() =>
+        _usage
+            .Select(kvp => new QuotaUsageSnapshot(kvp.Key, kvp.Value.Period, kvp.Value.Used))
+            .ToList();
+
+    public void HydrateUsage(IReadOnlyList<QuotaUsageSnapshot> usages)
+    {
+        ArgumentNullException.ThrowIfNull(usages);
+
+        var period = CurrentPeriod();
+        foreach (var usage in usages)
+        {
+            // Ignore stale months so a partition's prior-period usage never suppresses the current
+            // month's fresh allowance.
+            if (!string.Equals(usage.Period, period, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            _usage[usage.PartitionKey] = new PeriodUsage(usage.Period, usage.Used);
+        }
     }
 
     private string CurrentPeriod() => _clock().UtcDateTime.ToString("yyyy-MM", CultureInfo.InvariantCulture);

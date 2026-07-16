@@ -87,13 +87,13 @@
       </div>
       <div class="rail-foot">
         <div class="theme-switch" role="group" aria-label="Theme">
-          <button type="button" @click="setTheme('light')" :class="{ active: isTheme('light') }" title="Light" aria-label="Light theme">
+          <button type="button" @click="setTheme('light')" :class="{ active: isTheme('light') }" :aria-pressed="isTheme('light')" title="Light" aria-label="Light theme">
             <span class="icon" x-html="icon('sun')"></span>
           </button>
-          <button type="button" @click="setTheme('dark')" :class="{ active: isTheme('dark') }" title="Dark" aria-label="Dark theme">
+          <button type="button" @click="setTheme('dark')" :class="{ active: isTheme('dark') }" :aria-pressed="isTheme('dark')" title="Dark" aria-label="Dark theme">
             <span class="icon" x-html="icon('moon')"></span>
           </button>
-          <button type="button" @click="setTheme('system')" :class="{ active: isTheme('system') }" title="Match system" aria-label="Match system theme">
+          <button type="button" @click="setTheme('system')" :class="{ active: isTheme('system') }" :aria-pressed="isTheme('system')" title="Match system" aria-label="Match system theme">
             <span class="icon" x-html="icon('monitor')"></span>
           </button>
         </div>

@@ -90,11 +90,6 @@ function adminApp() {
     })(),
 
     get store() { return Alpine.store('admin'); },
-    get darkMode() {
-      if (this.themeMode === 'dark') return true;
-      if (this.themeMode === 'light') return false;
-      return window.matchMedia('(prefers-color-scheme: dark)').matches;
-    },
     get apiKey() { return this.store.apiKey; },
     set apiKey(v) { this.store.apiKey = v; },
     get connectionStatus() { return this.store.connectionStatus; },
@@ -208,10 +203,6 @@ function adminApp() {
 
     isTheme(mode) {
       return this.themeMode === mode;
-    },
-
-    toggleDarkMode() {
-      this.setTheme(this.darkMode ? 'light' : 'dark');
     },
 
     setSettingsSubTab(sub) {
@@ -493,8 +484,7 @@ function adminApp() {
       return Object.entries(map)
         .filter(([, count]) => Number(count) > 0)
         .map(([modelId, count]) => ({ modelId, count: Number(count) }))
-        .sort((a, b) => b.count - a.count)
-        .slice(0, 8);
+        .sort((a, b) => b.count - a.count);
     },
 
     barWidth(value, rows) {

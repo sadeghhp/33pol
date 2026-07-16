@@ -64,7 +64,7 @@
   /* Text (light) */
   --text-primary:   #12151f;
   --text-secondary: #55607a;
-  --text-tertiary:  #858ea3;
+  --text-tertiary:  #6e7687;
   --text-on-accent: #ffffff;
 
   /* Borders (light) */
@@ -128,7 +128,7 @@ html.dark {
 
   --text-primary:   #e7eaf2;
   --text-secondary: #98a2b8;
-  --text-tertiary:  #616b83;
+  --text-tertiary:  #737e9b;
   --text-on-accent: #ffffff;
 
   --border:        #232838;
@@ -169,7 +169,7 @@ html.dark {
   html:not(.light):not(.dark) {
     --bg-app:#090b12; --bg-surface:#11141e; --bg-elevated:#171b28; --bg-sunken:#0c0f18;
     --bg-hover:rgba(255,255,255,0.04); --bg-inset:#0c0f18;
-    --text-primary:#e7eaf2; --text-secondary:#98a2b8; --text-tertiary:#616b83;
+    --text-primary:#e7eaf2; --text-secondary:#98a2b8; --text-tertiary:#737e9b;
     --border:#232838; --border-strong:#333a4e;
     --accent:#6366f1; --accent-hover:#7c7ff7; --accent-text:#a5b0ff;
     --accent-soft:rgba(99,102,241,0.16); --accent-softer:rgba(99,102,241,0.09); --accent-border:rgba(99,102,241,0.38);
@@ -758,8 +758,6 @@ code.inp-hint { font-family: var(--font-mono); font-size: 0.95em; padding: 0.05r
 .vital.accent-live .vital-value { color: var(--live-text); }
 .vital.accent-error { border-color: var(--error-border); }
 .vital.accent-error .vital-value { color: var(--error-text); }
-.vital.accent-warn { border-color: var(--warn-border); }
-.vital.accent-warn .vital-value { color: var(--warn); }
 
 /* embedded sparkline background */
 .vital-spark {
@@ -787,7 +785,6 @@ code.inp-hint { font-family: var(--font-mono); font-size: 0.95em; padding: 0.05r
 .mini-stat .ms-label { color: var(--text-tertiary); font-family: var(--font-mono); font-size: var(--text-2xs); text-transform: uppercase; letter-spacing: 0.06em; }
 .mini-stat .ms-value { font-weight: var(--fw-semi); font-variant-numeric: tabular-nums; color: var(--text-primary); }
 .mini-stat.warn .ms-value { color: var(--warn); }
-.mini-stat.error .ms-value { color: var(--error-text); }
 
 /* ================================================================
    12. CHARTS (hand-rolled)

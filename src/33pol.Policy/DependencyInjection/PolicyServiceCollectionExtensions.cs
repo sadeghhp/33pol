@@ -26,7 +26,9 @@ public static class PolicyServiceCollectionExtensions
         services.AddSingleton<IRateLimitConfigAdminService, RateLimitConfigAdminService>();
         services.AddSingleton<ICorsConfigAdminService, CorsConfigAdminService>();
         services.AddSingleton<IDistributedRateLimitStore, InMemoryDistributedRateLimitStore>();
-        services.AddSingleton<IQuotaService, InMemoryQuotaService>();
+        services.AddSingleton<InMemoryQuotaService>();
+        services.AddSingleton<IQuotaService>(sp => sp.GetRequiredService<InMemoryQuotaService>());
+        services.AddSingleton<IQuotaUsageSnapshotSource>(sp => sp.GetRequiredService<InMemoryQuotaService>());
 
         return services;
     }

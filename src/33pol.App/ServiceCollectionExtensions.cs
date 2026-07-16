@@ -35,6 +35,7 @@ public static class ServiceCollectionExtensions
         services.AddGatewayPolicy(configuration);
         services.AddGatewayBilling(configuration);
         services.AddGatewayBillingPersistence(configuration);
+        services.AddGatewayStatsPersistence(configuration);
         services.AddGatewayRegistry();
         services.AddGatewayApi();
         services.AddGatewayProxy();

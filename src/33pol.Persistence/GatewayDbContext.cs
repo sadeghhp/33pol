@@ -32,6 +32,12 @@ public sealed class GatewayDbContext : DbContext
 
     public DbSet<QuotaUsageEntity> QuotaUsages => Set<QuotaUsageEntity>();
 
+    public DbSet<GatewayStatsSnapshotEntity> GatewayStatsSnapshot => Set<GatewayStatsSnapshotEntity>();
+
+    public DbSet<RecentRequestSnapshotEntity> RecentRequests => Set<RecentRequestSnapshotEntity>();
+
+    public DbSet<QuotaUsageSnapshotEntity> QuotaUsageSnapshots => Set<QuotaUsageSnapshotEntity>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.ApplyConfigurationsFromAssembly(typeof(GatewayDbContext).Assembly);
