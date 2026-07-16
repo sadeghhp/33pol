@@ -77,10 +77,24 @@ function adminApp() {
     },
     _saveModelInFlight: false,
     _createKeyInFlight: false,
-    darkMode: localStorage.getItem('33pol-admin-dark') === 'true' ||
-      (!localStorage.getItem('33pol-admin-dark') && window.matchMedia('(prefers-color-scheme: dark)').matches),
+    settingsSubTab: 'runtime',
+    vitalsHistory: [],
+    _pollTick: 0,
+    themeMode: (function () {
+      const explicit = localStorage.getItem('33pol-admin-theme');
+      if (explicit === 'light' || explicit === 'dark' || explicit === 'system') return explicit;
+      const legacy = localStorage.getItem('33pol-admin-dark');
+      if (legacy === 'true') return 'dark';
+      if (legacy === 'false') return 'light';
+      return 'system';
+    })(),
 
     get store() { return Alpine.store('admin'); },
+    get darkMode() {
+      if (this.themeMode === 'dark') return true;
+      if (this.themeMode === 'light') return false;
+      return window.matchMedia('(prefers-color-scheme: dark)').matches;
+    },
     get apiKey() { return this.store.apiKey; },
     set apiKey(v) { this.store.apiKey = v; },
     get connectionStatus() { return this.store.connectionStatus; },
@@ -91,6 +105,9 @@ function adminApp() {
     get toasts() { return this.store.toasts; },
 
     init() {
+      this.applyTheme();
+      const media = window.matchMedia('(prefers-color-scheme: dark)');
+      media.addEventListener?.('change', () => { if (this.themeMode === 'system') this.applyTheme(); });
       this.initUsageDates();
       this.restoreTab();
       window.addEventListener('hashchange', () => this.applyHashTab());
@@ -175,9 +192,30 @@ function adminApp() {
       this.store.pushToast(message, type || 'success');
     },
 
+    applyTheme() {
+      const el = document.documentElement;
+      el.classList.remove('dark', 'light');
+      if (this.themeMode === 'dark') el.classList.add('dark');
+      else if (this.themeMode === 'light') el.classList.add('light');
+      // 'system' => no class; the prefers-color-scheme media query governs.
+    },
+
+    setTheme(mode) {
+      this.themeMode = (mode === 'light' || mode === 'dark') ? mode : 'system';
+      localStorage.setItem('33pol-admin-theme', this.themeMode);
+      this.applyTheme();
+    },
+
+    isTheme(mode) {
+      return this.themeMode === mode;
+    },
+
     toggleDarkMode() {
-      this.darkMode = !this.darkMode;
-      localStorage.setItem('33pol-admin-dark', this.darkMode);
+      this.setTheme(this.darkMode ? 'light' : 'dark');
+    },
+
+    setSettingsSubTab(sub) {
+      this.settingsSubTab = sub;
     },
 
     icon(name) {
@@ -349,10 +387,149 @@ function adminApp() {
       if (this.poll) clearInterval(this.poll);
       this.poll = null;
       if (!this.apiKey) return;
+      this._pollTick = 0;
+      // Poll on every tab so the live-vitals bar stays current wherever you are.
       this.poll = setInterval(() => {
-        if (this.tab !== 'dashboard' || document.hidden) return;
+        if (document.hidden) return;
         this.loadSummary(true);
+        if (this._pollTick % 5 === 0) this.loadHealth();
+        this._pollTick++;
       }, 2000);
+    },
+
+    recordVitals() {
+      const s = this.summary;
+      if (!s) return;
+      const sample = {
+        t: Date.now(),
+        requests: Number(s.totalInferenceRequests ?? 0),
+        errors: Number(s.totalErrors ?? 0),
+        latency: Number(s.averageLatencyMs ?? 0),
+        streams: Number(s.activeStreams ?? 0)
+      };
+      const h = this.vitalsHistory;
+      const last = h[h.length - 1];
+      if (last && sample.t - last.t < 500) return; // de-dupe near-simultaneous refreshes
+      h.push(sample);
+      if (h.length > 60) h.shift();
+    },
+
+    _sparkValues(metric) {
+      const h = this.vitalsHistory;
+      if (h.length < 2) return [];
+      if (metric === 'throughput' || metric === 'errorRate') {
+        const key = metric === 'throughput' ? 'requests' : 'errors';
+        const out = [];
+        for (let i = 1; i < h.length; i++) {
+          const dt = Math.max(1, (h[i].t - h[i - 1].t) / 1000);
+          out.push(Math.max(0, (h[i][key] - h[i - 1][key]) / dt));
+        }
+        return out;
+      }
+      const key = metric === 'latency' ? 'latency' : 'streams';
+      return h.map(s => s[key]);
+    },
+
+    hasSpark(metric) {
+      return this._sparkValues(metric).length >= 2;
+    },
+
+    sparkLine(metric) {
+      const v = this._sparkValues(metric);
+      if (v.length < 2) return '';
+      const max = Math.max(...v, 1e-9);
+      const n = v.length;
+      return v.map((val, i) => {
+        const x = (i / (n - 1)) * 100;
+        const y = 94 - Math.min(88, (val / max) * 88);
+        return x.toFixed(2) + ',' + y.toFixed(2);
+      }).join(' ');
+    },
+
+    sparkFill(metric) {
+      const v = this._sparkValues(metric);
+      if (v.length < 2) return '';
+      const max = Math.max(...v, 1e-9);
+      const n = v.length;
+      let d = 'M0,100';
+      v.forEach((val, i) => {
+        const x = (i / (n - 1)) * 100;
+        const y = 94 - Math.min(88, (val / max) * 88);
+        d += ' L' + x.toFixed(2) + ',' + y.toFixed(2);
+      });
+      d += ' L100,100 Z';
+      return d;
+    },
+
+    currentThroughput() {
+      const v = this._sparkValues('throughput');
+      return v.length ? v[v.length - 1] : 0;
+    },
+
+    errorRatePct() {
+      const req = Number(this.summary?.totalInferenceRequests ?? 0);
+      const err = Number(this.summary?.totalErrors ?? 0);
+      if (req <= 0) return 0;
+      return (err / req) * 100;
+    },
+
+    formatNum(n) {
+      const x = Number(n);
+      if (!Number.isFinite(x)) return n ?? '—';
+      return x.toLocaleString();
+    },
+
+    formatCompact(n) {
+      const x = Number(n);
+      if (!Number.isFinite(x)) return n ?? '—';
+      try {
+        return new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(x);
+      } catch { return this.formatNum(x); }
+    },
+
+    requestsByModelRows() {
+      const map = this.summary?.requestsPerModel;
+      if (!map || typeof map !== 'object') return [];
+      return Object.entries(map)
+        .filter(([, count]) => Number(count) > 0)
+        .map(([modelId, count]) => ({ modelId, count: Number(count) }))
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 8);
+    },
+
+    barWidth(value, rows) {
+      const max = Math.max(1, ...(rows || []).map(r => Number(r.count) || 0));
+      return Math.round((Number(value) / max) * 100) + '%';
+    },
+
+    usageDailySeries() {
+      const rollups = this.usage?.rollups || [];
+      if (!rollups.length) return [];
+      const byDate = new Map();
+      for (const r of rollups) {
+        const d = r.usageDate;
+        const cur = byDate.get(d) || { date: d, cost: 0, prompt: 0, completion: 0, requests: 0 };
+        cur.cost += Number(r.totalCost || 0);
+        cur.prompt += Number(r.promptTokens || 0);
+        cur.completion += Number(r.completionTokens || 0);
+        cur.requests += Number(r.requestCount || 0);
+        byDate.set(d, cur);
+      }
+      return [...byDate.values()].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+    },
+
+    usageMaxCost() {
+      return Math.max(1e-9, ...this.usageDailySeries().map(d => d.cost));
+    },
+
+    colHeight(value) {
+      return Math.max(2, Math.round((Number(value) / this.usageMaxCost()) * 100)) + '%';
+    },
+
+    shortDate(iso) {
+      if (!iso) return '';
+      const s = String(iso);
+      return s.length >= 10 ? s.slice(5, 10) : s;
     },
 
     async saveKey() {
@@ -383,6 +560,7 @@ function adminApp() {
       this.store.connectionStatus = '';
       this.store.connectionDegraded = false;
       this.summary = null;
+      this.vitalsHistory = [];
       this.usage = null;
       this.usageEvents = null;
       this.backends = [];
@@ -434,6 +612,7 @@ function adminApp() {
         this.summary = await summaryP;
         this.requests = (await requestsP) ?? [];
         this.summaryUpdatedAt = Date.now();
+        this.recordVitals();
         this.pollFailCount = 0;
         this.overviewStale = false;
       });
@@ -800,6 +979,7 @@ function adminApp() {
         try {
           this.summary = await this.apiJson('/admin/api/summary');
           this.summaryUpdatedAt = Date.now();
+          this.recordVitals();
           this.pollFailCount = 0;
           this.overviewStale = false;
         } catch {
@@ -811,6 +991,7 @@ function adminApp() {
       await this.runApi('overview', 'Loading summary…', async () => {
         this.summary = await this.apiJson('/admin/api/summary');
         this.summaryUpdatedAt = Date.now();
+        this.recordVitals();
         this.pollFailCount = 0;
         this.overviewStale = false;
       });
