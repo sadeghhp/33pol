@@ -1,4 +1,6 @@
+using Pol33.Core.Configuration;
 using Pol33.Core.RateLimiting;
+using Pol33.Persistence.Entities;
 using Pol33.Persistence.Repositories;
 using Pol33.Persistence.Tests.Infrastructure;
 
@@ -6,6 +8,38 @@ namespace Pol33.Persistence.Tests.Repositories;
 
 public sealed class GatewayConfigStoreTests
 {
+    [Fact]
+    public async Task Quota_RowPresent_LoadsScalarsWithDecimalToDoubleConversion()
+    {
+        await using var db = PersistenceTestDbContextFactory.CreateInMemory(
+            nameof(Quota_RowPresent_LoadsScalarsWithDecimalToDoubleConversion));
+
+        db.QuotaSettings.Add(new QuotaSettingsEntity
+        {
+            Id = 1,
+            DefaultMonthlyTokenLimit = 2_500_000,
+            SoftLimitRatio = 0.75m,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        });
+        await db.SaveChangesAsync();
+
+        var snapshot = await new GatewayConfigStore(db).LoadSnapshotAsync();
+
+        snapshot.Quota.DefaultMonthlyTokenLimit.Should().Be(2_500_000);
+        snapshot.Quota.SoftLimitRatio.Should().Be(0.75);
+    }
+
+    [Fact]
+    public async Task Quota_NoRow_FallsBackToDefaults()
+    {
+        await using var db = PersistenceTestDbContextFactory.CreateInMemory(
+            nameof(Quota_NoRow_FallsBackToDefaults));
+
+        var snapshot = await new GatewayConfigStore(db).LoadSnapshotAsync();
+
+        snapshot.Quota.Should().BeSameAs(QuotaConfigSection.Defaults);
+    }
+
     [Fact]
     public async Task RateLimits_SaveThenLoad_RoundTripsAndBumpsVersion()
     {

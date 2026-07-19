@@ -29,6 +29,7 @@ public sealed class GatewayDbBootstrapTests
             options,
             Options.Create(new Pol33.Core.Configuration.GatewayOptions()),
             Options.Create(new Pol33.Core.Configuration.RateLimitingOptions()),
+            Options.Create(new Pol33.Core.Configuration.QuotaOptions()),
             NullLogger<GatewayDbBootstrap>.Instance);
 
         await sut.EnsureInitializedAsync();
@@ -67,6 +68,7 @@ public sealed class GatewayDbBootstrapTests
             options,
             Options.Create(new Pol33.Core.Configuration.GatewayOptions()),
             Options.Create(new Pol33.Core.Configuration.RateLimitingOptions()),
+            Options.Create(new Pol33.Core.Configuration.QuotaOptions()),
             NullLogger<GatewayDbBootstrap>.Instance);
 
         await sut.EnsureInitializedAsync();

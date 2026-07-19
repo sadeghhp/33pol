@@ -48,6 +48,8 @@ public sealed class GatewayDbContext : DbContext
 
     public DbSet<ModelRouteEntity> ModelRoutes => Set<ModelRouteEntity>();
 
+    public DbSet<QuotaSettingsEntity> QuotaSettings => Set<QuotaSettingsEntity>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.ApplyConfigurationsFromAssembly(typeof(GatewayDbContext).Assembly);

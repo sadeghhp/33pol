@@ -12,6 +12,7 @@ public sealed class GatewayConfigStore(GatewayDbContext dbContext) : IGatewayCon
     private const int ConfigVersionRowId = 1;
     private const int CorsSettingsRowId = 1;
     private const int RateLimitDefaultsRowId = 1;
+    private const int QuotaSettingsRowId = 1;
 
     public async Task<GatewayConfigSnapshot> LoadSnapshotAsync(CancellationToken cancellationToken = default)
     {
@@ -24,6 +25,11 @@ public sealed class GatewayConfigStore(GatewayDbContext dbContext) : IGatewayCon
 
         var rateLimits = await LoadRateLimitsAsync(cancellationToken).ConfigureAwait(false);
 
+        var quota = await dbContext.QuotaSettings
+            .AsNoTracking()
+            .FirstOrDefaultAsync(q => q.Id == QuotaSettingsRowId, cancellationToken)
+            .ConfigureAwait(false);
+
         return new GatewayConfigSnapshot
         {
             Version = version,
@@ -32,6 +38,13 @@ public sealed class GatewayConfigStore(GatewayDbContext dbContext) : IGatewayCon
                 AllowedOrigins = cors?.AllowedOrigins ?? [],
             },
             RateLimits = rateLimits,
+            Quota = quota is null
+                ? QuotaConfigSection.Defaults
+                : new QuotaConfigSection
+                {
+                    DefaultMonthlyTokenLimit = quota.DefaultMonthlyTokenLimit,
+                    SoftLimitRatio = (double)quota.SoftLimitRatio,
+                },
         };
     }
 

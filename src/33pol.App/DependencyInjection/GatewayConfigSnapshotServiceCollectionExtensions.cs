@@ -57,6 +57,10 @@ public static class GatewayConfigSnapshotServiceCollectionExtensions
             .GetSection(RateLimitingOptions.SectionName)
             .Get<RateLimitingOptions>() ?? new RateLimitingOptions();
 
+        var quota = configuration
+            .GetSection(QuotaOptions.SectionName)
+            .Get<QuotaOptions>() ?? new QuotaOptions();
+
         return new GatewayConfigSnapshot
         {
             Cors = new CorsConfigSection
@@ -74,6 +78,11 @@ public static class GatewayConfigSnapshotServiceCollectionExtensions
                     static t => t.Key,
                     static t => ToPolicy(t.Value),
                     StringComparer.OrdinalIgnoreCase),
+            },
+            Quota = new QuotaConfigSection
+            {
+                DefaultMonthlyTokenLimit = quota.DefaultMonthlyTokenLimit,
+                SoftLimitRatio = quota.SoftLimitRatio,
             },
         };
     }

@@ -17,6 +17,7 @@ public sealed class GatewayDbBootstrap
     private readonly GatewayBootstrapOptions _options;
     private readonly GatewayOptions _gatewayOptions;
     private readonly RateLimitingOptions _rateLimitingOptions;
+    private readonly QuotaOptions _quotaOptions;
     private readonly ILogger<GatewayDbBootstrap> _logger;
 
     public GatewayDbBootstrap(
@@ -24,12 +25,14 @@ public sealed class GatewayDbBootstrap
         IOptions<GatewayBootstrapOptions> options,
         IOptions<GatewayOptions> gatewayOptions,
         IOptions<RateLimitingOptions> rateLimitingOptions,
+        IOptions<QuotaOptions> quotaOptions,
         ILogger<GatewayDbBootstrap> logger)
     {
         _db = db;
         _options = options.Value;
         _gatewayOptions = gatewayOptions.Value;
         _rateLimitingOptions = rateLimitingOptions.Value;
+        _quotaOptions = quotaOptions.Value;
         _logger = logger;
     }
 
@@ -49,6 +52,7 @@ public sealed class GatewayDbBootstrap
         await SeedCorsSettingsAsync(cancellationToken);
         await SeedRateLimitSettingsAsync(cancellationToken);
         await SeedModelRoutesAsync(cancellationToken);
+        await SeedQuotaSettingsAsync(cancellationToken);
 
         if (!_options.Enabled)
         {
@@ -159,6 +163,28 @@ public sealed class GatewayDbBootstrap
         _logger.LogInformation(
             "Seeded rate-limit settings (default + {PlanCount} plan tier(s)) from configuration.",
             _rateLimitingOptions.Plans.Count);
+    }
+
+    private async Task SeedQuotaSettingsAsync(CancellationToken cancellationToken)
+    {
+        if (await _db.QuotaSettings.AnyAsync(cancellationToken))
+        {
+            return;
+        }
+
+        _db.QuotaSettings.Add(new QuotaSettingsEntity
+        {
+            Id = 1,
+            DefaultMonthlyTokenLimit = _quotaOptions.DefaultMonthlyTokenLimit,
+            SoftLimitRatio = (decimal)_quotaOptions.SoftLimitRatio,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        });
+
+        await _db.SaveChangesAsync(cancellationToken);
+        _logger.LogInformation(
+            "Seeded quota settings (limit {Limit}, soft ratio {Ratio}) from configuration.",
+            _quotaOptions.DefaultMonthlyTokenLimit,
+            _quotaOptions.SoftLimitRatio);
     }
 
     private static readonly JsonSerializerOptions ModelsJsonOptions = new()

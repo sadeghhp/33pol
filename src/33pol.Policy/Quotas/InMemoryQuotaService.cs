@@ -8,6 +8,7 @@ using Pol33.Core.Models;
 namespace Pol33.Policy.Quotas;
 
 public sealed class InMemoryQuotaService(
+    IGatewayConfigProvider configProvider,
     IOptions<QuotaOptions> options,
     IGatewayMetricsCollector metricsCollector,
     Func<DateTimeOffset>? clock = null) : IQuotaService, IQuotaUsageSnapshotSource
@@ -24,7 +25,10 @@ public sealed class InMemoryQuotaService(
     public QuotaCheckResult CheckBeforeForward(string partitionKey, string modelId)
     {
         _ = modelId;
-        var limit = options.Value.DefaultMonthlyTokenLimit;
+
+        // Read the snapshot once: Current can swap mid-method, so pin it for a consistent decision.
+        var quota = configProvider.Current.Quota;
+        var limit = quota.DefaultMonthlyTokenLimit;
         if (limit <= 0)
         {
             return QuotaCheckResult.Allowed;
@@ -41,11 +45,11 @@ public sealed class InMemoryQuotaService(
             return QuotaCheckResult.HardExceeded;
         }
 
-        var softThreshold = (long)(limit * options.Value.SoftLimitRatio);
+        var softThreshold = (long)(limit * quota.SoftLimitRatio);
         if (used >= softThreshold)
         {
             return QuotaCheckResult.SoftWarning(
-                $"Monthly token usage at {used} of {limit} ({options.Value.SoftLimitRatio:P0} soft threshold).");
+                $"Monthly token usage at {used} of {limit} ({quota.SoftLimitRatio:P0} soft threshold).");
         }
 
         return QuotaCheckResult.Allowed;

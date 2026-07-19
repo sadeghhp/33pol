@@ -20,6 +20,8 @@ public sealed record GatewayConfigSnapshot
 
     public RateLimitsConfigSection RateLimits { get; init; } = RateLimitsConfigSection.Defaults;
 
+    public QuotaConfigSection Quota { get; init; } = QuotaConfigSection.Defaults;
+
     /// <summary>The safe, hardcoded configuration used before the first successful database load.</summary>
     public static GatewayConfigSnapshot Defaults { get; } = new();
 }
@@ -50,4 +52,20 @@ public sealed record RateLimitsConfigSection
 
     private static readonly IReadOnlyDictionary<string, RateLimitPolicy> EmptyMap =
         new Dictionary<string, RateLimitPolicy>(StringComparer.OrdinalIgnoreCase);
+}
+
+/// <summary>
+/// Quota section of the config snapshot: the runtime-tunable per-partition monthly token limit and
+/// the soft-warning ratio, read per request by the quota service. The defaults mirror
+/// <see cref="QuotaOptions"/> so a database-less deployment (and the pre-load window) behaves exactly
+/// as it did when these values were read straight from appsettings. Non-tunable scalars
+/// (<c>CommittedRequestIdRetentionLimit</c>, resilience knobs, the key pepper) stay in appsettings.
+/// </summary>
+public sealed record QuotaConfigSection
+{
+    public long DefaultMonthlyTokenLimit { get; init; } = 1_000_000;
+
+    public double SoftLimitRatio { get; init; } = 0.9;
+
+    public static QuotaConfigSection Defaults { get; } = new();
 }
