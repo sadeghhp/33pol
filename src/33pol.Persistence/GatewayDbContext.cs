@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Pol33.Persistence.Entities;
 
 namespace Pol33.Persistence;
@@ -50,8 +51,29 @@ public sealed class GatewayDbContext : DbContext
 
     public DbSet<QuotaSettingsEntity> QuotaSettings => Set<QuotaSettingsEntity>();
 
+    /// <summary>
+    /// Stores every <see cref="DateTimeOffset"/> as its UTC tick count (INTEGER) rather than the EF SQLite
+    /// default (TEXT). SQLite refuses <c>ORDER BY</c> on DateTimeOffset TEXT columns (it threw 500s on the
+    /// admin key list and billing-event queries), and TEXT ordering would sort lexically — silently wrong the
+    /// moment a non-UTC offset is written. UtcTicks orders by true instant and keeps range comparisons valid.
+    /// All persisted timestamps are UTC instants, so dropping the original offset is intentional and lossless.
+    /// </summary>
+    protected override void ConfigureConventions(ModelConfigurationBuilder configurationBuilder)
+    {
+        // Applies to both DateTimeOffset and DateTimeOffset? properties across every entity.
+        configurationBuilder.Properties<DateTimeOffset>().HaveConversion<DateTimeOffsetToUtcTicksConverter>();
+    }
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.ApplyConfigurationsFromAssembly(typeof(GatewayDbContext).Assembly);
+    }
+
+    private sealed class DateTimeOffsetToUtcTicksConverter : ValueConverter<DateTimeOffset, long>
+    {
+        public DateTimeOffsetToUtcTicksConverter()
+            : base(offset => offset.UtcTicks, ticks => new DateTimeOffset(ticks, TimeSpan.Zero))
+        {
+        }
     }
 }
