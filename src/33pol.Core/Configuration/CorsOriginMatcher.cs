@@ -12,7 +12,8 @@ public static class CorsOriginMatcher
     {
         if (string.IsNullOrWhiteSpace(requestOrigin) ||
             !Uri.TryCreate(requestOrigin, UriKind.Absolute, out var originUri) ||
-            (originUri.Scheme != Uri.UriSchemeHttp && originUri.Scheme != Uri.UriSchemeHttps))
+            (originUri.Scheme != Uri.UriSchemeHttp && originUri.Scheme != Uri.UriSchemeHttps) ||
+            !string.Equals(requestOrigin, originUri.GetLeftPart(UriPartial.Authority), StringComparison.OrdinalIgnoreCase))
         {
             return false;
         }
