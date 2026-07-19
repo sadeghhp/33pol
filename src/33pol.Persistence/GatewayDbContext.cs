@@ -46,6 +46,8 @@ public sealed class GatewayDbContext : DbContext
 
     public DbSet<RateLimitPlanEntity> RateLimitPlans => Set<RateLimitPlanEntity>();
 
+    public DbSet<ModelRouteEntity> ModelRoutes => Set<ModelRouteEntity>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.ApplyConfigurationsFromAssembly(typeof(GatewayDbContext).Assembly);

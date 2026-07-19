@@ -85,39 +85,4 @@ internal static class ModelRegistryPersistence
             Aliases = [.. model.Aliases],
             PublicAccess = model.PublicAccess,
         };
-
-    internal static async Task WriteAtomicAsync(
-        string configPath,
-        IReadOnlyList<ModelConfig> models,
-        CancellationToken cancellationToken)
-    {
-        var directory = Path.GetDirectoryName(configPath)
-            ?? throw new InvalidOperationException($"Cannot resolve directory for '{configPath}'.");
-
-        Directory.CreateDirectory(directory);
-
-        var tempPath = Path.Combine(directory, $".{Path.GetFileName(configPath)}.{Guid.NewGuid():N}.tmp");
-        var payload = new ModelRegistryConfig { Models = models.Select(CloneModel).ToList() };
-        var json = JsonSerializer.Serialize(payload, JsonOptions);
-
-        await File.WriteAllTextAsync(tempPath, json, cancellationToken).ConfigureAwait(false);
-
-        try
-        {
-            File.Move(tempPath, configPath, overwrite: true);
-        }
-        catch (IOException)
-        {
-            // Single-file Docker bind mounts often reject rename-over-target (EBUSY).
-            // Same-directory rename usually works; if not, overwrite in place.
-            await File.WriteAllTextAsync(configPath, json, cancellationToken).ConfigureAwait(false);
-        }
-        finally
-        {
-            if (File.Exists(tempPath))
-            {
-                File.Delete(tempPath);
-            }
-        }
-    }
 }

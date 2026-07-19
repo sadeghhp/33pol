@@ -28,7 +28,7 @@ public sealed class RegistryServiceCollectionExtensionsTests
 
         provider.GetRequiredService<IModelRegistry>().Should().BeOfType<ModelRegistryService>();
         provider.GetRequiredService<IModelRegistryWriter>().Should().BeOfType<ModelRegistryWriter>();
-        provider.GetRequiredService<IConfigReload>().Should().BeOfType<ConfigReloadService>();
+        provider.GetRequiredService<IConfigReload>().Should().BeOfType<ModelRegistryConfigReload>();
         provider.GetRequiredService<RegistryGate>().Should().NotBeNull();
     }
 }

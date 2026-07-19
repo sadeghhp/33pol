@@ -1,8 +1,7 @@
-using System.Text.Json;
 using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
-using Microsoft.Extensions.Options;
-using Pol33.Core.Configuration;
+using Pol33.Core.Abstractions;
 using Pol33.Core.Models;
 using Pol33.Registry.Services;
 
@@ -14,363 +13,267 @@ public sealed class ModelRegistryWriterTests
     public async Task RemoveModelAsync_WithTwoModels_RemovesTargetAndPersists()
     {
         var registry = new ModelRegistryService(NullLogger<ModelRegistryService>.Instance);
-        var path = await WriteTempConfigAsync("""
-            { "models": [
-              { "id": "keep", "url": "http://keep", "aliases": [] },
-              { "id": "remove-me", "url": "http://remove", "aliases": [] }
-            ] }
-            """);
+        registry.Apply(
+        [
+            new ModelConfig { Id = "keep", Url = "http://keep", Aliases = [] },
+            new ModelConfig { Id = "remove-me", Url = "http://remove", Aliases = [] },
+        ]);
+        var (writer, repo) = CreateWriter(registry);
 
-        try
-        {
-            await registry.LoadModelsAsync(path);
-            var writer = CreateWriter(registry, path);
+        var result = await writer.RemoveModelAsync("remove-me");
 
-            var result = await writer.RemoveModelAsync("remove-me");
-
-            result.Success.Should().BeTrue();
-            registry.ModelExists("remove-me").Should().BeFalse();
-            registry.ModelExists("keep").Should().BeTrue();
-
-            var json = await File.ReadAllTextAsync(path);
-            json.Should().Contain("keep");
-            json.Should().NotContain("remove-me");
-        }
-        finally
-        {
-            File.Delete(path);
-        }
+        result.Success.Should().BeTrue();
+        registry.ModelExists("remove-me").Should().BeFalse();
+        registry.ModelExists("keep").Should().BeTrue();
+        repo.Saved.Select(m => m.Id).Should().BeEquivalentTo(["keep"]);
     }
 
     [Fact]
     public async Task UpdateModelAsync_UnknownId_Returns404()
     {
-        var (writer, _, path) = await CreateWriterWithSeedAsync();
+        var (writer, _, _) = CreateWriterWithSeed();
 
-        try
+        var result = await writer.UpdateModelAsync("missing", new ModelConfig
         {
-            var result = await writer.UpdateModelAsync("missing", new ModelConfig
-            {
-                Id = "missing",
-                Url = "http://missing",
-                Aliases = [],
-            });
+            Id = "missing",
+            Url = "http://missing",
+            Aliases = [],
+        });
 
-            result.Success.Should().BeFalse();
-            result.SuggestedStatusCode.Should().Be(404);
-        }
-        finally
-        {
-            File.Delete(path);
-        }
+        result.Success.Should().BeFalse();
+        result.SuggestedStatusCode.Should().Be(404);
     }
 
     [Fact]
     public async Task RemoveModelAsync_UnknownId_Returns404()
     {
-        var (writer, _, path) = await CreateWriterWithSeedAsync();
+        var (writer, _, _) = CreateWriterWithSeed();
 
-        try
-        {
-            var result = await writer.RemoveModelAsync("missing");
+        var result = await writer.RemoveModelAsync("missing");
 
-            result.Success.Should().BeFalse();
-            result.SuggestedStatusCode.Should().Be(404);
-        }
-        finally
-        {
-            File.Delete(path);
-        }
+        result.Success.Should().BeFalse();
+        result.SuggestedStatusCode.Should().Be(404);
     }
 
     [Fact]
     public async Task AddModelAsync_SecretUpstreamEnvVar_ReturnsFailure()
     {
-        var (writer, registry, path) = await CreateWriterWithSeedAsync();
+        var (writer, registry, _) = CreateWriterWithSeed();
 
-        try
+        var result = await writer.AddModelAsync(new ModelConfig
         {
-            var result = await writer.AddModelAsync(new ModelConfig
-            {
-                Id = "bad-auth",
-                Url = "https://openrouter.ai/api",
-                Aliases = [],
-                UpstreamAuth = new UpstreamAuthConfig { Type = "bearer", EnvVar = "sk-or-v1-abcdef0123456789" }
-            });
+            Id = "bad-auth",
+            Url = "https://openrouter.ai/api",
+            Aliases = [],
+            UpstreamAuth = new UpstreamAuthConfig { Type = "bearer", EnvVar = "sk-or-v1-abcdef0123456789" },
+        });
 
-            result.Success.Should().BeFalse();
-            result.Message.Should().Contain("not the API key");
-            registry.ModelExists("bad-auth").Should().BeFalse();
-        }
-        finally
-        {
-            File.Delete(path);
-        }
+        result.Success.Should().BeFalse();
+        result.Message.Should().Contain("not the API key");
+        registry.ModelExists("bad-auth").Should().BeFalse();
     }
 
     [Fact]
     public async Task AddModelAsync_MissingUrl_ReturnsFailure()
     {
-        var (writer, registry, path) = await CreateWriterWithSeedAsync();
+        var (writer, registry, _) = CreateWriterWithSeed();
 
-        try
+        var result = await writer.AddModelAsync(new ModelConfig
         {
-            var result = await writer.AddModelAsync(new ModelConfig
-            {
-                Id = "no-url",
-                Url = "",
-                Aliases = [],
-            });
+            Id = "no-url",
+            Url = "",
+            Aliases = [],
+        });
 
-            result.Success.Should().BeFalse();
-            registry.ModelExists("no-url").Should().BeFalse();
-        }
-        finally
-        {
-            File.Delete(path);
-        }
+        result.Success.Should().BeFalse();
+        registry.ModelExists("no-url").Should().BeFalse();
     }
 
     [Fact]
     public async Task AddModelAsync_AfterLoad_ModelVisibleImmediately()
     {
-        var (writer, registry, path) = await CreateWriterWithSeedAsync();
+        var (writer, registry, _) = CreateWriterWithSeed();
 
-        try
+        var result = await writer.AddModelAsync(new ModelConfig
         {
-            var result = await writer.AddModelAsync(new ModelConfig
-            {
-                Id = "new-model",
-                Url = "http://new:8000",
-                Aliases = ["new-alias"],
-            });
+            Id = "new-model",
+            Url = "http://new:8000",
+            Aliases = ["new-alias"],
+        });
 
-            result.Success.Should().BeTrue();
-            registry.TryGetModel("new-alias", out var model).Should().BeTrue();
-            model!.Id.Should().Be("new-model");
-        }
-        finally
-        {
-            File.Delete(path);
-        }
+        result.Success.Should().BeTrue();
+        registry.TryGetModel("new-alias", out var model).Should().BeTrue();
+        model!.Id.Should().Be("new-model");
     }
 
     [Fact]
-    public async Task AddModelAsync_PersistsModelsJsonOnDisk()
+    public async Task AddModelAsync_PersistsToRepository()
     {
-        var (writer, _, path) = await CreateWriterWithSeedAsync();
+        var (writer, _, repo) = CreateWriterWithSeed();
 
-        try
+        await writer.AddModelAsync(new ModelConfig
         {
-            await writer.AddModelAsync(new ModelConfig
-            {
-                Id = "disk-model",
-                Url = "http://disk:8000",
-                Aliases = [],
-            });
+            Id = "db-model",
+            Url = "http://db:8000",
+            Aliases = [],
+        });
 
-            var json = await File.ReadAllTextAsync(path);
-            using var document = JsonDocument.Parse(json);
-            var ids = document.RootElement
-                .GetProperty("models")
-                .EnumerateArray()
-                .Select(m => m.GetProperty("id").GetString())
-                .ToList();
-
-            ids.Should().Contain("disk-model");
-            ids.Should().Contain("seed");
-        }
-        finally
-        {
-            File.Delete(path);
-        }
+        repo.Saved.Select(m => m.Id).Should().Contain("db-model");
+        repo.Saved.Select(m => m.Id).Should().Contain("seed");
     }
 
     [Fact]
     public async Task AddModelAsync_DuplicateId_Returns409()
     {
-        var (writer, _, path) = await CreateWriterWithSeedAsync();
+        var (writer, _, _) = CreateWriterWithSeed();
 
-        try
+        var result = await writer.AddModelAsync(new ModelConfig
         {
-            var result = await writer.AddModelAsync(new ModelConfig
-            {
-                Id = "seed",
-                Url = "http://dup:8000",
-                Aliases = [],
-            });
+            Id = "seed",
+            Url = "http://dup:8000",
+            Aliases = [],
+        });
 
-            result.Success.Should().BeFalse();
-            result.SuggestedStatusCode.Should().Be(409);
-        }
-        finally
-        {
-            File.Delete(path);
-        }
+        result.Success.Should().BeFalse();
+        result.SuggestedStatusCode.Should().Be(409);
     }
 
     [Fact]
     public async Task RemoveModelAsync_LastModel_Returns400AndKeepsRegistry()
     {
         var registry = new ModelRegistryService(NullLogger<ModelRegistryService>.Instance);
-        var path = await WriteTempConfigAsync("""
-            { "models": [ { "id": "only", "url": "http://only", "aliases": [] } ] }
-            """);
+        registry.Apply([new ModelConfig { Id = "only", Url = "http://only", Aliases = [] }]);
+        var (writer, _) = CreateWriter(registry);
 
-        try
-        {
-            await registry.LoadModelsAsync(path);
-            var writer = CreateWriter(registry, path);
+        var result = await writer.RemoveModelAsync("only");
 
-            var result = await writer.RemoveModelAsync("only");
-
-            result.Success.Should().BeFalse();
-            result.SuggestedStatusCode.Should().Be(400);
-            registry.GetAllModels().Should().HaveCount(1);
-        }
-        finally
-        {
-            File.Delete(path);
-        }
+        result.Success.Should().BeFalse();
+        result.SuggestedStatusCode.Should().Be(400);
+        registry.GetAllModels().Should().HaveCount(1);
     }
 
     [Fact]
     public async Task ReplaceAllAsync_EmptyList_KeepsRegistryUnchanged()
     {
-        var (writer, registry, path) = await CreateWriterWithSeedAsync();
+        var (writer, registry, _) = CreateWriterWithSeed();
 
-        try
-        {
-            var result = await writer.ReplaceAllAsync([]);
+        var result = await writer.ReplaceAllAsync([]);
 
-            result.Success.Should().BeFalse();
-            result.SuggestedStatusCode.Should().Be(400);
-            registry.GetAllModels().Should().HaveCount(1);
-            registry.ModelExists("seed").Should().BeTrue();
-
-            var json = await File.ReadAllTextAsync(path);
-            json.Should().Contain("seed");
-        }
-        finally
-        {
-            File.Delete(path);
-        }
+        result.Success.Should().BeFalse();
+        result.SuggestedStatusCode.Should().Be(400);
+        registry.GetAllModels().Should().HaveCount(1);
+        registry.ModelExists("seed").Should().BeTrue();
     }
 
     [Fact]
-    public async Task ReplaceAllAsync_ValidList_ReplacesRegistryAndFile()
+    public async Task ReplaceAllAsync_ValidList_ReplacesRegistryAndPersists()
     {
-        var (writer, registry, path) = await CreateWriterWithSeedAsync();
+        var (writer, registry, repo) = CreateWriterWithSeed();
 
-        try
-        {
-            var result = await writer.ReplaceAllAsync(
-            [
-                new ModelConfig { Id = "only-new", Url = "http://new-only", Aliases = ["new-alias"] },
-            ]);
+        var result = await writer.ReplaceAllAsync(
+        [
+            new ModelConfig { Id = "only-new", Url = "http://new-only", Aliases = ["new-alias"] },
+        ]);
 
-            result.Success.Should().BeTrue();
-            registry.GetAllModels().Should().HaveCount(1);
-            registry.TryGetModel("new-alias", out var model).Should().BeTrue();
-            model!.Id.Should().Be("only-new");
-
-            var json = await File.ReadAllTextAsync(path);
-            json.Should().Contain("only-new");
-            json.Should().NotContain("seed");
-        }
-        finally
-        {
-            File.Delete(path);
-        }
+        result.Success.Should().BeTrue();
+        registry.GetAllModels().Should().HaveCount(1);
+        registry.TryGetModel("new-alias", out var model).Should().BeTrue();
+        model!.Id.Should().Be("only-new");
+        repo.Saved.Select(m => m.Id).Should().BeEquivalentTo(["only-new"]);
     }
 
     [Fact]
     public async Task UpdateModelAsync_ExistingId_UpdatesUrlAndPersists()
     {
-        var (writer, registry, path) = await CreateWriterWithSeedAsync();
+        var (writer, registry, repo) = CreateWriterWithSeed();
 
-        try
+        var result = await writer.UpdateModelAsync("seed", new ModelConfig
         {
-            var result = await writer.UpdateModelAsync("seed", new ModelConfig
-            {
-                Id = "ignored-id",
-                Url = "http://updated:9000",
-                Aliases = ["updated-alias"],
-            });
+            Id = "ignored-id",
+            Url = "http://updated:9000",
+            Aliases = ["updated-alias"],
+        });
 
-            result.Success.Should().BeTrue();
-            registry.TryGetModel("updated-alias", out var model).Should().BeTrue();
-            model!.Url.Should().Be("http://updated:9000");
-
-            var json = await File.ReadAllTextAsync(path);
-            json.Should().Contain("http://updated:9000");
-        }
-        finally
-        {
-            File.Delete(path);
-        }
+        result.Success.Should().BeTrue();
+        registry.TryGetModel("updated-alias", out var model).Should().BeTrue();
+        model!.Url.Should().Be("http://updated:9000");
+        repo.Saved.Should().ContainSingle(m => m.Id == "seed" && m.Url == "http://updated:9000");
     }
 
     [Fact]
     public async Task AddModelAsync_ConcurrentReadsDuringApply_DoNotThrow()
     {
-        var (writer, registry, path) = await CreateWriterWithSeedAsync();
+        var (writer, registry, _) = CreateWriterWithSeed();
 
-        try
+        var readGate = new ManualResetEventSlim(false);
+        var readers = Enumerable.Range(0, 8).Select(_ => Task.Run(() =>
         {
-            var readGate = new ManualResetEventSlim(false);
-            var readers = Enumerable.Range(0, 8).Select(_ => Task.Run(() =>
+            readGate.Wait();
+            for (var i = 0; i < 200; i++)
             {
-                readGate.Wait();
-                for (var i = 0; i < 200; i++)
-                {
-                    registry.TryGetModel("seed", out ModelConfig? _);
-                    _ = registry.GetAllModels().Count;
-                }
-            })).ToArray();
+                registry.TryGetModel("seed", out ModelConfig? _);
+                _ = registry.GetAllModels().Count;
+            }
+        })).ToArray();
 
-            readGate.Set();
-            await writer.AddModelAsync(new ModelConfig
-            {
-                Id = "concurrent",
-                Url = "http://concurrent:8000",
-                Aliases = [],
-            });
-            await Task.WhenAll(readers);
-
-            registry.ModelExists("concurrent").Should().BeTrue();
-        }
-        finally
+        readGate.Set();
+        await writer.AddModelAsync(new ModelConfig
         {
-            File.Delete(path);
-        }
+            Id = "concurrent",
+            Url = "http://concurrent:8000",
+            Aliases = [],
+        });
+        await Task.WhenAll(readers);
+
+        registry.ModelExists("concurrent").Should().BeTrue();
     }
 
-    private static async Task<(ModelRegistryWriter Writer, ModelRegistryService Registry, string Path)> CreateWriterWithSeedAsync()
+    private static (ModelRegistryWriter Writer, ModelRegistryService Registry, FakeModelRouteRepository Repo) CreateWriterWithSeed()
     {
         var registry = new ModelRegistryService(NullLogger<ModelRegistryService>.Instance);
-        var path = await WriteTempConfigAsync("""
-            { "models": [ { "id": "seed", "url": "http://seed", "aliases": [] } ] }
-            """);
-        await registry.LoadModelsAsync(path);
-        return (CreateWriter(registry, path), registry, path);
+        registry.Apply([new ModelConfig { Id = "seed", Url = "http://seed", Aliases = [] }]);
+        var (writer, repo) = CreateWriter(registry);
+        return (writer, registry, repo);
     }
 
-    private static ModelRegistryWriter CreateWriter(ModelRegistryService registry, string path)
+    private static (ModelRegistryWriter Writer, FakeModelRouteRepository Repo) CreateWriter(ModelRegistryService registry)
     {
-        var options = Options.Create(new GatewayOptions { ModelsConfigPath = path });
-        return new ModelRegistryWriter(
+        var repo = new FakeModelRouteRepository();
+        var writer = new ModelRegistryWriter(
             registry,
             new RegistryGate(),
-            options,
+            new StubScopeFactory(repo),
             new TestUpstreamSecretStore(),
             NullLogger<ModelRegistryWriter>.Instance);
+        return (writer, repo);
     }
 
-    private static async Task<string> WriteTempConfigAsync(string json)
+    private sealed class FakeModelRouteRepository : IModelRouteRepository
     {
-        var path = Path.Combine(Path.GetTempPath(), $"33pol-writer-{Guid.NewGuid():N}.json");
-        await File.WriteAllTextAsync(path, json);
-        return path;
+        public List<ModelConfig> Saved { get; private set; } = [];
+
+        public Task<IReadOnlyList<ModelConfig>> ListAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<ModelConfig>>(Saved);
+
+        public Task ReplaceAllAsync(IReadOnlyList<ModelConfig> models, CancellationToken cancellationToken = default)
+        {
+            Saved = models.ToList();
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class StubScopeFactory(IModelRouteRepository repository)
+        : IServiceScopeFactory, IServiceScope, IServiceProvider
+    {
+        public IServiceScope CreateScope() => this;
+
+        public IServiceProvider ServiceProvider => this;
+
+        public void Dispose()
+        {
+        }
+
+        public object? GetService(Type serviceType) =>
+            serviceType == typeof(IModelRouteRepository) ? repository : null;
     }
 }
