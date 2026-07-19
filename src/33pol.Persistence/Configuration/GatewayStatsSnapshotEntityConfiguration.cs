@@ -17,14 +17,9 @@ internal sealed class GatewayStatsSnapshotEntityConfiguration : IEntityTypeConfi
             .ValueGeneratedNever();
 
         builder.Property(s => s.RequestsPerModelJson)
-            .HasColumnType("jsonb")
             .IsRequired();
 
         builder.Property(s => s.ErrorsPerModelJson)
-            .HasColumnType("jsonb")
             .IsRequired();
-
-        builder.Property(s => s.UpdatedAt)
-            .HasColumnType("timestamptz");
     }
 }

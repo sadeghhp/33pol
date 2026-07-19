@@ -11,7 +11,7 @@ If you discover a security issue, please report it privately to the maintainers 
 - Override dev defaults before any internet-facing deployment:
   - `GATEWAY_ADMIN_API_KEY` / bootstrap admin key
   - `Gateway:Security:KeyPepper`
-  - Postgres password and provider API keys (`OPENROUTER_API_KEY`, etc.)
+  - Provider API keys (`OPENROUTER_API_KEY`, etc.)
 
 Full guidance: [docs/security.md](docs/security.md).
 

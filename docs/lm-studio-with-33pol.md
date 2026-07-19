@@ -241,7 +241,7 @@ More client examples: [integrations.md](./integrations.md).
 ## How it works (short)
 
 1. Your client sends `Authorization: Bearer <inference-key>` to 33pol.
-2. 33pol validates the key (Postgres in the Docker stack).
+2. 33pol validates the key (against the embedded SQLite database in the Docker stack).
 3. The JSON `"model"` field is matched to an entry in the registry (`models.json`).
 4. 33pol proxies the request to the **Upstream URL** (`host.docker.internal:1234`) with an OpenAI-compatible path (`/v1/chat/completions`, etc.).
 5. LM Studio runs inference and returns the response; 33pol passes it back to the client.

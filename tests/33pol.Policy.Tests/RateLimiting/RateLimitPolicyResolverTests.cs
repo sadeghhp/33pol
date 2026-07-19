@@ -1,5 +1,6 @@
-using Microsoft.Extensions.Options;
+using Pol33.Core.Abstractions;
 using Pol33.Core.Configuration;
+using Pol33.Core.RateLimiting;
 using Pol33.Policy.RateLimiting;
 
 namespace Pol33.Policy.Tests.RateLimiting;
@@ -9,9 +10,9 @@ public sealed class RateLimitPolicyResolverTests
     [Fact]
     public void Resolve_NoPlanOrTenant_UsesDefault()
     {
-        var resolver = CreateResolver(new RateLimitingOptions
+        var resolver = CreateResolver(new RateLimitsConfigSection
         {
-            Default = new RateLimitTierOptions { Rpm = 42, Burst = 7, MaxConcurrentStreams = 3 },
+            Default = new RateLimitPolicy(42, 7, 3),
         });
 
         var policy = resolver.Resolve(null, null);
@@ -24,12 +25,12 @@ public sealed class RateLimitPolicyResolverTests
     [Fact]
     public void Resolve_PlanSlug_UsesPlanTier()
     {
-        var resolver = CreateResolver(new RateLimitingOptions
+        var resolver = CreateResolver(new RateLimitsConfigSection
         {
-            Default = new RateLimitTierOptions { Rpm = 10, Burst = 1, MaxConcurrentStreams = 1 },
-            Plans = new Dictionary<string, RateLimitTierOptions>(StringComparer.OrdinalIgnoreCase)
+            Default = new RateLimitPolicy(10, 1, 1),
+            Plans = new Dictionary<string, RateLimitPolicy>(StringComparer.OrdinalIgnoreCase)
             {
-                ["enterprise"] = new() { Rpm = 500, Burst = 50, MaxConcurrentStreams = 25 },
+                ["enterprise"] = new(500, 50, 25),
             },
         });
 
@@ -41,35 +42,59 @@ public sealed class RateLimitPolicyResolverTests
     }
 
     [Fact]
-    public void Resolve_TenantOverride_TakesPrecedenceOverPlan()
+    public void Resolve_PlanSlug_IsCaseInsensitive()
     {
-        var resolver = CreateResolver(new RateLimitingOptions
+        var resolver = CreateResolver(new RateLimitsConfigSection
         {
-            Default = new RateLimitTierOptions { Rpm = 10, Burst = 1, MaxConcurrentStreams = 1 },
-            Plans = new Dictionary<string, RateLimitTierOptions>(StringComparer.OrdinalIgnoreCase)
+            Default = new RateLimitPolicy(10, 1, 1),
+            Plans = new Dictionary<string, RateLimitPolicy>(StringComparer.OrdinalIgnoreCase)
             {
-                ["standard"] = new() { Rpm = 100, Burst = 10, MaxConcurrentStreams = 5 },
-            },
-            Tenants = new Dictionary<string, RateLimitTierOptions>(StringComparer.OrdinalIgnoreCase)
-            {
-                ["tenant-a"] = new() { Rpm = 999, Burst = 99, MaxConcurrentStreams = 9 },
+                ["enterprise"] = new(500, 50, 25),
             },
         });
 
-        var policy = resolver.Resolve("standard", "tenant-a");
-
-        policy.Rpm.Should().Be(999);
+        resolver.Resolve("ENTERPRISE", null).Rpm.Should().Be(500);
     }
 
-    private static RateLimitPolicyResolver CreateResolver(RateLimitingOptions options) =>
-        new(new TestOptionsMonitor(options));
-
-    private sealed class TestOptionsMonitor(RateLimitingOptions value) : IOptionsMonitor<RateLimitingOptions>
+    [Fact]
+    public void Resolve_TenantOverride_TakesPrecedenceOverPlan()
     {
-        public RateLimitingOptions CurrentValue { get; private set; } = value;
+        var resolver = CreateResolver(new RateLimitsConfigSection
+        {
+            Default = new RateLimitPolicy(10, 1, 1),
+            Plans = new Dictionary<string, RateLimitPolicy>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["standard"] = new(100, 10, 5),
+            },
+            TenantOverrides = new Dictionary<string, RateLimitPolicy>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["tenant-a"] = new(999, 99, 9),
+            },
+        });
 
-        public RateLimitingOptions Get(string? name) => CurrentValue;
+        resolver.Resolve("standard", "tenant-a").Rpm.Should().Be(999);
+    }
 
-        public IDisposable? OnChange(Action<RateLimitingOptions, string?> listener) => null;
+    [Fact]
+    public void Resolve_ClampsNonPositiveRpmToOne()
+    {
+        var resolver = CreateResolver(new RateLimitsConfigSection
+        {
+            Default = new RateLimitPolicy(0, -5, -1),
+        });
+
+        var policy = resolver.Resolve(null, null);
+
+        policy.Rpm.Should().Be(1);
+        policy.Burst.Should().Be(0);
+        policy.MaxConcurrentStreams.Should().Be(0);
+    }
+
+    private static RateLimitPolicyResolver CreateResolver(RateLimitsConfigSection rateLimits) =>
+        new(new StubConfigProvider(new GatewayConfigSnapshot { RateLimits = rateLimits }));
+
+    private sealed class StubConfigProvider(GatewayConfigSnapshot snapshot) : IGatewayConfigProvider
+    {
+        public GatewayConfigSnapshot Current { get; } = snapshot;
     }
 }

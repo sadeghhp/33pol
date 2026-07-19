@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Pol33.Core.Abstractions;
 using Pol33.Persistence.Bootstrap;
 using Pol33.Persistence.Hosting;
+using Pol33.Persistence.Infrastructure;
 using Pol33.Persistence.Repositories;
 
 namespace Pol33.Persistence.DependencyInjection;
@@ -19,6 +20,7 @@ public static class PersistenceServiceCollectionExtensions
         var connectionString = configuration.GetConnectionString(ConnectionStringName);
         if (string.IsNullOrWhiteSpace(connectionString))
         {
+            services.AddSingleton<ISqliteBackupService, Maintenance.NullSqliteBackupService>();
             return services;
         }
 
@@ -29,16 +31,20 @@ public static class PersistenceServiceCollectionExtensions
                 : Guid.NewGuid().ToString("N");
             services.AddDbContext<GatewayDbContext>(options =>
                 options.UseInMemoryDatabase(databaseName));
+            services.AddSingleton<ISqliteBackupService, Maintenance.NullSqliteBackupService>();
         }
         else
         {
             services.AddDbContext<GatewayDbContext>(options =>
-                options.UseNpgsql(connectionString, npgsql =>
-                    npgsql.MigrationsAssembly(typeof(GatewayDbContext).Assembly.GetName().Name)));
+                SqliteGatewayDbContext.Configure(options, connectionString));
+            services.AddScoped<ISqliteBackupService, Maintenance.SqliteBackupService>();
         }
 
-        services.Configure<GatewayBootstrapOptions>(
-            configuration.GetSection(GatewayBootstrapOptions.SectionName));
+        services.AddSingleton<Microsoft.Extensions.Options.IValidateOptions<GatewayBootstrapOptions>, GatewayBootstrapOptionsValidator>();
+        services
+            .AddOptions<GatewayBootstrapOptions>()
+            .Bind(configuration.GetSection(GatewayBootstrapOptions.SectionName))
+            .ValidateOnStart();
 
         services.AddScoped<ITenantRepository, TenantRepository>();
         services.AddScoped<IApiKeyRepository, ApiKeyRepository>();
@@ -50,6 +56,10 @@ public static class PersistenceServiceCollectionExtensions
         services.AddScoped<IBudgetRepository, BudgetRepository>();
         services.AddScoped<IGatewayStatsSnapshotStore, GatewayStatsSnapshotStore>();
         services.AddScoped<IQuotaUsageSnapshotStore, QuotaUsageSnapshotStore>();
+        services.AddScoped<IGatewayConfigStore, GatewayConfigStore>();
+        services.AddScoped<ICorsSettingsRepository, CorsSettingsRepository>();
+        services.AddScoped<IRateLimitSettingsRepository, RateLimitSettingsRepository>();
+        services.AddScoped<IModelRouteRepository, ModelRouteRepository>();
         services.AddScoped<GatewayDbBootstrap>();
         services.AddHostedService<GatewayDbInitializer>();
 

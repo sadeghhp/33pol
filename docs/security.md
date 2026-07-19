@@ -79,7 +79,7 @@ Expect `Access-Control-Allow-Origin: https://sadeghhp.github.io` when that origi
 
 1. Copy examples: `models.json.example` → `models.json`, `upstream-secrets.enc.example` → `upstream-secrets.enc`.
 2. **Rotate** any provider keys that ever lived in old Git history; prefer `OPENROUTER_API_KEY` in `.env` with `upstreamAuth.envVar` in `models.json`.
-3. Replace dev defaults: admin API key, `KeyPepper`, Postgres password.
+3. Replace dev defaults: admin API key, `KeyPepper`.
 4. Reapply or restart gateway after secret changes.
 
 **Collaborators after a history rewrite:** `git fetch && git reset --hard origin/main` or re-clone.

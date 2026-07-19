@@ -1,5 +1,4 @@
 using Microsoft.EntityFrameworkCore;
-using Npgsql;
 using Pol33.Core.Abstractions;
 using Pol33.Core.Billing;
 using Pol33.Core.Models;
@@ -127,11 +126,7 @@ public sealed class BillingEventRepository(GatewayDbContext dbContext) : IBillin
 
     private static bool IsDuplicateRequestId(DbUpdateException exception)
     {
-        if (exception.InnerException is PostgresException postgres)
-        {
-            return postgres.SqlState == "23505";
-        }
-
+        // SQLite surfaces a unique-index violation as "SQLite Error 19: 'UNIQUE constraint failed: ...'".
         var message = exception.InnerException?.Message ?? exception.Message;
         return message.Contains("unique", StringComparison.OrdinalIgnoreCase)
             || message.Contains("duplicate", StringComparison.OrdinalIgnoreCase);

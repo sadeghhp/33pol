@@ -28,8 +28,8 @@ Epic: **EPIC-post-ga** (358079).
 
 | Gap | Story | Notes |
 |-----|-------|-------|
-| G-10 | #528 US-post-ga-01 Redis rate limits | Tasks #555–#557. Older duplicate **#521** — close or merge |
-| G-11 | #537 US-post-ga-02 multi-replica HA | #572–#573 |
+| G-10 | #528 US-post-ga-01 Redis rate limits | **Superseded** — single-instance SQLite is a locked decision; no distributed rate-limit store. Close. |
+| G-11 | #537 US-post-ga-02 multi-replica HA | **Superseded** — the gateway runs single-instance on embedded SQLite (Helm rejects >1 replica). Durability comes from backups, not replicas. Close. |
 | G-12 | #538 US-post-ga-03 SSE admin stream | Duplicate **#522** |
 | G-13 | #539 US-post-ga-04 durable audit | Duplicate **#523** |
 | G-14 | #540 US-post-ga-05 Stripe | Duplicate **#524** |

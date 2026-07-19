@@ -1,136 +1,130 @@
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.FileProviders;
-using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
-using Microsoft.Extensions.Options;
+using Pol33.Core.Abstractions;
 using Pol33.Core.Configuration;
+using Pol33.Core.RateLimiting;
 using Pol33.Policy.Admin;
-using Pol33.Policy.RateLimiting;
 
 namespace Pol33.Policy.Tests.Admin;
 
 public sealed class RateLimitConfigAdminServiceTests
 {
     [Fact]
-    public async Task UpdateAsync_ValidPayload_PersistsAndReloadsOptions()
+    public async Task UpdateAsync_ValidPayload_PersistsToRepositoryAndRefreshes()
     {
-        var root = Path.Combine(Path.GetTempPath(), "33pol-rate-limit-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(root);
+        var repo = new RecordingRepository();
+        var refresher = new RecordingRefresher();
+        var service = CreateService(new StubServiceProvider(repo, refresher));
 
-        var appsettingsPath = Path.Combine(root, "appsettings.json");
-        await File.WriteAllTextAsync(
-            appsettingsPath,
-            """
+        var result = await service.UpdateAsync(
+            new RateLimitTierOptions { Rpm = 30, Burst = 3, MaxConcurrentStreams = 3 },
+            new Dictionary<string, RateLimitTierOptions>(StringComparer.OrdinalIgnoreCase)
             {
-              "RateLimiting": {
-                "Default": { "Rpm": 10, "Burst": 1, "MaxConcurrentStreams": 1 },
-                "Plans": { "standard": { "Rpm": 20, "Burst": 2, "MaxConcurrentStreams": 2 } },
-                "Tenants": { "tenant-a": { "Rpm": 99, "Burst": 9, "MaxConcurrentStreams": 9 } }
-              }
-            }
-            """);
+                ["enterprise"] = new() { Rpm = 300, Burst = 30, MaxConcurrentStreams = 30 },
+            });
 
-        try
-        {
-            var configuration = new ConfigurationBuilder()
-                .SetBasePath(root)
-                .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
-                .Build();
-
-            var monitor = new TestOptionsMonitor(
-                configuration.GetSection(RateLimitingOptions.SectionName).Get<RateLimitingOptions>()
-                ?? new RateLimitingOptions());
-
-            configuration.GetReloadToken().RegisterChangeCallback(
-                _ =>
-                {
-                    monitor.CurrentValue =
-                        configuration.GetSection(RateLimitingOptions.SectionName).Get<RateLimitingOptions>()
-                        ?? new RateLimitingOptions();
-                },
-                null);
-
-            var service = new RateLimitConfigAdminService(
-                configuration,
-                new TestHostEnvironment(root),
-                monitor,
-                NullLogger<RateLimitConfigAdminService>.Instance);
-
-            var result = await service.UpdateAsync(
-                new RateLimitTierOptions { Rpm = 30, Burst = 3, MaxConcurrentStreams = 3 },
-                new Dictionary<string, RateLimitTierOptions>(StringComparer.OrdinalIgnoreCase)
-                {
-                    ["enterprise"] = new() { Rpm = 300, Burst = 30, MaxConcurrentStreams = 30 },
-                },
-                CancellationToken.None);
-
-            result.Success.Should().BeTrue();
-
-            var persisted = await File.ReadAllTextAsync(appsettingsPath);
-            persisted.Should().Contain("\"Rpm\": 30");
-            persisted.Should().Contain("enterprise");
-            persisted.Should().Contain("tenant-a");
-
-            var resolver = new RateLimitPolicyResolver(monitor);
-            resolver.Resolve("enterprise", null).Rpm.Should().Be(300);
-            resolver.Resolve(null, "tenant-a").Rpm.Should().Be(99);
-        }
-        finally
-        {
-            Directory.Delete(root, recursive: true);
-        }
+        result.Success.Should().BeTrue();
+        repo.SavedDefault!.Rpm.Should().Be(30);
+        repo.SavedPlans!["enterprise"].Rpm.Should().Be(300);
+        refresher.Refreshed.Should().BeTrue();
     }
 
     [Fact]
     public async Task UpdateAsync_InvalidRpm_ReturnsValidationError()
     {
-        var root = Path.Combine(Path.GetTempPath(), "33pol-rate-limit-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(root);
+        var service = CreateService(new StubServiceProvider(null, null));
 
-        try
+        var result = await service.UpdateAsync(
+            new RateLimitTierOptions { Rpm = 0, Burst = 0, MaxConcurrentStreams = 0 },
+            new Dictionary<string, RateLimitTierOptions>());
+
+        result.Success.Should().BeFalse();
+        result.StatusCode.Should().Be(400);
+    }
+
+    [Fact]
+    public async Task UpdateAsync_NoDatabaseConfigured_Returns503()
+    {
+        var service = CreateService(new StubServiceProvider(null, null));
+
+        var result = await service.UpdateAsync(
+            new RateLimitTierOptions { Rpm = 60, Burst = 10, MaxConcurrentStreams = 5 },
+            new Dictionary<string, RateLimitTierOptions>());
+
+        result.Success.Should().BeFalse();
+        result.StatusCode.Should().Be(503);
+    }
+
+    private static RateLimitConfigAdminService CreateService(IServiceProvider provider) =>
+        new(
+            new StubConfigProvider(new GatewayConfigSnapshot()),
+            new StubScopeFactory(provider),
+            NullLogger<RateLimitConfigAdminService>.Instance);
+
+    private sealed class StubConfigProvider(GatewayConfigSnapshot snapshot) : IGatewayConfigProvider
+    {
+        public GatewayConfigSnapshot Current { get; } = snapshot;
+    }
+
+    private sealed class StubScopeFactory(IServiceProvider provider) : IServiceScopeFactory
+    {
+        public IServiceScope CreateScope() => new StubScope(provider);
+
+        private sealed class StubScope(IServiceProvider provider) : IServiceScope
         {
-            var configuration = new ConfigurationBuilder()
-                .SetBasePath(root)
-                .AddInMemoryCollection()
-                .Build();
+            public IServiceProvider ServiceProvider { get; } = provider;
 
-            var service = new RateLimitConfigAdminService(
-                configuration,
-                new TestHostEnvironment(root),
-                new TestOptionsMonitor(new RateLimitingOptions()),
-                NullLogger<RateLimitConfigAdminService>.Instance);
-
-            var result = await service.UpdateAsync(
-                new RateLimitTierOptions { Rpm = 0, Burst = 0, MaxConcurrentStreams = 0 },
-                new Dictionary<string, RateLimitTierOptions>(),
-                CancellationToken.None);
-
-            result.Success.Should().BeFalse();
-            result.StatusCode.Should().Be(400);
-        }
-        finally
-        {
-            Directory.Delete(root, recursive: true);
+            public void Dispose()
+            {
+            }
         }
     }
 
-    private sealed class TestOptionsMonitor(RateLimitingOptions initial) : IOptionsMonitor<RateLimitingOptions>
+    private sealed class StubServiceProvider(
+        IRateLimitSettingsRepository? repository,
+        IGatewayConfigRefresher? refresher) : IServiceProvider
     {
-        public RateLimitingOptions CurrentValue { get; set; } = initial;
+        public object? GetService(Type serviceType)
+        {
+            if (serviceType == typeof(IRateLimitSettingsRepository))
+            {
+                return repository;
+            }
 
-        public RateLimitingOptions Get(string? name) => CurrentValue;
+            if (serviceType == typeof(IGatewayConfigRefresher))
+            {
+                return refresher;
+            }
 
-        public IDisposable? OnChange(Action<RateLimitingOptions, string?> listener) => null;
+            return null;
+        }
     }
 
-    private sealed class TestHostEnvironment(string contentRoot) : IHostEnvironment
+    private sealed class RecordingRepository : IRateLimitSettingsRepository
     {
-        public string EnvironmentName { get; set; } = Environments.Development;
+        public RateLimitPolicy? SavedDefault { get; private set; }
 
-        public string ApplicationName { get; set; } = "33pol.Policy.Tests";
+        public IReadOnlyDictionary<string, RateLimitPolicy>? SavedPlans { get; private set; }
 
-        public string ContentRootPath { get; set; } = contentRoot;
+        public Task SaveAsync(
+            RateLimitPolicy defaultTier,
+            IReadOnlyDictionary<string, RateLimitPolicy> plans,
+            CancellationToken cancellationToken = default)
+        {
+            SavedDefault = defaultTier;
+            SavedPlans = plans;
+            return Task.CompletedTask;
+        }
+    }
 
-        public IFileProvider ContentRootFileProvider { get; set; } = new NullFileProvider();
+    private sealed class RecordingRefresher : IGatewayConfigRefresher
+    {
+        public bool Refreshed { get; private set; }
+
+        public Task RefreshNowAsync(CancellationToken cancellationToken = default)
+        {
+            Refreshed = true;
+            return Task.CompletedTask;
+        }
     }
 }

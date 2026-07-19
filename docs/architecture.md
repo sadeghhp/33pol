@@ -11,7 +11,7 @@ Clients (SDKs) ──► 33pol.App (Kestrel)
                       ├── Security (API keys, tenant context)
                       ├── Policy (rate limit, quota, circuit breaker)
                       ├── Proxy (model router, streaming)
-                      ├── Registry (models.json + live CRUD)
+                      ├── Registry (DB-backed routes + live CRUD; models.json seed/fallback)
                       ├── Billing (usage events, rollups, FinOps APIs)
                       ├── Observability (metrics, recent requests, admin summary)
                       └── Api (admin + health + models list)
@@ -38,7 +38,7 @@ Clients (SDKs) ──► 33pol.App (Kestrel)
 | `33pol.Policy` | Rate limits, quotas, circuit breaker |
 | `33pol.Observability` | Metrics, usage channel, control plane commands |
 | `33pol.Billing` | Rate cards, rollups, exports, webhooks |
-| `33pol.Persistence` | EF Core + Postgres (tenants, keys, grants, billing) |
+| `33pol.Persistence` | EF Core + SQLite (tenants, keys, grants, billing, DB-backed config) |
 | `33pol.Api` | Minimal API endpoint mapping |
 | `33pol.OperatorConsole` | Optional Spectre.Console TUI |
 
@@ -61,7 +61,7 @@ Serilog → Routing → CORS → RequestId → Auth → Authorization
 | Artifact | Use |
 |----------|-----|
 | [Dockerfile](../Dockerfile) | Container image |
-| [deploy/docker/](../deploy/docker/) | Local Compose (Postgres, Prometheus, Grafana, mock) |
+| [deploy/docker/](../deploy/docker/) | Local Compose (gateway with embedded SQLite, Prometheus, Grafana, mock) |
 | [deploy/helm/33pol/](../deploy/helm/33pol/) | Kubernetes |
 | [deploy/otel-collector/](../deploy/otel-collector/) | OTLP sample |
 

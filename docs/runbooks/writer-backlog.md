@@ -10,16 +10,16 @@
 
 1. Grafana panel: usage writer queue depth and drop rate  
 2. `GET /admin/api/summary` — inference still succeeding?  
-3. Postgres connectivity and disk space (billing persistence)  
+3. SQLite database file writability and disk space (billing persistence)  
 4. Gateway logs for persistence / batch writer errors  
 
 ## Common causes
 
 | Cause | Action |
 |-------|--------|
-| Traffic spike | Scale gateway replicas; writer is per-process — consider lowering burst or enabling drop policy awareness |
-| DB slow or unavailable | Fix Postgres; check connection pool and migrations |
-| Saturated channel (10k, DropOldest) | Expected under extreme load — increase capacity or add replicas with shared store (post-GA) |
+| Traffic spike | Raise CPU/memory (vertical scale); the gateway is single-instance, so lower burst or shed load rather than adding replicas |
+| DB slow or unavailable | Check the SQLite file (disk space, WAL growth, file locks) and migrations |
+| Saturated channel (10k, DropOldest) | Expected under extreme load — increase channel capacity and host resources (single-instance; no shared-store fan-out) |
 | Misconfigured `ConnectionStrings:GatewayDb` | Fix secret; readiness should fail if DB required |
 
 ## Mitigation

@@ -62,14 +62,7 @@ public sealed class InMemoryQuotaServiceTests
     public void CheckBeforeForward_AfterMonthRollover_ResetsUsage()
     {
         var now = new DateTimeOffset(2026, 1, 31, 12, 0, 0, TimeSpan.Zero);
-        var metrics = Substitute.For<IGatewayMetricsCollector>();
-        var options = Options.Create(new QuotaOptions
-        {
-            DefaultMonthlyTokenLimit = 10,
-            SoftLimitRatio = 0.9,
-            CommittedRequestIdRetentionLimit = 100_000,
-        });
-        var service = new InMemoryQuotaService(options, metrics, () => now);
+        var service = CreateService(limit: 10, clock: () => now);
 
         service.CommitUsage("t1", "m", 10, "req-jan");
         service.CheckBeforeForward("t1", "m").IsAllowed.Should().BeFalse(); // January exhausted
@@ -82,15 +75,26 @@ public sealed class InMemoryQuotaServiceTests
 
     private static InMemoryQuotaService CreateService(
         long limit,
-        int committedRequestRetentionLimit = 100_000)
+        int committedRequestRetentionLimit = 100_000,
+        Func<DateTimeOffset>? clock = null)
     {
         var metrics = Substitute.For<IGatewayMetricsCollector>();
+
+        // The monthly limit and soft ratio now come from the config snapshot; only the retention
+        // limit stays on QuotaOptions.
+        var provider = new StubConfigProvider(new GatewayConfigSnapshot
+        {
+            Quota = new QuotaConfigSection { DefaultMonthlyTokenLimit = limit, SoftLimitRatio = 0.9 },
+        });
         var options = Options.Create(new QuotaOptions
         {
-            DefaultMonthlyTokenLimit = limit,
-            SoftLimitRatio = 0.9,
             CommittedRequestIdRetentionLimit = committedRequestRetentionLimit,
         });
-        return new InMemoryQuotaService(options, metrics);
+        return new InMemoryQuotaService(provider, options, metrics, clock);
+    }
+
+    private sealed class StubConfigProvider(GatewayConfigSnapshot snapshot) : IGatewayConfigProvider
+    {
+        public GatewayConfigSnapshot Current => snapshot;
     }
 }

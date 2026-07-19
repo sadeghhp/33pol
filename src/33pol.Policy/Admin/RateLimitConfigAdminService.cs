@@ -1,41 +1,30 @@
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 using Pol33.Core.Abstractions;
 using Pol33.Core.Configuration;
+using Pol33.Core.RateLimiting;
 
 namespace Pol33.Policy.Admin;
 
-public sealed class RateLimitConfigAdminService : IRateLimitConfigAdminService
+/// <summary>
+/// Reads rate limits from the live config snapshot and persists updates to the database, forcing an
+/// in-process snapshot refresh so a change takes effect without a restart. Requires a configured
+/// database; in a DB-less deployment rate limits are read-only from appsettings.
+/// </summary>
+public sealed class RateLimitConfigAdminService(
+    IGatewayConfigProvider configProvider,
+    IServiceScopeFactory scopeFactory,
+    ILogger<RateLimitConfigAdminService> logger) : IRateLimitConfigAdminService
 {
-    private readonly IConfiguration _configuration;
-    private readonly IHostEnvironment _environment;
-    private readonly IOptionsMonitor<RateLimitingOptions> _optionsMonitor;
-    private readonly ILogger<RateLimitConfigAdminService> _logger;
-    private readonly SemaphoreSlim _writeLock = new(1, 1);
-
-    public RateLimitConfigAdminService(
-        IConfiguration configuration,
-        IHostEnvironment environment,
-        IOptionsMonitor<RateLimitingOptions> optionsMonitor,
-        ILogger<RateLimitConfigAdminService> logger)
-    {
-        _configuration = configuration;
-        _environment = environment;
-        _optionsMonitor = optionsMonitor;
-        _logger = logger;
-    }
-
     public RateLimitAdminConfig GetCurrent()
     {
-        var options = _optionsMonitor.CurrentValue;
+        var rateLimits = configProvider.Current.RateLimits;
         return new RateLimitAdminConfig
         {
-            Default = CloneTier(options.Default),
-            Plans = options.Plans.ToDictionary(
+            Default = ToTierOptions(rateLimits.Default),
+            Plans = rateLimits.Plans.ToDictionary(
                 static p => p.Key,
-                static p => CloneTier(p.Value),
+                static p => ToTierOptions(p.Value),
                 StringComparer.OrdinalIgnoreCase),
         };
     }
@@ -50,54 +39,48 @@ public sealed class RateLimitConfigAdminService : IRateLimitConfigAdminService
             return RateLimitConfigUpdateResult.Fail(validationError!, statusCode: 400);
         }
 
-        await _writeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var repository = scope.ServiceProvider.GetService<IRateLimitSettingsRepository>();
+        if (repository is null)
+        {
+            return RateLimitConfigUpdateResult.Fail(
+                "Rate-limit updates require a configured database.",
+                statusCode: 503);
+        }
+
         try
         {
-            var path = ResolveAppSettingsPath();
-            await AppSettingsRateLimitPersistence
-                .WriteAsync(path, defaultTier, plans, cancellationToken)
-                .ConfigureAwait(false);
+            var planPolicies = plans.ToDictionary(
+                static p => p.Key,
+                static p => ToPolicy(p.Value),
+                StringComparer.OrdinalIgnoreCase);
 
-            if (_configuration is IConfigurationRoot configurationRoot)
+            await repository.SaveAsync(ToPolicy(defaultTier), planPolicies, cancellationToken).ConfigureAwait(false);
+
+            var refresher = scope.ServiceProvider.GetService<IGatewayConfigRefresher>();
+            if (refresher is not null)
             {
-                configurationRoot.Reload();
-            }
-            else
-            {
-                _logger.LogWarning(
-                    "Configuration is not reloadable; rate limits were persisted but in-memory options may be stale until restart.");
+                await refresher.RefreshNowAsync(cancellationToken).ConfigureAwait(false);
             }
 
-            _ = _optionsMonitor.CurrentValue;
-
-            _logger.LogInformation("Updated rate limits in {AppSettingsPath}.", path);
+            logger.LogInformation("Updated rate limits (default + {PlanCount} plan tier(s)).", plans.Count);
             return RateLimitConfigUpdateResult.Ok("Rate limits updated.");
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to persist rate limit configuration.");
+            logger.LogError(ex, "Failed to persist rate limit configuration.");
             return RateLimitConfigUpdateResult.Fail("Failed to persist rate limit configuration.", statusCode: 500);
         }
-        finally
-        {
-            _writeLock.Release();
-        }
     }
 
-    private string ResolveAppSettingsPath()
-    {
-        var configured = _configuration["Gateway:AppSettingsPath"];
-        var fileName = string.IsNullOrWhiteSpace(configured) ? "appsettings.json" : configured.Trim();
-        return Path.IsPathRooted(fileName)
-            ? fileName
-            : Path.Combine(_environment.ContentRootPath, fileName);
-    }
+    private static RateLimitPolicy ToPolicy(RateLimitTierOptions tier) =>
+        new(tier.Rpm, tier.Burst, tier.MaxConcurrentStreams);
 
-    private static RateLimitTierOptions CloneTier(RateLimitTierOptions tier) =>
+    private static RateLimitTierOptions ToTierOptions(RateLimitPolicy policy) =>
         new()
         {
-            Rpm = tier.Rpm,
-            Burst = tier.Burst,
-            MaxConcurrentStreams = tier.MaxConcurrentStreams,
+            Rpm = policy.Rpm,
+            Burst = policy.Burst,
+            MaxConcurrentStreams = policy.MaxConcurrentStreams,
         };
 }

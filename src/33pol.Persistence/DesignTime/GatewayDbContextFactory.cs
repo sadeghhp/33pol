@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Design;
+using Pol33.Persistence.Infrastructure;
 
 namespace Pol33.Persistence.DesignTime;
 
@@ -8,13 +9,11 @@ public sealed class GatewayDbContextFactory : IDesignTimeDbContextFactory<Gatewa
     public GatewayDbContext CreateDbContext(string[] args)
     {
         var connectionString = Environment.GetEnvironmentVariable("GATEWAY_DB_CONNECTION")
-            ?? "Host=localhost;Port=5432;Database=33pol_gateway;Username=postgres;Password=postgres";
+            ?? "Data Source=gateway.design.db";
 
-        var options = new DbContextOptionsBuilder<GatewayDbContext>()
-            .UseNpgsql(connectionString, npgsql =>
-                npgsql.MigrationsAssembly(typeof(GatewayDbContext).Assembly.GetName().Name))
-            .Options;
+        var options = new DbContextOptionsBuilder<GatewayDbContext>();
+        SqliteGatewayDbContext.Configure(options, connectionString);
 
-        return new GatewayDbContext(options);
+        return new GatewayDbContext(options.Options);
     }
 }

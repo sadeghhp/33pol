@@ -33,9 +33,6 @@ internal sealed class RecentRequestSnapshotEntityConfiguration : IEntityTypeConf
         builder.Property(r => r.ErrorCode)
             .HasMaxLength(128);
 
-        builder.Property(r => r.TimestampUtc)
-            .HasColumnType("timestamptz");
-
         builder.HasIndex(r => r.TimestampUtc);
     }
 }

@@ -12,13 +12,20 @@ public sealed class InMemoryQuotaServiceSnapshotTests
     private static InMemoryQuotaService CreateService(long limit, Func<DateTimeOffset> clock)
     {
         var metrics = Substitute.For<IGatewayMetricsCollector>();
+        var provider = new StubConfigProvider(new GatewayConfigSnapshot
+        {
+            Quota = new QuotaConfigSection { DefaultMonthlyTokenLimit = limit, SoftLimitRatio = 0.9 },
+        });
         var options = Options.Create(new QuotaOptions
         {
-            DefaultMonthlyTokenLimit = limit,
-            SoftLimitRatio = 0.9,
             CommittedRequestIdRetentionLimit = 100_000,
         });
-        return new InMemoryQuotaService(options, metrics, clock);
+        return new InMemoryQuotaService(provider, options, metrics, clock);
+    }
+
+    private sealed class StubConfigProvider(GatewayConfigSnapshot snapshot) : IGatewayConfigProvider
+    {
+        public GatewayConfigSnapshot Current => snapshot;
     }
 
     [Fact]

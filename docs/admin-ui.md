@@ -114,7 +114,7 @@ Rotating **KeyPepper** invalidates stored upstream secrets — re-enter API keys
 
 | Symptom | Cause | Fix |
 |---------|--------|-----|
-| 400 on save with `envVar` in JSON | Secret pasted as env var name | Use quick-add **API key** field, or a valid name like `OPENROUTER_API_KEY` in file-based config |
+| 400 on save with `envVar` in JSON | Secret pasted as env var name | Use quick-add **API key** field, or a valid name like `OPENROUTER_API_KEY` in the model route's `envVar` |
 | Upstream 401 | Missing or wrong stored key | Edit model → set new API key; verify `hasUpstreamCredential` on GET |
 | Stale UI after upgrade | Cached admin assets | Hard refresh; assets use `?v=5` |
 | Docker local LLM fails | Used `localhost` in URL | Use `http://host.docker.internal:<port>` |

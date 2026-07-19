@@ -1,32 +1,18 @@
-# 33pol local stack — gateway, Postgres, Prometheus, Grafana, mock upstream (WP5.4).
+# 33pol local stack — gateway (embedded SQLite), Prometheus, Grafana, mock upstream (WP5.4).
 # Usage: repo root `docker compose up -d --build` or see deploy/docker/README.md
 #
-# Local-dev defaults below (POSTGRES_PASSWORD, GATEWAY_ADMIN_API_KEY, GATEWAY_KEY_PEPPER)
-# let `docker compose up` work without a .env file. Override via .env for non-local deploys.
-# Admin UI sign-in key (default): sk-33pol-4aa283ddb877adaccc60cb53314fa15cfd41f01084df064c
+# Local-dev defaults below (GATEWAY_ADMIN_API_KEY, GATEWAY_KEY_PEPPER) let `docker compose up`
+# work without a .env file. They are OBVIOUS DEV SENTINELS, not real secrets.
+#
+# PRODUCTION: set ASPNETCORE_ENVIRONMENT=Production plus strong GATEWAY_ADMIN_API_KEY and
+# GATEWAY_KEY_PEPPER in .env. The gateway REFUSES TO BOOT in Production on the sentinel/default
+# values below (they are on a startup denylist), so a prod deploy cannot silently inherit them.
+# Generate secrets with:  openssl rand -hex 24   (pepper)  and  printf 'sk-33pol-%s' "$(openssl rand -hex 24)"  (admin key)
+# Admin UI sign-in key (dev sentinel): sk-33pol-dev-local-unsafe
 
 name: 33pol
 
 services:
-  postgres:
-    image: postgres:16-alpine
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER:-gateway}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ysHAsRWXYv6pGtd3tANleZKc2Bf6I0Z}
-      POSTGRES_DB: ${POSTGRES_DB:-gateway}
-    volumes:
-      - postgres-data:/var/lib/postgresql/data
-    ports:
-      # Default to loopback only; set POSTGRES_BIND=0.0.0.0 explicitly to expose on the network.
-      - "${POSTGRES_BIND:-127.0.0.1}:${POSTGRES_PORT:-5432}:5432"
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-      start_period: 10s
-
   mock-upstream:
     profiles: ["mock", "full"]
     image: wiremock/wiremock:3.9.1
@@ -52,8 +38,6 @@ services:
         required: false
     restart: unless-stopped
     depends_on:
-      postgres:
-        condition: service_healthy
       mock-upstream:
         condition: service_healthy
         required: false
@@ -62,14 +46,15 @@ services:
     environment:
       ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT:-Development}
       ASPNETCORE_URLS: http://+:8080
-      ConnectionStrings__GatewayDb: >-
-        Host=postgres;Port=5432;Database=${POSTGRES_DB:-gateway};
-        Username=${POSTGRES_USER:-gateway};Password=${POSTGRES_PASSWORD:-ysHAsRWXYv6pGtd3tANleZKc2Bf6I0Z}
+      # Embedded SQLite database, persisted on the gateway-data volume mounted at /data.
+      ConnectionStrings__GatewayDb: ${GATEWAY_DB_CONNECTION:-Data Source=/data/gateway.db}
       Gateway__ModelsConfigPath: /app/config/models.json
-      Gateway__Bootstrap__AdminApiKey: ${GATEWAY_ADMIN_API_KEY:-sk-33pol-4aa283ddb877adaccc60cb53314fa15cfd41f01084df064c}
-      # Production requires GATEWAY_KEY_PEPPER (>=16 chars, not dev-pepper-change-me). Development may omit it.
-      Gateway__Security__KeyPepper: ${GATEWAY_KEY_PEPPER:-oJHJdzSvNdVFbFd8fDrexL3bf6n9ggW}
-      Gateway__Bootstrap__KeyPepper: ${GATEWAY_KEY_PEPPER:-oJHJdzSvNdVFbFd8fDrexL3bf6n9ggW}
+      Gateway__Bootstrap__AdminApiKey: ${GATEWAY_ADMIN_API_KEY:-sk-33pol-dev-local-unsafe}
+      # Production requires a strong GATEWAY_KEY_PEPPER (>=16 chars, non-default). Development may omit it.
+      # Bootstrap and Security peppers MUST be identical (both fed from GATEWAY_KEY_PEPPER) or the admin key
+      # is hashed with one and verified with the other and can never authenticate.
+      Gateway__Security__KeyPepper: ${GATEWAY_KEY_PEPPER:-dev-pepper-change-me}
+      Gateway__Bootstrap__KeyPepper: ${GATEWAY_KEY_PEPPER:-dev-pepper-change-me}
       Gateway__OperatorConsole__Enabled: "false"
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
@@ -84,6 +69,8 @@ services:
     volumes:
       # Directory mount: atomic rename works; single-file bind mounts often return EBUSY on save.
       - ./config:/app/config
+      # Persist the embedded SQLite database (gateway.db + WAL/SHM sidecars) across restarts.
+      - gateway-data:/data
     ports:
       # Default to loopback only; set GATEWAY_BIND=0.0.0.0 explicitly to expose on the network.
       - "${GATEWAY_BIND:-127.0.0.1}:${GATEWAY_PORT:-8080}:8080"
@@ -117,6 +104,8 @@ services:
     image: grafana/grafana:11.3.0
     restart: unless-stopped
     environment:
+      # GRAFANA_ADMIN_PASSWORD defaults to "admin" for local-dev convenience only. Change it in
+      # .env before enabling the observability profile beyond your own machine.
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
       GF_USERS_ALLOW_SIGN_UP: "false"
@@ -125,11 +114,13 @@ services:
       - ../grafana/dashboards:/var/lib/grafana/dashboards:ro
       - grafana-data:/var/lib/grafana
     ports:
-      - "${GRAFANA_PORT:-3000}:3000"
+      # Default to loopback only, same as the gateway; set GRAFANA_BIND=0.0.0.0 explicitly to
+      # expose on the network (only after changing GRAFANA_ADMIN_PASSWORD).
+      - "${GRAFANA_BIND:-127.0.0.1}:${GRAFANA_PORT:-3000}:3000"
     depends_on:
       - prometheus
 
 volumes:
-  postgres-data:
+  gateway-data:
   prometheus-data:
   grafana-data:

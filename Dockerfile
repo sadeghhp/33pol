@@ -39,6 +39,12 @@ COPY --from=build /app/publish .
 COPY deploy/docker/gateway-healthcheck.sh /app/healthcheck.sh
 RUN chmod +x /app/healthcheck.sh
 
+# Pre-create the SQLite data directory owned by the non-root runtime uid. Docker seeds a freshly
+# provisioned named volume from the image's directory at the mount path — ownership included — so
+# this makes /data writable by the gateway (uid 1654). Without it the fresh gateway-data volume is
+# root-owned and the non-root process fails with "SQLite Error 14: unable to open database file".
+RUN mkdir -p /data && chown "${APP_UID:-1654}:${APP_UID:-1654}" /data
+
 ENV ASPNETCORE_URLS=http://+:8080
 EXPOSE 8080
 

@@ -1,43 +1,30 @@
-using System.Text.Json;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 using Pol33.Core.Abstractions;
-using Pol33.Core.Configuration;
 using Pol33.Core.Models;
-using Pol33.Registry.Hosting;
 
 namespace Pol33.Registry.Services;
 
-public sealed class ModelRegistryWriter : IModelRegistryWriter
+/// <summary>
+/// Applies admin mutations to the model registry: validates, persists the full route set to the
+/// database (<see cref="IModelRouteRepository"/>), then swaps the in-memory registry so the change is
+/// live immediately. Writes are serialized by <see cref="RegistryGate"/>. Requires a configured
+/// database; DB-less deployments are read-only from models.json.
+/// </summary>
+public sealed class ModelRegistryWriter(
+    ModelRegistryService registry,
+    RegistryGate gate,
+    IServiceScopeFactory scopeFactory,
+    IUpstreamSecretStore secretStore,
+    ILogger<ModelRegistryWriter> logger) : IModelRegistryWriter
 {
-    private readonly ModelRegistryService _registry;
-    private readonly RegistryGate _gate;
-    private readonly GatewayOptions _options;
-    private readonly IUpstreamSecretStore _secretStore;
-    private readonly ILogger<ModelRegistryWriter> _logger;
-
-    public ModelRegistryWriter(
-        ModelRegistryService registry,
-        RegistryGate gate,
-        IOptions<GatewayOptions> options,
-        IUpstreamSecretStore secretStore,
-        ILogger<ModelRegistryWriter> logger)
-    {
-        _registry = registry;
-        _gate = gate;
-        _options = options.Value;
-        _secretStore = secretStore;
-        _logger = logger;
-    }
-
     public async Task<RegistryMutationResult> AddModelAsync(
         ModelConfig model,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(model);
 
-        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             if (string.IsNullOrWhiteSpace(model.Id) || string.IsNullOrWhiteSpace(model.Url))
@@ -50,27 +37,20 @@ public sealed class ModelRegistryWriter : IModelRegistryWriter
                 return RegistryMutationResult.Fail(validationError!);
             }
 
-            if (_registry.ModelExists(model.Id))
+            if (registry.ModelExists(model.Id))
             {
                 return RegistryMutationResult.Fail($"Model '{model.Id}' already exists.", 409);
             }
 
-            var models = _registry.GetAllModels().ToList();
+            var models = registry.GetAllModels().ToList();
             models.Add(ModelRegistryPersistence.CloneModel(model));
 
-            var configPath = ResolveConfigPath();
-            await _registry.PersistAndApplyAsync(configPath, models, cancellationToken).ConfigureAwait(false);
-            _logger.LogInformation("Added model {ModelId} to registry.", model.Id);
-
-            return RegistryMutationResult.Ok($"Model '{model.Id}' added.");
-        }
-        catch (Exception ex)
-        {
-            return ModelRegistryPersistErrors.FromException(ex, ResolveConfigPath(), _logger, "add model");
+            return await PersistAndApplyAsync(models, $"Model '{model.Id}' added.", "add model", cancellationToken)
+                .ConfigureAwait(false);
         }
         finally
         {
-            _gate.Release();
+            gate.Release();
         }
     }
 
@@ -82,11 +62,10 @@ public sealed class ModelRegistryWriter : IModelRegistryWriter
         ArgumentException.ThrowIfNullOrWhiteSpace(id);
         ArgumentNullException.ThrowIfNull(model);
 
-        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            if (!_registry.TryGetModel(id, out var existing) || existing is null)
+            if (!registry.TryGetModel(id, out var existing) || existing is null)
             {
                 return RegistryMutationResult.Fail($"Model '{id}' was not found.", 404);
             }
@@ -100,28 +79,16 @@ public sealed class ModelRegistryWriter : IModelRegistryWriter
             var updated = ModelRegistryPersistence.CloneModel(model);
             updated.Id = canonicalId;
 
-            var models = _registry.GetAllModels()
+            var models = registry.GetAllModels()
                 .Select(m => string.Equals(m.Id, canonicalId, StringComparison.OrdinalIgnoreCase) ? updated : m)
                 .ToList();
 
-            if (models.All(m => !string.Equals(m.Id, canonicalId, StringComparison.OrdinalIgnoreCase)))
-            {
-                return RegistryMutationResult.Fail($"Model '{id}' was not found.", 404);
-            }
-
-            var configPath = ResolveConfigPath();
-            await _registry.PersistAndApplyAsync(configPath, models, cancellationToken).ConfigureAwait(false);
-            _logger.LogInformation("Updated model {ModelId} in registry.", canonicalId);
-
-            return RegistryMutationResult.Ok($"Model '{canonicalId}' updated.");
-        }
-        catch (Exception ex)
-        {
-            return ModelRegistryPersistErrors.FromException(ex, ResolveConfigPath(), _logger, "update model");
+            return await PersistAndApplyAsync(models, $"Model '{canonicalId}' updated.", "update model", cancellationToken)
+                .ConfigureAwait(false);
         }
         finally
         {
-            _gate.Release();
+            gate.Release();
         }
     }
 
@@ -131,44 +98,39 @@ public sealed class ModelRegistryWriter : IModelRegistryWriter
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(id);
 
-        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            if (!_registry.TryGetModel(id, out var existing) || existing is null)
+            if (!registry.TryGetModel(id, out var existing) || existing is null)
             {
                 return RegistryMutationResult.Fail($"Model '{id}' was not found.", 404);
             }
 
             var canonicalId = existing.Id;
-            var models = _registry.GetAllModels()
+            var models = registry.GetAllModels()
                 .Where(m => !string.Equals(m.Id, canonicalId, StringComparison.OrdinalIgnoreCase))
                 .ToList();
 
-            var configPath = ResolveConfigPath();
             if (models.Count == 0)
             {
-                _logger.LogWarning(
-                    "Remove of {ModelId} would clear registry; persisting empty file is skipped.",
-                    canonicalId);
+                logger.LogWarning("Remove of {ModelId} would clear registry; rejected.", canonicalId);
                 return RegistryMutationResult.Fail(
                     "Cannot remove the last model; registry would be empty.",
                     400);
             }
 
-            await _registry.PersistAndApplyAsync(configPath, models, cancellationToken).ConfigureAwait(false);
-            await _secretStore.DeleteAsync(canonicalId, cancellationToken).ConfigureAwait(false);
-            _logger.LogInformation("Removed model {ModelId} from registry.", canonicalId);
+            var result = await PersistAndApplyAsync(models, $"Model '{canonicalId}' removed.", "remove model", cancellationToken)
+                .ConfigureAwait(false);
+            if (result.Success)
+            {
+                await secretStore.DeleteAsync(canonicalId, cancellationToken).ConfigureAwait(false);
+            }
 
-            return RegistryMutationResult.Ok($"Model '{canonicalId}' removed.");
-        }
-        catch (Exception ex)
-        {
-            return ModelRegistryPersistErrors.FromException(ex, ResolveConfigPath(), _logger, "remove model");
+            return result;
         }
         finally
         {
-            _gate.Release();
+            gate.Release();
         }
     }
 
@@ -178,13 +140,12 @@ public sealed class ModelRegistryWriter : IModelRegistryWriter
     {
         ArgumentNullException.ThrowIfNull(models);
 
-        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             if (models.Count == 0)
             {
-                _logger.LogWarning("ReplaceAll rejected: empty model list would clear the registry.");
+                logger.LogWarning("ReplaceAll rejected: empty model list would clear the registry.");
                 return RegistryMutationResult.Fail(
                     "Cannot replace registry with an empty model list.",
                     400);
@@ -199,22 +160,42 @@ public sealed class ModelRegistryWriter : IModelRegistryWriter
             }
 
             var cloned = models.Select(ModelRegistryPersistence.CloneModel).ToList();
-            var configPath = ResolveConfigPath();
-            await _registry.PersistAndApplyAsync(configPath, cloned, cancellationToken).ConfigureAwait(false);
-            _logger.LogInformation("Replaced registry with {ModelCount} models.", cloned.Count);
-
-            return RegistryMutationResult.Ok($"Registry replaced with {cloned.Count} model(s).");
-        }
-        catch (Exception ex)
-        {
-            return ModelRegistryPersistErrors.FromException(ex, ResolveConfigPath(), _logger, "replace registry");
+            return await PersistAndApplyAsync(
+                    cloned,
+                    $"Registry replaced with {cloned.Count} model(s).",
+                    "replace registry",
+                    cancellationToken)
+                .ConfigureAwait(false);
         }
         finally
         {
-            _gate.Release();
+            gate.Release();
         }
     }
 
-    private string ResolveConfigPath() =>
-        ModelRegistryInitializer.ResolveConfigPath(_options.ModelsConfigPath);
+    private async Task<RegistryMutationResult> PersistAndApplyAsync(
+        IReadOnlyList<ModelConfig> models,
+        string successMessage,
+        string action,
+        CancellationToken cancellationToken)
+    {
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var repository = scope.ServiceProvider.GetService<IModelRouteRepository>();
+        if (repository is null)
+        {
+            return RegistryMutationResult.Fail("Model registry updates require a configured database.", 503);
+        }
+
+        try
+        {
+            await repository.ReplaceAllAsync(models, cancellationToken).ConfigureAwait(false);
+            registry.Apply(models);
+            logger.LogInformation("Registry {Action}: {ModelCount} model(s).", action, models.Count);
+            return RegistryMutationResult.Ok(successMessage);
+        }
+        catch (Exception ex)
+        {
+            return ModelRegistryPersistErrors.FromException(ex, "database", logger, action);
+        }
+    }
 }

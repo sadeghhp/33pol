@@ -19,7 +19,7 @@ install_prompt_profile() {
   fi
   local choice
   echo "Select deployment profile:" >&2
-  echo "  1) gpu-gateway       — Postgres + gateway (remote GPU server)" >&2
+  echo "  1) gpu-gateway       — gateway + embedded SQLite (remote GPU server)" >&2
   echo "  2) gpu-observability — above + Prometheus + Grafana (no mock)" >&2
   echo "  3) full-stack        — above + WireMock mock upstream (local demo)" >&2
   read -rp "Choice [1]: " choice
@@ -114,17 +114,6 @@ install_resolve_install_config() {
     fi
   fi
 
-  INSTALL_POSTGRES_PORT="$(install_prompt_value INSTALL_POSTGRES_PORT "Postgres port" "5432")"
-  install_validate_port "${INSTALL_POSTGRES_PORT}" || die "Invalid POSTGRES_PORT"
-
-  if [[ -z "${INSTALL_POSTGRES_BIND:-}" ]]; then
-    INSTALL_POSTGRES_BIND="0.0.0.0"
-    if [[ "${INSTALL_YES:-false}" != true ]]; then
-      read -rp "Postgres bind address [0.0.0.0]: " INSTALL_POSTGRES_BIND
-      INSTALL_POSTGRES_BIND="${INSTALL_POSTGRES_BIND:-0.0.0.0}"
-    fi
-  fi
-
   local admin_default
   admin_default="$(install_generate_admin_key)"
   INSTALL_ADMIN_KEY="$(install_prompt_value INSTALL_ADMIN_KEY "Admin API key" "${admin_default}" true)"
@@ -132,11 +121,14 @@ install_resolve_install_config() {
     INSTALL_ADMIN_KEY="${admin_default}"
   fi
 
-  INSTALL_POSTGRES_USER="${INSTALL_POSTGRES_USER:-gateway}"
-  if [[ "${INSTALL_PROFILE}" == gpu-gateway || "${INSTALL_PROFILE}" == gpu-observability ]]; then
-    INSTALL_POSTGRES_PASSWORD="${INSTALL_POSTGRES_PASSWORD:-$(install_generate_password)}"
-  else
-    INSTALL_POSTGRES_PASSWORD="${INSTALL_POSTGRES_PASSWORD:-gateway}"
+  # Key pepper hashes every stored API key. It must be strong and non-default in Production, and must
+  # stay STABLE across reinstalls (rotating it invalidates existing key hashes). Reuse an existing
+  # value by exporting INSTALL_KEY_PEPPER before running.
+  local pepper_default
+  pepper_default="$(install_generate_secret)"
+  INSTALL_KEY_PEPPER="$(install_prompt_value INSTALL_KEY_PEPPER "Key pepper (keep stable across reinstalls)" "${pepper_default}" true)"
+  if [[ -z "${INSTALL_KEY_PEPPER}" ]]; then
+    INSTALL_KEY_PEPPER="${pepper_default}"
   fi
 
   if [[ "${INSTALL_PROFILE}" == gpu-gateway || "${INSTALL_PROFILE}" == gpu-observability ]]; then

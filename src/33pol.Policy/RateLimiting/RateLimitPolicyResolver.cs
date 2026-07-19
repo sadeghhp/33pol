@@ -1,37 +1,30 @@
-using Microsoft.Extensions.Options;
 using Pol33.Core.Abstractions;
-using Pol33.Core.Configuration;
 using Pol33.Core.RateLimiting;
 
 namespace Pol33.Policy.RateLimiting;
 
-public sealed class RateLimitPolicyResolver : IRateLimitPolicyResolver
+public sealed class RateLimitPolicyResolver(IGatewayConfigProvider configProvider) : IRateLimitPolicyResolver
 {
-    private readonly IOptionsMonitor<RateLimitingOptions> _options;
-
-    public RateLimitPolicyResolver(IOptionsMonitor<RateLimitingOptions> options) =>
-        _options = options;
-
     public RateLimitPolicy Resolve(string? planSlug, string? tenantSlug)
     {
-        var options = _options.CurrentValue;
+        var rateLimits = configProvider.Current.RateLimits;
 
         if (!string.IsNullOrWhiteSpace(tenantSlug) &&
-            options.Tenants.TryGetValue(tenantSlug, out var tenantTier))
+            rateLimits.TenantOverrides.TryGetValue(tenantSlug, out var tenantTier))
         {
-            return ToPolicy(tenantTier);
+            return Clamp(tenantTier);
         }
 
         if (!string.IsNullOrWhiteSpace(planSlug) &&
-            options.Plans.TryGetValue(planSlug, out var planTier))
+            rateLimits.Plans.TryGetValue(planSlug, out var planTier))
         {
-            return ToPolicy(planTier);
+            return Clamp(planTier);
         }
 
-        return ToPolicy(options.Default);
+        return Clamp(rateLimits.Default);
     }
 
-    private static RateLimitPolicy ToPolicy(RateLimitTierOptions tier) =>
+    private static RateLimitPolicy Clamp(RateLimitPolicy tier) =>
         new(
             Math.Max(1, tier.Rpm),
             Math.Max(0, tier.Burst),

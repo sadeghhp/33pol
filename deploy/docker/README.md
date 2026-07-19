@@ -1,12 +1,12 @@
 # Docker Compose — local 33pol stack
 
-Runs **gateway** and **Postgres** by default. Optional Compose profile **`full`** adds Prometheus, Grafana, and a WireMock mock upstream.
+Runs the **gateway** by default, with an embedded SQLite database persisted on the `gateway-data` volume (no external database service). Optional Compose profile **`full`** adds Prometheus, Grafana, and a WireMock mock upstream.
 
 ## Compose profiles
 
 | Profile | `COMPOSE_PROFILES` | Services |
 |---------|----------------------|----------|
-| **gpu-gateway** (default) | empty / unset | `postgres`, `gateway` |
+| **gpu-gateway** (default) | empty / unset | `gateway` (embedded SQLite) |
 | **gpu-observability** | `observability` | above + `prometheus`, `grafana` |
 | **full-stack** (local demo) | `full` | above + `mock-upstream` |
 
@@ -48,7 +48,7 @@ For **gpu-gateway only**, omit `COMPOSE_PROFILES` in `.env` (or leave it empty),
 | Mock upstream  | http://localhost:18080       |
 | Prometheus     | http://localhost:9090        |
 | Grafana        | http://localhost:3000 (admin / admin) — folder **33pol**: [33pol Gateway](http://localhost:3000/d/33pol-gateway/33pol-gateway) (RED, backends), [Traffic & tokens](http://localhost:3000/d/33pol-gateway-traffic/33pol-gateway-traffic) — see [observability.md](../../docs/observability.md) |
-| PostgreSQL     | localhost:5432               |
+| Database       | embedded SQLite at `/data/gateway.db` on the `gateway-data` volume |
 
 Test the mock:
 
@@ -77,6 +77,22 @@ The default points at `http://mock-upstream:8080` (full-stack profile). Edit on 
 `host.docker.internal` is configured so backends running on the host machine are reachable from the gateway container.
 
 The whole `deploy/docker/config/` directory is mounted at `/app/config` (including `models.json`) so the Admin UI (**Models** tab) can persist registry changes. A single-file bind mount cannot be atomically replaced on Docker Desktop (EBUSY).
+
+## First boot (fresh database)
+
+33pol deploys **greenfield**: it starts from an empty SQLite database and there is no import
+from any prior datastore. EF migrations create the schema only — they never carry data across.
+On the first boot of an empty `gateway.db`, `GatewayDbBootstrap` seeds the intended starting
+state, **once** (skipped forever after, so this is not a re-sync):
+
+- **Model routes** ← `models.json` (if present at `Gateway:ModelsConfigPath`).
+- **CORS origins, rate limits, quota scalars** ← `appsettings`.
+- **One admin API key** ← `GATEWAY_ADMIN_API_KEY`, plus the default tenant.
+
+There are **no pre-existing inference keys, tenants, model grants, or usage history** — you
+issue inference keys through the Admin UI / `POST /admin/api/keys` after first boot. If you are
+ever migrating from an external datastore instead of starting fresh, that is a separate one-off
+import (not provided here); a plain redeploy never imports data.
 
 ## Versioned deploy & instant rollback
 

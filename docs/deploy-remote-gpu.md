@@ -1,6 +1,6 @@
 # Deploy 33pol on a remote GPU server
 
-This guide installs **33pol** on a Linux host with Docker, using the **gpu-gateway** profile: Postgres and the gateway run in containers; your GPU inference server (vLLM, Ollama, TGI, etc.) runs on the **host** and is reached via `host.docker.internal`.
+This guide installs **33pol** on a Linux host with Docker, using the **gpu-gateway** profile: the gateway runs in a container with an embedded SQLite database (persisted on the `gateway-data` volume — no external database service); your GPU inference server (vLLM, Ollama, TGI, etc.) runs on the **host** and is reached via `host.docker.internal`.
 
 ## Prerequisites
 
@@ -70,7 +70,7 @@ Rotate the bootstrap admin key after first login per [security.md](./security.md
 - **Public access:** `GATEWAY_BIND=0.0.0.0` (installer default).
 - **Local / SSH tunnel only:** set `GATEWAY_BIND=127.0.0.1` in `.env`, then `ssh -L 8080:127.0.0.1:8080 user@server`.
 
-Open only the gateway port in your firewall; do not expose Postgres publicly unless required.
+Open only the gateway port in your firewall. There is no separate database service to expose (the SQLite file stays inside the `gateway-data` volume).
 
 ## Lifecycle commands
 

@@ -34,12 +34,15 @@ BACKUP_DIR="${STATE_DIR}/backups"
 
 IMAGE_REPO="33pol-gateway"        # versioned tags live under this repository
 GATEWAY_SERVICE="gateway"
-DB_SERVICE="postgres"
+# The embedded SQLite database lives on the gateway-data volume, mounted into the gateway
+# container at this path (compose default GatewayDb=Data Source=/data/gateway.db).
+DB_PATH="/data/gateway.db"
 
 # --- Defaults (override via flags) ------------------------------------------
 VERSION=""
 PROFILES=""
 DO_BACKUP=true
+HOT_BACKUP=false
 HEALTH_GATE=true
 HEALTH_TIMEOUT=120
 KEEP=5
@@ -100,7 +103,9 @@ profile_args() {
     IFS=',' read -ra _ps <<<"${PROFILES}"
     for p in "${_ps[@]}"; do [[ -n "${p}" ]] && out+=(--profile "${p}"); done
   fi
-  printf '%s\n' "${out[@]:-}"
+  # Emit nothing when there are no profiles. `"${out[@]:-}"` would print a single empty line, which
+  # mapfile turns into a stray "" argument to docker compose (compose then prints usage and exits 1).
+  ((${#out[@]})) && printf '%s\n' "${out[@]}"
 }
 
 # Run docker compose with base + override, the resolved image tag, and profiles.
@@ -163,34 +168,112 @@ confirm() {
   [[ "${reply}" =~ ^[Yy]$ ]]
 }
 
-# --- Database backup / restore ---------------------------------------------
-db_running() { dc latest ps --status running "${DB_SERVICE}" 2>/dev/null | grep -q "${DB_SERVICE}"; }
+# --- Database backup / restore (embedded SQLite on the gateway-data volume) --
+# The database is a single file (gateway.db + WAL/SHM sidecars) inside the gateway
+# container at ${DB_PATH}. A WAL-consistent copy needs no active writer, so a snapshot
+# briefly stops the gateway, copies the file set out of the volume, and starts it again —
+# no sqlite3 in the image and no sidecar image to pull (works air-gapped). A snapshot is a
+# directory (db-<label>-<ts>/) holding gateway.db plus any -wal/-shm captured with it.
+
+# The container image tag for ephemeral ops (cp/run against the existing container). Uses the
+# deployed version, whose image is guaranteed present; falls back to latest before first deploy.
+gateway_tag() { local t; t="$(state_get CURRENT_VERSION)"; printf '%s' "${t:-latest}"; }
+gateway_present() { [[ -n "$(dc "$(gateway_tag)" ps -aq "${GATEWAY_SERVICE}" 2>/dev/null)" ]]; }
+gateway_running() { [[ -n "$(dc "$(gateway_tag)" ps -q --status running "${GATEWAY_SERVICE}" 2>/dev/null)" ]]; }
 
 backup_db() {
-  local label="${1:-manual}" file
-  file="${BACKUP_DIR}/db-${label}-$(date -u '+%Y%m%d%H%M%S').dump"
-  if [[ "${DRY_RUN}" == true ]]; then log "[dry-run] would snapshot database -> ${file}"; printf '%s' "${file}"; return 0; fi
-  if ! db_running; then warn "Database container is not running; skipping snapshot."; return 0; fi
-  log "Snapshotting database -> $(basename "${file}")"
-  # pg_dump runs inside the container using its own POSTGRES_* env — no secret handling on the host.
-  dc latest exec -T "${DB_SERVICE}" sh -c \
-    'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc' >"${file}" \
-    || { rm -f "${file}"; die "Database snapshot failed."; }
-  ok "Snapshot saved: ${file} ($(du -h "${file}" | cut -f1))"
-  printf '%s' "${file}"
+  local label="${1:-manual}" dir tag
+  dir="${BACKUP_DIR}/db-${label}-$(date -u '+%Y%m%d%H%M%S')"
+  if [[ "${DRY_RUN}" == true ]]; then log "[dry-run] would snapshot SQLite database -> ${dir}"; printf '%s' "${dir}"; return 0; fi
+  if ! gateway_present; then warn "Gateway container not present; skipping snapshot."; return 0; fi
+  tag="$(gateway_tag)"
+  log "Snapshotting SQLite database -> $(basename "${dir}") (brief gateway stop for a WAL-consistent copy)"
+  local was_running=false
+  if gateway_running; then was_running=true; dc "${tag}" stop "${GATEWAY_SERVICE}" >/dev/null 2>&1 || true; fi
+  mkdir -p "${dir}"
+  if ! dc "${tag}" cp "${GATEWAY_SERVICE}:${DB_PATH}" "${dir}/gateway.db" >/dev/null 2>&1; then
+    rm -rf "${dir}"
+    [[ "${was_running}" == true ]] && dc "${tag}" start "${GATEWAY_SERVICE}" >/dev/null 2>&1 || true
+    die "Database snapshot failed (is the stack deployed?)."
+  fi
+  # WAL/SHM may be absent (checkpointed); capture them when present so the set stays consistent.
+  dc "${tag}" cp "${GATEWAY_SERVICE}:${DB_PATH}-wal" "${dir}/gateway.db-wal" >/dev/null 2>&1 || true
+  dc "${tag}" cp "${GATEWAY_SERVICE}:${DB_PATH}-shm" "${dir}/gateway.db-shm" >/dev/null 2>&1 || true
+  [[ "${was_running}" == true ]] && dc "${tag}" start "${GATEWAY_SERVICE}" >/dev/null 2>&1 || true
+  ok "Snapshot saved: ${dir} ($(du -sh "${dir}" | cut -f1))"
+  printf '%s' "${dir}"
+}
+
+# Online (no-downtime) backup: ask the running gateway to VACUUM INTO a consistent copy inside the
+# volume, verify integrity, then copy that single file out to ${BACKUP_DIR}. Unlike backup_db this
+# never stops the gateway, so it is safe to schedule on a timer. Falls back to the cold snapshot if
+# the gateway is not running. Produces the same db-<label>-<ts>/gateway.db layout restore_db expects.
+backup_db_hot() {
+  local label="${1:-hot}" port key resp path dir tag
+  if ! gateway_running; then
+    warn "Gateway not running; falling back to a cold snapshot."
+    backup_db "${label}"
+    return $?
+  fi
+  if [[ "${DRY_RUN}" == true ]]; then log "[dry-run] would request an online VACUUM INTO backup"; printf '%s' "${BACKUP_DIR}/db-${label}-dryrun"; return 0; fi
+  command -v curl >/dev/null 2>&1 || die "curl is required for hot backups; use plain 'backup' for a cold snapshot."
+  port="$(env_get GATEWAY_PORT)"; port="${port:-8080}"
+  key="$(env_get GATEWAY_ADMIN_API_KEY)"
+  [[ -n "${key}" ]] || die "GATEWAY_ADMIN_API_KEY not set in ${ENV_FILE}; cannot authenticate a hot backup."
+  log "Requesting online backup (VACUUM INTO, no downtime) ..."
+  resp="$(curl -fsS --max-time 120 -X POST -H "Authorization: Bearer ${key}" \
+    "http://127.0.0.1:${port}/admin/api/maintenance/backup" 2>/dev/null)" \
+    || die "Hot backup request failed (is the gateway healthy on :${port}?)."
+  path="$(printf '%s' "${resp}" | sed -n 's/.*"path":"\([^"]*\)".*/\1/p')"
+  [[ "${resp}" == *'"succeeded":true'* && -n "${path}" ]] \
+    || die "Hot backup did not succeed: ${resp}"
+  tag="$(gateway_tag)"
+  dir="${BACKUP_DIR}/db-${label}-$(date -u '+%Y%m%d%H%M%S')"
+  mkdir -p "${dir}"
+  if ! dc "${tag}" cp "${GATEWAY_SERVICE}:${path}" "${dir}/gateway.db" >/dev/null 2>&1; then
+    rm -rf "${dir}"; die "Failed to copy hot backup out of the container."
+  fi
+  # Reclaim the in-volume copy; the durable artifact now lives on the host.
+  dc "${tag}" exec -T "${GATEWAY_SERVICE}" rm -f "${path}" >/dev/null 2>&1 || true
+  ok "Hot backup saved: ${dir} ($(du -sh "${dir}" | cut -f1)); integrity_check ok"
+  printf '%s' "${dir}"
 }
 
 restore_db() {
-  local file="$1"
-  [[ -f "${file}" ]] || die "Backup file not found: ${file}"
-  db_running || die "Database container is not running; start the stack before restoring."
-  warn "This OVERWRITES the current database with ${file}."
+  local src="$1" srcdir dbname tag
+  [[ -e "${src}" ]] || die "Backup not found: ${src}"
+  # Accept a snapshot directory (current format) or a bare gateway.db file.
+  if [[ -d "${src}" ]]; then
+    srcdir="$(cd "${src}" && pwd)"; dbname="gateway.db"
+  else
+    srcdir="$(cd "$(dirname "${src}")" && pwd)"; dbname="$(basename "${src}")"
+  fi
+  [[ -f "${srcdir}/${dbname}" ]] || die "No ${dbname} found in ${srcdir}"
+  gateway_present || die "Gateway container not present; deploy the stack before restoring."
+  warn "This OVERWRITES the live SQLite database with ${src}."
   confirm "Proceed with database restore?" || die "Restore cancelled."
-  log "Restoring database from $(basename "${file}") ..."
-  dc latest exec -T "${DB_SERVICE}" sh -c \
-    'pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB" --clean --if-exists --no-owner' <"${file}" \
-    || die "Database restore reported errors."
-  ok "Database restored."
+  if [[ "${DRY_RUN}" == true ]]; then log "[dry-run] would restore ${srcdir}/${dbname} -> ${GATEWAY_SERVICE}:${DB_PATH}"; return 0; fi
+  tag="$(gateway_tag)"
+  log "Restoring SQLite database from $(basename "${src}") (gateway will restart) ..."
+  dc "${tag}" stop "${GATEWAY_SERVICE}" >/dev/null 2>&1 || true
+  # Replace the DB file set inside the volume in one privileged throwaway container: drop any stale
+  # WAL/SHM (so a leftover WAL cannot replay over the restored file), copy the snapshot in via a
+  # read-only bind mount, and hand the files to the gateway's runtime uid ($APP_UID from the base
+  # image) so the non-root gateway can open the restored database read-write. The gateway is stopped,
+  # so exec is unavailable; a run container mounts the same gateway-data volume.
+  dc "${tag}" run --rm --no-deps --user 0 -v "${srcdir}:/restore:ro" \
+    --entrypoint sh "${GATEWAY_SERVICE}" -c '
+      set -e
+      rm -f /data/gateway.db /data/gateway.db-wal /data/gateway.db-shm
+      cp "/restore/'"${dbname}"'" /data/gateway.db
+      [ -f /restore/gateway.db-wal ] && cp /restore/gateway.db-wal /data/gateway.db-wal || true
+      [ -f /restore/gateway.db-shm ] && cp /restore/gateway.db-shm /data/gateway.db-shm || true
+      uid="${APP_UID:-1654}"
+      chown "${uid}:${uid}" /data/gateway.db /data/gateway.db-wal /data/gateway.db-shm 2>/dev/null || true
+      chmod 644 /data/gateway.db
+    ' >/dev/null 2>&1 || die "Database restore failed."
+  dc "${tag}" start "${GATEWAY_SERVICE}" >/dev/null 2>&1 || dc "${tag}" up -d --no-build "${GATEWAY_SERVICE}"
+  ok "Database restored; gateway restarting."
 }
 
 # --- Health gate ------------------------------------------------------------
@@ -231,10 +314,21 @@ cmd_deploy() {
   new_version="$(compute_version)"
   prev_version="$(state_get CURRENT_VERSION)"
 
+  # A real deploy must run in Production so the gateway's secret-strength validators fire.
+  # The compose default is Development (a convenience for bare `docker compose up`), which
+  # disables those validators and would let the dev-sentinel admin key / pepper through.
+  local aspnet_env; aspnet_env="$(env_get ASPNETCORE_ENVIRONMENT)"; aspnet_env="${aspnet_env:-Development}"
+
   step "Deploying 33pol gateway"
   printf '  version:  %s%s%s\n' "${C_BOLD}" "${new_version}" "${C_RESET}"
   printf '  previous: %s\n' "${prev_version:-<none>}"
+  printf '  env:      %s\n' "${aspnet_env}"
   [[ -n "${PROFILES}" ]] && printf '  profiles: %s\n' "${PROFILES}"
+  if [[ "${aspnet_env}" != "Production" ]]; then
+    warn "ASPNETCORE_ENVIRONMENT=${aspnet_env}: secret-strength validation is DISABLED (not a production configuration)."
+    warn "For production set ASPNETCORE_ENVIRONMENT=Production in ${ENV_FILE} plus strong GATEWAY_ADMIN_API_KEY and GATEWAY_KEY_PEPPER."
+    confirm "Continue deploying in ${aspnet_env} mode anyway?" || die "Deploy cancelled; set ASPNETCORE_ENVIRONMENT=Production for a production deploy."
+  fi
   confirm "Continue?" || die "Deploy cancelled."
 
   # 1) Snapshot the database first — this is the real rollback insurance because
@@ -251,7 +345,7 @@ cmd_deploy() {
   dc "${new_version}" build "${GATEWAY_SERVICE}"
   ok "Image built."
 
-  # 3) Roll out (postgres stays up; only gateway is recreated onto the new image).
+  # 3) Roll out. The SQLite file persists on the gateway-data volume across the recreate.
   step "3/4 Roll out"
   dc "${new_version}" up -d --remove-orphans
   state_set PREVIOUS_VERSION "${prev_version}"
@@ -339,15 +433,18 @@ cmd_history() {
   cat "${HISTORY_FILE}"
 }
 
-cmd_backup()  { preflight; backup_db "manual" >/dev/null; }
+cmd_backup()  {
+  preflight
+  if [[ "${HOT_BACKUP:-false}" == true ]]; then backup_db_hot "manual" >/dev/null; else backup_db "manual" >/dev/null; fi
+}
 cmd_restore() { preflight; [[ -n "${1:-}" ]] || die "Usage: $0 restore <backup-file>"; restore_db "$1"; }
 
 cmd_list_backups() {
   preflight
   step "Database snapshots in ${BACKUP_DIR}"
-  if compgen -G "${BACKUP_DIR}/*.dump" >/dev/null; then
-    ls -1t "${BACKUP_DIR}"/*.dump | while read -r f; do
-      printf '  %-55s %s%s%s\n' "$(basename "${f}")" "${C_DIM}" "$(du -h "${f}" | cut -f1)" "${C_RESET}"
+  if compgen -G "${BACKUP_DIR}/db-*" >/dev/null; then
+    ls -1dt "${BACKUP_DIR}"/db-* | while read -r d; do
+      printf '  %-45s %s%s%s\n' "$(basename "${d}")" "${C_DIM}" "$(du -sh "${d}" | cut -f1)" "${C_RESET}"
     done
   else
     warn "No snapshots found."
@@ -379,10 +476,10 @@ cmd_prune() {
   step "Pruning old images (keeping ${KEEP} most recent + current/previous) and backups"
   prune_images
   # Keep the newest KEEP backups.
-  if compgen -G "${BACKUP_DIR}/*.dump" >/dev/null; then
+  if compgen -G "${BACKUP_DIR}/db-*" >/dev/null; then
     local n=0
-    ls -1t "${BACKUP_DIR}"/*.dump | while read -r f; do
-      n=$((n + 1)); (( n > KEEP )) && { rm -f "${f}"; log "Removed old backup $(basename "${f}")"; }
+    ls -1dt "${BACKUP_DIR}"/db-* | while read -r d; do
+      n=$((n + 1)); (( n > KEEP )) && { rm -rf "${d}"; log "Removed old backup $(basename "${d}")"; }
     done
   fi
   ok "Prune complete."
@@ -399,8 +496,10 @@ ${C_BOLD}COMMANDS${C_RESET}
   status                 Show current/previous version, container state, health.
   versions               List locally built gateway image versions.
   history                Show the deploy/rollback audit log.
-  backup                 Take a database snapshot now.
-  restore <file>         Restore the database from a snapshot.
+  backup [--hot]         Take a database snapshot now. Default briefly restarts the
+                         gateway for a WAL-consistent copy; --hot uses an online
+                         VACUUM INTO with no downtime (safe to run on a timer).
+  restore <snapshot>     Restore the database from a snapshot directory.
   list-backups           List database snapshots.
   logs [service]         Follow logs (default: all services).
   prune                  Remove old image versions and backups.
@@ -410,7 +509,7 @@ ${C_BOLD}FLAGS${C_RESET}
   --version <v>          Explicit image version (default: <git-sha>-<utc>).
   --to <v>               Rollback target version (default: previous).
   --profiles <a,b>       Compose profiles: mock, observability, full.
-  --restore-db <file>    Also restore this DB snapshot during rollback.
+  --restore-db <snapshot> Also restore this DB snapshot during rollback.
   --timeout <sec>        Health-gate timeout (default: ${HEALTH_TIMEOUT}).
   --keep <n>             Versions/backups to keep on prune (default: ${KEEP}).
   --no-backup            Skip the pre-deploy database snapshot.
@@ -422,7 +521,7 @@ ${C_BOLD}EXAMPLES${C_RESET}
   ./33pol-deploy.sh deploy --profiles observability --yes
   ./33pol-deploy.sh deploy --version v2.1.0
   ./33pol-deploy.sh rollback                       # to previous version
-  ./33pol-deploy.sh rollback --to a1b2c3d4-2026... --restore-db .deploy/backups/db-...dump
+  ./33pol-deploy.sh rollback --to a1b2c3d4-2026... --restore-db .deploy/backups/db-predeploy-...
   ./33pol-deploy.sh status
 EOF
 }
@@ -439,6 +538,7 @@ while [[ $# -gt 0 ]]; do
     --timeout)      HEALTH_TIMEOUT="${2:?}"; shift 2 ;;
     --keep)         KEEP="${2:?}"; shift 2 ;;
     --no-backup)    DO_BACKUP=false; shift ;;
+    --hot)          HOT_BACKUP=true; shift ;;
     --no-health-gate) HEALTH_GATE=false; shift ;;
     -y|--yes)       ASSUME_YES=true; shift ;;
     --dry-run)      DRY_RUN=true; shift ;;

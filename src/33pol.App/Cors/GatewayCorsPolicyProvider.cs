@@ -1,16 +1,16 @@
 using Microsoft.AspNetCore.Cors.Infrastructure;
 using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Options;
+using Pol33.Core.Abstractions;
 using Pol33.Core.Configuration;
 
 namespace Pol33.App.Cors;
 
 /// <summary>
-/// Builds the default CORS policy from live <see cref="GatewayOptions"/> so admin/appsettings
-/// reloads take effect without a process restart.
+/// Builds the default CORS policy from the live config snapshot (<see cref="IGatewayConfigProvider"/>)
+/// so admin updates take effect in-process without a restart.
 /// </summary>
 public sealed class GatewayCorsPolicyProvider(
-    IOptionsMonitor<GatewayOptions> optionsMonitor,
+    IGatewayConfigProvider configProvider,
     IHostEnvironment environment) : ICorsPolicyProvider
 {
     public const int PreflightMaxAgeSeconds = 86_400;
@@ -33,8 +33,8 @@ public sealed class GatewayCorsPolicyProvider(
             return builder.Build();
         }
 
-        var allowedOrigins = optionsMonitor.CurrentValue.Cors.GetNormalizedOrigins();
-        if (allowedOrigins.Length > 0)
+        var allowedOrigins = configProvider.Current.Cors.AllowedOrigins;
+        if (allowedOrigins.Count > 0)
         {
             builder.SetIsOriginAllowed(origin => CorsOriginMatcher.IsOriginAllowed(origin, allowedOrigins))
                 .AllowAnyHeader()

@@ -6,7 +6,7 @@ All notable changes to this project are documented here. Version tags follow [Se
 
 ### Added
 
-- Multi-project gateway (Phases 1–5): OpenAI-compatible proxy, Postgres persistence, rate limits, quotas, FinOps, operator admin UI.
+- Multi-project gateway (Phases 1–5): OpenAI-compatible proxy, embedded SQLite persistence, rate limits, quotas, FinOps, operator admin UI.
 - Docker Compose stack, Helm chart, host install script (`install-33pol.sh`), Prometheus/Grafana provisioning.
 - CI: Release build, coverage gate, k6 smoke; GHCR images; tag-gated GitHub Releases with gateway tarball.
 

@@ -1,3 +1,6 @@
+# 33pol runs SINGLE-INSTANCE only. Its embedded SQLite database is one file on a ReadWriteOnce
+# volume; a second writer corrupts it. replicaCount MUST stay 1 and autoscaling MUST stay disabled —
+# the chart refuses to render otherwise (see templates/deployment.yaml). Scale vertically via resources.
 replicaCount: 1
 
 image:
@@ -33,10 +36,12 @@ resources:
     cpu: 500m
     memory: 512Mi
 
+# Autoscaling is INCOMPATIBLE with the single-file SQLite backend and is rejected at render time.
+# Do not enable it. These fields are retained only so the HPA template parses; leave enabled: false.
 autoscaling:
   enabled: false
   minReplicas: 1
-  maxReplicas: 5
+  maxReplicas: 1
   targetCPUUtilizationPercentage: 70
 
 serviceMonitor:
@@ -72,14 +77,15 @@ providerApiKeys:
   # TOGETHER_API_KEY, GROQ_API_KEY, DEEPSEEK_API_KEY, MISTRAL_API_KEY, FIREWORKS_API_KEY,
   # DASHSCOPE_API_KEY, plus any custom envVar for POST /admin/api/providers/models.
 
-postgresql:
-  enabled: false
-  host: ""
-  port: 5432
-  database: gateway
-  username: gateway
-  existingSecret: ""
-  secretKey: password
+# Embedded SQLite database. The gateway runs single-instance (keep replicaCount: 1); the database
+# is a single file on a ReadWriteOnce volume. Disable persistence only for ephemeral/test installs.
+persistence:
+  enabled: true
+  mountPath: /data
+  connectionString: "Data Source=/data/gateway.db"
+  size: 1Gi
+  accessMode: ReadWriteOnce
+  # storageClass: ""   # unset uses the cluster default StorageClass
 
 probes:
   livenessPath: /health/live

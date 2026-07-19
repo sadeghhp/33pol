@@ -40,7 +40,7 @@ init_logging() {
 redact_env_preview() {
   sed -E \
     -e 's/^(GATEWAY_ADMIN_API_KEY=).*/\1***REDACTED***/' \
-    -e 's/^(POSTGRES_PASSWORD=).*/\1***REDACTED***/' \
+    -e 's/^(GATEWAY_KEY_PEPPER=).*/\1***REDACTED***/' \
     -e 's/^(GRAFANA_ADMIN_PASSWORD=).*/\1***REDACTED***/' \
     -e 's/^([A-Z_]*API_KEY=).*/\1***REDACTED***/'
 }

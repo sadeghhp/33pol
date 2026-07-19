@@ -18,8 +18,5 @@ internal sealed class QuotaUsageSnapshotEntityConfiguration : IEntityTypeConfigu
         builder.Property(q => q.Period)
             .HasMaxLength(7)
             .IsRequired();
-
-        builder.Property(q => q.UpdatedAt)
-            .HasColumnType("timestamptz");
     }
 }

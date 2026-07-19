@@ -1,33 +1,21 @@
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 using Pol33.Core.Abstractions;
 using Pol33.Core.Configuration;
 
 namespace Pol33.Policy.Admin;
 
-public sealed class CorsConfigAdminService : ICorsConfigAdminService
+/// <summary>
+/// Reads CORS origins from the live config snapshot and persists updates to the database, forcing an
+/// in-process snapshot refresh so a change is live without a restart. Requires a configured database;
+/// in a DB-less deployment CORS origins are read-only from appsettings.
+/// </summary>
+public sealed class CorsConfigAdminService(
+    IGatewayConfigProvider configProvider,
+    IServiceScopeFactory scopeFactory,
+    ILogger<CorsConfigAdminService> logger) : ICorsConfigAdminService
 {
-    private readonly IConfiguration _configuration;
-    private readonly IHostEnvironment _environment;
-    private readonly IOptionsMonitor<GatewayOptions> _optionsMonitor;
-    private readonly ILogger<CorsConfigAdminService> _logger;
-    private readonly SemaphoreSlim _writeLock = new(1, 1);
-
-    public CorsConfigAdminService(
-        IConfiguration configuration,
-        IHostEnvironment environment,
-        IOptionsMonitor<GatewayOptions> optionsMonitor,
-        ILogger<CorsConfigAdminService> logger)
-    {
-        _configuration = configuration;
-        _environment = environment;
-        _optionsMonitor = optionsMonitor;
-        _logger = logger;
-    }
-
-    public string[] GetCurrent() => _optionsMonitor.CurrentValue.Cors.GetNormalizedOrigins();
+    public string[] GetCurrent() => [.. configProvider.Current.Cors.AllowedOrigins];
 
     public async Task<CorsConfigUpdateResult> UpdateAsync(
         IReadOnlyList<string> allowedOrigins,
@@ -38,46 +26,34 @@ public sealed class CorsConfigAdminService : ICorsConfigAdminService
             return CorsConfigUpdateResult.Fail(validationError!, statusCode: 400);
         }
 
-        await _writeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var repository = scope.ServiceProvider.GetService<ICorsSettingsRepository>();
+        if (repository is null)
+        {
+            return CorsConfigUpdateResult.Fail(
+                "CORS updates require a configured database.",
+                statusCode: 503);
+        }
+
         try
         {
-            var path = ResolveAppSettingsPath();
-            await AppSettingsCorsPersistence
-                .WriteAsync(path, normalized, cancellationToken)
-                .ConfigureAwait(false);
+            await repository.SaveAllowedOriginsAsync(normalized, cancellationToken).ConfigureAwait(false);
 
-            if (_configuration is IConfigurationRoot configurationRoot)
+            // Force an immediate in-process reload so the new origins are live without waiting for the
+            // reconcile poll.
+            var refresher = scope.ServiceProvider.GetService<IGatewayConfigRefresher>();
+            if (refresher is not null)
             {
-                configurationRoot.Reload();
-            }
-            else
-            {
-                _logger.LogWarning(
-                    "Configuration is not reloadable; CORS origins were persisted but in-memory options may be stale until restart.");
+                await refresher.RefreshNowAsync(cancellationToken).ConfigureAwait(false);
             }
 
-            _ = _optionsMonitor.CurrentValue;
-
-            _logger.LogInformation("Updated CORS allowed origins in {AppSettingsPath}.", path);
+            logger.LogInformation("Updated CORS allowed origins ({OriginCount}).", normalized.Length);
             return CorsConfigUpdateResult.Ok("CORS allowed origins updated.");
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to persist CORS configuration.");
+            logger.LogError(ex, "Failed to persist CORS configuration.");
             return CorsConfigUpdateResult.Fail("Failed to persist CORS configuration.", statusCode: 500);
         }
-        finally
-        {
-            _writeLock.Release();
-        }
-    }
-
-    private string ResolveAppSettingsPath()
-    {
-        var configured = _configuration["Gateway:AppSettingsPath"];
-        var fileName = string.IsNullOrWhiteSpace(configured) ? "appsettings.json" : configured.Trim();
-        return Path.IsPathRooted(fileName)
-            ? fileName
-            : Path.Combine(_environment.ContentRootPath, fileName);
     }
 }

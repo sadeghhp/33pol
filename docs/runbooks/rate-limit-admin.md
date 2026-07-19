@@ -52,5 +52,5 @@ After rollback, confirm:
 
 ## Risks
 
-- **Multi-replica:** Each pod has its own `appsettings.json` unless shared storage or an external config source is used; admin `PUT` only updates the pod that served the request.
+- **Single-instance:** rate-limit config lives in the SQLite database, not per-pod `appsettings.json`. Admin `PUT` writes the DB and bumps the config version; the in-process reconcile applies it (immediately on the writing instance). The gateway runs one replica, so there is no cross-pod fan-out to coordinate.
 - **In-memory store:** RPM windows already counted are not reset on reload; only new limits apply to subsequent acquires.

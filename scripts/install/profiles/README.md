@@ -2,7 +2,7 @@
 
 | Profile | `COMPOSE_PROFILES` | Compose services |
 |---------|-------------------|------------------|
-| `gpu-gateway` | (empty) | `postgres`, `gateway` |
+| `gpu-gateway` | (empty) | `gateway` (embedded SQLite, no external DB) |
 | `gpu-observability` | `observability` | above + `prometheus`, `grafana` |
 | `full-stack` | `full` | above + `mock-upstream` (Prometheus/Grafana included via `full`) |
 

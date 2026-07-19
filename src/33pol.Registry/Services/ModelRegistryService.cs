@@ -67,6 +67,24 @@ public sealed class ModelRegistryService : IModelRegistry
         _logger.LogInformation("Loaded {ModelCount} models from {ConfigPath}.", config.Models.Count, configPath);
     }
 
+    /// <summary>
+    /// Swaps the in-memory registry to the given models (deep-cloned, alias lookup rebuilt). An empty
+    /// list is ignored and leaves the registry unchanged — an empty registry is never a valid state to
+    /// swap in (callers reject empty before persisting).
+    /// </summary>
+    public void Apply(IReadOnlyList<ModelConfig> models)
+    {
+        ArgumentNullException.ThrowIfNull(models);
+
+        if (models.Count == 0)
+        {
+            _logger.LogWarning("Apply skipped: empty model list would clear registry; keeping current state.");
+            return;
+        }
+
+        ApplyModels(ModelRegistryPersistence.BuildLookup(models));
+    }
+
     internal void ApplyModels((Dictionary<string, ModelConfig> Lookup, List<ModelConfig> Models) snapshot)
     {
         lock (_lock)
@@ -74,24 +92,5 @@ public sealed class ModelRegistryService : IModelRegistry
             _lookup = snapshot.Lookup;
             _models = snapshot.Models;
         }
-    }
-
-    internal async Task PersistAndApplyAsync(
-        string configPath,
-        IReadOnlyList<ModelConfig> models,
-        CancellationToken cancellationToken)
-    {
-        if (models.Count == 0)
-        {
-            _logger.LogWarning(
-                "Persist skipped for {ConfigPath}: empty model list would clear registry; keeping in-memory state.",
-                configPath);
-            return;
-        }
-
-        var snapshot = ModelRegistryPersistence.BuildLookup(models);
-        await ModelRegistryPersistence.WriteAtomicAsync(configPath, snapshot.Models, cancellationToken)
-            .ConfigureAwait(false);
-        ApplyModels(snapshot);
     }
 }

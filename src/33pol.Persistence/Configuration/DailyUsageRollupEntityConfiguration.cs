@@ -22,9 +22,6 @@ internal sealed class DailyUsageRollupEntityConfiguration : IEntityTypeConfigura
         builder.Property(r => r.TotalCost)
             .HasPrecision(18, 6);
 
-        builder.Property(r => r.UpdatedAt)
-            .HasColumnType("timestamptz");
-
         builder.HasIndex(r => new { r.UsageDate, r.TenantId, r.ModelId, r.CostCenter })
             .IsUnique();
     }

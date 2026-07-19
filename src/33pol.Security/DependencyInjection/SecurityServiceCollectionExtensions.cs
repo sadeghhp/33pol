@@ -105,12 +105,13 @@ public sealed class GatewaySecurityOptionsValidator : IValidateOptions<GatewaySe
 
         var pepper = options.KeyPepper?.Trim();
         if (string.IsNullOrEmpty(pepper)
-            || string.Equals(pepper, GatewaySecurityOptions.DefaultKeyPepper, StringComparison.Ordinal)
+            || Pol33.Core.Security.WellKnownWeakSecrets.IsWeakPepper(pepper)
             || pepper.Length < GatewaySecurityOptions.MinimumPepperLength)
         {
             return ValidateOptionsResult.Fail(
                 $"{GatewaySecurityOptions.SectionName}:KeyPepper must be set to a strong, non-default "
-                + $"value of at least {GatewaySecurityOptions.MinimumPepperLength} characters outside Development.");
+                + $"value of at least {GatewaySecurityOptions.MinimumPepperLength} characters outside Development. "
+                + "Set the GATEWAY_KEY_PEPPER environment variable to a freshly generated secret.");
         }
 
         return ValidateOptionsResult.Success;

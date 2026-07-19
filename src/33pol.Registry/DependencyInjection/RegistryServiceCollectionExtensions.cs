@@ -22,10 +22,9 @@ public static class RegistryServiceCollectionExtensions
         services.AddSingleton<BackendHealthStore>();
         services.AddSingleton<IBackendHealthStore>(sp => sp.GetRequiredService<BackendHealthStore>());
         services.AddHostedService<HealthCheckService>();
-        services.AddHostedService<ModelRegistryInitializer>();
-        services.AddSingleton<ConfigReloadService>();
-        services.AddSingleton<IConfigReload>(sp => sp.GetRequiredService<ConfigReloadService>());
-        services.AddHostedService(sp => sp.GetRequiredService<ConfigReloadService>());
+        services.AddSingleton<ModelRegistryLoader>();
+        services.AddHostedService<ModelRegistryLoaderHostedService>();
+        services.AddSingleton<IConfigReload, ModelRegistryConfigReload>();
         return services;
     }
 }
