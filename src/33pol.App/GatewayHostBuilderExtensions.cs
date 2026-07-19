@@ -60,6 +60,7 @@ public static class GatewayHostBuilderExtensions
         app.MapAdminControlPlaneEndpoints();
         app.MapAdminProviderEndpoints();
         app.MapAdminUsageEndpoints();
+        app.MapMaintenanceAdminEndpoints();
         app.MapModelsEndpoints();
         app.UseDefaultFiles();
         app.UseStaticFiles(new StaticFileOptions

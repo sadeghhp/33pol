@@ -20,6 +20,7 @@ public static class PersistenceServiceCollectionExtensions
         var connectionString = configuration.GetConnectionString(ConnectionStringName);
         if (string.IsNullOrWhiteSpace(connectionString))
         {
+            services.AddSingleton<ISqliteBackupService, Maintenance.NullSqliteBackupService>();
             return services;
         }
 
@@ -30,11 +31,13 @@ public static class PersistenceServiceCollectionExtensions
                 : Guid.NewGuid().ToString("N");
             services.AddDbContext<GatewayDbContext>(options =>
                 options.UseInMemoryDatabase(databaseName));
+            services.AddSingleton<ISqliteBackupService, Maintenance.NullSqliteBackupService>();
         }
         else
         {
             services.AddDbContext<GatewayDbContext>(options =>
                 SqliteGatewayDbContext.Configure(options, connectionString));
+            services.AddScoped<ISqliteBackupService, Maintenance.SqliteBackupService>();
         }
 
         services.AddSingleton<Microsoft.Extensions.Options.IValidateOptions<GatewayBootstrapOptions>, GatewayBootstrapOptionsValidator>();

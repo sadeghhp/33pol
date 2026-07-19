@@ -42,6 +42,7 @@ DB_PATH="/data/gateway.db"
 VERSION=""
 PROFILES=""
 DO_BACKUP=true
+HOT_BACKUP=false
 HEALTH_GATE=true
 HEALTH_TIMEOUT=120
 KEEP=5
@@ -200,6 +201,41 @@ backup_db() {
   dc "${tag}" cp "${GATEWAY_SERVICE}:${DB_PATH}-shm" "${dir}/gateway.db-shm" >/dev/null 2>&1 || true
   [[ "${was_running}" == true ]] && dc "${tag}" start "${GATEWAY_SERVICE}" >/dev/null 2>&1 || true
   ok "Snapshot saved: ${dir} ($(du -sh "${dir}" | cut -f1))"
+  printf '%s' "${dir}"
+}
+
+# Online (no-downtime) backup: ask the running gateway to VACUUM INTO a consistent copy inside the
+# volume, verify integrity, then copy that single file out to ${BACKUP_DIR}. Unlike backup_db this
+# never stops the gateway, so it is safe to schedule on a timer. Falls back to the cold snapshot if
+# the gateway is not running. Produces the same db-<label>-<ts>/gateway.db layout restore_db expects.
+backup_db_hot() {
+  local label="${1:-hot}" port key resp path dir tag
+  if ! gateway_running; then
+    warn "Gateway not running; falling back to a cold snapshot."
+    backup_db "${label}"
+    return $?
+  fi
+  if [[ "${DRY_RUN}" == true ]]; then log "[dry-run] would request an online VACUUM INTO backup"; printf '%s' "${BACKUP_DIR}/db-${label}-dryrun"; return 0; fi
+  command -v curl >/dev/null 2>&1 || die "curl is required for hot backups; use plain 'backup' for a cold snapshot."
+  port="$(env_get GATEWAY_PORT)"; port="${port:-8080}"
+  key="$(env_get GATEWAY_ADMIN_API_KEY)"
+  [[ -n "${key}" ]] || die "GATEWAY_ADMIN_API_KEY not set in ${ENV_FILE}; cannot authenticate a hot backup."
+  log "Requesting online backup (VACUUM INTO, no downtime) ..."
+  resp="$(curl -fsS --max-time 120 -X POST -H "Authorization: Bearer ${key}" \
+    "http://127.0.0.1:${port}/admin/api/maintenance/backup" 2>/dev/null)" \
+    || die "Hot backup request failed (is the gateway healthy on :${port}?)."
+  path="$(printf '%s' "${resp}" | sed -n 's/.*"path":"\([^"]*\)".*/\1/p')"
+  [[ "${resp}" == *'"succeeded":true'* && -n "${path}" ]] \
+    || die "Hot backup did not succeed: ${resp}"
+  tag="$(gateway_tag)"
+  dir="${BACKUP_DIR}/db-${label}-$(date -u '+%Y%m%d%H%M%S')"
+  mkdir -p "${dir}"
+  if ! dc "${tag}" cp "${GATEWAY_SERVICE}:${path}" "${dir}/gateway.db" >/dev/null 2>&1; then
+    rm -rf "${dir}"; die "Failed to copy hot backup out of the container."
+  fi
+  # Reclaim the in-volume copy; the durable artifact now lives on the host.
+  dc "${tag}" exec -T "${GATEWAY_SERVICE}" rm -f "${path}" >/dev/null 2>&1 || true
+  ok "Hot backup saved: ${dir} ($(du -sh "${dir}" | cut -f1)); integrity_check ok"
   printf '%s' "${dir}"
 }
 
@@ -386,7 +422,10 @@ cmd_history() {
   cat "${HISTORY_FILE}"
 }
 
-cmd_backup()  { preflight; backup_db "manual" >/dev/null; }
+cmd_backup()  {
+  preflight
+  if [[ "${HOT_BACKUP:-false}" == true ]]; then backup_db_hot "manual" >/dev/null; else backup_db "manual" >/dev/null; fi
+}
 cmd_restore() { preflight; [[ -n "${1:-}" ]] || die "Usage: $0 restore <backup-file>"; restore_db "$1"; }
 
 cmd_list_backups() {
@@ -446,7 +485,9 @@ ${C_BOLD}COMMANDS${C_RESET}
   status                 Show current/previous version, container state, health.
   versions               List locally built gateway image versions.
   history                Show the deploy/rollback audit log.
-  backup                 Take a database snapshot now (briefly restarts the gateway).
+  backup [--hot]         Take a database snapshot now. Default briefly restarts the
+                         gateway for a WAL-consistent copy; --hot uses an online
+                         VACUUM INTO with no downtime (safe to run on a timer).
   restore <snapshot>     Restore the database from a snapshot directory.
   list-backups           List database snapshots.
   logs [service]         Follow logs (default: all services).
@@ -486,6 +527,7 @@ while [[ $# -gt 0 ]]; do
     --timeout)      HEALTH_TIMEOUT="${2:?}"; shift 2 ;;
     --keep)         KEEP="${2:?}"; shift 2 ;;
     --no-backup)    DO_BACKUP=false; shift ;;
+    --hot)          HOT_BACKUP=true; shift ;;
     --no-health-gate) HEALTH_GATE=false; shift ;;
     -y|--yes)       ASSUME_YES=true; shift ;;
     --dry-run)      DRY_RUN=true; shift ;;
