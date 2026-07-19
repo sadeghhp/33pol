@@ -13,4 +13,10 @@ public sealed class GatewayBootstrapOptions
     public string? AdminApiKey { get; init; }
 
     public string KeyPepper { get; init; } = "dev-pepper-change-me";
+
+    /// <summary>Minimum accepted pepper length outside Development. Mirrors Gateway:Security:KeyPepper.</summary>
+    public const int MinimumPepperLength = 16;
+
+    /// <summary>Minimum accepted admin API key length outside Development (when a value is supplied).</summary>
+    public const int MinimumAdminKeyLength = 24;
 }

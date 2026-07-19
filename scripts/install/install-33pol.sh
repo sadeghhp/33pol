@@ -214,7 +214,8 @@ cmd_install() {
     "${INSTALL_GATEWAY_PORT}" \
     "${INSTALL_GATEWAY_BIND}" \
     "${INSTALL_ADMIN_KEY}" \
-    "${INSTALL_ASPNET_ENV}")"
+    "${INSTALL_ASPNET_ENV}" \
+    "${INSTALL_KEY_PEPPER}")"
 
   if [[ -n "${INSTALL_ENV_OVERRIDE}" ]]; then
     env_content="$(install_merge_env_file "${env_content}" "${INSTALL_ENV_OVERRIDE}")"

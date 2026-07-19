@@ -2,8 +2,13 @@
 # Usage: repo root `docker compose up -d --build` or see deploy/docker/README.md
 #
 # Local-dev defaults below (GATEWAY_ADMIN_API_KEY, GATEWAY_KEY_PEPPER) let `docker compose up`
-# work without a .env file. Override via .env for non-local deploys.
-# Admin UI sign-in key (default): sk-33pol-4aa283ddb877adaccc60cb53314fa15cfd41f01084df064c
+# work without a .env file. They are OBVIOUS DEV SENTINELS, not real secrets.
+#
+# PRODUCTION: set ASPNETCORE_ENVIRONMENT=Production plus strong GATEWAY_ADMIN_API_KEY and
+# GATEWAY_KEY_PEPPER in .env. The gateway REFUSES TO BOOT in Production on the sentinel/default
+# values below (they are on a startup denylist), so a prod deploy cannot silently inherit them.
+# Generate secrets with:  openssl rand -hex 24   (pepper)  and  printf 'sk-33pol-%s' "$(openssl rand -hex 24)"  (admin key)
+# Admin UI sign-in key (dev sentinel): sk-33pol-dev-local-unsafe
 
 name: 33pol
 
@@ -41,10 +46,12 @@ services:
       # Embedded SQLite database, persisted on the gateway-data volume mounted at /data.
       ConnectionStrings__GatewayDb: ${GATEWAY_DB_CONNECTION:-Data Source=/data/gateway.db}
       Gateway__ModelsConfigPath: /app/config/models.json
-      Gateway__Bootstrap__AdminApiKey: ${GATEWAY_ADMIN_API_KEY:-sk-33pol-4aa283ddb877adaccc60cb53314fa15cfd41f01084df064c}
-      # Production requires GATEWAY_KEY_PEPPER (>=16 chars, not dev-pepper-change-me). Development may omit it.
-      Gateway__Security__KeyPepper: ${GATEWAY_KEY_PEPPER:-oJHJdzSvNdVFbFd8fDrexL3bf6n9ggW}
-      Gateway__Bootstrap__KeyPepper: ${GATEWAY_KEY_PEPPER:-oJHJdzSvNdVFbFd8fDrexL3bf6n9ggW}
+      Gateway__Bootstrap__AdminApiKey: ${GATEWAY_ADMIN_API_KEY:-sk-33pol-dev-local-unsafe}
+      # Production requires a strong GATEWAY_KEY_PEPPER (>=16 chars, non-default). Development may omit it.
+      # Bootstrap and Security peppers MUST be identical (both fed from GATEWAY_KEY_PEPPER) or the admin key
+      # is hashed with one and verified with the other and can never authenticate.
+      Gateway__Security__KeyPepper: ${GATEWAY_KEY_PEPPER:-dev-pepper-change-me}
+      Gateway__Bootstrap__KeyPepper: ${GATEWAY_KEY_PEPPER:-dev-pepper-change-me}
       Gateway__OperatorConsole__Enabled: "false"
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}

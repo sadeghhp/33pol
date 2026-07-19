@@ -37,8 +37,11 @@ public static class PersistenceServiceCollectionExtensions
                 SqliteGatewayDbContext.Configure(options, connectionString));
         }
 
-        services.Configure<GatewayBootstrapOptions>(
-            configuration.GetSection(GatewayBootstrapOptions.SectionName));
+        services.AddSingleton<Microsoft.Extensions.Options.IValidateOptions<GatewayBootstrapOptions>, GatewayBootstrapOptionsValidator>();
+        services
+            .AddOptions<GatewayBootstrapOptions>()
+            .Bind(configuration.GetSection(GatewayBootstrapOptions.SectionName))
+            .ValidateOnStart();
 
         services.AddScoped<ITenantRepository, TenantRepository>();
         services.AddScoped<IApiKeyRepository, ApiKeyRepository>();

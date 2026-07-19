@@ -121,6 +121,16 @@ install_resolve_install_config() {
     INSTALL_ADMIN_KEY="${admin_default}"
   fi
 
+  # Key pepper hashes every stored API key. It must be strong and non-default in Production, and must
+  # stay STABLE across reinstalls (rotating it invalidates existing key hashes). Reuse an existing
+  # value by exporting INSTALL_KEY_PEPPER before running.
+  local pepper_default
+  pepper_default="$(install_generate_secret)"
+  INSTALL_KEY_PEPPER="$(install_prompt_value INSTALL_KEY_PEPPER "Key pepper (keep stable across reinstalls)" "${pepper_default}" true)"
+  if [[ -z "${INSTALL_KEY_PEPPER}" ]]; then
+    INSTALL_KEY_PEPPER="${pepper_default}"
+  fi
+
   if [[ "${INSTALL_PROFILE}" == gpu-gateway || "${INSTALL_PROFILE}" == gpu-observability ]]; then
     INSTALL_ASPNET_ENV="${INSTALL_ASPNET_ENV:-Production}"
     install_prompt_gpu_upstream

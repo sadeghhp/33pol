@@ -27,6 +27,16 @@ public sealed class GatewaySecurityOptionsValidatorTests
         result.Failed.Should().BeTrue();
     }
 
+    [Theory]
+    [InlineData("oJHJdzSvNdVFbFd8fDrexL3bf6n9ggW")] // shipped compose/.env default, long enough to pass length
+    [InlineData("dev-pepper-change-me")]
+    public void Validate_ProductionWithShippedDefaultPepper_Fails(string pepper)
+    {
+        var result = Validate("Production", new GatewaySecurityOptions { KeyPepper = pepper });
+
+        result.Failed.Should().BeTrue();
+    }
+
     [Fact]
     public void Validate_ProductionWithStrongPepper_Succeeds()
     {

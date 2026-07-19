@@ -159,6 +159,7 @@ install_build_env_content() {
   local gateway_bind="$3"
   local admin_key="$4"
   local aspnet_env="$5"
+  local key_pepper="$6"
   local compose_profiles
   compose_profiles="$(install_profile_to_compose_profiles "${profile}")"
 
@@ -171,6 +172,8 @@ install_build_env_content() {
     install_env_line GATEWAY_BIND "${gateway_bind}"
     install_env_line GATEWAY_PORT "${gateway_port}"
     install_env_line GATEWAY_ADMIN_API_KEY "${admin_key}"
+    # Feeds both Gateway__Security__KeyPepper and Gateway__Bootstrap__KeyPepper (must stay identical).
+    install_env_line GATEWAY_KEY_PEPPER "${key_pepper}"
     install_env_line MOCK_UPSTREAM_PORT 18080
     install_env_line PROMETHEUS_PORT 9090
     install_env_line GRAFANA_PORT 3000
