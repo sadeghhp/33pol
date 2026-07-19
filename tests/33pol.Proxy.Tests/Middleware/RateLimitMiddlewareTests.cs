@@ -1,9 +1,9 @@
 using Microsoft.AspNetCore.Http;
-using Microsoft.Extensions.Options;
 using NSubstitute;
 using Pol33.Core.Abstractions;
 using Pol33.Core.Configuration;
 using Pol33.Core.Errors;
+using Pol33.Core.RateLimiting;
 using Pol33.Policy.RateLimiting;
 using Pol33.Proxy.Middleware;
 
@@ -14,9 +14,9 @@ public sealed class RateLimitMiddlewareTests
     [Fact]
     public async Task InvokeAsync_WhenRpmExceeded_Returns429WithRetryAfter()
     {
-        var resolver = new RateLimitPolicyResolver(new FixedOptionsMonitor(new RateLimitingOptions
+        var resolver = new RateLimitPolicyResolver(new StubConfigProvider(new GatewayConfigSnapshot
         {
-            Default = new RateLimitTierOptions { Rpm = 1, Burst = 0, MaxConcurrentStreams = 5 },
+            RateLimits = new RateLimitsConfigSection { Default = new RateLimitPolicy(1, 0, 5) },
         }));
         var store = new InMemoryDistributedRateLimitStore();
         var errors = new OpenAiErrorResponseWriter();
@@ -49,12 +49,8 @@ public sealed class RateLimitMiddlewareTests
         context.Response.Headers[GatewayHeaders.ErrorCode].ToString().Should().Be("rate_limit_exceeded");
     }
 
-    private sealed class FixedOptionsMonitor(RateLimitingOptions value) : IOptionsMonitor<RateLimitingOptions>
+    private sealed class StubConfigProvider(GatewayConfigSnapshot snapshot) : IGatewayConfigProvider
     {
-        public RateLimitingOptions CurrentValue { get; } = value;
-
-        public RateLimitingOptions Get(string? name) => CurrentValue;
-
-        public IDisposable? OnChange(Action<RateLimitingOptions, string?> listener) => null;
+        public GatewayConfigSnapshot Current { get; } = snapshot;
     }
 }

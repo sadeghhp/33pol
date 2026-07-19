@@ -1,3 +1,5 @@
+using Pol33.Core.RateLimiting;
+
 namespace Pol33.Core.Configuration;
 
 /// <summary>
@@ -16,6 +18,8 @@ public sealed record GatewayConfigSnapshot
 
     public CorsConfigSection Cors { get; init; } = CorsConfigSection.Empty;
 
+    public RateLimitsConfigSection RateLimits { get; init; } = RateLimitsConfigSection.Defaults;
+
     /// <summary>The safe, hardcoded configuration used before the first successful database load.</summary>
     public static GatewayConfigSnapshot Defaults { get; } = new();
 }
@@ -26,4 +30,24 @@ public sealed record CorsConfigSection
     public IReadOnlyList<string> AllowedOrigins { get; init; } = [];
 
     public static CorsConfigSection Empty { get; } = new();
+}
+
+/// <summary>
+/// Rate-limit section of the config snapshot. The resolver picks a tier in precedence order:
+/// per-tenant override, then plan, then default. Plan/tenant keys are compared OrdinalIgnoreCase.
+/// TenantOverrides is currently always empty (reserved), matching the pre-migration behavior where
+/// the RateLimiting:Tenants map was never populated.
+/// </summary>
+public sealed record RateLimitsConfigSection
+{
+    public RateLimitPolicy Default { get; init; } = RateLimitPolicy.Default;
+
+    public IReadOnlyDictionary<string, RateLimitPolicy> Plans { get; init; } = EmptyMap;
+
+    public IReadOnlyDictionary<string, RateLimitPolicy> TenantOverrides { get; init; } = EmptyMap;
+
+    public static RateLimitsConfigSection Defaults { get; } = new();
+
+    private static readonly IReadOnlyDictionary<string, RateLimitPolicy> EmptyMap =
+        new Dictionary<string, RateLimitPolicy>(StringComparer.OrdinalIgnoreCase);
 }

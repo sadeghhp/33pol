@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Pol33.Core.Abstractions;
 using Pol33.Core.Configuration;
+using Pol33.Core.RateLimiting;
 using Pol33.Persistence.Entities;
 
 namespace Pol33.Persistence.Repositories;
@@ -10,6 +11,7 @@ public sealed class GatewayConfigStore(GatewayDbContext dbContext) : IGatewayCon
     // The config sections are singleton rows; the fixed keys keep reads and bumps a pure upsert.
     private const int ConfigVersionRowId = 1;
     private const int CorsSettingsRowId = 1;
+    private const int RateLimitDefaultsRowId = 1;
 
     public async Task<GatewayConfigSnapshot> LoadSnapshotAsync(CancellationToken cancellationToken = default)
     {
@@ -20,6 +22,8 @@ public sealed class GatewayConfigStore(GatewayDbContext dbContext) : IGatewayCon
             .FirstOrDefaultAsync(c => c.Id == CorsSettingsRowId, cancellationToken)
             .ConfigureAwait(false);
 
+        var rateLimits = await LoadRateLimitsAsync(cancellationToken).ConfigureAwait(false);
+
         return new GatewayConfigSnapshot
         {
             Version = version,
@@ -27,6 +31,32 @@ public sealed class GatewayConfigStore(GatewayDbContext dbContext) : IGatewayCon
             {
                 AllowedOrigins = cors?.AllowedOrigins ?? [],
             },
+            RateLimits = rateLimits,
+        };
+    }
+
+    private async Task<RateLimitsConfigSection> LoadRateLimitsAsync(CancellationToken cancellationToken)
+    {
+        var defaults = await dbContext.RateLimitDefaults
+            .AsNoTracking()
+            .FirstOrDefaultAsync(d => d.Id == RateLimitDefaultsRowId, cancellationToken)
+            .ConfigureAwait(false);
+
+        var plans = await dbContext.RateLimitPlans
+            .AsNoTracking()
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        return new RateLimitsConfigSection
+        {
+            Default = defaults is null
+                ? RateLimitPolicy.Default
+                : new RateLimitPolicy(defaults.Rpm, defaults.Burst, defaults.MaxConcurrentStreams),
+            Plans = plans.ToDictionary(
+                p => p.Slug,
+                p => new RateLimitPolicy(p.Rpm, p.Burst, p.MaxConcurrentStreams),
+                StringComparer.OrdinalIgnoreCase),
+            // TenantOverrides intentionally empty (reserved) — see RateLimitsConfigSection.
         };
     }
 

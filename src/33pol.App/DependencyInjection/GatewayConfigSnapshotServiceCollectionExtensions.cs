@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Pol33.Core.Abstractions;
 using Pol33.Core.Configuration;
+using Pol33.Core.RateLimiting;
 using Pol33.Persistence.DependencyInjection;
 
 namespace Pol33.App.DependencyInjection;
@@ -52,12 +53,31 @@ public static class GatewayConfigSnapshotServiceCollectionExtensions
             .GetSection($"{GatewayOptions.SectionName}:{GatewayCorsOptions.SectionName}:{nameof(GatewayCorsOptions.AllowedOrigins)}")
             .Get<string[]>();
 
+        var rateLimiting = configuration
+            .GetSection(RateLimitingOptions.SectionName)
+            .Get<RateLimitingOptions>() ?? new RateLimitingOptions();
+
         return new GatewayConfigSnapshot
         {
             Cors = new CorsConfigSection
             {
                 AllowedOrigins = GatewayCorsOptions.NormalizeOrigins(origins),
             },
+            RateLimits = new RateLimitsConfigSection
+            {
+                Default = ToPolicy(rateLimiting.Default),
+                Plans = rateLimiting.Plans.ToDictionary(
+                    static p => p.Key,
+                    static p => ToPolicy(p.Value),
+                    StringComparer.OrdinalIgnoreCase),
+                TenantOverrides = rateLimiting.Tenants.ToDictionary(
+                    static t => t.Key,
+                    static t => ToPolicy(t.Value),
+                    StringComparer.OrdinalIgnoreCase),
+            },
         };
     }
+
+    private static RateLimitPolicy ToPolicy(RateLimitTierOptions tier) =>
+        new(tier.Rpm, tier.Burst, tier.MaxConcurrentStreams);
 }

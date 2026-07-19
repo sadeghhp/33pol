@@ -52,6 +52,7 @@ public static class PersistenceServiceCollectionExtensions
         services.AddScoped<IQuotaUsageSnapshotStore, QuotaUsageSnapshotStore>();
         services.AddScoped<IGatewayConfigStore, GatewayConfigStore>();
         services.AddScoped<ICorsSettingsRepository, CorsSettingsRepository>();
+        services.AddScoped<IRateLimitSettingsRepository, RateLimitSettingsRepository>();
         services.AddScoped<GatewayDbBootstrap>();
         services.AddHostedService<GatewayDbInitializer>();
 

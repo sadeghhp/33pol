@@ -42,6 +42,10 @@ public sealed class GatewayDbContext : DbContext
 
     public DbSet<CorsSettingsEntity> CorsSettings => Set<CorsSettingsEntity>();
 
+    public DbSet<RateLimitDefaultsEntity> RateLimitDefaults => Set<RateLimitDefaultsEntity>();
+
+    public DbSet<RateLimitPlanEntity> RateLimitPlans => Set<RateLimitPlanEntity>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.ApplyConfigurationsFromAssembly(typeof(GatewayDbContext).Assembly);
