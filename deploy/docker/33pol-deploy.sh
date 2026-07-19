@@ -314,10 +314,21 @@ cmd_deploy() {
   new_version="$(compute_version)"
   prev_version="$(state_get CURRENT_VERSION)"
 
+  # A real deploy must run in Production so the gateway's secret-strength validators fire.
+  # The compose default is Development (a convenience for bare `docker compose up`), which
+  # disables those validators and would let the dev-sentinel admin key / pepper through.
+  local aspnet_env; aspnet_env="$(env_get ASPNETCORE_ENVIRONMENT)"; aspnet_env="${aspnet_env:-Development}"
+
   step "Deploying 33pol gateway"
   printf '  version:  %s%s%s\n' "${C_BOLD}" "${new_version}" "${C_RESET}"
   printf '  previous: %s\n' "${prev_version:-<none>}"
+  printf '  env:      %s\n' "${aspnet_env}"
   [[ -n "${PROFILES}" ]] && printf '  profiles: %s\n' "${PROFILES}"
+  if [[ "${aspnet_env}" != "Production" ]]; then
+    warn "ASPNETCORE_ENVIRONMENT=${aspnet_env}: secret-strength validation is DISABLED (not a production configuration)."
+    warn "For production set ASPNETCORE_ENVIRONMENT=Production in ${ENV_FILE} plus strong GATEWAY_ADMIN_API_KEY and GATEWAY_KEY_PEPPER."
+    confirm "Continue deploying in ${aspnet_env} mode anyway?" || die "Deploy cancelled; set ASPNETCORE_ENVIRONMENT=Production for a production deploy."
+  fi
   confirm "Continue?" || die "Deploy cancelled."
 
   # 1) Snapshot the database first — this is the real rollback insurance because
