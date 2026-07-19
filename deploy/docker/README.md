@@ -78,6 +78,22 @@ The default points at `http://mock-upstream:8080` (full-stack profile). Edit on 
 
 The whole `deploy/docker/config/` directory is mounted at `/app/config` (including `models.json`) so the Admin UI (**Models** tab) can persist registry changes. A single-file bind mount cannot be atomically replaced on Docker Desktop (EBUSY).
 
+## First boot (fresh database)
+
+33pol deploys **greenfield**: it starts from an empty SQLite database and there is no import
+from any prior datastore. EF migrations create the schema only — they never carry data across.
+On the first boot of an empty `gateway.db`, `GatewayDbBootstrap` seeds the intended starting
+state, **once** (skipped forever after, so this is not a re-sync):
+
+- **Model routes** ← `models.json` (if present at `Gateway:ModelsConfigPath`).
+- **CORS origins, rate limits, quota scalars** ← `appsettings`.
+- **One admin API key** ← `GATEWAY_ADMIN_API_KEY`, plus the default tenant.
+
+There are **no pre-existing inference keys, tenants, model grants, or usage history** — you
+issue inference keys through the Admin UI / `POST /admin/api/keys` after first boot. If you are
+ever migrating from an external datastore instead of starting fresh, that is a separate one-off
+import (not provided here); a plain redeploy never imports data.
+
 ## Versioned deploy & instant rollback
 
 For managed deployments, use **[`33pol-deploy.sh`](33pol-deploy.sh)** instead of raw `docker compose up --build`. It builds an immutable, version-tagged gateway image (`33pol-gateway:<git-sha>-<utc>`), snapshots the database before every rollout, health-gates the deploy, and **auto-rolls-back** if the gateway does not come up. Rolling back to a prior version is a seconds-long image swap — no rebuild.
