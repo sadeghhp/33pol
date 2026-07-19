@@ -1,3 +1,6 @@
+# 33pol runs SINGLE-INSTANCE only. Its embedded SQLite database is one file on a ReadWriteOnce
+# volume; a second writer corrupts it. replicaCount MUST stay 1 and autoscaling MUST stay disabled —
+# the chart refuses to render otherwise (see templates/deployment.yaml). Scale vertically via resources.
 replicaCount: 1
 
 image:
@@ -33,10 +36,12 @@ resources:
     cpu: 500m
     memory: 512Mi
 
+# Autoscaling is INCOMPATIBLE with the single-file SQLite backend and is rejected at render time.
+# Do not enable it. These fields are retained only so the HPA template parses; leave enabled: false.
 autoscaling:
   enabled: false
   minReplicas: 1
-  maxReplicas: 5
+  maxReplicas: 1
   targetCPUUtilizationPercentage: 70
 
 serviceMonitor:

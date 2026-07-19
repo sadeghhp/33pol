@@ -1,3 +1,13 @@
+{{- /*
+  Single-instance guardrail. The gateway persists all state in one SQLite file on a ReadWriteOnce
+  volume; a second writer corrupts it. Reject any configuration that would run more than one replica.
+*/ -}}
+{{- if gt (int .Values.replicaCount) 1 }}
+{{- fail "33pol runs single-instance only: replicaCount must be 1. Its embedded SQLite database is a single file on a ReadWriteOnce volume and a second writer corrupts it. Scale up vertically (resources), not horizontally." }}
+{{- end }}
+{{- if .Values.autoscaling.enabled }}
+{{- fail "33pol runs single-instance only: autoscaling.enabled must be false. Horizontal scaling would run multiple writers against one embedded SQLite file and corrupt it." }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
