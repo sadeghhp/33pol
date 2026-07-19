@@ -38,6 +38,8 @@ public sealed class GatewayDbContext : DbContext
 
     public DbSet<QuotaUsageSnapshotEntity> QuotaUsageSnapshots => Set<QuotaUsageSnapshotEntity>();
 
+    public DbSet<ConfigVersionEntity> ConfigVersions => Set<ConfigVersionEntity>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.ApplyConfigurationsFromAssembly(typeof(GatewayDbContext).Assembly);

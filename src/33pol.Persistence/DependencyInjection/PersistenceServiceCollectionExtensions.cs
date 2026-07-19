@@ -50,6 +50,7 @@ public static class PersistenceServiceCollectionExtensions
         services.AddScoped<IBudgetRepository, BudgetRepository>();
         services.AddScoped<IGatewayStatsSnapshotStore, GatewayStatsSnapshotStore>();
         services.AddScoped<IQuotaUsageSnapshotStore, QuotaUsageSnapshotStore>();
+        services.AddScoped<IGatewayConfigStore, GatewayConfigStore>();
         services.AddScoped<GatewayDbBootstrap>();
         services.AddHostedService<GatewayDbInitializer>();
 
