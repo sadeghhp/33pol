@@ -24,7 +24,11 @@ public sealed class GatewayDbBootstrapTests
             KeyPepper = "test-pepper",
         });
 
-        var sut = new GatewayDbBootstrap(db, options, NullLogger<GatewayDbBootstrap>.Instance);
+        var sut = new GatewayDbBootstrap(
+            db,
+            options,
+            Options.Create(new Pol33.Core.Configuration.GatewayOptions()),
+            NullLogger<GatewayDbBootstrap>.Instance);
 
         await sut.EnsureInitializedAsync();
 
@@ -57,7 +61,11 @@ public sealed class GatewayDbBootstrapTests
             AdminApiKey = "sk-should-not-create",
         });
 
-        var sut = new GatewayDbBootstrap(db, options, NullLogger<GatewayDbBootstrap>.Instance);
+        var sut = new GatewayDbBootstrap(
+            db,
+            options,
+            Options.Create(new Pol33.Core.Configuration.GatewayOptions()),
+            NullLogger<GatewayDbBootstrap>.Instance);
 
         await sut.EnsureInitializedAsync();
 

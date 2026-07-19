@@ -11,7 +11,13 @@ namespace Pol33.App.DependencyInjection;
 /// </summary>
 internal sealed class GatewayConfigState : IGatewayConfigProvider
 {
-    private volatile GatewayConfigSnapshot _current = GatewayConfigSnapshot.Defaults;
+    private volatile GatewayConfigSnapshot _current;
+
+    public GatewayConfigState(GatewayConfigSnapshot initial)
+    {
+        ArgumentNullException.ThrowIfNull(initial);
+        _current = initial;
+    }
 
     public GatewayConfigSnapshot Current => _current;
 

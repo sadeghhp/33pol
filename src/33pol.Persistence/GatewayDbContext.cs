@@ -40,6 +40,8 @@ public sealed class GatewayDbContext : DbContext
 
     public DbSet<ConfigVersionEntity> ConfigVersions => Set<ConfigVersionEntity>();
 
+    public DbSet<CorsSettingsEntity> CorsSettings => Set<CorsSettingsEntity>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.ApplyConfigurationsFromAssembly(typeof(GatewayDbContext).Assembly);

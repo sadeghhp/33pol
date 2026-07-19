@@ -7,16 +7,26 @@ namespace Pol33.Persistence.Repositories;
 
 public sealed class GatewayConfigStore(GatewayDbContext dbContext) : IGatewayConfigStore
 {
-    // The config version is a singleton row; the fixed key keeps reads and bumps a pure upsert.
+    // The config sections are singleton rows; the fixed keys keep reads and bumps a pure upsert.
     private const int ConfigVersionRowId = 1;
+    private const int CorsSettingsRowId = 1;
 
     public async Task<GatewayConfigSnapshot> LoadSnapshotAsync(CancellationToken cancellationToken = default)
     {
         var version = await GetVersionAsync(cancellationToken).ConfigureAwait(false);
 
+        var cors = await dbContext.CorsSettings
+            .AsNoTracking()
+            .FirstOrDefaultAsync(c => c.Id == CorsSettingsRowId, cancellationToken)
+            .ConfigureAwait(false);
+
         return new GatewayConfigSnapshot
         {
             Version = version,
+            Cors = new CorsConfigSection
+            {
+                AllowedOrigins = cors?.AllowedOrigins ?? [],
+            },
         };
     }
 

@@ -14,6 +14,16 @@ public sealed record GatewayConfigSnapshot
 {
     public long Version { get; init; }
 
+    public CorsConfigSection Cors { get; init; } = CorsConfigSection.Empty;
+
     /// <summary>The safe, hardcoded configuration used before the first successful database load.</summary>
     public static GatewayConfigSnapshot Defaults { get; } = new();
+}
+
+/// <summary>CORS section of the config snapshot: the normalized allowed origins (may be empty = deny).</summary>
+public sealed record CorsConfigSection
+{
+    public IReadOnlyList<string> AllowedOrigins { get; init; } = [];
+
+    public static CorsConfigSection Empty { get; } = new();
 }
