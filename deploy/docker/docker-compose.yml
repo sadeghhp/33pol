@@ -101,6 +101,8 @@ services:
     image: grafana/grafana:11.3.0
     restart: unless-stopped
     environment:
+      # GRAFANA_ADMIN_PASSWORD defaults to "admin" for local-dev convenience only. Change it in
+      # .env before enabling the observability profile beyond your own machine.
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
       GF_USERS_ALLOW_SIGN_UP: "false"
@@ -109,7 +111,9 @@ services:
       - ../grafana/dashboards:/var/lib/grafana/dashboards:ro
       - grafana-data:/var/lib/grafana
     ports:
-      - "${GRAFANA_PORT:-3000}:3000"
+      # Default to loopback only, same as the gateway; set GRAFANA_BIND=0.0.0.0 explicitly to
+      # expose on the network (only after changing GRAFANA_ADMIN_PASSWORD).
+      - "${GRAFANA_BIND:-127.0.0.1}:${GRAFANA_PORT:-3000}:3000"
     depends_on:
       - prometheus
 
