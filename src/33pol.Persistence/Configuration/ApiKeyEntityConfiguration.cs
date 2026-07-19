@@ -27,21 +27,6 @@ internal sealed class ApiKeyEntityConfiguration : IEntityTypeConfiguration<ApiKe
             .HasMaxLength(32)
             .IsRequired();
 
-        builder.Property(k => k.Scopes)
-            .HasColumnType("jsonb");
-
-        builder.Property(k => k.ExpiresAt)
-            .HasColumnType("timestamptz");
-
-        builder.Property(k => k.RevokedAt)
-            .HasColumnType("timestamptz");
-
-        builder.Property(k => k.CreatedAt)
-            .HasColumnType("timestamptz");
-
-        builder.Property(k => k.LastUsedAt)
-            .HasColumnType("timestamptz");
-
         builder.Property(k => k.Label)
             .HasMaxLength(128);
 

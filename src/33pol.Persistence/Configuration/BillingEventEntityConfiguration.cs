@@ -35,9 +35,6 @@ internal sealed class BillingEventEntityConfiguration : IEntityTypeConfiguration
         builder.Property(e => e.TotalCost)
             .HasPrecision(18, 6);
 
-        builder.Property(e => e.RecordedAt)
-            .HasColumnType("timestamptz");
-
         builder.HasIndex(e => new { e.TenantId, e.RecordedAt });
 
         builder.HasIndex(e => new { e.ApiKeyId, e.RecordedAt });

@@ -29,12 +29,6 @@ internal sealed class BudgetEntityConfiguration : IEntityTypeConfiguration<Budge
         builder.Property(b => b.PeriodStartDay)
             .HasDefaultValue(1);
 
-        builder.Property(b => b.CreatedAt)
-            .HasColumnType("timestamptz");
-
-        builder.Property(b => b.UpdatedAt)
-            .HasColumnType("timestamptz");
-
         builder.HasIndex(b => b.TenantId);
 
         builder.HasOne(b => b.Tenant)

@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Pol33.Core.Abstractions;
 using Pol33.Persistence.Bootstrap;
 using Pol33.Persistence.Hosting;
+using Pol33.Persistence.Infrastructure;
 using Pol33.Persistence.Repositories;
 
 namespace Pol33.Persistence.DependencyInjection;
@@ -33,8 +34,7 @@ public static class PersistenceServiceCollectionExtensions
         else
         {
             services.AddDbContext<GatewayDbContext>(options =>
-                options.UseNpgsql(connectionString, npgsql =>
-                    npgsql.MigrationsAssembly(typeof(GatewayDbContext).Assembly.GetName().Name)));
+                SqliteGatewayDbContext.Configure(options, connectionString));
         }
 
         services.Configure<GatewayBootstrapOptions>(

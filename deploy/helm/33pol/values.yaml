@@ -72,14 +72,15 @@ providerApiKeys:
   # TOGETHER_API_KEY, GROQ_API_KEY, DEEPSEEK_API_KEY, MISTRAL_API_KEY, FIREWORKS_API_KEY,
   # DASHSCOPE_API_KEY, plus any custom envVar for POST /admin/api/providers/models.
 
-postgresql:
-  enabled: false
-  host: ""
-  port: 5432
-  database: gateway
-  username: gateway
-  existingSecret: ""
-  secretKey: password
+# Embedded SQLite database. The gateway runs single-instance (keep replicaCount: 1); the database
+# is a single file on a ReadWriteOnce volume. Disable persistence only for ephemeral/test installs.
+persistence:
+  enabled: true
+  mountPath: /data
+  connectionString: "Data Source=/data/gateway.db"
+  size: 1Gi
+  accessMode: ReadWriteOnce
+  # storageClass: ""   # unset uses the cluster default StorageClass
 
 probes:
   livenessPath: /health/live

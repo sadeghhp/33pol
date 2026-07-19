@@ -38,17 +38,5 @@ internal sealed class RateCardEntityConfiguration : IEntityTypeConfiguration<Rat
         builder.Property(r => r.Currency)
             .HasMaxLength(3)
             .IsRequired();
-
-        builder.Property(r => r.EffectiveFrom)
-            .HasColumnType("timestamptz");
-
-        builder.Property(r => r.EffectiveUntil)
-            .HasColumnType("timestamptz");
-
-        builder.Property(r => r.CreatedAt)
-            .HasColumnType("timestamptz");
-
-        builder.Property(r => r.UpdatedAt)
-            .HasColumnType("timestamptz");
     }
 }

@@ -25,11 +25,5 @@ internal sealed class PlanEntityConfiguration : IEntityTypeConfiguration<PlanEnt
 
         builder.Property(p => p.RateCardSlug)
             .HasMaxLength(64);
-
-        builder.Property(p => p.CreatedAt)
-            .HasColumnType("timestamptz");
-
-        builder.Property(p => p.UpdatedAt)
-            .HasColumnType("timestamptz");
     }
 }

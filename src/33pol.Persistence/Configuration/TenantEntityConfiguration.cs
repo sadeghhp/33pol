@@ -29,12 +29,6 @@ internal sealed class TenantEntityConfiguration : IEntityTypeConfiguration<Tenan
         builder.Property(t => t.CostCenter)
             .HasMaxLength(128);
 
-        builder.Property(t => t.CreatedAt)
-            .HasColumnType("timestamptz");
-
-        builder.Property(t => t.UpdatedAt)
-            .HasColumnType("timestamptz");
-
         builder.HasMany(t => t.ApiKeys)
             .WithOne(k => k.Tenant)
             .HasForeignKey(k => k.TenantId)

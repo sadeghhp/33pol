@@ -8,25 +8,6 @@
 name: 33pol
 
 services:
-  postgres:
-    image: postgres:16-alpine
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER:-gateway}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ysHAsRWXYv6pGtd3tANleZKc2Bf6I0Z}
-      POSTGRES_DB: ${POSTGRES_DB:-gateway}
-    volumes:
-      - postgres-data:/var/lib/postgresql/data
-    ports:
-      # Default to loopback only; set POSTGRES_BIND=0.0.0.0 explicitly to expose on the network.
-      - "${POSTGRES_BIND:-127.0.0.1}:${POSTGRES_PORT:-5432}:5432"
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-      start_period: 10s
-
   mock-upstream:
     profiles: ["mock", "full"]
     image: wiremock/wiremock:3.9.1
@@ -49,8 +30,6 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     depends_on:
-      postgres:
-        condition: service_healthy
       mock-upstream:
         condition: service_healthy
         required: false
@@ -59,9 +38,8 @@ services:
     environment:
       ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT:-Development}
       ASPNETCORE_URLS: http://+:8080
-      ConnectionStrings__GatewayDb: >-
-        Host=postgres;Port=5432;Database=${POSTGRES_DB:-gateway};
-        Username=${POSTGRES_USER:-gateway};Password=${POSTGRES_PASSWORD:-ysHAsRWXYv6pGtd3tANleZKc2Bf6I0Z}
+      # Embedded SQLite database, persisted on the gateway-data volume mounted at /data.
+      ConnectionStrings__GatewayDb: ${GATEWAY_DB_CONNECTION:-Data Source=/data/gateway.db}
       Gateway__ModelsConfigPath: /app/config/models.json
       Gateway__Bootstrap__AdminApiKey: ${GATEWAY_ADMIN_API_KEY:-sk-33pol-4aa283ddb877adaccc60cb53314fa15cfd41f01084df064c}
       # Production requires GATEWAY_KEY_PEPPER (>=16 chars, not dev-pepper-change-me). Development may omit it.
@@ -81,6 +59,8 @@ services:
     volumes:
       # Directory mount: atomic rename works; single-file bind mounts often return EBUSY on save.
       - ./config:/app/config
+      # Persist the embedded SQLite database (gateway.db + WAL/SHM sidecars) across restarts.
+      - gateway-data:/data
     ports:
       # Default to loopback only; set GATEWAY_BIND=0.0.0.0 explicitly to expose on the network.
       - "${GATEWAY_BIND:-127.0.0.1}:${GATEWAY_PORT:-8080}:8080"
@@ -127,6 +107,6 @@ services:
       - prometheus
 
 volumes:
-  postgres-data:
+  gateway-data:
   prometheus-data:
   grafana-data:

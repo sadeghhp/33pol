@@ -6,6 +6,11 @@ metadata:
     {{- include "33pol.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.replicaCount }}
+  {{- if .Values.persistence.enabled }}
+  # SQLite is a single file on a ReadWriteOnce volume; Recreate avoids two pods mounting it at once.
+  strategy:
+    type: Recreate
+  {{- end }}
   selector:
     matchLabels:
       {{- include "33pol.selectorLabels" . | nindent 6 }}
@@ -33,20 +38,8 @@ spec:
             - name: Gateway__Cors__AllowedOrigins__{{ $index }}
               value: {{ $origin | quote }}
             {{- end }}
-            {{- if .Values.postgresql.enabled }}
             - name: ConnectionStrings__GatewayDb
-              value: >-
-                Host={{ .Values.postgresql.host }};
-                Port={{ .Values.postgresql.port }};
-                Database={{ .Values.postgresql.database }};
-                Username={{ .Values.postgresql.username }};
-                Password=$(POSTGRES_PASSWORD)
-            - name: POSTGRES_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ required "postgresql.existingSecret required when postgresql.enabled" .Values.postgresql.existingSecret }}
-                  key: {{ .Values.postgresql.secretKey }}
-            {{- end }}
+              value: {{ .Values.persistence.connectionString | quote }}
             {{- with .Values.providerApiKeys.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -54,6 +47,9 @@ spec:
           envFrom:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+          volumeMounts:
+            - name: data
+              mountPath: {{ .Values.persistence.mountPath }}
           livenessProbe:
             httpGet:
               path: {{ .Values.probes.livenessPath }}
@@ -68,3 +64,11 @@ spec:
             periodSeconds: 5
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: data
+        {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "33pol.fullname" . }}-data
+        {{- else }}
+          emptyDir: {}
+        {{- end }}
