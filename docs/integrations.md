@@ -114,9 +114,9 @@ Streaming: set `stream=True` on the same call. The gateway preserves SSE semanti
 
 ## Kubernetes
 
-- **Helm:** `deploy/helm/33pol/` — `persistence.enabled` provisions the ReadWriteOnce PVC for the embedded SQLite database (keep `replicaCount: 1`).
+- **Helm:** `deploy/helm/33pol/` — `persistence.enabled` provisions the ReadWriteOnce PVC for the embedded SQLite database. Point it at durable, backed-up storage; see [runbooks/backup-restore.md](./runbooks/backup-restore.md).
+- **Single-instance only:** the gateway is one writer against one SQLite file. `replicaCount` must stay `1` and `autoscaling.enabled` must stay `false` — the chart refuses to render otherwise. Scale vertically (CPU/memory). All config (rate limits, routes, CORS, quotas) is in the database, so there is nothing to fan out across pods.
 - **Probes:** liveness `/health/live`, readiness `/health/ready` (no auth).
-- **Multi-replica:** in-memory rate limits are per-pod unless Redis store is configured. Fan out admin registry changes or use a shared `models.json` volume. See [implementation-plan/11-ha-and-scaling.md](./implementation-plan/11-ha-and-scaling.md).
 
 ## LangChain / LiteLLM
 

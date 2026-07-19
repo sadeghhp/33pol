@@ -17,9 +17,9 @@
 
 | Cause | Action |
 |-------|--------|
-| Traffic spike | Scale gateway replicas; writer is per-process — consider lowering burst or enabling drop policy awareness |
+| Traffic spike | Raise CPU/memory (vertical scale); the gateway is single-instance, so lower burst or shed load rather than adding replicas |
 | DB slow or unavailable | Check the SQLite file (disk space, WAL growth, file locks) and migrations |
-| Saturated channel (10k, DropOldest) | Expected under extreme load — increase capacity or add replicas with shared store (post-GA) |
+| Saturated channel (10k, DropOldest) | Expected under extreme load — increase channel capacity and host resources (single-instance; no shared-store fan-out) |
 | Misconfigured `ConnectionStrings:GatewayDb` | Fix secret; readiness should fail if DB required |
 
 ## Mitigation

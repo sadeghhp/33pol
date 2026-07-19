@@ -34,7 +34,7 @@ With gateway running (auth off or valid inference key):
 ```bash
 pip install openai
 export OPENAI_BASE_URL=http://localhost:8080/v1
-export OPENAI_API_KEY=sk-your-key   # inference key when Postgres is enabled
+export OPENAI_API_KEY=sk-your-key   # inference key when the SQLite database is configured
 export MODEL=gpt-local              # or mock-gpt when using deploy/docker Compose
 python3 perf/scripts/sdk-smoke.py
 ```

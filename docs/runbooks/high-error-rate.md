@@ -25,7 +25,7 @@
 
 - Reload registry: `POST /admin/api/config/reload` (admin key)
 - Remove bad model: `DELETE /admin/api/models/{id}`
-- Scale replicas (Helm `autoscaling.enabled`) if CPU-saturated
+- Scale **vertically** (raise CPU/memory `resources`) if saturated. The gateway runs single-instance on embedded SQLite; horizontal scaling / `autoscaling.enabled` is rejected by the Helm chart.
 
 ## Escalation
 

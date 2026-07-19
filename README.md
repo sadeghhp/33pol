@@ -162,7 +162,7 @@ Deeper architecture: [docs/architecture.md](./docs/architecture.md) · [solution
 | Area | Capability |
 |------|------------|
 | **Compatibility** | OpenAI-shaped requests, responses, errors, and SSE streaming |
-| **Routing** | Body-based `model` → backend URL; aliases; hot reload of `models.json`; encrypted upstream credentials |
+| **Routing** | Body-based `model` → backend URL; aliases; DB-backed model routes with live admin CRUD (`models.json` seeds/falls back); encrypted upstream credentials |
 | **Security** | Hashed API keys (HMAC + pepper), admin vs inference roles, tenant + per-key model grants, [CORS for browser SPAs](docs/security.md#cors), optional [`publicAccess`](docs/security.md#public-models-publicaccess) for local upstreams |
 | **Resilience** | Forward timeouts, body size limits, per-model concurrency, circuit breaker |
 | **Policy** | Admin-managed RPM/burst and plans, concurrent streams, monthly token quotas, budget hard-stop |
@@ -295,7 +295,7 @@ More: [docs/integrations.md](./docs/integrations.md) · SDK smoke: `python3 perf
 
 ## Model registry
 
-Backends are defined in **`models.json`** (path via `Gateway:ModelsConfigPath`) or updated at runtime through admin APIs. In Docker Compose, copy `deploy/docker/config/models.json.example` → `models.json` locally (the file is gitignored).
+Model routes live in the **SQLite database** and are managed at runtime through the admin APIs (and admin UI). On first boot an empty database is seeded from **`models.json`** (path via `Gateway:ModelsConfigPath`), which also serves as a fallback when no database is configured; thereafter the database is the source of truth. In Docker Compose, copy `deploy/docker/config/models.json.example` → `models.json` locally to seed (the file is gitignored).
 
 ```json
 {
@@ -407,7 +407,7 @@ helm upgrade --install 33pol deploy/helm/33pol \
 - Probes: `/health/live` (liveness), `/health/ready` (readiness) — no auth.
 - **SSE / streaming:** configure long proxy timeouts on ingress; disable buffering for chat completion streams ([integrations.md](./docs/integrations.md)).
 - **Browser SPAs:** set `gateway.cors.allowedOrigins` in Helm values when `ASPNETCORE_ENVIRONMENT` is Production ([security.md](./docs/security.md#cors)).
-- **Multi-replica:** rate limits are per-pod unless a shared store is configured; coordinate registry updates or share `models.json`.
+- **Single-instance:** the gateway runs one replica on embedded SQLite (the Helm chart rejects `replicaCount > 1` and `autoscaling.enabled`). All config and routes are in the database; scale vertically and point the PVC at durable, backed-up storage ([backup runbook](docs/runbooks/backup-restore.md)).
 
 ---
 
