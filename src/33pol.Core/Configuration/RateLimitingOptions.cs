@@ -19,9 +19,9 @@ public sealed class RateLimitingOptions
 
 public sealed class RateLimitTierOptions
 {
-    public int Rpm { get; set; } = 60;
+    public int Rpm { get; set; } = 600;
 
-    public int Burst { get; set; } = 10;
+    public int Burst { get; set; } = 100;
 
-    public int MaxConcurrentStreams { get; set; } = 5;
+    public int MaxConcurrentStreams { get; set; } = 50;
 }
