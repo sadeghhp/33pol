@@ -15,7 +15,7 @@ public sealed class AdminUiIntegrationTests
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var body = await response.Content.ReadAsStringAsync();
-        body.Should().Contain("33pol Gateway Admin");
+        body.Should().Contain("33pol control plane");
         body.Should().MatchRegex("href=\"admin\\.css\\?v=\\d+\"");
         body.Should().MatchRegex("src=\"admin-icons\\.js\\?v=\\d+\"");
         body.Should().MatchRegex("src=\"admin-errors\\.js\\?v=\\d+\"");
@@ -35,7 +35,7 @@ public sealed class AdminUiIntegrationTests
         body.Should().Contain("id=\"model-upstream-api-key\"");
         body.Should().Contain("x-model=\"editModel.apiKey\"");
         body.Should().NotMatchRegex(@"<label[^>]*x-text=[^>]*>[\s\S]*?x-model=""editModel\.apiKey""");
-        body.Should().Contain("auth-hint");
+        body.Should().Contain("class=\"hint\"");
         body.Should().Contain("Errors by model");
         body.Should().Contain("x-model=\"requestsErrorsOnly\"");
         body.Should().Contain("Errors only");
@@ -96,7 +96,7 @@ public sealed class AdminUiIntegrationTests
         body.Should().Contain(":root");
         body.Should().Contain("--accent");
         body.Should().Contain("app-shell");
-        body.Should().Contain(".auth-hint");
+        body.Should().Contain(".hint");
         body.Should().Contain(".errors-by-model");
         body.Should().Contain(".request-detail-row");
     }

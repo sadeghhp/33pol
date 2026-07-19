@@ -33,7 +33,11 @@ public sealed class AdminCorsEndpointTests
             AdminKey,
             configureSettings: settings =>
             {
+                // appsettings.json ships two default origins; override both indices so the
+                // test-configured origin is the only one bound (config arrays merge per-index
+                // across providers, so overriding just index 0 would leave index 1 in place).
                 settings["Gateway:Cors:AllowedOrigins:0"] = AllowedOrigin;
+                settings["Gateway:Cors:AllowedOrigins:1"] = "";
             });
         await GatewayWebApplicationFactory.EnsureAuthReadyAsync(factory);
         var client = CreateAuthenticatedClient(factory, AdminKey);
