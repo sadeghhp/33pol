@@ -129,7 +129,7 @@ flowchart LR
 
 ### Request path (inference)
 
-1. **Authenticate** — Inference API key (`Authorization: Bearer` or `X-API-Key`) when Postgres/bootstrap is enabled, unless the model has `publicAccess: true`.
+1. **Authenticate** — Inference API key (`Authorization: Bearer` or `X-API-Key`) when the database/bootstrap is enabled, unless the model has `publicAccess: true`.
 2. **Authorize model** — Tenant ceiling and per-key allowlist must include the requested `model` (or alias); public models skip grant checks.
 3. **Policy** — Rate limit (RPM, burst, concurrent streams), then quota / budget checks.
 4. **Route** — Resolve backend URL from registry; apply circuit breaker and timeouts.
@@ -179,11 +179,11 @@ Pick the path that fits you — all three hit the same OpenAI-compatible surface
 
 ### Option A — Docker Compose (recommended)
 
-No local .NET SDK required. Default profile runs **Postgres + gateway** only; enable optional services via `COMPOSE_PROFILES` in `.env`.
+No local .NET SDK required. Default profile runs the **gateway** only (with an embedded SQLite database — no external DB service); enable optional services via `COMPOSE_PROFILES` in `.env`.
 
 | Profile | `COMPOSE_PROFILES` | Services |
 |---------|-------------------|----------|
-| **gpu-gateway** (default) | empty | `postgres`, `gateway` |
+| **gpu-gateway** (default) | empty | `gateway` (embedded SQLite) |
 | **gpu-observability** | `observability` | above + `prometheus`, `grafana` |
 | **full-stack** (local demo) | `full` | above + `mock-upstream` |
 
@@ -342,7 +342,7 @@ curl -s http://localhost:8080/admin/api/summary \
   -H "X-API-Key: $ADMIN_KEY" | jq .
 ```
 
-When Postgres is configured, set `Gateway:Bootstrap:AdminApiKey` for first-run provisioning, then rotate.
+For first-run provisioning, set `Gateway:Bootstrap:AdminApiKey`, then rotate.
 
 Guides: [admin-ui.md](./docs/admin-ui.md) · [operator-console.md](./docs/operator-console.md) · [security.md](./docs/security.md).
 
@@ -374,7 +374,7 @@ FinOps detail: [finops.md](./docs/finops.md) · Observability: [observability.md
 | [scripts/install-33pol.sh](./scripts/install-33pol.sh) | Interactive install on a Linux server (`install`, `upgrade`, `reapply`, `doctor`, `status`, `logs`) |
 | [docs/deploy-remote-gpu.md](./docs/deploy-remote-gpu.md) | Remote GPU server walkthrough |
 | [Dockerfile](./Dockerfile) | Production container (`ghcr.io` on `main`) |
-| [docker-compose.yml](./docker-compose.yml) | Compose entry point; profiles via `COMPOSE_PROFILES` in `.env` (default: gateway + Postgres only) |
+| [docker-compose.yml](./docker-compose.yml) | Compose entry point; profiles via `COMPOSE_PROFILES` in `.env` (default: gateway only, embedded SQLite) |
 | [deploy/helm/33pol/](./deploy/helm/33pol/) | Kubernetes (HPA, ServiceMonitor, ingress, CORS values) |
 | [deploy/README.md](./deploy/README.md) | Layout index |
 | [scripts/host-health/](./scripts/host-health/) | Optional Ubuntu host health checks (independent of 33pol) |
@@ -398,7 +398,7 @@ git clone https://github.com/sadeghhp/33pol.git && cd 33pol && ./scripts/install
 ```bash
 helm upgrade --install 33pol deploy/helm/33pol \
   --set image.repository=ghcr.io/<org>/33pol \
-  --set postgresql.enabled=true \
+  --set persistence.enabled=true \
   --set serviceMonitor.enabled=true
 ```
 
@@ -425,7 +425,7 @@ helm upgrade --install 33pol deploy/helm/33pol \
 │   ├── 33pol.Policy       # Rate limits, quotas, breaker config
 │   ├── 33pol.Observability
 │   ├── 33pol.Billing
-│   ├── 33pol.Persistence  # EF Core + Postgres
+│   ├── 33pol.Persistence  # EF Core + SQLite
 │   ├── 33pol.Api          # Minimal API endpoints
 │   └── 33pol.OperatorConsole
 └── tests/                 # Unit, integration, architecture, conformance

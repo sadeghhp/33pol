@@ -114,7 +114,7 @@ Streaming: set `stream=True` on the same call. The gateway preserves SSE semanti
 
 ## Kubernetes
 
-- **Helm:** `deploy/helm/33pol/` — set `postgresql.enabled` and secrets for production DB.
+- **Helm:** `deploy/helm/33pol/` — `persistence.enabled` provisions the ReadWriteOnce PVC for the embedded SQLite database (keep `replicaCount: 1`).
 - **Probes:** liveness `/health/live`, readiness `/health/ready` (no auth).
 - **Multi-replica:** in-memory rate limits are per-pod unless Redis store is configured. Fan out admin registry changes or use a shared `models.json` volume. See [implementation-plan/11-ha-and-scaling.md](./implementation-plan/11-ha-and-scaling.md).
 
@@ -147,7 +147,7 @@ Sample collector config: [deploy/otel-collector/config.yaml](../deploy/otel-coll
 
 ## Docker Compose
 
-Full local stack (gateway, Postgres, WireMock upstream, Prometheus, Grafana):
+Full local stack (gateway with embedded SQLite, WireMock upstream, Prometheus, Grafana):
 
 ```bash
 cp .env.example .env && docker compose up -d --build
@@ -161,8 +161,8 @@ Compose auto-provisions Grafana dashboards from `deploy/grafana/dashboards/` (fo
 helm upgrade --install 33pol deploy/helm/33pol \
   --set image.repository=ghcr.io/<org>/33pol \
   --set image.tag=2.0.0 \
-  --set postgresql.enabled=true \
-  --set postgresql.existingSecret=gateway-db
+  --set persistence.enabled=true \
+  --set persistence.size=1Gi
 ```
 
 The chart deploys the gateway only (no Grafana). Scrape `/metrics` via `serviceMonitor.enabled` when Prometheus Operator is installed, then import or provision dashboards from `deploy/grafana/`. See [deploy/README.md](../deploy/README.md).

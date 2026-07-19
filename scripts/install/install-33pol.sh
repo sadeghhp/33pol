@@ -134,7 +134,7 @@ cmd_doctor() {
   resolve_install_dir
   install_ensure_models_json "${INSTALL_DIR:-$(pwd)}"
   install_ensure_upstream_secrets "${INSTALL_DIR:-$(pwd)}"
-  install_run_doctor "${INSTALL_GATEWAY_PORT:-8080}" "${INSTALL_POSTGRES_PORT:-5432}"
+  install_run_doctor "${INSTALL_GATEWAY_PORT:-8080}"
   if [[ -f "${INSTALL_STATE_DIR}/install.state.json" ]]; then
     log "State file: ${INSTALL_STATE_DIR}/install.state.json"
     if dir_state="$(install_read_state_install_dir 2>/dev/null)"; then
@@ -192,7 +192,7 @@ cmd_install() {
 
   install_resolve_install_config
 
-  install_run_doctor "${INSTALL_GATEWAY_PORT}" "${INSTALL_POSTGRES_PORT}"
+  install_run_doctor "${INSTALL_GATEWAY_PORT}"
 
   if [[ ! -f "${INSTALL_DIR}/33pol.sln" ]]; then
     install_clone_or_update "${INSTALL_GIT_URL:-${DEFAULT_GIT_URL}}" "${INSTALL_DIR}" "${INSTALL_GIT_REF:-main}"
@@ -214,10 +214,6 @@ cmd_install() {
     "${INSTALL_GATEWAY_PORT}" \
     "${INSTALL_GATEWAY_BIND}" \
     "${INSTALL_ADMIN_KEY}" \
-    "${INSTALL_POSTGRES_USER}" \
-    "${INSTALL_POSTGRES_PASSWORD}" \
-    "${INSTALL_POSTGRES_BIND}" \
-    "${INSTALL_POSTGRES_PORT}" \
     "${INSTALL_ASPNET_ENV}")"
 
   if [[ -n "${INSTALL_ENV_OVERRIDE}" ]]; then

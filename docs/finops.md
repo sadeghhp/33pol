@@ -13,7 +13,7 @@ Phase 4 implements **quota gating** on the inference hot path. Phase 5 adds **bi
 
 - **Check:** synchronous `IQuotaService.CheckBeforeForward` in `QuotaMiddleware`
 - **Commit:** `IUsageRecorder` queue commits tokens idempotently by `request_id`
-- **Storage:** in-memory counters per tenant partition when no database; PostgreSQL `billing_events` + `daily_usage_rollups` when configured
+- **Storage:** in-memory counters per tenant partition when no database; the embedded SQLite `billing_events` + `daily_usage_rollups` tables when configured
 
 ## Usage APIs (Phase 5)
 

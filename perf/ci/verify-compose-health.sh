@@ -16,7 +16,7 @@ cd "${COMPOSE_DIR}"
 [ -f .env ] && set -a && source .env && set +a
 
 running_services="$(docker compose ps --services --filter status=running 2>/dev/null || true)"
-if [[ "${running_services}" != *postgres* ]]; then
+if [[ "${running_services}" != *gateway* ]]; then
   echo "Start stack first: cd ${COMPOSE_DIR} && docker compose up -d --build" >&2
   exit 1
 fi

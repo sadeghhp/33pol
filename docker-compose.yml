@@ -1,4 +1,4 @@
-# All-in-one 33pol local stack (gateway + Postgres + mock upstream + Prometheus + Grafana).
+# All-in-one 33pol local stack (gateway with embedded SQLite + mock upstream + Prometheus + Grafana).
 # From repo root:
 #   cp .env.example .env
 #   docker compose up -d --build

@@ -1,12 +1,12 @@
 # Docker Compose — local 33pol stack
 
-Runs **gateway** and **Postgres** by default. Optional Compose profile **`full`** adds Prometheus, Grafana, and a WireMock mock upstream.
+Runs the **gateway** by default, with an embedded SQLite database persisted on the `gateway-data` volume (no external database service). Optional Compose profile **`full`** adds Prometheus, Grafana, and a WireMock mock upstream.
 
 ## Compose profiles
 
 | Profile | `COMPOSE_PROFILES` | Services |
 |---------|----------------------|----------|
-| **gpu-gateway** (default) | empty / unset | `postgres`, `gateway` |
+| **gpu-gateway** (default) | empty / unset | `gateway` (embedded SQLite) |
 | **gpu-observability** | `observability` | above + `prometheus`, `grafana` |
 | **full-stack** (local demo) | `full` | above + `mock-upstream` |
 
@@ -48,7 +48,7 @@ For **gpu-gateway only**, omit `COMPOSE_PROFILES` in `.env` (or leave it empty),
 | Mock upstream  | http://localhost:18080       |
 | Prometheus     | http://localhost:9090        |
 | Grafana        | http://localhost:3000 (admin / admin) — folder **33pol**: [33pol Gateway](http://localhost:3000/d/33pol-gateway/33pol-gateway) (RED, backends), [Traffic & tokens](http://localhost:3000/d/33pol-gateway-traffic/33pol-gateway-traffic) — see [observability.md](../../docs/observability.md) |
-| PostgreSQL     | localhost:5432               |
+| Database       | embedded SQLite at `/data/gateway.db` on the `gateway-data` volume |
 
 Test the mock:
 

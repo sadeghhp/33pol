@@ -30,7 +30,7 @@ helm upgrade --install 33pol deploy/helm/33pol -f my-values.yaml
 | Value | Purpose |
 |-------|---------|
 | `gateway.operatorConsole.enabled` | Keep `false` in Kubernetes |
-| `postgresql.enabled` | Wire `ConnectionStrings__GatewayDb` from a secret |
+| `persistence.enabled` | Provision the ReadWriteOnce PVC for the embedded SQLite database (keep `replicaCount: 1`) |
 | `serviceMonitor.enabled` | Prometheus Operator scrape of `/metrics` |
 | `ingress.enabled` | Expose gateway HTTP (configure SSE timeouts for streaming) |
 | `autoscaling.enabled` | HPA on CPU |

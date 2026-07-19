@@ -1,8 +1,8 @@
-# 33pol local stack — gateway, Postgres, Prometheus, Grafana, mock upstream (WP5.4).
+# 33pol local stack — gateway (embedded SQLite), Prometheus, Grafana, mock upstream (WP5.4).
 # Usage: repo root `docker compose up -d --build` or see deploy/docker/README.md
 #
-# Local-dev defaults below (POSTGRES_PASSWORD, GATEWAY_ADMIN_API_KEY, GATEWAY_KEY_PEPPER)
-# let `docker compose up` work without a .env file. Override via .env for non-local deploys.
+# Local-dev defaults below (GATEWAY_ADMIN_API_KEY, GATEWAY_KEY_PEPPER) let `docker compose up`
+# work without a .env file. Override via .env for non-local deploys.
 # Admin UI sign-in key (default): sk-33pol-4aa283ddb877adaccc60cb53314fa15cfd41f01084df064c
 
 name: 33pol
