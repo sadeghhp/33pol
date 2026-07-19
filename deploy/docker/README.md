@@ -157,13 +157,18 @@ docker compose up -d --build
 
 **Preferred:** Admin UI **Settings → CORS**, or `GET`/`PUT` `/admin/api/cors` (writes `Gateway:Cors:AllowedOrigins` in appsettings and hot-reloads).
 
-**Compose env (optional):** Do not leave empty `GATEWAY_CORS_ALLOWED_ORIGIN_*` vars in compose — empty env slots override appsettings. Copy [`docker-compose.cors.override.example.yml`](docker-compose.cors.override.example.yml) to `docker-compose.override.yml` (or merge) and set for example:
+**`.env` (Docker):** Add origins directly in repo-root `.env` — any number, no Compose mapping:
 
 ```bash
 ASPNETCORE_ENVIRONMENT=Production
 GATEWAY_CORS_ALLOWED_ORIGIN_0=https://sadeghhp.github.io
 GATEWAY_CORS_ALLOWED_ORIGIN_1=http://localhost:5173
+GATEWAY_CORS_ALLOWED_ORIGIN_2=http://localhost
+# or: GATEWAY_CORS_ALLOWED_ORIGINS=https://sadeghhp.github.io,http://localhost:5173
+docker compose up -d --force-recreate gateway
 ```
+
+The gateway loads `.env` via `env_file` and reads `GATEWAY_CORS_ALLOWED_ORIGIN_*` / `GATEWAY_CORS_ALLOWED_ORIGINS` at startup.
 
 Verify after changing config / restarting the gateway:
 

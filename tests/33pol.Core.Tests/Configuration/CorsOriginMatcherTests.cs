@@ -28,7 +28,7 @@ public sealed class CorsOriginMatcherTests
     [Fact]
     public void IsOriginAllowed_ExactOrigin_MatchesNormalizedOrigin()
     {
-        var patterns = ["http://localhost:5173"];
+        string[] patterns = ["http://localhost:5173"];
 
         CorsOriginMatcher.IsOriginAllowed("http://localhost:5173", patterns).Should().BeTrue();
         CorsOriginMatcher.IsOriginAllowed("http://localhost:5173/", patterns).Should().BeFalse();
@@ -37,7 +37,7 @@ public sealed class CorsOriginMatcherTests
     [Fact]
     public void IsOriginAllowed_MixedPatterns_MatchesEither()
     {
-        var patterns = ["https://*.github.io", "http://localhost:3000"];
+        string[] patterns = ["https://*.github.io", "http://localhost:3000"];
 
         CorsOriginMatcher.IsOriginAllowed("https://sadeghhp.github.io", patterns).Should().BeTrue();
         CorsOriginMatcher.IsOriginAllowed("http://localhost:3000", patterns).Should().BeTrue();

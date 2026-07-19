@@ -1,17 +1,14 @@
-# Optional: apply CORS origins via environment variables.
-# Copy to docker-compose.override.yml (or merge into your override) only when
-# GATEWAY_CORS_ALLOWED_ORIGIN_* is set in .env. Do not leave unused empty slots —
-# empty Gateway__Cors__AllowedOrigins__N values override appsettings / admin UI.
+# Deprecated: CORS from .env is applied automatically.
 #
-#   cp docker-compose.cors.override.example.yml docker-compose.override.yml
-#
-# Then in .env:
+# Add origins to .env at the repo root (any number, no Compose edits):
 #   GATEWAY_CORS_ALLOWED_ORIGIN_0=https://*.github.io
 #   GATEWAY_CORS_ALLOWED_ORIGIN_1=http://localhost:5173
-
-services:
-  gateway:
-    environment:
-      Gateway__Cors__AllowedOrigins__0: ${GATEWAY_CORS_ALLOWED_ORIGIN_0}
-      Gateway__Cors__AllowedOrigins__1: ${GATEWAY_CORS_ALLOWED_ORIGIN_1:-}
-      Gateway__Cors__AllowedOrigins__2: ${GATEWAY_CORS_ALLOWED_ORIGIN_2:-}
+#   GATEWAY_CORS_ALLOWED_ORIGIN_2=http://localhost
+#
+# Or comma-separated:
+#   GATEWAY_CORS_ALLOWED_ORIGINS=https://*.github.io,http://localhost:5173
+#
+# Then: docker compose up -d --force-recreate gateway
+#
+# The gateway service loads ../../.env via env_file in deploy/docker/docker-compose.yml.
+# Do not copy this file unless you need other gateway overrides.

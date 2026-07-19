@@ -41,7 +41,7 @@ Do not use `AllowAnyOrigin` in production. The built-in admin UI (`/admin`) is s
 | Admin API | `GET` / `PUT` `/admin/api/cors` — see [runbooks/cors-admin.md](runbooks/cors-admin.md) |
 | `appsettings` | `Gateway:Cors:AllowedOrigins: ["https://sadeghhp.github.io"]` |
 | Environment | `Gateway__Cors__AllowedOrigins__0=https://sadeghhp.github.io` |
-| Docker Compose (optional override) | Copy `deploy/docker/docker-compose.cors.override.example.yml` and set `GATEWAY_CORS_ALLOWED_ORIGIN_0=…` |
+| Docker `.env` | `GATEWAY_CORS_ALLOWED_ORIGIN_0=https://sadeghhp.github.io` (any index; no Compose edits) or `GATEWAY_CORS_ALLOWED_ORIGINS=…` comma-separated |
 | Helm | `gateway.cors.allowedOrigins` in `values.yaml` |
 
 Changes via admin UI/API write appsettings and **hot-reload** the CORS policy (no restart).

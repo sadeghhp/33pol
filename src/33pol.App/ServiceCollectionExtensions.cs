@@ -26,6 +26,7 @@ public static class ServiceCollectionExtensions
             .Bind(configuration.GetSection(GatewayOptions.SectionName))
             .ValidateOnStart();
 
+        services.AddSingleton<IPostConfigureOptions<GatewayOptions>, GatewayCorsEnvironmentPostConfigure>();
         services.AddSingleton<IValidateOptions<GatewayOptions>, GatewayOptionsValidateOptions>();
         services.AddGatewayCors(configuration, environment);
         services.AddGatewayOpenTelemetry();

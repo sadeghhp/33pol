@@ -47,6 +47,9 @@ services:
     build:
       context: ../..
       dockerfile: Dockerfile
+    env_file:
+      - path: ../../.env
+        required: false
     restart: unless-stopped
     depends_on:
       postgres:

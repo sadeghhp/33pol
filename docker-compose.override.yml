@@ -1,8 +1,0 @@
-# CORS origins via environment (merged when running docker compose from repo root).
-# Requires matching vars in .env — see deploy/docker/docker-compose.cors.override.example.yml.
-
-services:
-  gateway:
-    environment:
-      Gateway__Cors__AllowedOrigins__0: ${GATEWAY_CORS_ALLOWED_ORIGIN_0}
-      Gateway__Cors__AllowedOrigins__1: ${GATEWAY_CORS_ALLOWED_ORIGIN_1:-}

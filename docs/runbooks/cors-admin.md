@@ -36,7 +36,7 @@ Validation (HTTP 400, `{ "message": "…" }`):
 
 `POST /admin/api/config/reload` reloads **models.json** only; it does not re-read CORS from a separate file.
 
-**Docker note:** Prefer the admin API / UI. If using Compose env vars, apply them via `deploy/docker/docker-compose.cors.override.example.yml` — do not inject empty `Gateway__Cors__AllowedOrigins__N` values (they override appsettings).
+**Docker note:** Add `GATEWAY_CORS_ALLOWED_ORIGIN_*` or `GATEWAY_CORS_ALLOWED_ORIGINS` in repo-root `.env` and recreate the gateway (`docker compose up -d --force-recreate gateway`). No per-index Compose mapping is required.
 
 ## Admin UI
 
