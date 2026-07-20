@@ -140,6 +140,8 @@ public sealed class BillingUsageBatchPersistenceHandlerTests
         services.AddSingleton<IBillingWebhookDispatcher>(Substitute.For<IBillingWebhookDispatcher>());
         services.AddSingleton<BillingBudgetWarningTracker>();
         services.AddSingleton<BillingDailyUsageWebhookTracker>();
+        services.AddSingleton<BillingUnpricedModelTracker>();
+        services.AddLogging();
         services.AddSingleton<IApiKeyLastUsedTracker>(Substitute.For<IApiKeyLastUsedTracker>());
         services.AddSingleton(new BudgetReservationLedger(TimeSpan.FromMinutes(2)));
         services.AddSingleton(Options.Create(new BillingOptions

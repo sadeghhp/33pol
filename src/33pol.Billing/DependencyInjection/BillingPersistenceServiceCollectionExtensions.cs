@@ -2,6 +2,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Pol33.Billing.Forecast;
+using Pol33.Billing.RateCards;
 using Pol33.Billing.Usage;
 using Pol33.Billing.Webhooks;
 using Pol33.Core.Abstractions;
@@ -20,6 +21,8 @@ public static class BillingPersistenceServiceCollectionExtensions
         {
             return services;
         }
+
+        services.Replace(ServiceDescriptor.Scoped<IRateCardAdminService, RateCardAdminService>());
 
         services.AddScoped<BillingUsagePersistenceHandler>();
         services.AddScoped<BillingUsageService>();

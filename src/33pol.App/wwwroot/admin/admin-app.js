@@ -256,6 +256,23 @@ function adminApp() {
       } catch { return n.toFixed(4); }
     },
 
+    // Prices are authored per million tokens and are often sub-cent, so they get their own
+    // formatter rather than going through formatCost (which caps at 4 decimal places).
+    formatModelPrice(pricing) {
+      if (!pricing) return '—';
+      const fmt = v => {
+        const n = Number(v);
+        if (!Number.isFinite(n)) return '—';
+        try {
+          return new Intl.NumberFormat(undefined, {
+            style: 'currency', currency: pricing.currency || 'USD',
+            minimumFractionDigits: 2, maximumFractionDigits: 6
+          }).format(n);
+        } catch { return n.toFixed(2); }
+      };
+      return fmt(pricing.inputPricePerMillionTokens) + ' / ' + fmt(pricing.outputPricePerMillionTokens);
+    },
+
     summaryAgeText() {
       if (!this.summaryUpdatedAt) return '';
       const sec = Math.floor((Date.now() - this.summaryUpdatedAt) / 1000);
@@ -1239,7 +1256,8 @@ function adminApp() {
       const list = (await this.apiJson('/admin/api/models')) ?? [];
       this.models = (list || []).map(item => ({
         ...(item.model || item),
-        hasUpstreamCredential: item.hasUpstreamCredential === true
+        hasUpstreamCredential: item.hasUpstreamCredential === true,
+        pricing: item.pricing || null
       }));
     },
 
@@ -1265,16 +1283,27 @@ function adminApp() {
         url: this.editModel.url.trim(),
         maxContextLength: Number(this.editModel.maxContextLength) || 8192,
         aliases,
-        publicAccess: !!this.editModel.publicAccess
+        publicAccess: !!this.editModel.publicAccess,
+        // Echoed back so editing a model does not wipe capabilities the UI does not expose.
+        capabilities: this.editModel.capabilities || []
       };
       if (this.editModel._existing && this.editModel.upstreamAuth && !(this.editModel.apiKey || '').trim() && !this.editModel.clearApiKey) {
         model.upstreamAuth = this.editModel.upstreamAuth;
       }
       const apiKey = (this.editModel.apiKey || '').trim();
+      const input = this.editModel.inputPricePerMillion;
+      const output = this.editModel.outputPricePerMillion;
+      const hasPricing = input !== '' && input !== null && input !== undefined &&
+        output !== '' && output !== null && output !== undefined;
       return {
         model,
         apiKey: apiKey || null,
-        clearApiKey: !!this.editModel.clearApiKey
+        clearApiKey: !!this.editModel.clearApiKey,
+        pricing: hasPricing
+          ? { inputPricePerMillionTokens: Number(input), outputPricePerMillionTokens: Number(output) }
+          : null,
+        // Only clear when the model previously had a price and both fields were emptied.
+        clearPricing: !hasPricing && !!this.editModel._hadPricing
       };
     },
 
@@ -1282,7 +1311,9 @@ function adminApp() {
       this.editModel = {
         id: '', url: '', maxContextLength: 8192, aliasesText: '',
         apiKey: '', clearApiKey: false, hasUpstreamCredential: false,
-        publicAccess: false, upstreamAuth: null, _existing: false
+        publicAccess: false, upstreamAuth: null, capabilities: [],
+        inputPricePerMillion: '', outputPricePerMillion: '',
+        _hadPricing: false, _existing: false
       };
       this.showAdvancedModel = false;
     },
@@ -1295,8 +1326,27 @@ function adminApp() {
         hasUpstreamCredential: !!m.hasUpstreamCredential,
         publicAccess: !!m.publicAccess,
         upstreamAuth: m.upstreamAuth || null,
+        capabilities: m.capabilities || [],
+        inputPricePerMillion: m.pricing ? m.pricing.inputPricePerMillionTokens : '',
+        outputPricePerMillion: m.pricing ? m.pricing.outputPricePerMillionTokens : '',
+        _hadPricing: !!m.pricing,
         _existing: true
       };
+    },
+
+    modelPricingError() {
+      const input = this.editModel.inputPricePerMillion;
+      const output = this.editModel.outputPricePerMillion;
+      const filled = v => v !== '' && v !== null && v !== undefined;
+      if (filled(input) !== filled(output)) {
+        return 'Set both input and output prices, or leave both blank to leave the model unpriced.';
+      }
+      if (!filled(input)) return '';
+      for (const v of [input, output]) {
+        const n = Number(v);
+        if (!Number.isFinite(n) || n < 0) return 'Prices must be zero or greater.';
+      }
+      return '';
     },
 
     async saveModel() {
@@ -1308,6 +1358,11 @@ function adminApp() {
       }
       if (/localhost|127\.0\.0\.1/.test(write.model.url)) {
         this.modelFieldError = 'Use http://host.docker.internal:<port> when the gateway runs in Docker (not localhost).';
+        return;
+      }
+      const priceError = this.modelPricingError();
+      if (priceError) {
+        this.modelFieldError = priceError;
         return;
       }
       this._saveModelInFlight = true;

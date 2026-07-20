@@ -52,7 +52,9 @@ public static class PersistenceServiceCollectionExtensions
         services.AddScoped<IApiKeyModelGrantRepository, ApiKeyModelGrantRepository>();
         services.AddScoped<IDailyUsageRollupRepository, DailyUsageRollupRepository>();
         services.AddScoped<IBillingEventRepository, BillingEventRepository>();
-        services.AddScoped<IRateCardRepository, RateCardRepository>();
+        services.AddMemoryCache();
+        services.AddScoped<RateCardRepository>();
+        services.AddScoped<IRateCardRepository, CachingRateCardRepository>();
         services.AddScoped<IBudgetRepository, BudgetRepository>();
         services.AddScoped<IGatewayStatsSnapshotStore, GatewayStatsSnapshotStore>();
         services.AddScoped<IQuotaUsageSnapshotStore, QuotaUsageSnapshotStore>();

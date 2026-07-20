@@ -35,8 +35,10 @@ public static class AdminControlPlaneEndpoints
     private static IResult ListBackends(IControlPlaneCommands commands) =>
         Results.Json(commands.ListBackends());
 
-    private static IResult ListModels(AdminModelProvisioningService provisioning) =>
-        Results.Json(provisioning.ListModels());
+    private static async Task<IResult> ListModels(
+        AdminModelProvisioningService provisioning,
+        CancellationToken cancellationToken) =>
+        Results.Json(await provisioning.ListModelsAsync(cancellationToken).ConfigureAwait(false));
 
     private static IResult ListRequests(IControlPlaneCommands commands, int? limit) =>
         Results.Json(commands.ListRecentRequests(limit is > 0 and <= 500 ? limit.Value : 50));
@@ -72,10 +74,20 @@ public static class AdminControlPlaneEndpoints
 
     private static async Task<IResult> RemoveModel(
         IControlPlaneCommands commands,
+        IRateCardAdminService pricing,
         string id,
         CancellationToken cancellationToken)
     {
-        var result = await commands.RemoveModelAsync(AdminModelRouteId.Decode(id), cancellationToken).ConfigureAwait(false);
+        var modelId = AdminModelRouteId.Decode(id);
+        var result = await commands.RemoveModelAsync(modelId, cancellationToken).ConfigureAwait(false);
+
+        if (result.Success)
+        {
+            // Drop pricing too, so a model later re-created under the same id does not
+            // silently inherit a stale rate card.
+            await pricing.ClearPricingAsync(modelId, cancellationToken).ConfigureAwait(false);
+        }
+
         return Results.Json(result, statusCode: result.SuggestedStatusCode);
     }
 

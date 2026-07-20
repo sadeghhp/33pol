@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using NSubstitute;
 using Pol33.Billing.Aggregates;
@@ -31,8 +32,10 @@ public sealed class BillingUsagePersistenceHandlerTests
             webhooks ?? Substitute.For<IBillingWebhookDispatcher>(),
             warningTracker ?? new BillingBudgetWarningTracker(),
             dailyTracker ?? new BillingDailyUsageWebhookTracker(),
+            new BillingUnpricedModelTracker(),
             lastUsedTracker ?? Substitute.For<IApiKeyLastUsedTracker>(),
             new BudgetReservationLedger(TimeSpan.FromMinutes(2)),
+            NullLogger<BillingUsagePersistenceHandler>.Instance,
             Options.Create(new BillingOptions { DefaultCurrency = "USD" }));
 
     [Fact]

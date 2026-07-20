@@ -54,6 +54,36 @@ Budgets with `HardStopEnabled` block inference when period spend ≥ `AmountLimi
 - Metrics: `gateway_usage_writer_queue_depth`, `gateway_usage_writer_dropped_total` (see `deploy/prometheus/alerts/33pol-writer.yml`).
 - Admin read API: `GET /admin/api/usage/events?tenantId=&from=&to=&limit=` for paginated billing event history.
 
+## Model pricing (rate cards)
+
+Costs are only produced for models that have a price. Set one per model in the admin UI under
+**Routing → Models → (edit a model)**, or via the model admin API:
+
+```http
+PATCH /admin/api/models/{id}
+{
+  "model": { "id": "gpt-4o", "url": "https://openrouter.ai/api" },
+  "pricing": { "inputPricePerMillionTokens": 3.00, "outputPricePerMillionTokens": 15.00 }
+}
+```
+
+- Prices are per **one million tokens**, in `Billing:DefaultCurrency` (USD).
+- `GET /admin/api/models` returns each model's current `pricing` (null when unpriced).
+- Omitting `pricing` leaves the existing price unchanged; `"clearPricing": true` removes it.
+- Pricing is stored in the `rate_cards` table, not on the model itself, so it never reaches the
+  `models.json` fallback registry. It therefore **requires a configured database** — without one the
+  endpoint returns 503.
+- Deleting a model also deletes its rate card.
+
+**A model with no rate card records zero cost.** Its billing events persist with null costs and roll
+up as `0`, which is indistinguishable from genuinely free usage in the Usage & cost tab. The gateway
+logs a warning once per unpriced model to make this visible.
+
+**Caching:** rate cards are cached in-process for `Billing:RateCardCacheTtlSeconds` (default 60),
+because budget enforcement prices every request before forwarding it. Admin edits invalidate the
+entry immediately in-process; across replicas the TTL bounds staleness. Historical lookups bypass
+the cache.
+
 ## Persistence pipeline
 
 1. `IUsageRecorder` enqueues `UsageEvent` after inference.

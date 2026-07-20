@@ -44,6 +44,8 @@ public static class BillingServiceCollectionExtensions
             var billingOptions = sp.GetRequiredService<IOptions<BillingOptions>>().Value;
             return new BillingDailyUsageWebhookTracker(billingOptions.DailyWebhookTrackerRetentionLimit);
         });
+        services.AddSingleton<BillingUnpricedModelTracker>();
+        services.AddSingleton<IRateCardAdminService, NoOpRateCardAdminService>();
         services.AddSingleton<IBudgetEnforcementService, NoOpBudgetEnforcementService>();
         services.AddSingleton<IBillingWebhookDispatcher, BillingWebhookDispatcher>();
         services.AddSingleton<IBillingForecastService, NoOpBillingForecastService>();

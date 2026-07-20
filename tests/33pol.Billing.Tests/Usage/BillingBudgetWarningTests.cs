@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using NSubstitute;
 using Pol33.Billing.Aggregates;
@@ -122,8 +123,10 @@ public sealed class BillingBudgetWarningTests
             webhooks,
             new BillingBudgetWarningTracker(),
             new BillingDailyUsageWebhookTracker(),
+            new BillingUnpricedModelTracker(),
             Substitute.For<IApiKeyLastUsedTracker>(),
             new BudgetReservationLedger(TimeSpan.FromMinutes(2)),
+            NullLogger<BillingUsagePersistenceHandler>.Instance,
             Options.Create(new BillingOptions()));
     }
 

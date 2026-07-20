@@ -36,6 +36,10 @@ public sealed class AdminUiIntegrationTests
         body.Should().Contain("x-model=\"editModel.apiKey\"");
         body.Should().NotMatchRegex(@"<label[^>]*x-text=[^>]*>[\s\S]*?x-model=""editModel\.apiKey""");
         body.Should().Contain("class=\"hint\"");
+        body.Should().Contain("x-model=\"editModel.inputPricePerMillion\"");
+        body.Should().Contain("x-model=\"editModel.outputPricePerMillion\"");
+        body.Should().Contain("Input price (per 1M tokens)");
+        body.Should().Contain("formatModelPrice(m.pricing)");
         body.Should().Contain("Errors by model");
         body.Should().Contain("x-model=\"requestsErrorsOnly\"");
         body.Should().Contain("Errors only");
@@ -137,6 +141,9 @@ public sealed class AdminUiIntegrationTests
         body.Should().Contain("shortRequestId");
         body.Should().MatchRegex("loadSummary\\([\\s\\S]*?/admin/api/requests");
         body.Should().Contain("downloadBlob");
+        body.Should().Contain("formatModelPrice");
+        body.Should().Contain("modelPricingError");
+        body.Should().Contain("clearPricing");
         body.Should().NotContain("confirm(");
         body.Should().NotContain("openDiscover");
         body.Should().NotContain("fetchProviderModels");

@@ -36,4 +36,11 @@ public sealed class BillingOptions
     /// tenant's available budget.
     /// </summary>
     public int BudgetReservationTtlSeconds { get; set; } = 120;
+
+    /// <summary>
+    /// How long a model's rate card is cached. Budget enforcement prices every request before
+    /// forwarding it, so this keeps that off SQLite. Admin edits invalidate the entry immediately
+    /// in-process; the TTL bounds staleness across replicas.
+    /// </summary>
+    public int RateCardCacheTtlSeconds { get; set; } = 60;
 }

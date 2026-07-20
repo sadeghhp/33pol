@@ -1,5 +1,7 @@
+using Microsoft.Extensions.DependencyInjection;
 using Pol33.Api.Contracts;
 using Pol33.Core.Abstractions;
+using Pol33.Core.Billing;
 using Pol33.Core.Models;
 using Pol33.Core.Providers;
 
@@ -8,8 +10,20 @@ namespace Pol33.Api.Services;
 public sealed class AdminModelProvisioningService(
     IControlPlaneCommands commands,
     IUpstreamSecretStore secretStore,
+    IServiceScopeFactory scopeFactory,
     IAuditLogger audit)
 {
+    /// <summary>
+    /// Pricing is backed by the database and so is scoped, while this service is a singleton.
+    /// Resolve it per call from a fresh scope, as ModelRegistryWriter does for its repository.
+    /// </summary>
+    private async Task<T> WithPricingAsync<T>(Func<IRateCardAdminService, Task<T>> action)
+    {
+        using var scope = scopeFactory.CreateScope();
+        var pricing = scope.ServiceProvider.GetRequiredService<IRateCardAdminService>();
+        return await action(pricing).ConfigureAwait(false);
+    }
+
     public async Task<RegistryMutationResult> AddAsync(
         AdminModelWriteRequest request,
         CancellationToken cancellationToken = default)
@@ -30,7 +44,7 @@ public sealed class AdminModelProvisioningService(
         }
 
         await ApplySecretAsync(prep, cancellationToken).ConfigureAwait(false);
-        return result;
+        return await ApplyPricingAsync(prep.Model!.Id, request, result, cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<RegistryMutationResult> UpdateAsync(
@@ -54,18 +68,71 @@ public sealed class AdminModelProvisioningService(
         }
 
         await ApplySecretAsync(prep, cancellationToken).ConfigureAwait(false);
-        return result;
+        return await ApplyPricingAsync(prep.Model!.Id, request, result, cancellationToken).ConfigureAwait(false);
     }
 
-    public IReadOnlyList<AdminModelListItem> ListModels()
+    public async Task<IReadOnlyList<AdminModelListItem>> ListModelsAsync(
+        CancellationToken cancellationToken = default)
     {
+        var pricingByModel = await WithPricingAsync(p => p.GetPricingByModelAsync(cancellationToken))
+            .ConfigureAwait(false);
+
         return commands.ListModels()
             .Select(m => new AdminModelListItem
             {
                 Model = m,
-                HasUpstreamCredential = HasCredential(m)
+                HasUpstreamCredential = HasCredential(m),
+                Pricing = pricingByModel.TryGetValue(m.Id, out var price) ? price : null
             })
             .ToList();
+    }
+
+    /// <summary>
+    /// Applies pricing after the model itself is persisted, since pricing keys off the model id.
+    /// A pricing failure is surfaced rather than swallowed, but the model change already stood.
+    /// </summary>
+    private async Task<RegistryMutationResult> ApplyPricingAsync(
+        string modelId,
+        AdminModelWriteRequest request,
+        RegistryMutationResult modelResult,
+        CancellationToken cancellationToken)
+    {
+        if (request.ClearPricing)
+        {
+            var cleared = await WithPricingAsync(p => p.ClearPricingAsync(modelId, cancellationToken))
+                .ConfigureAwait(false);
+            return cleared.Success
+                ? modelResult
+                : RegistryMutationResult.Fail(
+                    $"{modelResult.Message} However, pricing was not cleared: {cleared.Message}",
+                    cleared.StatusCode);
+        }
+
+        if (request.Pricing is null)
+        {
+            return modelResult;
+        }
+
+        var applied = await WithPricingAsync(p => p.SetPricingAsync(modelId, request.Pricing, cancellationToken))
+            .ConfigureAwait(false);
+
+        if (!applied.Success)
+        {
+            return RegistryMutationResult.Fail(
+                $"{modelResult.Message} However, pricing was not saved: {applied.Message}",
+                applied.StatusCode);
+        }
+
+        audit.LogAdminAction(
+            "model.pricing.update",
+            new AuditLogEntry(null, null, new
+            {
+                modelId,
+                request.Pricing.InputPricePerMillionTokens,
+                request.Pricing.OutputPricePerMillionTokens,
+            }));
+
+        return modelResult;
     }
 
     private bool HasCredential(ModelConfig model)
@@ -101,6 +168,7 @@ public sealed class AdminModelProvisioningService(
             MaxContextLength = model.MaxContextLength > 0 ? model.MaxContextLength : 8192,
             Aliases = model.Aliases ?? [],
             PublicAccess = model.PublicAccess,
+            Capabilities = model.Capabilities ?? [],
         };
 
         if (string.IsNullOrWhiteSpace(normalized.Id) || string.IsNullOrWhiteSpace(normalized.Url))

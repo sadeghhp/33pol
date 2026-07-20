@@ -84,5 +84,6 @@ internal static class ModelRegistryPersistence
             MaxContextLength = model.MaxContextLength,
             Aliases = [.. model.Aliases],
             PublicAccess = model.PublicAccess,
+            Capabilities = [.. model.Capabilities],
         };
 }

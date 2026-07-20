@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Pol33.Core.Abstractions;
 using Pol33.Core.Billing;
@@ -16,8 +17,10 @@ public sealed class BillingUsagePersistenceHandler(
     IBillingWebhookDispatcher webhooks,
     BillingBudgetWarningTracker warningTracker,
     BillingDailyUsageWebhookTracker dailyWebhookTracker,
+    BillingUnpricedModelTracker unpricedModelTracker,
     IApiKeyLastUsedTracker lastUsedTracker,
     BudgetReservationLedger reservationLedger,
+    ILogger<BillingUsagePersistenceHandler> logger,
     IOptions<BillingOptions> billingOptions) : IUsagePersistenceHandler
 {
     public async ValueTask PersistAsync(UsageEvent usageEvent, CancellationToken cancellationToken = default)
@@ -66,6 +69,16 @@ public sealed class BillingUsagePersistenceHandler(
                     rateCard,
                     usageEvent.PromptTokens,
                     usageEvent.CompletionTokens);
+                unpricedModelTracker.Clear(usageEvent.ModelId);
+            }
+            else if (unpricedModelTracker.TryMarkWarned(usageEvent.ModelId))
+            {
+                // Without a rate card the event persists with null costs and rolls up as zero
+                // spend, which is indistinguishable from genuinely free usage. Say so once.
+                logger.LogWarning(
+                    "Model '{ModelId}' has no rate card; its usage will record as zero cost. " +
+                    "Set input/output prices for it in the admin model settings.",
+                    usageEvent.ModelId);
             }
         }
 

@@ -13,7 +13,7 @@
   <script defer src="admin-icons.js?v=8"></script>
   <script defer src="admin-errors.js?v=7"></script>
   <script defer src="admin-store.js?v=8"></script>
-  <script defer src="admin-app.js?v=17"></script>
+  <script defer src="admin-app.js?v=18"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.9/dist/cdn.min.js"></script>
 </head>
 <body x-data="adminApp()" x-init="init()" x-cloak @keydown.window="onModalKeydown($event)">
@@ -503,7 +503,7 @@
                 <thead>
                   <tr>
                     <th class="sortable" @click="sortToggle('models','id')">ID<span x-html="sortIndicator('models','id')"></span></th>
-                    <th>Upstream URL</th><th>Aliases</th><th class="num">Context</th><th>Access</th><th>Credential</th><th></th>
+                    <th>Upstream URL</th><th>Aliases</th><th class="num">Context</th><th class="num">Price in/out (1M)</th><th>Access</th><th>Credential</th><th></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -523,6 +523,7 @@
                       </td>
                       <td x-text="(m.aliases || []).join(', ') || '—'"></td>
                       <td class="num" x-text="formatNum(m.maxContextLength)"></td>
+                      <td class="num" x-text="formatModelPrice(m.pricing)"></td>
                       <td><span class="status-chip" :class="m.publicAccess ? 'warn' : 'ok'" x-text="m.publicAccess ? 'Public' : 'Key required'"></span></td>
                       <td><span class="tag" x-show="m.hasUpstreamCredential">stored</span><span x-show="!m.hasUpstreamCredential" class="muted">—</span></td>
                       <td>
@@ -867,6 +868,18 @@
         <label class="checkbox" x-show="editModel._existing && editModel.hasUpstreamCredential" style="margin-top: var(--space-3)">
           <input type="checkbox" x-model="editModel.clearApiKey" /> Remove stored API key
         </label>
+      </div>
+
+      <div class="drawer-section">
+        <div class="grid">
+          <label>Input price (per 1M tokens)
+            <input type="number" min="0" step="0.01" x-model="editModel.inputPricePerMillion" placeholder="e.g. 3.00" />
+          </label>
+          <label>Output price (per 1M tokens)
+            <input type="number" min="0" step="0.01" x-model="editModel.outputPricePerMillion" placeholder="e.g. 15.00" />
+          </label>
+        </div>
+        <p class="hint">Used to cost usage on the Usage &amp; cost tab. Leave both blank to leave the model unpriced — its requests will record as zero cost.</p>
       </div>
 
       <button type="button" class="action ghost" @click="showAdvancedModel = !showAdvancedModel" style="margin-bottom: var(--space-3)">
