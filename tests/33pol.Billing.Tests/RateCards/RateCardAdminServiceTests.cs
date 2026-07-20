@@ -1,16 +1,84 @@
 using Pol33.Billing.RateCards;
 using Pol33.Core.Abstractions;
 using Pol33.Core.Billing;
+using Pol33.Core.Models;
 
 namespace Pol33.Billing.Tests.RateCards;
 
 public sealed class RateCardAdminServiceTests
 {
+    private static FakeModelRegistry KnownRegistry() => new("gpt-4o");
+
+    [Fact]
+    public async Task SetPricingAsync_CanonicalisesModelId()
+    {
+        var repository = new FakeRateCardRepository();
+        var service = new RateCardAdminService(repository, KnownRegistry());
+
+        // The registry resolves ids case-insensitively, so pricing must be stored under the
+        // canonical id or it would never be found for the model it was meant for.
+        var result = await service.SetPricingAsync("GPT-4O", new ModelPricing
+        {
+            InputPricePerMillionTokens = 3m,
+            OutputPricePerMillionTokens = 15m,
+        });
+
+        result.Success.Should().BeTrue();
+        repository.Upserts[0].ModelId.Should().Be("gpt-4o");
+    }
+
+    [Fact]
+    public async Task SetPricingAsync_ResolvesAliasToCanonicalId()
+    {
+        var repository = new FakeRateCardRepository();
+        var registry = new FakeModelRegistry("gpt-4o");
+        registry.AddAlias("fast", "gpt-4o");
+        var service = new RateCardAdminService(repository, registry);
+
+        await service.SetPricingAsync("fast", new ModelPricing
+        {
+            InputPricePerMillionTokens = 1m,
+            OutputPricePerMillionTokens = 2m,
+        });
+
+        repository.Upserts[0].ModelId.Should().Be("gpt-4o");
+    }
+
+    [Fact]
+    public async Task SetPricingAsync_UnknownModel_Returns404_AndWritesNothing()
+    {
+        var repository = new FakeRateCardRepository();
+        var service = new RateCardAdminService(repository, KnownRegistry());
+
+        var result = await service.SetPricingAsync("typo-model", new ModelPricing
+        {
+            InputPricePerMillionTokens = 3m,
+            OutputPricePerMillionTokens = 15m,
+        });
+
+        result.Success.Should().BeFalse();
+        result.StatusCode.Should().Be(404);
+        repository.Upserts.Should().BeEmpty("an orphan rate card would silently never apply");
+    }
+
+    [Fact]
+    public async Task ClearPricingAsync_DoesNotRequireRegistry()
+    {
+        var repository = new FakeRateCardRepository();
+        // Empty registry: clearing runs after a model is deleted, when its id is already gone.
+        var service = new RateCardAdminService(repository, new FakeModelRegistry());
+
+        var result = await service.ClearPricingAsync("already-deleted");
+
+        result.Success.Should().BeTrue();
+        repository.Deletes.Should().ContainSingle().Which.Should().Be("already-deleted");
+    }
+
     [Fact]
     public async Task SetPricingAsync_PersistsPrices()
     {
         var repository = new FakeRateCardRepository();
-        var service = new RateCardAdminService(repository);
+        var service = new RateCardAdminService(repository, KnownRegistry());
 
         var result = await service.SetPricingAsync("gpt-4o", new ModelPricing
         {
@@ -29,7 +97,7 @@ public sealed class RateCardAdminServiceTests
     public async Task SetPricingAsync_RejectsNegativePrices(decimal input, decimal output)
     {
         var repository = new FakeRateCardRepository();
-        var service = new RateCardAdminService(repository);
+        var service = new RateCardAdminService(repository, KnownRegistry());
 
         var result = await service.SetPricingAsync("gpt-4o", new ModelPricing
         {
@@ -47,7 +115,7 @@ public sealed class RateCardAdminServiceTests
     public async Task SetPricingAsync_RejectsPriceBeyondColumnPrecision()
     {
         var repository = new FakeRateCardRepository();
-        var service = new RateCardAdminService(repository);
+        var service = new RateCardAdminService(repository, KnownRegistry());
 
         var result = await service.SetPricingAsync("gpt-4o", new ModelPricing
         {
@@ -64,7 +132,7 @@ public sealed class RateCardAdminServiceTests
     public async Task SetPricingAsync_RoundsToSixDecimalPlaces()
     {
         var repository = new FakeRateCardRepository();
-        var service = new RateCardAdminService(repository);
+        var service = new RateCardAdminService(repository, KnownRegistry());
 
         await service.SetPricingAsync("gpt-4o", new ModelPricing
         {
@@ -78,7 +146,7 @@ public sealed class RateCardAdminServiceTests
     [Fact]
     public async Task SetPricingAsync_RejectsBlankModelId()
     {
-        var service = new RateCardAdminService(new FakeRateCardRepository());
+        var service = new RateCardAdminService(new FakeRateCardRepository(), KnownRegistry());
 
         var result = await service.SetPricingAsync("  ", new ModelPricing());
 
@@ -90,7 +158,7 @@ public sealed class RateCardAdminServiceTests
     public async Task ClearPricingAsync_DeletesForModel()
     {
         var repository = new FakeRateCardRepository();
-        var service = new RateCardAdminService(repository);
+        var service = new RateCardAdminService(repository, KnownRegistry());
 
         var result = await service.ClearPricingAsync("gpt-4o");
 
@@ -108,6 +176,33 @@ public sealed class RateCardAdminServiceTests
         result.Success.Should().BeFalse();
         result.StatusCode.Should().Be(503);
         (await service.GetPricingByModelAsync()).Should().BeEmpty();
+    }
+
+    /// <summary>Mirrors the real registry's case-insensitive id and alias resolution.</summary>
+    private sealed class FakeModelRegistry : IModelRegistry
+    {
+        private readonly Dictionary<string, ModelConfig> _lookup = new(StringComparer.OrdinalIgnoreCase);
+
+        public FakeModelRegistry(params string[] modelIds)
+        {
+            foreach (var id in modelIds)
+            {
+                _lookup[id] = new ModelConfig { Id = id, Url = "https://upstream.test" };
+            }
+        }
+
+        public void AddAlias(string alias, string canonicalId) => _lookup[alias] = _lookup[canonicalId];
+
+        public bool TryGetModel(string name, out ModelConfig? model) => _lookup.TryGetValue(name, out model);
+
+        public IReadOnlyList<ModelConfig> GetAllModels() => _lookup.Values.Distinct().ToList();
+
+        public bool ModelExists(string name) => _lookup.ContainsKey(name);
+
+        public string? GetBackendUrl(string name) => _lookup.TryGetValue(name, out var m) ? m.Url : null;
+
+        public Task LoadModelsAsync(string configPath, CancellationToken cancellationToken = default) =>
+            Task.CompletedTask;
     }
 
     private sealed class FakeRateCardRepository : IRateCardRepository

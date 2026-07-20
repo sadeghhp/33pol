@@ -68,6 +68,9 @@ PATCH /admin/api/models/{id}
 ```
 
 - Prices are per **one million tokens**, in `Billing:DefaultCurrency` (USD).
+- The model must already be registered — pricing an unknown id returns 404 rather than storing an
+  orphan rate card that would never apply. Ids are resolved through the model registry, so aliases
+  and differing case both resolve to the canonical model (`model_id` uses `NOCASE` collation).
 - `GET /admin/api/models` returns each model's current `pricing` (null when unpriced).
 - Omitting `pricing` leaves the existing price unchanged; `"clearPricing": true` removes it.
 - Pricing is stored in the `rate_cards` table, not on the model itself, so it never reaches the

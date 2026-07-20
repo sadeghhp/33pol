@@ -7,6 +7,10 @@ using Pol33.Integration.Tests.Support;
 
 namespace Pol33.Integration.Tests.Admin;
 
+/// <summary>
+/// Runs against a real SQLite database (migrations applied) rather than the EF InMemory provider,
+/// so collation, constraints and query translation are exercised the way production sees them.
+/// </summary>
 public sealed class AdminModelPricingTests
 {
     private static HttpClient CreateAdminClient(WebApplicationFactory<Program> factory)
@@ -35,7 +39,7 @@ public sealed class AdminModelPricingTests
     [Fact]
     public async Task PostModel_WithPricing_PersistsAndReturnsIt()
     {
-        await using var factory = GatewayWebApplicationFactory.CreateWithInMemoryDatabase();
+        await using var factory = GatewayWebApplicationFactory.CreateWithSqliteDatabase();
         await GatewayWebApplicationFactory.EnsureAuthReadyAsync(factory);
         var client = CreateAdminClient(factory);
 
@@ -59,7 +63,7 @@ public sealed class AdminModelPricingTests
     [Fact]
     public async Task PatchModel_UpdatesPricingInPlace()
     {
-        await using var factory = GatewayWebApplicationFactory.CreateWithInMemoryDatabase();
+        await using var factory = GatewayWebApplicationFactory.CreateWithSqliteDatabase();
         await GatewayWebApplicationFactory.EnsureAuthReadyAsync(factory);
         var client = CreateAdminClient(factory);
 
@@ -85,7 +89,7 @@ public sealed class AdminModelPricingTests
     [Fact]
     public async Task PatchModel_WithClearPricing_LeavesModelUnpriced()
     {
-        await using var factory = GatewayWebApplicationFactory.CreateWithInMemoryDatabase();
+        await using var factory = GatewayWebApplicationFactory.CreateWithSqliteDatabase();
         await GatewayWebApplicationFactory.EnsureAuthReadyAsync(factory);
         var client = CreateAdminClient(factory);
 
@@ -107,10 +111,61 @@ public sealed class AdminModelPricingTests
         pricing.ValueKind.Should().Be(JsonValueKind.Null);
     }
 
+    /// <summary>
+    /// The registry resolves model ids case-insensitively, so pricing set under different casing
+    /// must still apply. Before the NOCASE collation and id canonicalisation this wrote a second
+    /// rate card that the model never matched, leaving it silently unpriced.
+    /// </summary>
+    [Fact]
+    public async Task PatchModel_PricingWithDifferentlyCasedId_StillAppliesToTheModel()
+    {
+        await using var factory = GatewayWebApplicationFactory.CreateWithSqliteDatabase();
+        await GatewayWebApplicationFactory.EnsureAuthReadyAsync(factory);
+        var client = CreateAdminClient(factory);
+
+        var modelId = "cased-" + Guid.NewGuid().ToString("N")[..8];
+        await client.PostAsJsonAsync("/admin/api/models", new
+        {
+            model = new { id = modelId, url = "https://openrouter.ai/api", aliases = Array.Empty<string>(), maxContextLength = 8192 }
+        });
+
+        var upper = modelId.ToUpperInvariant();
+        var patch = await client.PatchAsJsonAsync("/admin/api/models/" + Uri.EscapeDataString(upper), new
+        {
+            model = new { id = upper, url = "https://openrouter.ai/api", aliases = Array.Empty<string>(), maxContextLength = 8192 },
+            pricing = new { inputPricePerMillionTokens = 3.00, outputPricePerMillionTokens = 15.00 }
+        });
+        patch.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        // Listed under the canonical id, with the price attached.
+        var entry = await FindModelAsync(client, modelId);
+        entry.Should().NotBeNull();
+        entry!.Value.GetProperty("pricing").GetProperty("inputPricePerMillionTokens").GetDecimal().Should().Be(3.00m);
+    }
+
+    [Fact]
+    public async Task PostModel_PricingForUnregisteredModel_DoesNotSilentlySucceed()
+    {
+        await using var factory = GatewayWebApplicationFactory.CreateWithSqliteDatabase();
+        await GatewayWebApplicationFactory.EnsureAuthReadyAsync(factory);
+        var client = CreateAdminClient(factory);
+
+        // Pricing is applied after the model is persisted, so the model here does exist by then.
+        // This guards the inverse: the endpoint must not accept pricing for a model that never
+        // made it into the registry.
+        var response = await client.PostAsJsonAsync("/admin/api/models", new
+        {
+            model = new { id = "", url = "https://openrouter.ai/api", aliases = Array.Empty<string>(), maxContextLength = 8192 },
+            pricing = new { inputPricePerMillionTokens = 3.00, outputPricePerMillionTokens = 15.00 }
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
     [Fact]
     public async Task PostModel_WithNegativePrice_Returns400()
     {
-        await using var factory = GatewayWebApplicationFactory.CreateWithInMemoryDatabase();
+        await using var factory = GatewayWebApplicationFactory.CreateWithSqliteDatabase();
         await GatewayWebApplicationFactory.EnsureAuthReadyAsync(factory);
         var client = CreateAdminClient(factory);
 
@@ -131,7 +186,7 @@ public sealed class AdminModelPricingTests
     [Fact]
     public async Task PatchModel_PreservesCapabilitiesAndPricing_AcrossUnrelatedUpdate()
     {
-        await using var factory = GatewayWebApplicationFactory.CreateWithInMemoryDatabase();
+        await using var factory = GatewayWebApplicationFactory.CreateWithSqliteDatabase();
         await GatewayWebApplicationFactory.EnsureAuthReadyAsync(factory);
         var client = CreateAdminClient(factory);
 
@@ -179,7 +234,7 @@ public sealed class AdminModelPricingTests
     [Fact]
     public async Task DeleteModel_AlsoClearsPricing()
     {
-        await using var factory = GatewayWebApplicationFactory.CreateWithInMemoryDatabase();
+        await using var factory = GatewayWebApplicationFactory.CreateWithSqliteDatabase();
         await GatewayWebApplicationFactory.EnsureAuthReadyAsync(factory);
         var client = CreateAdminClient(factory);
 

@@ -3,7 +3,9 @@ using Pol33.Core.Billing;
 
 namespace Pol33.Billing.RateCards;
 
-public sealed class RateCardAdminService(IRateCardRepository rateCards) : IRateCardAdminService
+public sealed class RateCardAdminService(
+    IRateCardRepository rateCards,
+    IModelRegistry registry) : IRateCardAdminService
 {
     /// <summary>
     /// The rate_cards price columns are decimal(18,6), leaving 12 digits ahead of the point.
@@ -31,11 +33,21 @@ public sealed class RateCardAdminService(IRateCardRepository rateCards) : IRateC
             return ModelPricingUpdateResult.Fail(error!, 400);
         }
 
+        // Key pricing by exactly the id the routing layer uses. The registry resolves ids
+        // case-insensitively and resolves aliases, so without this a price set as "GPT-4o" (or via
+        // an alias) would never be found for the canonical "gpt-4o" and would silently never apply.
+        if (!registry.TryGetModel(modelId.Trim(), out var model) || model is null)
+        {
+            return ModelPricingUpdateResult.Fail(
+                $"Model '{modelId}' is not registered, so pricing cannot be set for it.",
+                404);
+        }
+
         await rateCards
-            .UpsertForModelAsync(modelId.Trim(), input, output, cancellationToken)
+            .UpsertForModelAsync(model.Id, input, output, cancellationToken)
             .ConfigureAwait(false);
 
-        return ModelPricingUpdateResult.Ok($"Pricing updated for model '{modelId}'.");
+        return ModelPricingUpdateResult.Ok($"Pricing updated for model '{model.Id}'.");
     }
 
     public async Task<ModelPricingUpdateResult> ClearPricingAsync(
@@ -47,6 +59,9 @@ public sealed class RateCardAdminService(IRateCardRepository rateCards) : IRateC
             return ModelPricingUpdateResult.Fail("Model id is required to clear pricing.", 400);
         }
 
+        // Deliberately does not consult the registry: this also runs after a model is deleted,
+        // when the id is no longer registered. Case-insensitive matching is handled by the
+        // NOCASE collation on model_id.
         await rateCards
             .DeleteForModelAsync(modelId.Trim(), cancellationToken)
             .ConfigureAwait(false);
