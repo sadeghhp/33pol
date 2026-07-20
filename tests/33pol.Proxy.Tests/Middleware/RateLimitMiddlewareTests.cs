@@ -49,6 +49,58 @@ public sealed class RateLimitMiddlewareTests
         context.Response.Headers[GatewayHeaders.ErrorCode].ToString().Should().Be("rate_limit_exceeded");
     }
 
+    [Fact]
+    public async Task InvokeAsync_WhenRateLimitingDisabled_NeverRejects()
+    {
+        // Same tier that rejects the second request above (rpm 1, burst 0), but with the master switch off.
+        var resolver = new RateLimitPolicyResolver(new StubConfigProvider(new GatewayConfigSnapshot
+        {
+            RateLimits = new RateLimitsConfigSection
+            {
+                Enabled = false,
+                Default = new RateLimitPolicy(1, 0, 5),
+            },
+        }));
+        var context = new DefaultHttpContext();
+        context.Request.Method = HttpMethods.Post;
+        context.Request.Path = "/v1/chat/completions";
+
+        var nextCalls = 0;
+        var middleware = new RateLimitMiddleware(
+            _ =>
+            {
+                nextCalls++;
+                return Task.CompletedTask;
+            },
+            resolver,
+            new InMemoryDistributedRateLimitStore(),
+            new OpenAiErrorResponseWriter(),
+            Substitute.For<IGatewayMetricsCollector>(),
+            TimeProvider.System);
+
+        for (var i = 0; i < 5; i++)
+        {
+            await middleware.InvokeAsync(context);
+        }
+
+        nextCalls.Should().Be(5);
+        context.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+    }
+
+    [Fact]
+    public void IsEnabled_ReflectsSnapshotAndDefaultsToTrue()
+    {
+        var disabled = new RateLimitPolicyResolver(new StubConfigProvider(new GatewayConfigSnapshot
+        {
+            RateLimits = new RateLimitsConfigSection { Enabled = false },
+        }));
+        disabled.IsEnabled().Should().BeFalse();
+
+        // A snapshot that predates the toggle (or a database-less deployment) must still enforce.
+        var defaulted = new RateLimitPolicyResolver(new StubConfigProvider(new GatewayConfigSnapshot()));
+        defaulted.IsEnabled().Should().BeTrue();
+    }
+
     private sealed class StubConfigProvider(GatewayConfigSnapshot snapshot) : IGatewayConfigProvider
     {
         public GatewayConfigSnapshot Current { get; } = snapshot;

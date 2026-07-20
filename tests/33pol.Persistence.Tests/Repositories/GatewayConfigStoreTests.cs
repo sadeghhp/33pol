@@ -56,10 +56,42 @@ public sealed class GatewayConfigStoreTests
 
         var snapshot = await new GatewayConfigStore(db).LoadSnapshotAsync();
 
+        snapshot.RateLimits.Enabled.Should().BeTrue();
         snapshot.RateLimits.Default.Rpm.Should().Be(55);
         snapshot.RateLimits.Default.MaxConcurrentStreams.Should().Be(4);
         snapshot.RateLimits.Plans["PRO"].Rpm.Should().Be(200); // OrdinalIgnoreCase lookup
         snapshot.Version.Should().Be(1); // save bumped the config version
+    }
+
+    [Fact]
+    public async Task RateLimits_SaveDisabled_RoundTripsFlagAndKeepsTierValues()
+    {
+        await using var db = PersistenceTestDbContextFactory.CreateInMemory(
+            nameof(RateLimits_SaveDisabled_RoundTripsFlagAndKeepsTierValues));
+
+        await new RateLimitSettingsRepository(db).SaveAsync(
+            enabled: false,
+            new RateLimitPolicy(55, 5, 4),
+            new Dictionary<string, RateLimitPolicy>(StringComparer.OrdinalIgnoreCase));
+
+        var snapshot = await new GatewayConfigStore(db).LoadSnapshotAsync();
+
+        snapshot.RateLimits.Enabled.Should().BeFalse();
+        // Tier values survive a disable so re-enabling restores the configured limits.
+        snapshot.RateLimits.Default.Rpm.Should().Be(55);
+        snapshot.RateLimits.Default.MaxConcurrentStreams.Should().Be(4);
+    }
+
+    [Fact]
+    public async Task RateLimits_WithNoDefaultsRow_DefaultsToEnabled()
+    {
+        await using var db = PersistenceTestDbContextFactory.CreateInMemory(
+            nameof(RateLimits_WithNoDefaultsRow_DefaultsToEnabled));
+
+        var snapshot = await new GatewayConfigStore(db).LoadSnapshotAsync();
+
+        // A database-less / pre-seed gateway must enforce, never silently allow everything.
+        snapshot.RateLimits.Enabled.Should().BeTrue();
     }
 
     [Fact]

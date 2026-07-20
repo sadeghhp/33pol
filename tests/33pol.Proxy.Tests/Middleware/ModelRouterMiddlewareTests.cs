@@ -749,6 +749,9 @@ public sealed class ModelRouterMiddlewareTests
         var rateLimitResolver = Substitute.For<IRateLimitPolicyResolver>();
         rateLimitResolver.Resolve(Arg.Any<string?>(), Arg.Any<string?>())
             .Returns(new RateLimitPolicy(10_000, 1_000, 1_000));
+        // Must be stubbed explicitly: an unconfigured substitute returns false, which would silently
+        // bypass the stream-slot path these tests exercise.
+        rateLimitResolver.IsEnabled().Returns(true);
         var rateLimitStore = Substitute.For<IDistributedRateLimitStore>();
         rateLimitStore.TryAcquireStreamSlot(Arg.Any<string>(), Arg.Any<RateLimitPolicy>())
             .Returns(new RateLimitAcquireResult(true));

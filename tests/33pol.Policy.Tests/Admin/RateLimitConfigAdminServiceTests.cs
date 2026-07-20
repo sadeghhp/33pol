@@ -109,11 +109,15 @@ public sealed class RateLimitConfigAdminServiceTests
 
         public IReadOnlyDictionary<string, RateLimitPolicy>? SavedPlans { get; private set; }
 
+        public bool? SavedEnabled { get; private set; }
+
         public Task SaveAsync(
+            bool enabled,
             RateLimitPolicy defaultTier,
             IReadOnlyDictionary<string, RateLimitPolicy> plans,
             CancellationToken cancellationToken = default)
         {
+            SavedEnabled = enabled;
             SavedDefault = defaultTier;
             SavedPlans = plans;
             return Task.CompletedTask;
