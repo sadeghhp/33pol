@@ -66,6 +66,24 @@ public sealed class CircuitBreaker
         }
     }
 
+    /// <summary>
+    /// Releases a half-open probe permit taken by <see cref="TryEnter"/> without recording an
+    /// outcome. Used when an admitted request ends for a reason that says nothing about backend
+    /// health (client abort, gateway-side rejection, configuration error). Without this the permit
+    /// is never restored and the breaker stays HalfOpen with no probe available, rejecting every
+    /// subsequent request until the process restarts.
+    /// </summary>
+    public void RecordAbandoned()
+    {
+        lock (_sync)
+        {
+            if (_state == CircuitState.HalfOpen)
+            {
+                _halfOpenPermit = true;
+            }
+        }
+    }
+
     public void RecordFailure()
     {
         lock (_sync)

@@ -1,4 +1,6 @@
 using System.Collections.Concurrent;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Pol33.Core.Abstractions;
 using Pol33.Core.Configuration;
@@ -12,14 +14,17 @@ public sealed class ModelCircuitBreakerRegistry : ICircuitBreakerStateSource
     private readonly CircuitBreakerPolicyOptions _policyOptions;
     private readonly int _maxTrackedModels;
     private readonly IGatewayMetricsCollector _metrics;
+    private readonly ILogger<ModelCircuitBreakerRegistry> _logger;
 
     public ModelCircuitBreakerRegistry(
         IOptions<GatewayOptions> options,
-        IGatewayMetricsCollector metrics)
+        IGatewayMetricsCollector metrics,
+        ILogger<ModelCircuitBreakerRegistry>? logger = null)
     {
         _policyOptions = CircuitBreakerPolicyOptions.FromGatewayResilience(options.Value.Resilience);
         _maxTrackedModels = options.Value.Resilience.MaxTrackedResilienceModels;
         _metrics = metrics;
+        _logger = logger ?? NullLogger<ModelCircuitBreakerRegistry>.Instance;
     }
 
     public CircuitBreaker GetBreaker(string modelId)
@@ -63,6 +68,18 @@ public sealed class ModelCircuitBreakerRegistry : ICircuitBreakerStateSource
         NotifyStateChange(modelId, before, breaker.State);
     }
 
+    /// <summary>
+    /// Releases a half-open probe permit without recording an outcome. Call this when a request that
+    /// passed <see cref="TryEnter"/> ends for a reason unrelated to backend health.
+    /// </summary>
+    public void RecordAbandoned(string modelId)
+    {
+        var breaker = GetBreaker(modelId);
+        var before = breaker.State;
+        breaker.RecordAbandoned();
+        NotifyStateChange(modelId, before, breaker.State);
+    }
+
     public IReadOnlyList<CircuitBreakerModelState> GetStates()
     {
         var list = new List<CircuitBreakerModelState>(_breakers.Count);
@@ -82,6 +99,24 @@ public sealed class ModelCircuitBreakerRegistry : ICircuitBreakerStateSource
         }
 
         _metrics.RecordCircuitBreakerTransition(modelId, ToStateLabel(after));
+
+        if (after == CircuitState.Open)
+        {
+            _logger.LogWarning(
+                "Circuit breaker opened for model {ModelId} after {FailureThreshold} consecutive backend failures; " +
+                "rejecting requests for {BreakDurationSeconds}s",
+                modelId,
+                _policyOptions.FailureThreshold,
+                _policyOptions.BreakDuration.TotalSeconds);
+        }
+        else
+        {
+            _logger.LogInformation(
+                "Circuit breaker for model {ModelId} transitioned {FromState} -> {ToState}",
+                modelId,
+                ToStateLabel(before),
+                ToStateLabel(after));
+        }
     }
 
     internal static int ToMetricState(CircuitState state) =>

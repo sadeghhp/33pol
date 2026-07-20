@@ -174,6 +174,10 @@ public sealed class ModelRouterMiddleware
 
         if (!_circuitBreakers.TryEnter(modelConfig.Id))
         {
+            _logger.LogWarning(
+                "Rejected request for model {ModelId}: circuit breaker is {CircuitState}",
+                modelConfig.Id,
+                ModelCircuitBreakerRegistry.ToStateLabel(_circuitBreakers.GetBreaker(modelConfig.Id).State));
             _metricsCollector.RecordForwardAttempt(modelConfig.Id, "circuit_open");
             await context.WriteGatewayErrorAsync(
                 _errors.Write(GatewayErrorCode.CircuitOpen),
@@ -181,10 +185,15 @@ public sealed class ModelRouterMiddleware
             return;
         }
 
+        // Admission consumed the breaker's half-open probe permit. The lease guarantees it is released
+        // on every exit path — including thrown exceptions — so the breaker cannot wedge in HalfOpen.
+        using var circuitLease = new CircuitBreakerProbeLease(_circuitBreakers, modelConfig.Id);
+
         var bulkheadLease = await _bulkhead.TryAcquireAsync(modelConfig.Id, context.RequestAborted).ConfigureAwait(false);
         if (bulkheadLease is null)
         {
-            _circuitBreakers.RecordFailure(modelConfig.Id);
+            // Gateway-side saturation, not backend ill health: abandon the probe rather than
+            // recording a failure that would trip the breaker on a healthy backend.
             _metricsCollector.RecordForwardAttempt(modelConfig.Id, "bulkhead_full");
             await context.WriteGatewayErrorAsync(
                 _errors.Write(
@@ -209,7 +218,7 @@ public sealed class ModelRouterMiddleware
                 var streamAcquire = _rateLimitStore.TryAcquireStreamSlot(ratePartitionKey, ratePolicy);
                 if (!streamAcquire.IsAcquired)
                 {
-                    _circuitBreakers.RecordFailure(modelConfig.Id);
+                    // Client-tier concurrency limit, not a backend signal.
                     await context.WriteGatewayErrorAsync(
                         _errors.Write(GatewayErrorCode.ConcurrencyLimitExceeded),
                         context.RequestAborted,
@@ -248,7 +257,11 @@ public sealed class ModelRouterMiddleware
             var upstreamBearerToken = _upstreamBearerTokenResolver.ResolveBearerToken(modelConfig.UpstreamAuth);
             if (modelConfig.UpstreamAuth is not null && string.IsNullOrWhiteSpace(upstreamBearerToken))
             {
-                _circuitBreakers.RecordFailure(modelConfig.Id);
+                // Permanent gateway misconfiguration. Recording it as a backend failure would trip the
+                // breaker on every request and mask the real cause behind an opaque circuit_open error.
+                _logger.LogError(
+                    "Upstream auth token not configured for model {ModelId}; check UpstreamAuth configuration",
+                    modelConfig.Id);
                 inferenceScope.SetOutcome(false, "upstream_error");
                 _metricsCollector.RecordForwardAttempt(modelConfig.Id, "upstream_error");
                 await context.WriteGatewayErrorAsync(
@@ -305,7 +318,8 @@ public sealed class ModelRouterMiddleware
             catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested &&
                                                        !priorAborted.IsCancellationRequested)
             {
-                _circuitBreakers.RecordFailure(modelConfig.Id);
+                // A gateway-side timeout means the backend failed to respond in time: a real health signal.
+                circuitLease.RecordFailure();
                 inferenceScope.SetOutcome(false, "upstream_timeout");
                 _metricsCollector.RecordForwardAttempt(modelConfig.Id, "upstream_timeout");
                 if (!context.Response.HasStarted)
@@ -327,14 +341,25 @@ public sealed class ModelRouterMiddleware
 
             if (error == ForwarderError.None)
             {
-                _circuitBreakers.RecordSuccess(modelConfig.Id);
+                circuitLease.RecordSuccess();
                 inferenceScope.SetOutcome(true);
                 _metricsCollector.RecordForwardAttempt(modelConfig.Id, "success");
                 RecordRecentRequest(context, modelConfig.Id, started, requestInfo.Stream, success: true);
                 return;
             }
 
-            _circuitBreakers.RecordFailure(modelConfig.Id);
+            if (error == ForwarderError.RequestCanceled)
+            {
+                // The client hung up. This is not evidence the backend is unhealthy, and counting it
+                // would let a burst of disconnects trip the breaker on a perfectly good backend.
+                // Leaving the lease unrecorded abandons the probe on dispose.
+                inferenceScope.SetOutcome(false, "client_canceled");
+                _metricsCollector.RecordForwardAttempt(modelConfig.Id, "client_canceled");
+                RecordRecentRequest(context, modelConfig.Id, started, requestInfo.Stream, success: false);
+                return;
+            }
+
+            circuitLease.RecordFailure();
             inferenceScope.SetOutcome(false, "upstream_error");
             _metricsCollector.RecordForwardAttempt(modelConfig.Id, "upstream_error");
             if (!context.Response.HasStarted)
@@ -342,7 +367,7 @@ public sealed class ModelRouterMiddleware
                 _logger.LogWarning("Forwarder error {Error} for model {ModelId}", error, modelConfig.Id);
                 await context.WriteGatewayErrorAsync(
                     _errors.Write(GatewayErrorCode.UpstreamError),
-                    context.RequestAborted).ConfigureAwait(false);
+                    CancellationToken.None).ConfigureAwait(false);
             }
 
             RecordRecentRequest(context, modelConfig.Id, started, requestInfo.Stream, success: false);
