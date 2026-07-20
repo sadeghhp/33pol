@@ -2,10 +2,11 @@ using System.Security.Claims;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Caching.Memory;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Pol33.Core.Abstractions;
+using Pol33.Core.Billing;
+using Pol33.Core.Models;
 using Pol33.Persistence.DependencyInjection;
 using Pol33.Security.DependencyInjection;
 using Pol33.Security.Hosting;
@@ -25,6 +26,33 @@ public sealed class SecurityServiceCollectionExtensionsTests
         services.Any(d => d.ServiceType == typeof(IApiKeyValidator)).Should().BeTrue();
         services.Any(d => d.ServiceType == typeof(IHostedService) && d.ImplementationType == typeof(GatewayAuthenticationInitializer))
             .Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task AddGatewaySecurity_WithoutConnectionString_NullImplementationsAreUsable()
+    {
+        var services = new ServiceCollection();
+        services.AddGatewaySecurity(new ConfigurationBuilder().Build());
+        var provider = services.BuildServiceProvider();
+
+        var validator = provider.GetRequiredService<IApiKeyValidator>();
+        (await validator.ValidateAsync(null)).IsSuccess.Should().BeFalse();
+        validator.InvalidateCache(Guid.NewGuid());
+
+        var grantService = provider.GetRequiredService<IModelGrantService>();
+        (await grantService.IsModelAllowedAsync(Guid.NewGuid(), Guid.NewGuid(), "model")).Should().BeTrue();
+        grantService.InvalidateTenantGrants(Guid.NewGuid());
+        grantService.InvalidateApiKeyGrants(Guid.NewGuid());
+
+        var grantAdmin = provider.GetRequiredService<IModelGrantAdminService>();
+        var grantAdminAct = () => grantAdmin.GetTenantGrantsAsync(Guid.NewGuid());
+        await grantAdminAct.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*ConnectionStrings:GatewayDb*");
+
+        var adminKeys = provider.GetRequiredService<IAdminKeyService>();
+        var adminKeysAct = () => adminKeys.ListAsync(Guid.NewGuid());
+        await adminKeysAct.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*ConnectionStrings:GatewayDb*");
     }
 
     [Fact]
