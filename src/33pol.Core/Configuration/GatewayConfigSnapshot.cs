@@ -42,6 +42,14 @@ public sealed record CorsConfigSection
 /// </summary>
 public sealed record RateLimitsConfigSection
 {
+    /// <summary>
+    /// Global master switch. When false, neither request-rate limits nor stream-concurrency limits are
+    /// enforced for any tier. Lives on the section rather than on <see cref="RateLimitPolicy"/> because
+    /// it is gateway-wide; the per-tier numbers stay meaningful and are restored when re-enabled.
+    /// Defaults to true so a database-less deployment enforces limits exactly as before.
+    /// </summary>
+    public bool Enabled { get; init; } = true;
+
     public RateLimitPolicy Default { get; init; } = RateLimitPolicy.Default;
 
     public IReadOnlyDictionary<string, RateLimitPolicy> Plans { get; init; } = EmptyMap;

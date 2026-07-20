@@ -21,6 +21,7 @@ public sealed class RateLimitConfigAdminService(
         var rateLimits = configProvider.Current.RateLimits;
         return new RateLimitAdminConfig
         {
+            Enabled = rateLimits.Enabled,
             Default = ToTierOptions(rateLimits.Default),
             Plans = rateLimits.Plans.ToDictionary(
                 static p => p.Key,
@@ -30,10 +31,13 @@ public sealed class RateLimitConfigAdminService(
     }
 
     public async Task<RateLimitConfigUpdateResult> UpdateAsync(
+        bool enabled,
         RateLimitTierOptions defaultTier,
         IReadOnlyDictionary<string, RateLimitTierOptions> plans,
         CancellationToken cancellationToken = default)
     {
+        // Tier values are validated even when disabling, so re-enabling later cannot restore a
+        // configuration that was never checked.
         if (!RateLimitConfigValidation.TryValidate(defaultTier, plans, out var validationError))
         {
             return RateLimitConfigUpdateResult.Fail(validationError!, statusCode: 400);
@@ -55,7 +59,8 @@ public sealed class RateLimitConfigAdminService(
                 static p => ToPolicy(p.Value),
                 StringComparer.OrdinalIgnoreCase);
 
-            await repository.SaveAsync(ToPolicy(defaultTier), planPolicies, cancellationToken).ConfigureAwait(false);
+            await repository.SaveAsync(enabled, ToPolicy(defaultTier), planPolicies, cancellationToken)
+                .ConfigureAwait(false);
 
             var refresher = scope.ServiceProvider.GetService<IGatewayConfigRefresher>();
             if (refresher is not null)
@@ -63,8 +68,12 @@ public sealed class RateLimitConfigAdminService(
                 await refresher.RefreshNowAsync(cancellationToken).ConfigureAwait(false);
             }
 
-            logger.LogInformation("Updated rate limits (default + {PlanCount} plan tier(s)).", plans.Count);
-            return RateLimitConfigUpdateResult.Ok("Rate limits updated.");
+            logger.LogInformation(
+                "Updated rate limits (enabled={Enabled}, default + {PlanCount} plan tier(s)).",
+                enabled,
+                plans.Count);
+            return RateLimitConfigUpdateResult.Ok(
+                enabled ? "Rate limits updated." : "Rate limits updated. Rate limiting is now disabled.");
         }
         catch (Exception ex)
         {

@@ -712,11 +712,17 @@
           <div class="card" x-show="settingsSubTab === 'limits'">
             <span class="eyebrow">Throttling</span>
             <h3>Rate limits</h3>
-            <p class="hint">Default tier and plan tiers (RPM, burst, max concurrent streams). Written to appsettings and applied without a restart.</p>
+            <p class="hint">Default tier and plan tiers (RPM, burst, max concurrent streams). Stored in the database and applied without a restart.</p>
             <p class="notice error" x-show="rateLimitsLoadError" x-text="rateLimitsLoadError"></p>
             <p class="hint" x-show="!rateLimits && !rateLimitsLoadError && isLoading('settings')">Loading rate limits…</p>
             <template x-if="rateLimits">
               <div>
+                <label class="checkbox">
+                  <input type="checkbox" x-model="rateLimits.enabled" />
+                  Enforce rate limits
+                </label>
+                <p class="hint">Turning this off disables request-rate and concurrent-stream limits for every tenant and plan. The values below stay saved and take effect again when you re-enable it.</p>
+                <p class="notice error" x-show="!rateLimits.enabled">Rate limiting is disabled — clients can send unlimited requests. Quotas and budgets still apply.</p>
                 <div class="rl-grid">
                   <span class="rl-name">Default</span>
                   <label>RPM <input type="number" min="1" x-model.number="rateLimits.default.rpm" /></label>

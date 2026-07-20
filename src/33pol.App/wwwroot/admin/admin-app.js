@@ -1015,6 +1015,8 @@ function adminApp() {
         maxConcurrentStreams: t.maxConcurrentStreams ?? t.MaxConcurrentStreams ?? 0
       });
       return {
+        // ?? not || so an explicit false is preserved; absent means enforcing, matching the server default.
+        enabled: data.enabled ?? data.Enabled ?? true,
         default: tier(d),
         plans: Object.fromEntries(
           Object.entries(plans).map(([slug, t]) => [slug, tier(t)])
@@ -1086,6 +1088,7 @@ function adminApp() {
       }
       const d = this.rateLimits?.default || {};
       return {
+        enabled: this.rateLimits?.enabled !== false,
         default: {
           rpm: Number(d.rpm),
           burst: Number(d.burst),

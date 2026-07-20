@@ -5,6 +5,8 @@ namespace Pol33.Policy.RateLimiting;
 
 public sealed class RateLimitPolicyResolver(IGatewayConfigProvider configProvider) : IRateLimitPolicyResolver
 {
+    public bool IsEnabled() => configProvider.Current.RateLimits.Enabled;
+
     public RateLimitPolicy Resolve(string? planSlug, string? tenantSlug)
     {
         var rateLimits = configProvider.Current.RateLimits;

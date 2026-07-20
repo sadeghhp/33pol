@@ -140,6 +140,7 @@ public sealed class GatewayDbBootstrap
         _db.RateLimitDefaults.Add(new RateLimitDefaultsEntity
         {
             Id = 1,
+            Enabled = _rateLimitingOptions.Enabled,
             Rpm = defaults.Rpm,
             Burst = defaults.Burst,
             MaxConcurrentStreams = defaults.MaxConcurrentStreams,

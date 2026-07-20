@@ -212,8 +212,12 @@ public sealed class ModelRouterMiddleware
                 : null;
             var ratePolicy = _rateLimitPolicyResolver.Resolve(planSlug, ratePartitionKey);
 
+            // The stream-concurrency cap is part of rate limiting, so the same master switch governs it;
+            // otherwise "rate limiting off" would still throttle streaming requests.
+            var rateLimitingEnabled = _rateLimitPolicyResolver.IsEnabled();
+
             var streamSlotAcquired = false;
-            if (requestInfo.Stream)
+            if (requestInfo.Stream && rateLimitingEnabled)
             {
                 var streamAcquire = _rateLimitStore.TryAcquireStreamSlot(ratePartitionKey, ratePolicy);
                 if (!streamAcquire.IsAcquired)

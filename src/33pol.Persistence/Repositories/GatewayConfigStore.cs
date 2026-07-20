@@ -62,6 +62,8 @@ public sealed class GatewayConfigStore(GatewayDbContext dbContext) : IGatewayCon
 
         return new RateLimitsConfigSection
         {
+            // No defaults row (database-less or pre-seed) means enforce, matching prior behavior.
+            Enabled = defaults?.Enabled ?? true,
             Default = defaults is null
                 ? RateLimitPolicy.Default
                 : new RateLimitPolicy(defaults.Rpm, defaults.Burst, defaults.MaxConcurrentStreams),

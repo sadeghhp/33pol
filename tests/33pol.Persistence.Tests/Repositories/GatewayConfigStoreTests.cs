@@ -47,6 +47,7 @@ public sealed class GatewayConfigStoreTests
             nameof(RateLimits_SaveThenLoad_RoundTripsAndBumpsVersion));
 
         await new RateLimitSettingsRepository(db).SaveAsync(
+            enabled: true,
             new RateLimitPolicy(55, 5, 4),
             new Dictionary<string, RateLimitPolicy>(StringComparer.OrdinalIgnoreCase)
             {

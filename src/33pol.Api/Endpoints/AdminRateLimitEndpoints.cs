@@ -42,7 +42,7 @@ public static class AdminRateLimitEndpoints
         }
 
         var result = await service
-            .UpdateAsync(request.Default, request.Plans, cancellationToken)
+            .UpdateAsync(request.Enabled, request.Default, request.Plans, cancellationToken)
             .ConfigureAwait(false);
 
         if (!result.Success)
@@ -57,6 +57,7 @@ public static class AdminRateLimitEndpoints
                 httpContext.User.FindFirst(GatewayAuthClaims.ApiKeyId)?.Value,
                 new
                 {
+                    request.Enabled,
                     request.Default.Rpm,
                     request.Default.Burst,
                     request.Default.MaxConcurrentStreams,
@@ -69,6 +70,7 @@ public static class AdminRateLimitEndpoints
     private static AdminRateLimitsDto ToDto(Core.Configuration.RateLimitAdminConfig config) =>
         new()
         {
+            Enabled = config.Enabled,
             Default = new Core.Configuration.RateLimitTierOptions
             {
                 Rpm = config.Default.Rpm,

@@ -4,6 +4,12 @@ public sealed class RateLimitingOptions
 {
     public const string SectionName = "RateLimiting";
 
+    /// <summary>
+    /// Seed value for the global rate-limiting master switch. Only used to populate a fresh database;
+    /// once seeded the live value comes from the config snapshot and is edited via the admin UI.
+    /// </summary>
+    public bool Enabled { get; set; } = true;
+
     public RateLimitTierOptions Default { get; set; } = new();
 
     public Dictionary<string, RateLimitTierOptions> Plans { get; set; } =

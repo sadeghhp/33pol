@@ -41,6 +41,13 @@ public sealed class RateLimitMiddleware
             return;
         }
 
+        // Global master switch, read from the live snapshot so the admin toggle applies without a restart.
+        if (!_policyResolver.IsEnabled())
+        {
+            await _next(context).ConfigureAwait(false);
+            return;
+        }
+
         var tenantContext = context.Items.TryGetValue(TenantContextKeys.HttpContextItemKey, out var value)
             ? value as TenantContext
             : null;

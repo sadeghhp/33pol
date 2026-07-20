@@ -11,6 +11,7 @@ public sealed class RateLimitSettingsRepository(GatewayDbContext dbContext) : IR
     private const int ConfigVersionRowId = 1;
 
     public async Task SaveAsync(
+        bool enabled,
         RateLimitPolicy defaultTier,
         IReadOnlyDictionary<string, RateLimitPolicy> plans,
         CancellationToken cancellationToken = default)
@@ -30,6 +31,7 @@ public sealed class RateLimitSettingsRepository(GatewayDbContext dbContext) : IR
             dbContext.RateLimitDefaults.Add(defaults);
         }
 
+        defaults.Enabled = enabled;
         defaults.Rpm = defaultTier.Rpm;
         defaults.Burst = defaultTier.Burst;
         defaults.MaxConcurrentStreams = defaultTier.MaxConcurrentStreams;

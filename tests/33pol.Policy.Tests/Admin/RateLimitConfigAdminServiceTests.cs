@@ -17,6 +17,7 @@ public sealed class RateLimitConfigAdminServiceTests
         var service = CreateService(new StubServiceProvider(repo, refresher));
 
         var result = await service.UpdateAsync(
+            enabled: true,
             new RateLimitTierOptions { Rpm = 30, Burst = 3, MaxConcurrentStreams = 3 },
             new Dictionary<string, RateLimitTierOptions>(StringComparer.OrdinalIgnoreCase)
             {
@@ -35,6 +36,7 @@ public sealed class RateLimitConfigAdminServiceTests
         var service = CreateService(new StubServiceProvider(null, null));
 
         var result = await service.UpdateAsync(
+            enabled: true,
             new RateLimitTierOptions { Rpm = 0, Burst = 0, MaxConcurrentStreams = 0 },
             new Dictionary<string, RateLimitTierOptions>());
 
@@ -48,6 +50,7 @@ public sealed class RateLimitConfigAdminServiceTests
         var service = CreateService(new StubServiceProvider(null, null));
 
         var result = await service.UpdateAsync(
+            enabled: true,
             new RateLimitTierOptions { Rpm = 60, Burst = 10, MaxConcurrentStreams = 5 },
             new Dictionary<string, RateLimitTierOptions>());
 

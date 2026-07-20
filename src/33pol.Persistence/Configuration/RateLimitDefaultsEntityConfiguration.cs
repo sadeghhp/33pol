@@ -15,5 +15,11 @@ internal sealed class RateLimitDefaultsEntityConfiguration : IEntityTypeConfigur
         // Single-row table; the key is assigned explicitly (always 1), never database-generated.
         builder.Property(d => d.Id)
             .ValueGeneratedNever();
+
+        // Defaults to true so databases created before this column existed keep enforcing rate limits
+        // after upgrading. The seed guard in GatewayDbBootstrap never revisits an existing row, so the
+        // column default is the only thing protecting those installs.
+        builder.Property(d => d.Enabled)
+            .HasDefaultValue(true);
     }
 }
