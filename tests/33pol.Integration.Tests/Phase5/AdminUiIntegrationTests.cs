@@ -27,7 +27,7 @@ public sealed class AdminUiIntegrationTests
         body.Should().Contain("Assignee");
         body.Should().Contain("Tenant model access");
         body.Should().Contain("CORS allowed origins");
-        body.Should().Contain("cors-card");
+        body.Should().Contain("settingsSubTab === 'cors'");
         body.Should().Contain("testModel(");
         body.Should().Contain("model-test-title");
         body.Should().Contain("Hello world");
@@ -40,7 +40,7 @@ public sealed class AdminUiIntegrationTests
         body.Should().Contain("x-model=\"requestsErrorsOnly\"");
         body.Should().Contain("Errors only");
         body.Should().Contain("Request ID");
-        body.Should().Contain("errors-by-model");
+        body.Should().Contain("errorsByModelRows");
         body.Should().Contain("aria-expanded");
         body.Should().Contain("showModelApiKey");
         body.Should().Contain("x-cloak");
@@ -97,7 +97,7 @@ public sealed class AdminUiIntegrationTests
         body.Should().Contain("--accent");
         body.Should().Contain("app-shell");
         body.Should().Contain(".hint");
-        body.Should().Contain(".errors-by-model");
+        body.Should().Contain(".hbars");
         body.Should().Contain(".request-detail-row");
     }
 
