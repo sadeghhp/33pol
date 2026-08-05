@@ -187,6 +187,7 @@ public sealed class AdminModelProvisioningCredentialTests
             commands,
             secretStore,
             provider.GetRequiredService<IServiceScopeFactory>(),
+            new UpstreamEnvVarPolicy(),
             Substitute.For<IAuditLogger>());
     }
 

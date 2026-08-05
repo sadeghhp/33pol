@@ -22,7 +22,13 @@ internal sealed class ModelRegistryLoaderHostedService(
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            logger.LogWarning(ex, "Failed to load model routes at startup; registry is empty until a reload.");
+            // Loud on purpose: with no routes loaded the gateway answers every inference request with
+            // "model not found" while looking healthy, so this must not read as a routine warning.
+            // Readiness reports not-ready off the registry's load state until a reload succeeds.
+            logger.LogError(
+                ex,
+                "Failed to load model routes at startup; the gateway has NO routes and will reject all "
+                + "inference requests until a reload succeeds.");
         }
     }
 

@@ -12,8 +12,25 @@ public interface IModelRouteRepository
     Task<IReadOnlyList<ModelConfig>> ListAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Replaces the entire route table with the given models and bumps the config version, in a
-    /// single atomic write. Callers validate and reject empty lists before calling.
+    /// Returns all model routes together with the current route version. Mutations read through
+    /// this so they can write back with the version they saw.
     /// </summary>
-    Task ReplaceAllAsync(IReadOnlyList<ModelConfig> models, CancellationToken cancellationToken = default);
+    Task<ModelRouteSnapshot> ListWithVersionAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>Reads just the current route version — a cheap check for the reconcile poll.</summary>
+    Task<long> GetVersionAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Replaces the entire route table with the given models and bumps the route version, in a
+    /// single atomic write. Returns the new version.
+    /// </summary>
+    /// <param name="expectedVersion">
+    /// The version the caller based its change on. When supplied and no longer current the write is
+    /// abandoned and <see cref="ModelRouteVersionConflictException"/> is thrown, rather than
+    /// clobbering the other writer's routes. Pass null only for unconditional replacement.
+    /// </param>
+    Task<long> ReplaceAllAsync(
+        IReadOnlyList<ModelConfig> models,
+        long? expectedVersion = null,
+        CancellationToken cancellationToken = default);
 }

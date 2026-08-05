@@ -1,7 +1,9 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Pol33.Core.Abstractions;
 using Pol33.Observability.ControlPlane;
+using Pol33.Observability.Diagnostics;
 using Pol33.Observability.Metrics;
 using Pol33.Observability.RecentRequests;
 using Pol33.Observability.Runtime;
@@ -19,6 +21,12 @@ public static class ObservabilityServiceCollectionExtensions
         services.AddSingleton<IGatewayMetricsCollector, GatewayMetricsCollector>();
         services.AddSingleton<IRequestTracker, GatewayRequestTracker>();
         services.AddSingleton<IRecentRequestStore, InMemoryRecentRequestStore>();
+        services.AddSingleton<IGatewayLogStore, InMemoryGatewayLogStore>();
+
+        // Registering the sink as an ILoggerProvider in the container makes every ILogger warning
+        // and error in the process visible in the admin Logs tab, with no call-site changes.
+        services.AddSingleton<ILoggerProvider>(sp =>
+            new GatewayLogSinkProvider(sp.GetRequiredService<IGatewayLogStore>));
         services.AddSingleton<IAdminSummaryReader, GatewayAdminSummaryReader>();
         services.AddSingleton<IControlPlaneCommands, ControlPlaneCommands>();
         services.AddSingleton<ChannelUsageRecorder>();

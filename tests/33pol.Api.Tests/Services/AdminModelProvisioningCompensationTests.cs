@@ -220,6 +220,7 @@ public sealed class AdminModelProvisioningCompensationTests
             commands,
             secretStore,
             provider.GetRequiredService<IServiceScopeFactory>(),
+            new UpstreamEnvVarPolicy(),
             audit ?? Substitute.For<IAuditLogger>());
     }
 

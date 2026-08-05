@@ -9,7 +9,7 @@ namespace Pol33.Registry.Services;
 /// <summary>
 /// Loads the in-memory <see cref="ModelRegistryService"/> from its source of truth: the database when
 /// one is configured (via <see cref="IModelRouteRepository"/>), otherwise the models.json file. Used
-/// at startup and on an admin reload.
+/// at startup, on an admin reload, and by the route reconcile poll.
 /// </summary>
 public sealed class ModelRegistryLoader(
     IServiceScopeFactory scopeFactory,
@@ -25,17 +25,19 @@ public sealed class ModelRegistryLoader(
 
         if (repository is not null)
         {
-            var models = await repository.ListAsync(cancellationToken).ConfigureAwait(false);
-            if (models.Count > 0)
+            var snapshot = await repository.ListWithVersionAsync(cancellationToken).ConfigureAwait(false);
+
+            // Applied even when empty: with the database as the source of truth, "no routes" is a
+            // state the operator can legitimately reach by deleting the last one, and treating it as
+            // "leave the registry alone" made memory disagree with what is persisted.
+            var (models, problems) = ModelRegistryPersistence.Sanitize(snapshot.Models);
+            foreach (var problem in problems)
             {
-                registry.Apply(models);
-            }
-            else
-            {
-                logger.LogWarning("No model routes found in the database; registry left unchanged.");
+                logger.LogError("Model route table contains an entry that cannot be loaded. {Problem}", problem);
             }
 
-            return registry.GetAllModels().Count;
+            registry.Apply(models, snapshot.Version);
+            return models.Count;
         }
 
         // DB-less fallback: load from the models.json file.

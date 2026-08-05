@@ -28,5 +28,11 @@ public sealed class AdminModelTestResponse
 
     public string? Content { get; set; }
 
+    /// <summary>
+    /// The next step an operator can take, when the gateway can narrow the failure down to one.
+    /// Null when it cannot — a wrong hint costs more than no hint.
+    /// </summary>
+    public string? Hint { get; set; }
+
     public int SuggestedStatusCode { get; set; } = StatusCodes.Status200OK;
 }

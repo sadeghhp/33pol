@@ -20,7 +20,14 @@ internal static class ModelRegistryPersistErrors
             return RegistryMutationResult.Fail(FormatIOException(ex, configPath), suggestedStatusCode: 503);
         }
 
-        throw ex;
+        // Anything else (a database error, a full disk) used to be rethrown, which surfaced as an
+        // unhandled 500 with no gateway error body and no hint about what the operator should do.
+        // The mutation left nothing behind — validation and persistence both happen before the
+        // registry is swapped — so report it as a retryable service failure.
+        logger.LogError(ex, "Registry persist failed unexpectedly during {Operation}.", operation);
+        return RegistryMutationResult.Fail(
+            $"Could not save the model registry during {operation}: {ex.Message}",
+            suggestedStatusCode: 503);
     }
 
     internal static string FormatIOException(Exception ex, string configPath)

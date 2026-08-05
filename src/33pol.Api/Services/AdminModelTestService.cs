@@ -5,6 +5,7 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Http;
 using Pol33.Api.Contracts;
 using Pol33.Core.Abstractions;
+using Pol33.Core.Diagnostics;
 using Pol33.Core.Models;
 
 namespace Pol33.Api.Services;
@@ -12,8 +13,11 @@ namespace Pol33.Api.Services;
 public sealed class AdminModelTestService(
     IModelRegistry registry,
     IUpstreamBearerTokenResolver tokenResolver,
-    IHttpClientFactory httpClientFactory)
+    IHttpClientFactory httpClientFactory,
+    IGatewayLogStore logStore)
 {
+    public const string LogCategory = "ModelTest";
+
     public const string HttpClientName = Core.Http.UpstreamHttpClientNames.Inference;
 
     public const string DefaultPrompt = "ping";
@@ -56,13 +60,15 @@ public sealed class AdminModelTestService(
     {
         if (!registry.TryGetModel(modelId, out var model) || model is null)
         {
-            return new AdminModelTestResponse
+            return Fail(new AdminModelTestResponse
             {
                 Ok = false,
                 ModelId = modelId,
                 Detail = $"Model '{modelId}' is not registered.",
+                Hint = "The gateway has no model under this id. Reload the models list — it may have " +
+                       "been removed or renamed in another session.",
                 SuggestedStatusCode = StatusCodes.Status404NotFound,
-            };
+            }, "model.not_registered");
         }
 
         var modelType = ModelTypes.Resolve(model);
@@ -70,26 +76,32 @@ public sealed class AdminModelTestService(
         var bearer = tokenResolver.ResolveBearerToken(model.UpstreamAuth);
         if (RequiresBearerToken(model.UpstreamAuth) && string.IsNullOrWhiteSpace(bearer))
         {
-            return new AdminModelTestResponse
+            return Fail(new AdminModelTestResponse
             {
                 Ok = false,
                 ModelId = model.Id,
                 ModelType = modelType,
                 Detail = "Upstream auth is configured but no API key is available. Set a stored key in admin or configure the gateway environment variable.",
+                Hint = string.IsNullOrWhiteSpace(model.UpstreamAuth?.EnvVar)
+                    ? "Open Routing → Models, edit this model, and set its upstream API key."
+                    : $"Set the '{model.UpstreamAuth!.EnvVar}' environment variable on the gateway process, " +
+                      "or store the key directly on the model in Routing → Models.",
                 SuggestedStatusCode = StatusCodes.Status400BadRequest,
-            };
+            }, "upstream.missing_credential");
         }
 
         if (!Uri.TryCreate(model.Url, UriKind.Absolute, out _))
         {
-            return new AdminModelTestResponse
+            return Fail(new AdminModelTestResponse
             {
                 Ok = false,
                 ModelId = model.Id,
                 ModelType = modelType,
                 Detail = "Model upstream URL is invalid.",
+                Hint = $"'{model.Url}' is not an absolute URL. Use the full server root including scheme, " +
+                       "e.g. http://127.0.0.1:8000.",
                 SuggestedStatusCode = StatusCodes.Status400BadRequest,
-            };
+            }, "model.invalid_url");
         }
 
         var probe = BuildProbe(model, modelType, request);
@@ -126,35 +138,49 @@ public sealed class AdminModelTestService(
 
             if (!response.IsSuccessStatusCode)
             {
-                return new AdminModelTestResponse
-                {
-                    Ok = false,
-                    ModelId = model.Id,
-                    ModelType = modelType,
-                    Endpoint = probe.EndpointPath,
-                    LatencyMs = stopwatch.ElapsedMilliseconds,
-                    StatusCode = statusCode,
-                    Detail = TruncateDetail(ExtractErrorDetail(body) ?? $"Upstream returned HTTP {statusCode}."),
-                    SuggestedStatusCode = StatusCodes.Status200OK,
-                };
+                return Fail(
+                    new AdminModelTestResponse
+                    {
+                        Ok = false,
+                        ModelId = model.Id,
+                        ModelType = modelType,
+                        Endpoint = probe.EndpointPath,
+                        LatencyMs = stopwatch.ElapsedMilliseconds,
+                        StatusCode = statusCode,
+                        Detail = TruncateDetail(ExtractErrorDetail(body) ?? $"Upstream returned HTTP {statusCode}."),
+                        Hint = GatewayLogHints.ForUpstreamStatus(statusCode, model.Url, probe.EndpointPath, model.Id),
+                        SuggestedStatusCode = StatusCodes.Status200OK,
+                    },
+                    $"upstream.http_{statusCode}",
+                    // The raw body is what distinguishes "no such route" from "no such model" on a 404,
+                    // and it is routinely dropped by ExtractErrorDetail when the upstream returns HTML.
+                    rawBody: body,
+                    requestUri: probe.RequestUri);
             }
 
             if (!probe.IsHealthyBody(body))
             {
                 // A 2xx whose body does not carry the payload the probe asked for is not a healthy
                 // model — reporting success here is exactly what masked the embedding failures.
-                return new AdminModelTestResponse
-                {
-                    Ok = false,
-                    ModelId = model.Id,
-                    ModelType = modelType,
-                    Endpoint = probe.EndpointPath,
-                    LatencyMs = stopwatch.ElapsedMilliseconds,
-                    StatusCode = statusCode,
-                    Detail = TruncateDetail(
-                        $"Upstream returned HTTP {statusCode} but the response did not match the expected {modelType} shape."),
-                    SuggestedStatusCode = StatusCodes.Status200OK,
-                };
+                return Fail(
+                    new AdminModelTestResponse
+                    {
+                        Ok = false,
+                        ModelId = model.Id,
+                        ModelType = modelType,
+                        Endpoint = probe.EndpointPath,
+                        LatencyMs = stopwatch.ElapsedMilliseconds,
+                        StatusCode = statusCode,
+                        Detail = TruncateDetail(
+                            $"Upstream returned HTTP {statusCode} but the response did not match the expected {modelType} shape."),
+                        Hint = $"The call succeeded but the body carried no {modelType} payload. The most " +
+                               "likely cause is a model-type mismatch — check the type set in Routing → " +
+                               "Models against what this upstream actually serves.",
+                        SuggestedStatusCode = StatusCodes.Status200OK,
+                    },
+                    "upstream.unexpected_shape",
+                    rawBody: body,
+                    requestUri: probe.RequestUri);
             }
 
             return new AdminModelTestResponse
@@ -169,34 +195,82 @@ public sealed class AdminModelTestService(
                 SuggestedStatusCode = StatusCodes.Status200OK,
             };
         }
-        catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested)
+        catch (TaskCanceledException ex) when (!cancellationToken.IsCancellationRequested)
         {
             stopwatch.Stop();
-            return new AdminModelTestResponse
-            {
-                Ok = false,
-                ModelId = model.Id,
-                ModelType = modelType,
-                Endpoint = probe.EndpointPath,
-                LatencyMs = stopwatch.ElapsedMilliseconds,
-                Detail = "Request timed out while calling upstream.",
-                SuggestedStatusCode = StatusCodes.Status200OK,
-            };
+            return Fail(
+                new AdminModelTestResponse
+                {
+                    Ok = false,
+                    ModelId = model.Id,
+                    ModelType = modelType,
+                    Endpoint = probe.EndpointPath,
+                    LatencyMs = stopwatch.ElapsedMilliseconds,
+                    Detail = "Request timed out while calling upstream.",
+                    Hint = GatewayLogHints.ForException(ex),
+                    SuggestedStatusCode = StatusCodes.Status200OK,
+                },
+                "upstream.timeout",
+                rawBody: ex.ToString(),
+                requestUri: probe.RequestUri);
         }
         catch (HttpRequestException ex)
         {
             stopwatch.Stop();
-            return new AdminModelTestResponse
-            {
-                Ok = false,
-                ModelId = model.Id,
-                ModelType = modelType,
-                Endpoint = probe.EndpointPath,
-                LatencyMs = stopwatch.ElapsedMilliseconds,
-                Detail = TruncateDetail(ex.Message),
-                SuggestedStatusCode = StatusCodes.Status200OK,
-            };
+            return Fail(
+                new AdminModelTestResponse
+                {
+                    Ok = false,
+                    ModelId = model.Id,
+                    ModelType = modelType,
+                    Endpoint = probe.EndpointPath,
+                    LatencyMs = stopwatch.ElapsedMilliseconds,
+                    Detail = TruncateDetail(ex.Message),
+                    Hint = GatewayLogHints.ForException(ex),
+                    SuggestedStatusCode = StatusCodes.Status200OK,
+                },
+                "upstream.unreachable",
+                rawBody: ex.ToString(),
+                requestUri: probe.RequestUri);
         }
+    }
+
+    /// <summary>
+    /// Writes a failed probe into the operator log and returns it unchanged, so a test run the
+    /// operator dismissed can still be traced afterwards from the Logs tab.
+    /// </summary>
+    private AdminModelTestResponse Fail(
+        AdminModelTestResponse response,
+        string eventCode,
+        string? rawBody = null,
+        Uri? requestUri = null)
+    {
+        var detail = string.IsNullOrWhiteSpace(rawBody)
+            ? null
+            : (requestUri is null ? rawBody : $"POST {requestUri}\n\n{rawBody}");
+
+        logStore.Record(new GatewayLogEntry
+        {
+            Id = $"log_{Guid.NewGuid():N}",
+            TimestampUtc = DateTimeOffset.UtcNow,
+            Level = GatewayLogLevel.Error.ToString(),
+            Category = LogCategory,
+            EventCode = eventCode,
+            Message = BuildLogMessage(response),
+            Detail = detail ?? (requestUri is null ? null : $"POST {requestUri}"),
+            Hint = response.Hint,
+            ModelId = response.ModelId,
+        });
+
+        return response;
+    }
+
+    private static string BuildLogMessage(AdminModelTestResponse response)
+    {
+        var status = response.StatusCode is { } code ? $"HTTP {code}" : "no response";
+        var endpoint = response.Endpoint is null ? string.Empty : $" {response.Endpoint}";
+        return $"Model test failed for '{response.ModelId}'{endpoint} — {status}. " +
+               (response.Detail ?? string.Empty).Trim();
     }
 
     /// <summary>

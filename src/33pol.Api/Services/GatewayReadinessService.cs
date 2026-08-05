@@ -15,7 +15,10 @@ public sealed class GatewayReadinessService(
         var configStatus = configReload.GetStatus();
         var models = registry.GetAllModels();
         var modelCount = models.Count;
-        var registryLoaded = modelCount > 0 && !configReload.IsReloadInProgress;
+        // Loaded-ness comes from the registry itself, not from the model count: an operator who has
+        // deleted their last route has an empty registry that is perfectly healthy, while a registry
+        // left empty by a failed load must never report ready.
+        var registryLoaded = registry.IsLoaded && !configReload.IsReloadInProgress;
 
         var healthyCount = models.Count(model => healthStore.IsBackendHealthy(model.Id));
         var draining = drainState.IsDraining;

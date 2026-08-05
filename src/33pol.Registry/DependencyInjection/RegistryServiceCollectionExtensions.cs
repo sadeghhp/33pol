@@ -24,6 +24,7 @@ public static class RegistryServiceCollectionExtensions
         services.AddHostedService<HealthCheckService>();
         services.AddSingleton<ModelRegistryLoader>();
         services.AddHostedService<ModelRegistryLoaderHostedService>();
+        services.AddHostedService<ModelRegistryRouteReconcileService>();
         services.AddSingleton<IConfigReload, ModelRegistryConfigReload>();
         return services;
     }

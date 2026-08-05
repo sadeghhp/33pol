@@ -60,6 +60,22 @@ public sealed class FileUpstreamSecretStoreTests
             UpstreamSecretsPath = secretsPath
         });
 
-        return new FileUpstreamSecretStore(options, config, NullLogger<FileUpstreamSecretStore>.Instance);
+        return new FileUpstreamSecretStore(
+            options,
+            config,
+            new TestHostEnvironment(),
+            NullLogger<FileUpstreamSecretStore>.Instance);
+    }
+
+    private sealed class TestHostEnvironment : Microsoft.Extensions.Hosting.IHostEnvironment
+    {
+        public string EnvironmentName { get; set; } = Microsoft.Extensions.Hosting.Environments.Production;
+
+        public string ApplicationName { get; set; } = "tests";
+
+        public string ContentRootPath { get; set; } = AppContext.BaseDirectory;
+
+        public Microsoft.Extensions.FileProviders.IFileProvider ContentRootFileProvider { get; set; } =
+            new Microsoft.Extensions.FileProviders.NullFileProvider();
     }
 }

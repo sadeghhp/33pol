@@ -81,6 +81,10 @@
             :class="{ active: tab === 'keys' }" @click="setTab('keys')">
             <span class="icon" x-html="icon('key')"></span> <span>API keys</span>
           </button>
+          <button type="button" role="tab" id="tab-logs" :aria-selected="tab === 'logs'"
+            :class="{ active: tab === 'logs' }" @click="setTab('logs')">
+            <span class="icon" x-html="icon('file-text')"></span> <span>Logs</span>
+          </button>
           <button type="button" role="tab" id="tab-settings" :aria-selected="tab === 'settings'"
             :class="{ active: tab === 'settings' }" @click="setTab('settings')">
             <span class="icon" x-html="icon('settings')"></span> <span>Settings</span>
@@ -679,6 +683,108 @@
           </div>
         </section>
 
+        <!-- ============================ LOGS ============================ -->
+        <section x-show="tab === 'logs'" role="tabpanel" aria-labelledby="tab-logs" id="panel-logs">
+          <div class="page-header">
+            <div class="titles">
+              <span class="eyebrow">Diagnostics</span><h2>Logs</h2>
+              <p class="page-sub">Warnings and errors raised by the gateway, newest first — upstream failures,
+                rejected requests, model tests. Held in memory only; restarting the gateway clears them.</p>
+            </div>
+          </div>
+
+          <div class="toolbar">
+            <label class="filter-field">
+              <span class="icon" x-html="icon('search')"></span>
+              <input x-model="logsSearch" @input.debounce.400ms="loadLogs()"
+                placeholder="model id, request id, message, code…" aria-label="Search logs" />
+            </label>
+            <select class="inline-select" x-model="logsLevel" @change="loadLogs()" aria-label="Minimum severity">
+              <option value="all">All severities</option>
+              <option value="warning">Warning and above</option>
+              <option value="error">Errors only</option>
+            </select>
+            <label class="checkbox field-inline">
+              <input type="checkbox" x-model="logsAutoRefresh" @change="syncPoll()" /> Auto-refresh
+            </label>
+            <span class="spacer"></span>
+            <button type="button" class="action secondary" @click="loadLogs()" :disabled="isLoading('logs')">
+              <span class="icon" x-html="icon('refresh')"></span> Refresh
+            </button>
+            <button type="button" class="action danger" @click="confirmClearLogs()"
+              :disabled="isLoading('logs') || !logs.length">
+              <span class="icon" x-html="icon('trash')"></span> Clear
+            </button>
+          </div>
+
+          <p class="hint" x-show="logs.length >= logsPageSize">
+            Showing the newest <span x-text="logsPageSize"></span> matching entries. The gateway keeps at
+            most <span x-text="logsCapacity"></span> in memory — narrow the search to see older ones.
+          </p>
+
+          <div class="table-wrap">
+            <table x-show="logs.length">
+              <thead>
+                <tr>
+                  <th>Time</th><th>Severity</th><th>Source</th><th>Message</th><th>Model</th>
+                </tr>
+              </thead>
+              <tbody>
+                <template x-for="l in logs" :key="l.id">
+                  <tr class="request-row" role="button" tabindex="0"
+                    :class="logRowClass(l)"
+                    :aria-expanded="isLogExpanded(l.id) ? 'true' : 'false'"
+                    :aria-label="l.level + ' from ' + l.category + ': ' + l.message"
+                    @click="toggleLogDetails(l.id)"
+                    @keydown.enter.prevent="toggleLogDetails(l.id)"
+                    @keydown.space.prevent="toggleLogDetails(l.id)">
+                    <td x-text="formatTime(l.lastTimestampUtc || l.timestampUtc)"></td>
+                    <td>
+                      <span class="tag" :class="logLevelClass(l.level)" x-text="l.level"></span>
+                      <span class="tag" x-show="l.repeats > 1" x-text="'×' + l.repeats"
+                        title="Identical events collapsed into this row"></span>
+                    </td>
+                    <td x-text="l.category"></td>
+                    <td class="col-truncate" x-text="l.message" :title="l.message"></td>
+                    <td x-text="l.modelId ?? '—'"></td>
+                  </tr>
+                  <tr x-show="isLogExpanded(l.id)" class="request-detail-row">
+                    <td colspan="5">
+                      <p class="log-hint" x-show="l.hint">
+                        <span class="icon" x-html="icon('lightbulb')"></span>
+                        <span x-text="l.hint"></span>
+                      </p>
+                      <dl class="request-detail-list">
+                        <div><dt>First seen</dt><dd x-text="formatTime(l.timestampUtc)"></dd></div>
+                        <div><dt>Occurrences</dt><dd x-text="l.repeats"></dd></div>
+                        <div><dt>Event code</dt><dd><code x-text="l.eventCode ?? '—'"></code></dd></div>
+                        <div><dt>Request ID</dt><dd><code x-text="l.requestId ?? '—'"></code></dd></div>
+                      </dl>
+                      <p x-show="l.detail" style="margin-bottom:0"><strong>Detail</strong></p>
+                      <pre class="model-test-content" x-show="l.detail" x-text="l.detail"></pre>
+                      <div class="row-actions" @click.stop>
+                        <button type="button" class="action secondary"
+                          @click="copyText(formatLogForCopy(l), 'Log entry copied.')">
+                          <span class="icon" x-html="icon('copy')"></span> Copy entry
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                </template>
+              </tbody>
+            </table>
+            <table x-show="isLoading('logs') && !logs.length">
+              <tbody><tr class="skeleton-row"><td colspan="5"></td></tr><tr class="skeleton-row"><td colspan="5"></td></tr><tr class="skeleton-row"><td colspan="5"></td></tr></tbody>
+            </table>
+          </div>
+          <div class="empty-state" x-show="!isLoading('logs') && !logs.length">
+            <span class="empty-state-icon icon" x-html="icon('file-text')"></span>
+            <p x-text="logsSearch || logsLevel !== 'all'
+              ? 'No log entries match this filter.'
+              : 'No warnings or errors recorded since the gateway started.'"></p>
+          </div>
+        </section>
+
         <!-- ============================ SETTINGS ============================ -->
         <section x-show="tab === 'settings'" role="tabpanel" aria-labelledby="tab-settings" id="panel-settings">
           <div class="page-header">
@@ -1018,6 +1124,13 @@
         <p x-show="modelTestDialog?.result?.content" style="margin-bottom:0"><strong>Response</strong></p>
         <pre class="model-test-content" x-show="modelTestDialog?.result?.content" x-text="modelTestDialog?.result?.content"></pre>
         <p class="field-error" x-show="modelTestDialog?.result?.detail && !modelTestDialog?.result?.ok" x-text="modelTestDialog?.result?.detail"></p>
+        <p class="log-hint" x-show="modelTestDialog?.result?.hint && !modelTestDialog?.result?.ok">
+          <span class="icon" x-html="icon('lightbulb')"></span>
+          <span x-text="modelTestDialog?.result?.hint"></span>
+        </p>
+        <p class="muted" x-show="!modelTestDialog?.result?.ok && modelTestDialog?.result?.supported !== false">
+          This failure was recorded in <a href="#logs" @click="closeModelTestDialog()">Logs</a> with the full upstream response.
+        </p>
       </div>
       <p class="field-error" x-show="modelTestDialog?.error && !modelTestDialog?.loading" x-text="modelTestDialog?.error"></p>
       <div class="modal-actions">

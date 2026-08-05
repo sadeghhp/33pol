@@ -11,6 +11,7 @@ public sealed class AdminModelProvisioningService(
     IControlPlaneCommands commands,
     IUpstreamSecretStore secretStore,
     IServiceScopeFactory scopeFactory,
+    UpstreamEnvVarPolicy envVarPolicy,
     IAuditLogger audit)
 {
     /// <summary>
@@ -31,7 +32,7 @@ public sealed class AdminModelProvisioningService(
         ArgumentNullException.ThrowIfNull(request);
         var model = request.Model ?? throw new ArgumentException("Model is required.");
 
-        var prep = PrepareModel(model, request.ApiKey, request.ClearApiKey, isUpdate: false);
+        var prep = PrepareModel(model, request.ApiKey, request.ClearApiKey, isUpdate: false, previousId: null);
         if (!prep.Success)
         {
             return RegistryMutationResult.Fail(prep.Error!);
@@ -65,7 +66,12 @@ public sealed class AdminModelProvisioningService(
         ArgumentNullException.ThrowIfNull(request);
         var model = request.Model ?? throw new ArgumentException("Model is required.");
 
-        var prep = PrepareModel(model, request.ApiKey, request.ClearApiKey, isUpdate: true);
+        // The route parameter may be an alias, so resolve the model the write will actually land on:
+        // a rename has to move that model's credential and rate card, both of which are keyed by the
+        // canonical id.
+        var existing = ResolveRegisteredModel(id);
+
+        var prep = PrepareModel(model, request.ApiKey, request.ClearApiKey, isUpdate: true, previousId: existing?.Id);
         if (!prep.Success)
         {
             return RegistryMutationResult.Fail(prep.Error!);
@@ -81,11 +87,22 @@ public sealed class AdminModelProvisioningService(
             return result;
         }
 
+        var previousId = existing?.Id;
+        var renamedFrom = previousId is not null &&
+                          !string.Equals(previousId, prep.Model!.Id, StringComparison.Ordinal)
+            ? previousId
+            : null;
+
         if (!await TryApplySecretAsync(prep, cancellationToken).ConfigureAwait(false))
         {
             return RegistryMutationResult.Fail(
                 $"{result.Message} However, the upstream credential was not stored, so this model " +
                 "cannot authenticate to its upstream until the credential is set again.");
+        }
+
+        if (renamedFrom is not null)
+        {
+            await MigrateRenamedModelAsync(renamedFrom, prep, request, cancellationToken).ConfigureAwait(false);
         }
 
         return await ApplyPricingAsync(prep.Model!.Id, request, result, cancellationToken).ConfigureAwait(false);
@@ -145,6 +162,75 @@ public sealed class AdminModelProvisioningService(
 
         return UpstreamSecretRefs.TryParseModelId(model.UpstreamAuth.SecretRef, out var modelId) &&
                await secretStore.ExistsAsync(modelId, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Finds the registered model an admin route parameter refers to, by id or by alias, so callers
+    /// can work with the canonical id the registry actually stores.
+    /// </summary>
+    private ModelConfig? ResolveRegisteredModel(string id)
+    {
+        var trimmed = id.Trim();
+        var models = commands.ListModels();
+
+        return models.FirstOrDefault(m => string.Equals(m.Id, trimmed, StringComparison.OrdinalIgnoreCase))
+               ?? models.FirstOrDefault(
+                   m => m.Aliases.Any(alias => string.Equals(alias, trimmed, StringComparison.OrdinalIgnoreCase)));
+    }
+
+    /// <summary>
+    /// Moves the things keyed by model id — the upstream credential and the rate card — after a
+    /// rename. Without this a renamed model loses its credential (and silently stops authenticating)
+    /// and its price (and silently bills at zero), while the old id keeps orphaned copies of both.
+    /// </summary>
+    private async Task MigrateRenamedModelAsync(
+        string previousId,
+        PrepResult prep,
+        AdminModelWriteRequest request,
+        CancellationToken cancellationToken)
+    {
+        var newId = prep.Model!.Id;
+
+        try
+        {
+            if (prep.ClearSecret || !string.IsNullOrWhiteSpace(prep.SecretToStore))
+            {
+                // The request already established the credential under the new id; the old copy is
+                // now unreferenced.
+                await secretStore.DeleteAsync(previousId, cancellationToken).ConfigureAwait(false);
+            }
+            else if (secretStore.TryGet(previousId, out var secret) && !string.IsNullOrWhiteSpace(secret))
+            {
+                await secretStore.PutAsync(newId, secret!, cancellationToken).ConfigureAwait(false);
+                await secretStore.DeleteAsync(previousId, cancellationToken).ConfigureAwait(false);
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            audit.LogAdminAction(
+                "model.rename.credential_migration_failed",
+                new AuditLogEntry(null, null, new { previousId, newId, error = ex.Message }));
+        }
+
+        // An explicit pricing instruction in the request is applied to the new id by
+        // ApplyPricingAsync; only carry the old rate card over when the request said nothing.
+        if (request.Pricing is null && !request.ClearPricing)
+        {
+            var pricingByModel = await WithPricingAsync(p => p.GetPricingByModelAsync(cancellationToken))
+                .ConfigureAwait(false);
+
+            if (pricingByModel.TryGetValue(previousId, out var previousPricing))
+            {
+                await WithPricingAsync(p => p.SetPricingAsync(newId, previousPricing, cancellationToken))
+                    .ConfigureAwait(false);
+            }
+        }
+
+        await WithPricingAsync(p => p.ClearPricingAsync(previousId, cancellationToken)).ConfigureAwait(false);
+
+        audit.LogAdminAction(
+            "model.renamed",
+            new AuditLogEntry(null, null, new { previousId, newId }));
     }
 
     /// <summary>
@@ -216,11 +302,12 @@ public sealed class AdminModelProvisioningService(
                storedSecrets.Contains(modelId);
     }
 
-    private static PrepResult PrepareModel(
+    private PrepResult PrepareModel(
         ModelConfig model,
         string? apiKey,
         bool clearApiKey,
-        bool isUpdate)
+        bool isUpdate,
+        string? previousId)
     {
         if (!ModelTypes.TryNormalize(model.ModelType, out var modelType, out var modelTypeError))
         {
@@ -284,23 +371,40 @@ public sealed class AdminModelProvisioningService(
 
             if (hasEnv)
             {
-                if (!EnvVarNameValidator.TryValidate(model.UpstreamAuth.EnvVar, out _, out var envError))
+                if (!EnvVarNameValidator.TryValidate(model.UpstreamAuth.EnvVar, out var normalizedEnvVar, out var envError))
                 {
                     return PrepResult.Fail(envError!);
+                }
+
+                if (!envVarPolicy.IsAllowed(normalizedEnvVar, out var policyError))
+                {
+                    return PrepResult.Fail(policyError!);
                 }
 
                 normalized.UpstreamAuth = new UpstreamAuthConfig
                 {
                     Type = "bearer",
-                    EnvVar = model.UpstreamAuth.EnvVar.Trim()
+                    EnvVar = normalizedEnvVar!
                 };
             }
             else if (hasRef)
             {
+                var secretRef = model.UpstreamAuth.SecretRef.Trim();
+
+                // On a rename the client echoes back the credential reference for the old id. Follow
+                // the model to its new id rather than rejecting the edit; the stored secret is moved
+                // to match once the rename is persisted.
+                if (previousId is not null &&
+                    !string.Equals(previousId, normalized.Id, StringComparison.Ordinal) &&
+                    UpstreamSecretRefs.IsValidForModel(secretRef, previousId))
+                {
+                    secretRef = UpstreamSecretRefs.ForModel(normalized.Id);
+                }
+
                 normalized.UpstreamAuth = new UpstreamAuthConfig
                 {
                     Type = "bearer",
-                    SecretRef = model.UpstreamAuth.SecretRef.Trim()
+                    SecretRef = secretRef
                 };
             }
             else if (!isUpdate)

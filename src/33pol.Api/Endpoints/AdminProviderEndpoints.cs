@@ -65,13 +65,15 @@ public static class AdminProviderEndpoints
         string providerId,
         [FromBody] ProviderModelsDiscoveryRequest? body,
         IConfiguration configuration,
+        UpstreamEnvVarPolicy envVarPolicy,
         OpenAiCompatibleProviderModelsClient client,
         CancellationToken cancellationToken) =>
-        DiscoverProviderModelsAsync(providerId, configuration, client, body?.EnvVar, cancellationToken);
+        DiscoverProviderModelsAsync(providerId, configuration, envVarPolicy, client, body?.EnvVar, cancellationToken);
 
     private static async Task<IResult> DiscoverProviderModelsAsync(
         string providerId,
         IConfiguration configuration,
+        UpstreamEnvVarPolicy envVarPolicy,
         OpenAiCompatibleProviderModelsClient client,
         string? envVar,
         CancellationToken cancellationToken)
@@ -111,6 +113,12 @@ public static class AdminProviderEndpoints
                 statusCode: StatusCodes.Status400BadRequest);
         }
 
+        if (!string.IsNullOrWhiteSpace(resolvedEnvVar) &&
+            !envVarPolicy.IsAllowed(resolvedEnvVar, out var policyError))
+        {
+            return Results.Problem(detail: policyError, statusCode: StatusCodes.Status400BadRequest);
+        }
+
         var token = ResolveBearerToken(configuration, resolvedEnvVar);
         if (definition.RequiresUpstreamAuth && string.IsNullOrWhiteSpace(token))
         {
@@ -139,10 +147,12 @@ public static class AdminProviderEndpoints
     private static Task<IResult> PostCustomProviderModels(
         [FromBody] CustomProviderModelsDiscoveryRequest? body,
         IConfiguration configuration,
+        UpstreamEnvVarPolicy envVarPolicy,
         OpenAiCompatibleProviderModelsClient client,
         CancellationToken cancellationToken) =>
         DiscoverCustomProviderModelsAsync(
             configuration,
+            envVarPolicy,
             client,
             body?.ModelsUrl,
             body?.EnvVar,
@@ -150,6 +160,7 @@ public static class AdminProviderEndpoints
 
     private static async Task<IResult> DiscoverCustomProviderModelsAsync(
         IConfiguration configuration,
+        UpstreamEnvVarPolicy envVarPolicy,
         OpenAiCompatibleProviderModelsClient client,
         string? modelsUrl,
         string? envVar,
@@ -166,6 +177,13 @@ public static class AdminProviderEndpoints
             if (!EnvVarNameValidator.TryValidate(envVar, out var resolvedEnvVar, out var envError))
             {
                 return Results.Problem(detail: envError, statusCode: StatusCodes.Status400BadRequest);
+            }
+
+            // The caller chose both the variable to read and the URL to send it to, so without this
+            // check the endpoint would forward any secret in the gateway's environment to any host.
+            if (!envVarPolicy.IsAllowed(resolvedEnvVar, out var policyError))
+            {
+                return Results.Problem(detail: policyError, statusCode: StatusCodes.Status400BadRequest);
             }
 
             bearerToken = ResolveBearerToken(configuration, resolvedEnvVar);
@@ -210,9 +228,10 @@ public static class AdminProviderEndpoints
     private static Task<IResult> PostOpenRouterModelsLegacy(
         [FromBody] ProviderModelsDiscoveryRequest? body,
         IConfiguration configuration,
+        UpstreamEnvVarPolicy envVarPolicy,
         OpenAiCompatibleProviderModelsClient client,
         CancellationToken cancellationToken) =>
-        DiscoverProviderModelsAsync("openrouter", configuration, client, body?.EnvVar, cancellationToken);
+        DiscoverProviderModelsAsync("openrouter", configuration, envVarPolicy, client, body?.EnvVar, cancellationToken);
 
     private static string? ResolveBearerToken(IConfiguration configuration, string? envVar)
     {

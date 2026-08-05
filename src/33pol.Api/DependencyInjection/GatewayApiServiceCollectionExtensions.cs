@@ -17,6 +17,8 @@ public static class GatewayApiServiceCollectionExtensions
         services.AddSingleton<GatewayHealthService>();
         services.AddSingleton<GatewayReadinessService>();
         services.AddSingleton<GatewayStatsService>();
+        services.AddSingleton(sp => Core.Providers.UpstreamEnvVarPolicy.FromOptions(
+            sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<Core.Configuration.GatewayOptions>>().Value));
         services.AddSingleton<AdminModelProvisioningService>();
         services.AddSingleton<AdminModelTestService>();
         services.AddTransient<Core.Providers.SsrfGuardingHttpHandler>();

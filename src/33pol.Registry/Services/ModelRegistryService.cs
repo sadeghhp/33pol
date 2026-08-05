@@ -1,4 +1,3 @@
-using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Pol33.Core.Abstractions;
 using Pol33.Core.Models;
@@ -11,10 +10,40 @@ public sealed class ModelRegistryService : IModelRegistry
     private readonly object _lock = new();
     private Dictionary<string, ModelConfig> _lookup = new(StringComparer.OrdinalIgnoreCase);
     private List<ModelConfig> _models = [];
+    private bool _isLoaded;
+    private long _appliedRouteVersion;
 
     public ModelRegistryService(ILogger<ModelRegistryService> logger)
     {
         _logger = logger;
+    }
+
+    /// <summary>
+    /// True once a model set has been loaded or applied successfully. Distinguishes "no routes are
+    /// configured" (a valid state) from "the routes could not be read" (a broken gateway) — readiness
+    /// depends on the difference, and a model count alone cannot tell them apart.
+    /// </summary>
+    public bool IsLoaded
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return _isLoaded;
+            }
+        }
+    }
+
+    /// <summary>The route-table version the current in-memory set was built from; 0 when unknown.</summary>
+    public long AppliedRouteVersion
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return _appliedRouteVersion;
+            }
+        }
     }
 
     public bool TryGetModel(string name, out ModelConfig? model)
@@ -68,29 +97,30 @@ public sealed class ModelRegistryService : IModelRegistry
     }
 
     /// <summary>
-    /// Swaps the in-memory registry to the given models (deep-cloned, alias lookup rebuilt). An empty
-    /// list is ignored and leaves the registry unchanged — an empty registry is never a valid state to
-    /// swap in (callers reject empty before persisting).
+    /// Swaps the in-memory registry to the given models (deep-cloned, alias lookup rebuilt).
     /// </summary>
-    public void Apply(IReadOnlyList<ModelConfig> models)
+    /// <remarks>
+    /// An empty list is applied, not ignored: removing the last route is a legitimate operator
+    /// action, and refusing it here meant the registry could disagree with the persisted truth.
+    /// A set that fails validation throws, so callers must build the lookup before persisting.
+    /// </remarks>
+    public void Apply(IReadOnlyList<ModelConfig> models, long routeVersion = 0)
     {
         ArgumentNullException.ThrowIfNull(models);
 
-        if (models.Count == 0)
-        {
-            _logger.LogWarning("Apply skipped: empty model list would clear registry; keeping current state.");
-            return;
-        }
-
-        ApplyModels(ModelRegistryPersistence.BuildLookup(models));
+        ApplyModels(ModelRegistryPersistence.BuildLookup(models), routeVersion);
     }
 
-    internal void ApplyModels((Dictionary<string, ModelConfig> Lookup, List<ModelConfig> Models) snapshot)
+    internal void ApplyModels(
+        (Dictionary<string, ModelConfig> Lookup, List<ModelConfig> Models) snapshot,
+        long routeVersion = 0)
     {
         lock (_lock)
         {
             _lookup = snapshot.Lookup;
             _models = snapshot.Models;
+            _isLoaded = true;
+            _appliedRouteVersion = routeVersion;
         }
     }
 }

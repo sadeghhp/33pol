@@ -152,6 +152,74 @@ public sealed class AdminModelTestServiceTests
         AdminModelTestService.BuildEmbeddingsUri(baseUrl).ToString().Should().Be(expected);
     }
 
+    /// <summary>
+    /// The '/v1' + '/v1/chat/completions' double-prefix is the single most common cause of an
+    /// instant 404 from an otherwise healthy upstream, so the failure must name it explicitly.
+    /// </summary>
+    [Fact]
+    public async Task TestAsync_UpstreamNotFound_WithV1SuffixedUrl_HintsAtDuplicatedPrefix()
+    {
+        var handler = new CapturingHandler(HttpStatusCode.NotFound, "Not Found");
+        var model = CreateModel("microsoft/harrier-oss-v1-27b", "http://localhost:2215/v1");
+        var service = CreateService(handler, model);
+
+        var result = await service.TestAsync("microsoft/harrier-oss-v1-27b", null);
+
+        result.Ok.Should().BeFalse();
+        result.StatusCode.Should().Be(404);
+        result.Hint.Should().Contain("already ends in '/v1'");
+        result.Hint.Should().Contain("http://localhost:2215");
+        handler.LastRequestUri!.AbsolutePath.Should().Be("/v1/v1/chat/completions");
+    }
+
+    [Fact]
+    public async Task TestAsync_UpstreamNotFound_WithRootUrl_HintsAtRouteOrModelName()
+    {
+        var handler = new CapturingHandler(HttpStatusCode.NotFound, "Not Found");
+        var model = CreateModel("microsoft/harrier-oss-v1-27b", "http://localhost:2215");
+        var service = CreateService(handler, model);
+
+        var result = await service.TestAsync("microsoft/harrier-oss-v1-27b", null);
+
+        result.Hint.Should().Contain("/v1/chat/completions");
+        result.Hint.Should().Contain("microsoft/harrier-oss-v1-27b");
+        result.Hint.Should().NotContain("already ends in");
+    }
+
+    [Fact]
+    public async Task TestAsync_UpstreamFailure_IsRecordedInTheLogStore()
+    {
+        var handler = new CapturingHandler(HttpStatusCode.NotFound, """{"detail":"model not found"}""");
+        var model = CreateModel("demo", "http://localhost:2215");
+        var service = CreateService(handler, model);
+
+        await service.TestAsync("demo", null);
+
+        var entry = _logs.Entries.Should().ContainSingle().Subject;
+        entry.Level.Should().Be(nameof(GatewayLogLevel.Error));
+        entry.Category.Should().Be(AdminModelTestService.LogCategory);
+        entry.EventCode.Should().Be("upstream.http_404");
+        entry.ModelId.Should().Be("demo");
+        entry.Hint.Should().NotBeNullOrWhiteSpace();
+        // The raw body is what tells "no such route" from "no such model" apart.
+        entry.Detail.Should().Contain("model not found");
+        entry.Detail.Should().Contain("http://localhost:2215/v1/chat/completions");
+    }
+
+    [Fact]
+    public async Task TestAsync_Success_RecordsNothing()
+    {
+        var handler = new CapturingHandler(
+            HttpStatusCode.OK,
+            """{"choices":[{"message":{"role":"assistant","content":"Hello"}}]}""");
+        var service = CreateService(handler, CreateModel("demo", "http://upstream.test"));
+
+        var result = await service.TestAsync("demo", null);
+
+        result.Ok.Should().BeTrue();
+        _logs.Entries.Should().BeEmpty();
+    }
+
     [Fact]
     public async Task TestAsync_EmbeddingModel_PostsEmbeddingsPayload()
     {
@@ -296,12 +364,15 @@ public sealed class AdminModelTestServiceTests
         }
         """;
 
-    private static AdminModelTestService CreateService(
+    /// <summary>Diagnostics recorded by the service under test; xUnit gives each test a fresh instance.</summary>
+    private readonly RecordingLogStore _logs = new();
+
+    private AdminModelTestService CreateService(
         HttpMessageHandler handler,
         params ModelConfig[] models) =>
         CreateService(handler, (IReadOnlyList<ModelConfig>)models);
 
-    private static AdminModelTestService CreateService(HttpMessageHandler handler, IReadOnlyList<ModelConfig> models)
+    private AdminModelTestService CreateService(HttpMessageHandler handler, IReadOnlyList<ModelConfig> models)
     {
         var registry = Substitute.For<IModelRegistry>();
         registry.TryGetModel(Arg.Any<string>(), out Arg.Any<ModelConfig?>())
@@ -338,7 +409,26 @@ public sealed class AdminModelTestServiceTests
         factory.CreateClient(AdminModelTestService.HttpClientName)
             .Returns(_ => new HttpClient(handler, disposeHandler: false));
 
-        return new AdminModelTestService(registry, resolver, factory);
+        return new AdminModelTestService(registry, resolver, factory, _logs);
+    }
+
+    private sealed class RecordingLogStore : IGatewayLogStore
+    {
+        private readonly List<GatewayLogEntry> _entries = [];
+
+        public int Capacity => 100;
+
+        public IReadOnlyList<GatewayLogEntry> Entries => _entries;
+
+        public void Record(GatewayLogEntry entry) => _entries.Add(entry);
+
+        public IReadOnlyList<GatewayLogEntry> GetRecent(
+            int limit,
+            GatewayLogLevel? minimumLevel = null,
+            string? search = null) =>
+            _entries;
+
+        public void Clear() => _entries.Clear();
     }
 
     private static ModelConfig CreateModel(string id, string url, string? secretRef = null)

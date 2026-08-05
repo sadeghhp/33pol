@@ -6,6 +6,7 @@ using Pol33.Api;
 using Pol33.Api.Contracts;
 using Pol33.Api.Services;
 using Pol33.Core.Abstractions;
+using Pol33.Core.Models;
 using Pol33.Core.Security;
 
 namespace Pol33.Api.Endpoints;
@@ -26,6 +27,8 @@ public static class AdminControlPlaneEndpoints
         group.MapPatch("/models/{id}", UpdateModel);
         group.MapDelete("/models/{id}", RemoveModel);
         group.MapPost("/models/{id}/test", TestModel);
+        group.MapGet("/logs", ListLogs);
+        group.MapDelete("/logs", ClearLogs);
 
         return endpoints;
     }
@@ -98,6 +101,33 @@ public static class AdminControlPlaneEndpoints
         }
 
         return Results.Json(result, statusCode: result.SuggestedStatusCode);
+    }
+
+    /// <summary>
+    /// Recent gateway diagnostics, newest first. <paramref name="level"/> is a floor
+    /// (<c>warning</c> hides info), <paramref name="search"/> a case-insensitive substring.
+    /// </summary>
+    private static IResult ListLogs(
+        IGatewayLogStore logs,
+        int? limit,
+        string? level,
+        string? search)
+    {
+        var take = limit is > 0 and <= 500 ? limit.Value : 100;
+        var entries = logs.GetRecent(take, GatewayLogLevels.ParseFilter(level), search);
+
+        return Results.Json(new AdminLogListResponse
+        {
+            Entries = [.. entries.Select(AdminLogEntryDto.From)],
+            Count = entries.Count,
+            Capacity = logs.Capacity,
+        });
+    }
+
+    private static IResult ClearLogs(IGatewayLogStore logs)
+    {
+        logs.Clear();
+        return Results.Json(new { success = true, message = "Log buffer cleared." });
     }
 
     private static async Task<IResult> TestModel(

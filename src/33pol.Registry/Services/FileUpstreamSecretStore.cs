@@ -1,14 +1,19 @@
 using System.Text.Json;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Pol33.Core.Abstractions;
 using Pol33.Core.Configuration;
+using Pol33.Core.Security;
 
 namespace Pol33.Registry.Services;
 
 public sealed class FileUpstreamSecretStore : IUpstreamSecretStore
 {
+    /// <summary>Published development default; rejected outside Development (see <c>WellKnownWeakSecrets</c>).</summary>
+    private const string DevelopmentPepper = "dev-pepper-change-me";
+
     private readonly GatewayOptions _gatewayOptions;
     private readonly byte[] _key;
     private readonly ILogger<FileUpstreamSecretStore> _logger;
@@ -18,15 +23,46 @@ public sealed class FileUpstreamSecretStore : IUpstreamSecretStore
     public FileUpstreamSecretStore(
         IOptions<GatewayOptions> gatewayOptions,
         IConfiguration configuration,
+        IHostEnvironment environment,
         ILogger<FileUpstreamSecretStore> logger)
     {
         _gatewayOptions = gatewayOptions.Value;
-        var pepper = configuration["Gateway:Security:KeyPepper"]
-            ?? configuration["Gateway:Bootstrap:KeyPepper"]
-            ?? "dev-pepper-change-me";
-        _key = UpstreamSecretFileCipher.DeriveKey(pepper);
         _logger = logger;
+        _key = UpstreamSecretFileCipher.DeriveKey(ResolvePepper(configuration, environment, logger));
         LoadFromDisk();
+    }
+
+    /// <summary>
+    /// The pepper is the encryption key for every upstream provider credential this gateway holds.
+    /// Falling back to a published constant meant the secrets file was decryptable by anyone who
+    /// obtained it, so outside Development a missing or well-known pepper fails closed instead.
+    /// </summary>
+    private static string ResolvePepper(
+        IConfiguration configuration,
+        IHostEnvironment environment,
+        ILogger logger)
+    {
+        var pepper = configuration["Gateway:Security:KeyPepper"]
+            ?? configuration["Gateway:Bootstrap:KeyPepper"];
+
+        var isUsable = !string.IsNullOrWhiteSpace(pepper) && !WellKnownWeakSecrets.IsWeakPepper(pepper);
+        if (isUsable)
+        {
+            return pepper!;
+        }
+
+        if (!environment.IsDevelopment())
+        {
+            throw new InvalidOperationException(
+                "Gateway:Security:KeyPepper must be set to a strong, non-default value: it encrypts the "
+                + "stored upstream provider credentials, and a default one leaves them readable by anyone "
+                + "who can read the secrets file. Set the GATEWAY_KEY_PEPPER environment variable.");
+        }
+
+        logger.LogWarning(
+            "No key pepper configured; upstream credentials are encrypted with the development default "
+            + "and are NOT protected. Set GATEWAY_KEY_PEPPER before storing real provider keys.");
+        return DevelopmentPepper;
     }
 
     public bool TryGet(string modelId, out string? secret)
@@ -153,6 +189,12 @@ public sealed class FileUpstreamSecretStore : IUpstreamSecretStore
         var json = JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true });
         var tempPath = Path.Combine(directory, $".{Path.GetFileName(path)}.{Guid.NewGuid():N}.tmp");
         await File.WriteAllTextAsync(tempPath, json, cancellationToken).ConfigureAwait(false);
+
+        // Owner-only, set on the temp file so the secrets are never world-readable even briefly.
+        if (!OperatingSystem.IsWindows())
+        {
+            File.SetUnixFileMode(tempPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
 
         try
         {

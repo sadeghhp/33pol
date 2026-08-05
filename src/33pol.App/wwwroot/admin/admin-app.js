@@ -1,5 +1,5 @@
 function adminApp() {
-  const TABS = ['dashboard', 'usage', 'routing', 'keys', 'settings'];
+  const TABS = ['dashboard', 'usage', 'routing', 'keys', 'logs', 'settings'];
   const LEGACY = {
     backends: { tab: 'routing', routingSubTab: 'backends' },
     models: { tab: 'routing', routingSubTab: 'models' }
@@ -55,6 +55,13 @@ function adminApp() {
     requests: [],
     requestsErrorsOnly: false,
     expandedRequestId: null,
+    logs: [],
+    logsLevel: 'all',
+    logsSearch: '',
+    logsCapacity: 0,
+    logsPageSize: 200,
+    logsAutoRefresh: false,
+    expandedLogId: null,
     configStatus: null,
     rateLimits: null,
     rateLimitPlanRows: [],
@@ -410,6 +417,9 @@ function adminApp() {
         if (document.hidden) return;
         this.loadSummary(true);
         if (this._pollTick % 5 === 0) this.loadHealth();
+        // Every 5th tick (10s) — the log buffer does not move fast enough to justify 2s polling,
+        // and only while the tab is actually on screen.
+        if (this.logsAutoRefresh && this.tab === 'logs' && this._pollTick % 5 === 0) this.loadLogs(true);
         this._pollTick++;
       }, 2000);
     },
@@ -584,6 +594,8 @@ function adminApp() {
       this.keys = [];
       this.selectedKeyIds = [];
       this.requests = [];
+      this.logs = [];
+      this.expandedLogId = null;
       this.createdKey = '';
       this.modelDrawerOpen = false;
       this.keysDrawerOpen = false;
@@ -603,7 +615,84 @@ function adminApp() {
         else this.loadModels();
       }
       if (name === 'keys') this.loadKeys();
+      if (name === 'logs') this.loadLogs();
       if (name === 'settings') this.loadSettings();
+    },
+
+    logsQuery() {
+      const params = new URLSearchParams({ limit: String(this.logsPageSize) });
+      if (this.logsLevel && this.logsLevel !== 'all') params.set('level', this.logsLevel);
+      const search = (this.logsSearch || '').trim();
+      if (search) params.set('search', search);
+      return '?' + params.toString();
+    },
+
+    /** @param quiet true for the auto-refresh tick, which must not flash the loading state. */
+    async loadLogs(quiet) {
+      const fetchLogs = async () => {
+        const body = await this.apiJson('/admin/api/logs' + this.logsQuery());
+        this.logs = body?.entries ?? [];
+        this.logsCapacity = Number(body?.capacity ?? 0);
+      };
+      if (quiet) {
+        try { await fetchLogs(); } catch { /* the poll must not raise a banner on a transient blip */ }
+        return;
+      }
+      await this.runApi('logs', 'Loading logs…', fetchLogs);
+    },
+
+    confirmClearLogs() {
+      this.openConfirm({
+        title: 'Clear the log buffer?',
+        message: 'Discards every entry currently held in memory. This cannot be undone — durable logs written by the gateway\'s configured log providers are unaffected.',
+        confirmLabel: 'Clear',
+        danger: true,
+        onConfirm: () => this.clearLogs()
+      });
+    },
+
+    async clearLogs() {
+      await this.runApi('logs', 'Clearing…', async () => {
+        await this.apiJson('/admin/api/logs', { method: 'DELETE' });
+        this.logs = [];
+        this.expandedLogId = null;
+        this.toast('Log buffer cleared.');
+      });
+    },
+
+    toggleLogDetails(id) {
+      this.expandedLogId = this.expandedLogId === id ? null : id;
+    },
+
+    isLogExpanded(id) {
+      return this.expandedLogId === id;
+    },
+
+    logLevelClass(level) {
+      return 'level-' + String(level || '').toLowerCase();
+    },
+
+    logRowClass(entry) {
+      const level = String(entry?.level || '').toLowerCase();
+      if (level === 'error' || level === 'critical') return 'row-error';
+      if (level === 'warning') return 'row-warn';
+      return '';
+    },
+
+    /** Plain-text form of an entry, so an operator can paste one into a bug report or chat. */
+    formatLogForCopy(entry) {
+      if (!entry) return '';
+      const lines = [
+        `[${entry.level}] ${this.formatTime(entry.timestampUtc)} ${entry.category}` +
+          (entry.eventCode ? ` (${entry.eventCode})` : ''),
+        entry.message
+      ];
+      if (entry.repeats > 1) lines.push(`Occurrences: ${entry.repeats}, last ${this.formatTime(entry.lastTimestampUtc)}`);
+      if (entry.modelId) lines.push(`Model: ${entry.modelId}`);
+      if (entry.requestId) lines.push(`Request: ${entry.requestId}`);
+      if (entry.hint) lines.push(`Hint: ${entry.hint}`);
+      if (entry.detail) lines.push('', entry.detail);
+      return lines.join('\n');
     },
 
     async loadSettings() {
@@ -1398,7 +1487,7 @@ function adminApp() {
         publicAccess: false, upstreamAuth: null, capabilities: [],
         modelType: 'text-generation',
         inputPricePerMillion: '', outputPricePerMillion: '',
-        _hadPricing: false, _existing: false
+        _hadPricing: false, _existing: false, _originalId: ''
       };
       this.showAdvancedModel = false;
     },
@@ -1417,7 +1506,10 @@ function adminApp() {
         inputPricePerMillion: m.pricing ? m.pricing.inputPricePerMillionTokens : '',
         outputPricePerMillion: m.pricing ? m.pricing.outputPricePerMillionTokens : '',
         _hadPricing: !!m.pricing,
-        _existing: true
+        _existing: true,
+        // The id the model is stored under. Editing the name is a rename, so the PATCH still has to
+        // address the original id — sending it to the new one just 404s.
+        _originalId: m.id
       };
     },
 
@@ -1456,7 +1548,7 @@ function adminApp() {
       try {
         await this.runApi('routingModels', 'Saving model…', async () => {
           const url = this.editModel._existing
-            ? '/admin/api/models/' + encodeURIComponent(write.model.id)
+            ? '/admin/api/models/' + encodeURIComponent(this.editModel._originalId || write.model.id)
             : '/admin/api/models';
           const body = await this.apiJson(url, {
             method: this.editModel._existing ? 'PATCH' : 'POST',
