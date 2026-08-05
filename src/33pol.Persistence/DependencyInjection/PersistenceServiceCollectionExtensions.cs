@@ -55,7 +55,8 @@ public static class PersistenceServiceCollectionExtensions
         services.AddMemoryCache();
         services.AddScoped<RateCardRepository>();
         services.AddScoped<IRateCardRepository, CachingRateCardRepository>();
-        services.AddScoped<IBudgetRepository, BudgetRepository>();
+        services.AddScoped<BudgetRepository>();
+        services.AddScoped<IBudgetRepository, CachingBudgetRepository>();
         services.AddScoped<IGatewayStatsSnapshotStore, GatewayStatsSnapshotStore>();
         services.AddScoped<IQuotaUsageSnapshotStore, QuotaUsageSnapshotStore>();
         services.AddScoped<IGatewayConfigStore, GatewayConfigStore>();

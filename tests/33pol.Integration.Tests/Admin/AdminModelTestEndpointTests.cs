@@ -171,6 +171,75 @@ public sealed class AdminModelTestEndpointTests
         body.Detail.Should().Contain("bad key");
     }
 
+    /// <summary>
+    /// The whole point of model types: an embedding model must be probed on /v1/embeddings, and the
+    /// type must survive the round-trip through the model registry.
+    /// </summary>
+    [Fact]
+    public async Task PostModelTest_EmbeddingModel_ProbesEmbeddingsEndpoint()
+    {
+        const string adminKey = "sk-33pol-model-test-embeddings";
+        var handler = new StubUpstreamHandler(
+            HttpStatusCode.OK,
+            """{"object":"list","data":[{"embedding":[0.1,0.2]},{"embedding":[0.3,0.4]}]}""");
+        using var factory = CreateFactory(adminKey, handler);
+        using var client = await CreateAdminClientAsync(factory, adminKey);
+
+        var modelId = "embedder-" + Guid.NewGuid().ToString("N")[..8];
+        var create = await client.PostAsJsonAsync(
+            "/admin/api/models",
+            new
+            {
+                model = new
+                {
+                    id = modelId,
+                    url = "http://upstream.test",
+                    aliases = Array.Empty<string>(),
+                    maxContextLength = 8192,
+                    modelType = "embedding"
+                },
+                apiKey = "sk-upstream-test-key-1234567890abcdef"
+            });
+        create.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var response = await client.PostAsJsonAsync($"/admin/api/models/{modelId}/test", new { });
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<ModelTestPayload>();
+        body!.Ok.Should().BeTrue();
+        body.ModelType.Should().Be("embedding");
+        body.Endpoint.Should().Be("/v1/embeddings");
+        body.Content.Should().Be("2 embeddings \u00d7 2 dimensions");
+        handler.LastRequestUri!.AbsolutePath.Should().Be("/v1/embeddings");
+        handler.LastRequestBody.Should().Contain(
+            "\"input\":[\"This is a test sentence.\",\"This sentence is used for similarity testing.\"]");
+    }
+
+    [Fact]
+    public async Task PostModelAdd_UnknownModelType_Returns400()
+    {
+        const string adminKey = "sk-33pol-model-type-invalid";
+        using var factory = CreateFactory(adminKey, new StubChatCompletionHandler());
+        using var client = await CreateAdminClientAsync(factory, adminKey);
+
+        var response = await client.PostAsJsonAsync(
+            "/admin/api/models",
+            new
+            {
+                model = new
+                {
+                    id = "bad-type-" + Guid.NewGuid().ToString("N")[..8],
+                    url = "http://upstream.test",
+                    aliases = Array.Empty<string>(),
+                    maxContextLength = 8192,
+                    modelType = "teleportation"
+                }
+            });
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await response.Content.ReadAsStringAsync()).Should().Contain("modelType");
+    }
+
     private static WebApplicationFactory<Program> CreateFactory(
         string adminApiKey,
         HttpMessageHandler chatHandler)
@@ -197,10 +266,36 @@ public sealed class AdminModelTestEndpointTests
     private sealed record ModelTestPayload(
         bool Ok,
         string ModelId,
+        string? ModelType,
+        string? Endpoint,
+        bool Supported,
         long LatencyMs,
         int? StatusCode,
         string? Detail,
         string? Content);
+
+    /// <summary>Captures the request so a test can assert which upstream route the probe chose.</summary>
+    private sealed class StubUpstreamHandler(HttpStatusCode statusCode, string body) : HttpMessageHandler
+    {
+        public Uri? LastRequestUri { get; private set; }
+
+        public string? LastRequestBody { get; private set; }
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            LastRequestUri = request.RequestUri;
+            LastRequestBody = request.Content is null
+                ? null
+                : await request.Content.ReadAsStringAsync(cancellationToken);
+
+            return new HttpResponseMessage(statusCode)
+            {
+                Content = new StringContent(body, Encoding.UTF8, "application/json"),
+            };
+        }
+    }
 
     private sealed class StubChatCompletionHandler : HttpMessageHandler
     {

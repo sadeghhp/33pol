@@ -96,4 +96,5 @@ public sealed class CachingRateCardRepositoryTests
         var historical = await repository.GetActiveForModelAsync("gpt-4o", DateTimeOffset.UtcNow.AddDays(-30));
         historical.Should().BeNull();
     }
+
 }

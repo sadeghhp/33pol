@@ -84,6 +84,36 @@ public sealed class FileUpstreamSecretStore : IUpstreamSecretStore
         }
     }
 
+    public Task<IReadOnlySet<string>> ListExistingAsync(
+        IEnumerable<string> modelIds,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(modelIds);
+
+        // Materialise outside the lock so an arbitrary caller-supplied sequence is not enumerated
+        // while holding it.
+        var requested = modelIds
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .Select(id => id.Trim())
+            .ToList();
+
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var present = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        lock (_lock)
+        {
+            foreach (var id in requested)
+            {
+                if (_cache.ContainsKey(id))
+                {
+                    present.Add(id);
+                }
+            }
+        }
+
+        return Task.FromResult<IReadOnlySet<string>>(present);
+    }
+
     private void LoadFromDisk()
     {
         var path = ResolvePath();

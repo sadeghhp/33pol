@@ -35,6 +35,21 @@ public static class GatewayMeters
     public static readonly Counter<long> UsageParseFailures =
         Meter.CreateCounter<long>("gateway_usage_parse_failures_total");
 
+    /// <summary>
+    /// Responses whose upstream reported only a combined token total. Their cost is an approximation
+    /// (priced at the dearer rate), so a persistently non-zero value for a model is a signal to check
+    /// that upstream's usage reporting.
+    /// </summary>
+    public static readonly Counter<long> UnsplitUsage =
+        Meter.CreateCounter<long>("gateway_usage_unsplit_total");
+
+    /// <summary>
+    /// Responses billed from a streamed-frame estimate rather than authoritative usage. A rising
+    /// value for one tenant may indicate deliberate disconnect-before-completion.
+    /// </summary>
+    public static readonly Counter<long> EstimatedUsage =
+        Meter.CreateCounter<long>("gateway_usage_estimated_total");
+
     public static readonly Counter<long> InferenceRoute =
         Meter.CreateCounter<long>("gateway_inference_route_total");
 

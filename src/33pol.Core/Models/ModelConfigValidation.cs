@@ -9,6 +9,11 @@ public static class ModelConfigValidation
         ArgumentNullException.ThrowIfNull(model);
         error = null;
 
+        if (!ModelTypes.TryNormalize(model.ModelType, out _, out error))
+        {
+            return false;
+        }
+
         if (model.UpstreamAuth is null)
         {
             return true;

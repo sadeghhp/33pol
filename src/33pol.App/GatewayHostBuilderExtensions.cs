@@ -71,6 +71,7 @@ public static class GatewayHostBuilderExtensions
                 {
                     ctx.Context.Response.Headers.CacheControl = "no-store, no-cache, must-revalidate";
                     ctx.Context.Response.Headers.Pragma = "no-cache";
+                    AdminSecurityHeaders.Apply(ctx.Context.Response.Headers);
                 }
             }
         });

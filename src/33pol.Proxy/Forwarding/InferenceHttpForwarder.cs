@@ -12,12 +12,33 @@ namespace Pol33.Proxy.Forwarding;
 
 public interface IInferenceHttpForwarder
 {
+    /// <summary>
+    /// Forwards the current request to <paramref name="modelUrl"/>.
+    /// </summary>
+    /// <param name="timeouts">
+    /// Header and stream-idle deadlines. The forwarder owns both, so the caller must pass an
+    /// undeadlined <paramref name="cancellationToken"/> (normally <c>HttpContext.RequestAborted</c>)
+    /// and rely on the returned <see cref="ForwarderError"/> to tell the two apart.
+    /// </param>
+    /// <param name="cancellationToken">
+    /// Client-disconnect / shutdown token only. It must NOT carry a total-duration deadline —
+    /// doing so is what previously truncated healthy long streams.
+    /// </param>
+    /// <returns>
+    /// <see cref="ForwarderError.None"/> on success;
+    /// <see cref="ForwarderError.RequestTimedOut"/> when headers did not arrive in time (a backend
+    /// health signal);
+    /// <see cref="ForwarderError.ResponseBodyDestination"/> when a streaming body stalled past the
+    /// idle timeout (inconclusive — abandon the probe);
+    /// <see cref="ForwarderError.RequestCanceled"/> when the client went away.
+    /// </returns>
     Task<ForwarderError> SendAsync(
         HttpContext context,
         string modelUrl,
         string? upstreamBearerToken,
         StreamingHttpTransformer transformer,
         bool isStreaming,
+        InferenceForwardTimeouts timeouts,
         CancellationToken cancellationToken);
 }
 
@@ -34,6 +55,7 @@ public sealed class InferenceHttpForwarder(
         string? upstreamBearerToken,
         StreamingHttpTransformer transformer,
         bool isStreaming,
+        InferenceForwardTimeouts timeouts,
         CancellationToken cancellationToken)
     {
         var destinationPrefix = InferenceDestinationBuilder.ToForwarderDestination(modelUrl);
@@ -70,16 +92,32 @@ public sealed class InferenceHttpForwarder(
             ? HttpCompletionOption.ResponseHeadersRead
             : HttpCompletionOption.ResponseContentRead;
 
+        // Header phase. Only this stretch carries the total-duration deadline: for a streaming
+        // response SendAsync returns as soon as headers arrive, so the deadline never reaches the
+        // body. For a non-streaming response the body arrives with the headers, which keeps the
+        // previous end-to-end semantics for that case.
+        using var headerCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        headerCts.CancelAfter(timeouts.HeaderTimeout);
+
         HttpResponseMessage responseMessage;
         try
         {
             responseMessage = await client
-                .SendAsync(requestMessage, completionOption, cancellationToken)
+                .SendAsync(requestMessage, completionOption, headerCts.Token)
                 .ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             return ForwarderError.RequestCanceled;
+        }
+        catch (OperationCanceledException) when (headerCts.IsCancellationRequested)
+        {
+            logger.LogWarning(
+                "Upstream did not return response headers within {HeaderTimeoutSeconds}s for {Method} {Uri}",
+                timeouts.HeaderTimeout.TotalSeconds,
+                requestMessage.Method,
+                requestMessage.RequestUri);
+            return ForwarderError.RequestTimedOut;
         }
         catch (HttpRequestException ex)
         {
@@ -88,6 +126,7 @@ public sealed class InferenceHttpForwarder(
         }
         catch (TaskCanceledException)
         {
+            // HttpClient.Timeout (as opposed to our linked token) also surfaces here.
             return ForwarderError.RequestTimedOut;
         }
 
@@ -118,15 +157,35 @@ public sealed class InferenceHttpForwarder(
                     ApplyStreamingResponseHeaders(context);
                     await context.Response.StartAsync(cancellationToken).ConfigureAwait(false);
 
+                    // Body phase. The idle deadline is rearmed after every chunk that reaches the
+                    // client, so a stream of any total duration survives while the upstream keeps
+                    // producing. Only a genuine stall trips it.
+                    using var idleCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                    idleCts.CancelAfter(timeouts.StreamIdleTimeout);
+
                     await using var upstreamBody = await responseMessage.Content
-                        .ReadAsStreamAsync(cancellationToken)
+                        .ReadAsStreamAsync(idleCts.Token)
                         .ConfigureAwait(false);
-                    await CopyStreamWithFlushAsync(
-                            upstreamBody,
-                            context.Response.Body,
-                            onFirstByteWritten: () => RecordTimeToFirstTokenIfNeeded(context),
-                            cancellationToken)
-                        .ConfigureAwait(false);
+
+                    try
+                    {
+                        await CopyStreamWithFlushAsync(
+                                upstreamBody,
+                                context.Response.Body,
+                                onFirstByteWritten: () => RecordTimeToFirstTokenIfNeeded(context),
+                                onChunkForwarded: () => idleCts.CancelAfter(timeouts.StreamIdleTimeout),
+                                idleCts.Token)
+                            .ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException) when (idleCts.IsCancellationRequested &&
+                                                            !cancellationToken.IsCancellationRequested)
+                    {
+                        logger.LogWarning(
+                            "Upstream stalled for more than {StreamIdleTimeoutSeconds}s mid-stream for {Uri}",
+                            timeouts.StreamIdleTimeout.TotalSeconds,
+                            requestMessage.RequestUri);
+                        return ForwarderError.ResponseBodyDestination;
+                    }
                 }
                 else
                 {
@@ -234,6 +293,7 @@ public sealed class InferenceHttpForwarder(
         Stream source,
         Stream destination,
         Action? onFirstByteWritten,
+        Action? onChunkForwarded,
         CancellationToken cancellationToken)
     {
         var buffer = ArrayPool<byte>.Shared.Rent(16 * 1024);
@@ -247,6 +307,10 @@ public sealed class InferenceHttpForwarder(
             {
                 await destination.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
                 await destination.FlushAsync(cancellationToken).ConfigureAwait(false);
+
+                // Rearm only once the bytes are actually with the client: progress, not mere
+                // upstream activity, is what proves the stream is alive.
+                onChunkForwarded?.Invoke();
 
                 if (!firstByteWritten)
                 {

@@ -5,7 +5,15 @@ function adminApp() {
     models: { tab: 'routing', routingSubTab: 'models' }
   };
 
+  // The canonical taxonomy is served by GET /admin/api/model-types and loaded during init, so the
+  // UI never keeps its own copy to drift from. This bootstrap list is only what renders before that
+  // request completes (and if it fails); it is replaced wholesale on load.
+  const BOOTSTRAP_MODEL_TYPES = [
+    { value: 'text-generation', label: 'Text generation', testEndpoint: '/v1/chat/completions', aliases: [] }
+  ];
+
   return {
+    modelTypeCatalog: BOOTSTRAP_MODEL_TYPES,
     tab: 'dashboard',
     routingSubTab: 'models',
     showApiKey: false,
@@ -64,7 +72,7 @@ function adminApp() {
     editModel: {
       id: '', url: '', maxContextLength: 8192, aliasesText: '',
       apiKey: '', clearApiKey: false, hasUpstreamCredential: false,
-      publicAccess: false, upstreamAuth: null, _existing: false
+      publicAccess: false, upstreamAuth: null, modelType: 'text-generation', _existing: false
     },
     modelFieldError: '',
     newKey: { role: 'Inference', label: '', assignee: '', description: '', costCenter: '' },
@@ -104,6 +112,7 @@ function adminApp() {
       const media = window.matchMedia('(prefers-color-scheme: dark)');
       media.addEventListener?.('change', () => { if (this.themeMode === 'system') this.applyTheme(); });
       this.initUsageDates();
+      this.loadModelTypes();
       this.restoreTab();
       window.addEventListener('hashchange', () => this.applyHashTab());
       document.addEventListener('visibilitychange', () => this.syncPoll());
@@ -794,19 +803,93 @@ function adminApp() {
       this.modelTestDialog = null;
     },
 
+    modelTypes() {
+      return this.modelTypeCatalog;
+    },
+
+    /**
+     * Loads the canonical taxonomy (values, labels, health-check endpoints and every accepted alias)
+     * from the gateway. On failure the bootstrap list stands, which degrades display but never
+     * rewrites a model's type.
+     */
+    async loadModelTypes() {
+      try {
+        const types = await this.apiJson('/admin/api/model-types');
+        if (Array.isArray(types) && types.length) this.modelTypeCatalog = types;
+      } catch (e) {
+        // Non-fatal: resolveModelType falls back to preserving whatever the model already has.
+      }
+    },
+
+    /**
+     * The type the gateway will dispatch the health check on. Mirrors ModelTypes.Resolve: explicit
+     * type wins, then a single-purpose capability list, then text generation.
+     *
+     * Returns the model's RAW modelType when it is set but not recognised — never a coerced
+     * default. Coercing it meant opening the edit dialog for a model typed with an alias the UI did
+     * not know pre-selected the wrong type, and saving silently rewrote it.
+     */
+    resolveModelType(m) {
+      if (!m) return 'text-generation';
+      const canonical = t => {
+        const raw = String(t || '').trim().toLowerCase();
+        if (!raw) return null;
+        const entry = (this.modelTypeCatalog || []).find(x =>
+          x.value.toLowerCase() === raw ||
+          (x.aliases || []).some(a => String(a).toLowerCase() === raw));
+        return entry ? entry.value : null;
+      };
+
+      const explicit = canonical(m.modelType);
+      if (explicit) return explicit;
+
+      // Set but unrecognised: keep it verbatim so an edit round-trip cannot silently change it.
+      if (String(m.modelType || '').trim()) return String(m.modelType).trim();
+
+      const caps = [...new Set((m.capabilities || []).map(c => canonical(c)).filter(Boolean))];
+      return caps.length === 1 ? caps[0] : 'text-generation';
+    },
+
+    /** True when the resolved type is not one the gateway knows, so the UI can show it as-is. */
+    isUnknownModelType(type) {
+      return !!type && !(this.modelTypeCatalog || []).some(t => t.value === type);
+    },
+
+    modelTypeLabel(type) {
+      const entry = (this.modelTypeCatalog || []).find(t => t.value === type);
+      if (entry) return entry.label;
+      return type || '—';
+    },
+
+    /** What the Test button will actually send, so the dialog does not promise a chat call for an embedding model. */
+    modelTestHint(modelId) {
+      const m = (this.models || []).find(x => x.id === modelId);
+      const type = this.resolveModelType(m);
+      const entry = (this.modelTypeCatalog || []).find(t => t.value === type);
+      if (!entry || !entry.testEndpoint) {
+        return 'No automated health check is defined for ' + this.modelTypeLabel(type).toLowerCase() + ' models.';
+      }
+      if (type === 'embedding') return 'Embeds two short test sentences via ' + entry.testEndpoint + ' on the upstream.';
+      if (type === 'rerank') return 'Reranks one test document via ' + entry.testEndpoint + ' on the upstream.';
+      return 'Sends a short prompt to ' + entry.testEndpoint + ' on the upstream (short reply).';
+    },
+
     async testModel(modelId) {
       if (!modelId) return;
       this.modelTestDialog = { modelId, loading: true, result: null, error: '' };
       try {
+        // No payload: the gateway picks the probe from the model's type.
         const result = await this.runApi('modelTest', 'Testing model…', async () =>
           this.apiJson('/admin/api/models/' + encodeURIComponent(modelId) + '/test', {
             method: 'POST',
-            body: JSON.stringify({ prompt: 'Hello world', maxTokens: 16 })
+            body: JSON.stringify({})
           }), { localOnly: true });
         if (this.modelTestDialog?.modelId === modelId) {
           this.modelTestDialog = { modelId, loading: false, result, error: '' };
         }
         if (result?.ok) this.toast('Model test succeeded.');
+        else if (result?.supported === false) this.toast('No health check for this model type.', 'error');
+        else if (result) this.toast(result.detail || 'Model test failed.', 'error');
       } catch (e) {
         if (this.modelTestDialog?.modelId === modelId) {
           this.modelTestDialog = {
@@ -1284,6 +1367,7 @@ function adminApp() {
         maxContextLength: Number(this.editModel.maxContextLength) || 8192,
         aliases,
         publicAccess: !!this.editModel.publicAccess,
+        modelType: this.editModel.modelType || null,
         // Echoed back so editing a model does not wipe capabilities the UI does not expose.
         capabilities: this.editModel.capabilities || []
       };
@@ -1312,6 +1396,7 @@ function adminApp() {
         id: '', url: '', maxContextLength: 8192, aliasesText: '',
         apiKey: '', clearApiKey: false, hasUpstreamCredential: false,
         publicAccess: false, upstreamAuth: null, capabilities: [],
+        modelType: 'text-generation',
         inputPricePerMillion: '', outputPricePerMillion: '',
         _hadPricing: false, _existing: false
       };
@@ -1327,6 +1412,8 @@ function adminApp() {
         publicAccess: !!m.publicAccess,
         upstreamAuth: m.upstreamAuth || null,
         capabilities: m.capabilities || [],
+        // Show the type the gateway would resolve, so saving an older model records it explicitly.
+        modelType: this.resolveModelType(m),
         inputPricePerMillion: m.pricing ? m.pricing.inputPricePerMillionTokens : '',
         outputPricePerMillion: m.pricing ? m.pricing.outputPricePerMillionTokens : '',
         _hadPricing: !!m.pricing,

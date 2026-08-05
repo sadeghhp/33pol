@@ -1066,6 +1066,9 @@ tr.request-detail-row td { background: var(--bg-inset); padding-top: 0.75rem; }
 }
 .test-result.ok { color: var(--live-text); background: var(--live-soft); border: 1px solid var(--live-border); }
 .test-result.bad { color: var(--error-text); background: var(--error-soft); border: 1px solid var(--error-border); }
+/* Nothing was tested — the model type has no health check. Distinct from a real failure. */
+.test-result.warn { color: var(--warn); background: var(--warn-soft); border: 1px solid var(--warn-border); }
+.test-result code { font-family: var(--font-mono); font-size: var(--text-xs); font-weight: var(--fw-normal); }
 
 .drawer-backdrop { display: flex; justify-content: flex-end; }
 .drawer {

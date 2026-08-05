@@ -6,15 +6,17 @@
   <meta name="theme-color" content="#090b12" />
   <title>33pol · Gateway control plane</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>" />
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" />
-  <link rel="stylesheet" href="admin.css?v=10" />
+  <!-- Fonts and Alpine are served from this origin, not a public CDN. The admin console handles API
+       keys, upstream provider secrets and pricing, so a CDN compromise would execute arbitrary
+       script in a fully-privileged admin session; self-hosting also keeps the console working in
+       air-gapped deployments and stops admin activity leaking to a third party. -->
+  <link rel="stylesheet" href="vendor/fonts.css?v=1" />
+  <link rel="stylesheet" href="admin.css?v=11" />
   <script defer src="admin-icons.js?v=8"></script>
   <script defer src="admin-errors.js?v=7"></script>
   <script defer src="admin-store.js?v=8"></script>
-  <script defer src="admin-app.js?v=18"></script>
-  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.9/dist/cdn.min.js"></script>
+  <script defer src="admin-app.js?v=20"></script>
+  <script defer src="vendor/alpine-3.14.9.min.js"></script>
 </head>
 <body x-data="adminApp()" x-init="init()" x-cloak @keydown.window="onModalKeydown($event)">
 
@@ -503,7 +505,7 @@
                 <thead>
                   <tr>
                     <th class="sortable" @click="sortToggle('models','id')">ID<span x-html="sortIndicator('models','id')"></span></th>
-                    <th>Upstream URL</th><th>Aliases</th><th class="num">Context</th><th class="num">Price in/out (1M)</th><th>Access</th><th>Credential</th><th></th>
+                    <th>Upstream URL</th><th>Type</th><th>Aliases</th><th class="num">Context</th><th class="num">Price in/out (1M)</th><th>Access</th><th>Credential</th><th></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -521,6 +523,7 @@
                           <button type="button" class="icon-btn" @click="copyText(m.url,'URL copied.')" title="Copy URL" aria-label="Copy URL"><span class="icon" x-html="icon('copy')"></span></button>
                         </span>
                       </td>
+                      <td><span class="tag" x-text="modelTypeLabel(resolveModelType(m))"></span></td>
                       <td x-text="(m.aliases || []).join(', ') || '—'"></td>
                       <td class="num" x-text="formatNum(m.maxContextLength)"></td>
                       <td class="num" x-text="formatModelPrice(m.pricing)"></td>
@@ -845,6 +848,19 @@
           </select>
         </label>
         <label>Model name <input x-model="editModel.id" :disabled="!!editModel._existing" autocomplete="off" /></label>
+        <label>Model type
+          <select x-model="editModel.modelType">
+            <!-- An unrecognised stored type is offered verbatim, so saving preserves it rather than
+                 silently coercing the model to text-generation. -->
+            <template x-if="isUnknownModelType(editModel.modelType)">
+              <option :value="editModel.modelType" x-text="editModel.modelType + ' (unrecognised)'"></option>
+            </template>
+            <template x-for="t in modelTypes()" :key="t.value">
+              <option :value="t.value" x-text="t.label"></option>
+            </template>
+          </select>
+        </label>
+        <p class="hint">Decides which health check the Test button runs — <span x-text="modelTypes().find(t => t.value === editModel.modelType)?.testEndpoint || 'no automated test available'"></span>.</p>
         <label>Upstream URL <input x-model="editModel.url" placeholder="https://openrouter.ai/api or http://host.docker.internal:1234" autocomplete="off" /></label>
         <p class="hint">When the gateway runs in Docker, use <code>host.docker.internal</code> instead of <code>localhost</code> for local upstreams.</p>
         <label class="checkbox">
@@ -986,14 +1002,17 @@
   <div class="modal-backdrop" x-show="modelTestDialog" @click.self="closeModelTestDialog()" x-transition.opacity role="presentation">
     <div class="modal modal-test" role="dialog" aria-modal="true" aria-labelledby="model-test-title" @click.stop>
       <h3 id="model-test-title">Test model</h3>
-      <p class="muted">Model <code x-text="modelTestDialog?.modelId"></code></p>
-      <p class="hint">Sends <strong>Hello world</strong> to <code>/v1/chat/completions</code> on the upstream (short reply).</p>
+      <p class="muted">Model <code x-text="modelTestDialog?.modelId"></code> ·
+        <span class="tag" x-text="modelTypeLabel(resolveModelType((models || []).find(m => m.id === modelTestDialog?.modelId)))"></span>
+      </p>
+      <p class="hint" x-text="modelTestHint(modelTestDialog?.modelId)"></p>
       <p class="muted" x-show="modelTestDialog?.loading">Calling upstream…</p>
       <div x-show="modelTestDialog?.result && !modelTestDialog?.loading">
-        <span class="test-result" :class="modelTestDialog?.result?.ok ? 'ok' : 'bad'">
-          <span class="icon" x-html="icon(modelTestDialog?.result?.ok ? 'check-circle' : 'x-circle')"></span>
-          <span x-text="modelTestDialog?.result?.ok ? 'Success' : 'Failed'"></span>
-          <template x-if="modelTestDialog?.result?.latencyMs != null"><span> · <span x-text="modelTestDialog.result.latencyMs"></span> ms</span></template>
+        <span class="test-result" :class="modelTestDialog?.result?.ok ? 'ok' : (modelTestDialog?.result?.supported === false ? 'warn' : 'bad')">
+          <span class="icon" x-html="icon(modelTestDialog?.result?.ok ? 'check-circle' : (modelTestDialog?.result?.supported === false ? 'alert-triangle' : 'x-circle'))"></span>
+          <span x-text="modelTestDialog?.result?.ok ? 'Success' : (modelTestDialog?.result?.supported === false ? 'Not available' : 'Failed')"></span>
+          <template x-if="modelTestDialog?.result?.endpoint"><span> · <code x-text="modelTestDialog.result.endpoint"></code></span></template>
+          <template x-if="modelTestDialog?.result?.latencyMs != null && modelTestDialog?.result?.supported !== false"><span> · <span x-text="modelTestDialog.result.latencyMs"></span> ms</span></template>
           <template x-if="modelTestDialog?.result?.statusCode"><span> · HTTP <span x-text="modelTestDialog.result.statusCode"></span></span></template>
         </span>
         <p x-show="modelTestDialog?.result?.content" style="margin-bottom:0"><strong>Response</strong></p>

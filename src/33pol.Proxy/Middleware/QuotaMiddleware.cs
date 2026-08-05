@@ -11,18 +11,15 @@ public sealed class QuotaMiddleware
 {
     private readonly RequestDelegate _next;
     private readonly IQuotaService _quotaService;
-    private readonly IBudgetEnforcementService _budgetEnforcement;
     private readonly IErrorResponseWriter _errors;
 
     public QuotaMiddleware(
         RequestDelegate next,
         IQuotaService quotaService,
-        IBudgetEnforcementService budgetEnforcement,
         IErrorResponseWriter errors)
     {
         _next = next;
         _quotaService = quotaService;
-        _budgetEnforcement = budgetEnforcement;
         _errors = errors;
     }
 
@@ -37,17 +34,12 @@ public sealed class QuotaMiddleware
         var partitionKey = ResolvePartitionKey(context);
         var modelHint = context.Request.Query.TryGetValue("model", out var q) ? q.ToString() : string.Empty;
 
-        var budgetCheck = await _budgetEnforcement
-            .CheckBeforeForwardAsync(partitionKey == "anonymous" ? null : partitionKey, context.RequestAborted)
-            .ConfigureAwait(false);
-        if (!budgetCheck.IsAllowed)
-        {
-            await context.WriteGatewayErrorAsync(
-                _errors.Write(GatewayErrorCode.QuotaExceeded),
-                context.RequestAborted).ConfigureAwait(false);
-            return;
-        }
-
+        // Budget enforcement deliberately does NOT run here. ModelRouterMiddleware's
+        // TryReserveAsync subsumes it — it evaluates the same hard budgets against the same spend
+        // and additionally reserves the request's estimated cost — so running both meant two DI
+        // scopes, two budget queries and two period-spend scans per inference request, for one
+        // decision. It also runs after model resolution, so it can price the actual model rather
+        // than guessing from a query-string hint.
         var check = _quotaService.CheckBeforeForward(partitionKey, modelHint);
         if (!check.IsAllowed)
         {

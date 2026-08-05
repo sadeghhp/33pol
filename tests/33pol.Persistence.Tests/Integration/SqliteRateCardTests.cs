@@ -161,4 +161,69 @@ public sealed class SqliteRateCardTests
             found!.InputPricePerMillionTokens.Should().Be(3m);
         }
     }
+
+    /// <summary>
+    /// The cache in front of the repository must fold case the same way the NOCASE column does.
+    /// With a raw-cased cache key the two spellings occupied separate entries, so an admin price
+    /// change evicted only the casing used on the write path and the other kept serving the stale
+    /// price for the rest of its TTL.
+    /// </summary>
+    [Fact]
+    public async Task CachedRepository_DifferentCasing_SharesOneEntryAndInvalidatesTogether()
+    {
+        var connectionString = NewSharedInMemoryConnectionString();
+        await using var keepAlive = await MigratedKeepAliveAsync(connectionString);
+
+        await using var db = PersistenceTestDbContextFactory.CreateSqlite(connectionString);
+        using var cache = new Microsoft.Extensions.Caching.Memory.MemoryCache(
+            new Microsoft.Extensions.Caching.Memory.MemoryCacheOptions());
+
+        var repository = new CachingRateCardRepository(
+            new RateCardRepository(db),
+            cache,
+            Microsoft.Extensions.Options.Options.Create(
+                new Pol33.Core.Configuration.BillingOptions { RateCardCacheTtlSeconds = 60 }));
+
+        await repository.UpsertForModelAsync("gpt-4o", 3m, 15m);
+
+        // Warm the cache under one casing.
+        (await repository.GetActiveForModelAsync("GPT-4o", DateTimeOffset.UtcNow))!
+            .InputPricePerMillionTokens.Should().Be(3m);
+
+        // Change the price under another casing.
+        await repository.UpsertForModelAsync("gpt-4o", 9m, 40m);
+
+        (await repository.GetActiveForModelAsync("GPT-4o", DateTimeOffset.UtcNow))!
+            .InputPricePerMillionTokens
+            .Should().Be(9m, "the change must be visible whatever casing the reader uses");
+
+        await repository.DeleteForModelAsync("GPT-4O");
+
+        (await repository.GetActiveForModelAsync("gpt-4o", DateTimeOffset.UtcNow))
+            .Should().BeNull("the deletion must be visible whatever casing the reader uses");
+    }
+
+    /// <summary>
+    /// The bulk path (admin list) and the single-model path (billing hot path) must agree about
+    /// which card is current for a model, whatever casing is used.
+    /// </summary>
+    [Fact]
+    public async Task BulkAndSingleLookup_AgreeAcrossCasing()
+    {
+        var connectionString = NewSharedInMemoryConnectionString();
+        await using var keepAlive = await MigratedKeepAliveAsync(connectionString);
+
+        await using var db = PersistenceTestDbContextFactory.CreateSqlite(connectionString);
+        var repository = new RateCardRepository(db);
+
+        await repository.UpsertForModelAsync("GPT-4o", 3m, 15m);
+
+        var single = await repository.GetActiveForModelAsync("gpt-4o", DateTimeOffset.UtcNow);
+        var bulk = await repository.GetActiveByModelAsync();
+
+        single.Should().NotBeNull();
+        bulk.TryGetValue("gpt-4o", out var fromBulk).Should().BeTrue();
+        fromBulk!.InputPricePerMillionTokens.Should().Be(single!.InputPricePerMillionTokens);
+        fromBulk.OutputPricePerMillionTokens.Should().Be(single.OutputPricePerMillionTokens);
+    }
 }

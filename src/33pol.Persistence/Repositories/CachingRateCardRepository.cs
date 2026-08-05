@@ -27,7 +27,15 @@ public sealed class CachingRateCardRepository(
 
     private TimeSpan Ttl => TimeSpan.FromSeconds(Math.Max(1, billingOptions.Value.RateCardCacheTtlSeconds));
 
-    private static string CacheKey(string modelId) => KeyPrefix + modelId;
+    /// <summary>
+    /// Case-folded, because the storage layer matches model ids case-insensitively (NOCASE
+    /// collation) and the registry resolves them with OrdinalIgnoreCase. A raw-cased key would give
+    /// "GPT-4o" and "gpt-4o" separate cache entries for the same row, so an admin price change
+    /// invalidated only the casing that happened to be used on the write path and the other casing
+    /// kept serving the stale price until its TTL expired.
+    /// </summary>
+    private static string CacheKey(string modelId) =>
+        KeyPrefix + modelId.Trim().ToLowerInvariant();
 
     public async Task<RateCardRecord?> GetActiveForModelAsync(
         string modelId,

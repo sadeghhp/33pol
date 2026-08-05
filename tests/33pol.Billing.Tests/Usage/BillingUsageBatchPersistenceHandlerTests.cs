@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using NSubstitute;
+using NSubstitute.Core;
 using Pol33.Billing.Aggregates;
 using Pol33.Billing.RateCards;
 using Pol33.Billing.Usage;
@@ -31,7 +32,7 @@ public sealed class BillingUsageBatchPersistenceHandlerTests
         await handler.PersistAsync(CreateEvent("req-1"));
         await billingEvents.DidNotReceive().TryAppendAsync(Arg.Any<BillingEventRecord>(), Arg.Any<CancellationToken>());
         await handler.PersistAsync(CreateEvent("req-2"));
-        await Task.Delay(150);
+        await WaitForAppendsAsync(billingEvents, 2);
         await handler.StopAsync(CancellationToken.None);
 
         await billingEvents.Received(2).TryAppendAsync(Arg.Any<BillingEventRecord>(), Arg.Any<CancellationToken>());
@@ -52,7 +53,7 @@ public sealed class BillingUsageBatchPersistenceHandlerTests
 
         await handler.StartAsync(CancellationToken.None);
         await handler.PersistAsync(CreateEvent("req-timer"));
-        await Task.Delay(120);
+        await WaitForAppendsAsync(billingEvents, 1);
         await handler.StopAsync(CancellationToken.None);
 
         await billingEvents.Received(1).TryAppendAsync(Arg.Any<BillingEventRecord>(), Arg.Any<CancellationToken>());
@@ -117,10 +118,33 @@ public sealed class BillingUsageBatchPersistenceHandlerTests
 
         await handler.StartAsync(CancellationToken.None);
         await handler.PersistAsync(CreateEvent("req-interval"));
-        await Task.Delay(250);
+        await WaitForAppendsAsync(billingEvents, 1);
         await handler.StopAsync(CancellationToken.None);
 
         await billingEvents.Received(1).TryAppendAsync(Arg.Any<BillingEventRecord>(), Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// Polls instead of sleeping a fixed interval: a fixed delay races the flush timer whenever the
+    /// suite runs under load, which made these assertions intermittently fail.
+    /// </summary>
+    private static async Task WaitForAppendsAsync(
+        IBillingEventRepository billingEvents,
+        int expected,
+        int timeoutMs = 5_000)
+    {
+        var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+        while (DateTime.UtcNow < deadline)
+        {
+            var appends = billingEvents.ReceivedCalls()
+                .Count(c => c.GetMethodInfo().Name == nameof(IBillingEventRepository.TryAppendAsync));
+            if (appends >= expected)
+            {
+                return;
+            }
+
+            await Task.Delay(20);
+        }
     }
 
     private static BillingUsageBatchPersistenceHandler CreateHandler(

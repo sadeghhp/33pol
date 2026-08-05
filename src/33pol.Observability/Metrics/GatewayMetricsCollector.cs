@@ -25,6 +25,12 @@ public sealed class GatewayMetricsCollector(GatewayRuntimeState runtimeState) : 
     public void RecordUsageParseFailure(string modelId) =>
         GatewayMeters.UsageParseFailures.Add(1, new KeyValuePair<string, object?>("model", modelId));
 
+    public void RecordEstimatedUsage(string modelId) =>
+        GatewayMeters.EstimatedUsage.Add(1, new KeyValuePair<string, object?>("model", modelId));
+
+    public void RecordUnsplitUsage(string modelId) =>
+        GatewayMeters.UnsplitUsage.Add(1, new KeyValuePair<string, object?>("model", modelId));
+
     public void RecordInferenceRouted(string modelId, string route, bool isStreaming) =>
         GatewayMeters.InferenceRoute.Add(
             1,

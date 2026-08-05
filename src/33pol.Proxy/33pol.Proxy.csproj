@@ -3,6 +3,7 @@
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
     <PackageReference Include="Yarp.ReverseProxy" />
+    <InternalsVisibleTo Include="33pol.Proxy.Tests" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\33pol.Policy\33pol.Policy.csproj" />

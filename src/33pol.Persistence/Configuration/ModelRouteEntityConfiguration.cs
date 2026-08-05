@@ -20,5 +20,8 @@ internal sealed class ModelRouteEntityConfiguration : IEntityTypeConfiguration<M
 
         builder.Property(m => m.Url)
             .IsRequired();
+
+        builder.Property(m => m.ModelType)
+            .HasMaxLength(64);
     }
 }

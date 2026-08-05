@@ -12,6 +12,10 @@ namespace Pol33.Proxy.Tests.Forwarding;
 
 public sealed class InferenceHttpForwarderTests
 {
+    /// <summary>Generous deadlines so timing is never what a behavioural test is really asserting.</summary>
+    private static readonly InferenceForwardTimeouts TestTimeouts =
+        new(TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(30));
+
     [Fact]
     public async Task SendAsync_Streaming_ForwardsFirstBytesBeforeUpstreamCompletes()
     {
@@ -36,6 +40,7 @@ public sealed class InferenceHttpForwarderTests
             upstreamBearerToken: null,
             transformer,
             isStreaming: true,
+            TestTimeouts,
             CancellationToken.None);
 
         using var readCts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
@@ -77,6 +82,7 @@ public sealed class InferenceHttpForwarderTests
             null,
             transformer,
             isStreaming: false,
+            TestTimeouts,
             CancellationToken.None);
 
         error.Should().Be(ForwarderError.None);
@@ -107,6 +113,7 @@ public sealed class InferenceHttpForwarderTests
             upstreamBearerToken: null,
             transformer,
             isStreaming: false,
+            TestTimeouts,
             CancellationToken.None);
 
         error.Should().Be(ForwarderError.None);
@@ -135,6 +142,7 @@ public sealed class InferenceHttpForwarderTests
             null,
             transformer,
             isStreaming: true,
+            TestTimeouts,
             cts.Token);
 
         error.Should().BeOneOf(ForwarderError.RequestTimedOut, ForwarderError.RequestCanceled);
@@ -159,6 +167,7 @@ public sealed class InferenceHttpForwarderTests
             null,
             transformer,
             isStreaming: true,
+            TestTimeouts,
             CancellationToken.None);
 
         error.Should().Be(ForwarderError.RequestCanceled);
@@ -182,6 +191,7 @@ public sealed class InferenceHttpForwarderTests
             upstreamBearerToken: null,
             transformer,
             isStreaming: true,
+            TestTimeouts,
             CancellationToken.None);
 
         error.Should().Be(ForwarderError.None);
@@ -211,6 +221,7 @@ public sealed class InferenceHttpForwarderTests
                 upstreamBearerToken: null,
                 transformer,
                 isStreaming: true,
+                TestTimeouts,
                 CancellationToken.None);
 
             error.Should().Be(ForwarderError.None);
@@ -244,12 +255,114 @@ public sealed class InferenceHttpForwarderTests
             upstreamBearerToken: null,
             transformer,
             isStreaming: true,
+            TestTimeouts,
             CancellationToken.None);
 
         error.Should().Be(ForwarderError.None);
         metrics.TimeToFirstTokenRecords.Should().HaveCount(1);
         metrics.TimeToFirstTokenRecords[0].ModelId.Should().Be("gpt");
         metrics.TimeToFirstTokenRecords[0].Seconds.Should().BeGreaterThanOrEqualTo(0);
+    }
+
+    /// <summary>
+    /// The defect this covers: a single total-duration deadline truncated healthy long streams. With
+    /// the split deadlines, a stream that keeps producing outlives a header timeout many times over.
+    /// </summary>
+    [Fact]
+    public async Task SendAsync_Streaming_ProducingStreamOutlivesHeaderTimeout()
+    {
+        var handler = new SlowDripUpstreamHandler(chunks: 6, interChunkDelay: TimeSpan.FromMilliseconds(120));
+        var forwarder = new InferenceHttpForwarder(
+            new SingleHandlerClientFactory(handler),
+            NoOpGatewayMetricsCollector.Instance,
+            NullLogger<InferenceHttpForwarder>.Instance);
+
+        var context = CreatePostContext("""{"model":"gpt","stream":true}""");
+        var transformer = new StreamingHttpTransformer(true, "gpt", "gpt");
+
+        // Total stream duration (~720ms) far exceeds the 200ms header timeout, but each gap is well
+        // inside the 2s idle timeout.
+        var timeouts = new InferenceForwardTimeouts(
+            HeaderTimeout: TimeSpan.FromMilliseconds(200),
+            StreamIdleTimeout: TimeSpan.FromSeconds(2));
+
+        var error = await forwarder.SendAsync(
+            context,
+            "http://backend:8000",
+            null,
+            transformer,
+            isStreaming: true,
+            timeouts,
+            CancellationToken.None);
+
+        error.Should().Be(ForwarderError.None);
+        context.Response.Body.Position = 0;
+        var body = await new StreamReader(context.Response.Body).ReadToEndAsync();
+        body.Should().Contain("chunk-5");
+    }
+
+    /// <summary>
+    /// A genuine mid-stream stall must be reported as ResponseBodyDestination, which the middleware
+    /// maps to "abandon the probe" rather than "backend failure".
+    /// </summary>
+    [Fact]
+    public async Task SendAsync_Streaming_StalledUpstream_ReturnsResponseBodyDestination()
+    {
+        var handler = new SlowDripUpstreamHandler(
+            chunks: 2,
+            interChunkDelay: TimeSpan.FromMilliseconds(20),
+            stallAfterChunks: 1);
+
+        var forwarder = new InferenceHttpForwarder(
+            new SingleHandlerClientFactory(handler),
+            NoOpGatewayMetricsCollector.Instance,
+            NullLogger<InferenceHttpForwarder>.Instance);
+
+        var context = CreatePostContext("""{"model":"gpt","stream":true}""");
+        var transformer = new StreamingHttpTransformer(true, "gpt", "gpt");
+
+        var timeouts = new InferenceForwardTimeouts(
+            HeaderTimeout: TimeSpan.FromSeconds(5),
+            StreamIdleTimeout: TimeSpan.FromMilliseconds(200));
+
+        var error = await forwarder.SendAsync(
+            context,
+            "http://backend:8000",
+            null,
+            transformer,
+            isStreaming: true,
+            timeouts,
+            CancellationToken.None);
+
+        error.Should().Be(ForwarderError.ResponseBodyDestination);
+    }
+
+    /// <summary>A header timeout is distinct from both cancellation and a stream stall.</summary>
+    [Fact]
+    public async Task SendAsync_HeaderTimeout_ReturnsRequestTimedOut()
+    {
+        var forwarder = new InferenceHttpForwarder(
+            new SingleHandlerClientFactory(new HangingUpstreamHandler()),
+            NoOpGatewayMetricsCollector.Instance,
+            NullLogger<InferenceHttpForwarder>.Instance);
+
+        var context = CreatePostContext("""{"model":"gpt","stream":true}""");
+        var transformer = new StreamingHttpTransformer(true, "gpt", "gpt");
+
+        var timeouts = new InferenceForwardTimeouts(
+            HeaderTimeout: TimeSpan.FromMilliseconds(150),
+            StreamIdleTimeout: TimeSpan.FromSeconds(30));
+
+        var error = await forwarder.SendAsync(
+            context,
+            "http://backend:8000",
+            null,
+            transformer,
+            isStreaming: true,
+            timeouts,
+            CancellationToken.None);
+
+        error.Should().Be(ForwarderError.RequestTimedOut);
     }
 
     private static DefaultHttpContext CreatePostContext(string jsonBody)
@@ -321,6 +434,14 @@ public sealed class InferenceHttpForwarderTests
         public void RecordRateLimitRejection(string reason) { }
         public void RecordQuotaRejection() { }
         public void RecordTokenUsage(string modelId, long promptTokens, long completionTokens) { }
+        public void RecordEstimatedUsage(string modelId)
+        {
+        }
+
+        public void RecordUnsplitUsage(string modelId)
+        {
+        }
+
         public void RecordUsageParseFailure(string modelId) { }
         public void RecordInferenceRouted(string modelId, string route, bool isStreaming) { }
         public void RecordForwardAttempt(string modelId, string outcome) { }
@@ -338,6 +459,14 @@ public sealed class InferenceHttpForwarderTests
         public void RecordRateLimitRejection(string reason) { }
         public void RecordQuotaRejection() { }
         public void RecordTokenUsage(string modelId, long promptTokens, long completionTokens) { }
+        public void RecordEstimatedUsage(string modelId)
+        {
+        }
+
+        public void RecordUnsplitUsage(string modelId)
+        {
+        }
+
         public void RecordUsageParseFailure(string modelId) { }
         public void RecordInferenceRouted(string modelId, string route, bool isStreaming) { }
         public void RecordForwardAttempt(string modelId, string outcome) { }
@@ -496,6 +625,91 @@ public sealed class InferenceHttpForwarderTests
             };
             response.Headers.TransferEncodingChunked = true;
             return Task.FromResult(response);
+        }
+    }
+
+    /// <summary>
+    /// Emits <c>chunks</c> SSE frames separated by <c>interChunkDelay</c>. When
+    /// <c>stallAfterChunks</c> is set, the stream stops producing (without completing) after that
+    /// many frames, which is what a hung upstream looks like to the gateway.
+    /// </summary>
+    private sealed class SlowDripUpstreamHandler(
+        int chunks,
+        TimeSpan interChunkDelay,
+        int? stallAfterChunks = null) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StreamContent(new SlowDripStream(chunks, interChunkDelay, stallAfterChunks))
+                {
+                    Headers = { ContentType = new MediaTypeHeaderValue("text/event-stream") },
+                },
+            });
+
+        private sealed class SlowDripStream(
+            int chunks,
+            TimeSpan interChunkDelay,
+            int? stallAfterChunks) : Stream
+        {
+            private int _emitted;
+
+            public override bool CanRead => true;
+
+            public override bool CanSeek => false;
+
+            public override bool CanWrite => false;
+
+            public override long Length => throw new NotSupportedException();
+
+            public override long Position
+            {
+                get => throw new NotSupportedException();
+                set => throw new NotSupportedException();
+            }
+
+            public override async ValueTask<int> ReadAsync(
+                Memory<byte> buffer,
+                CancellationToken cancellationToken = default)
+            {
+                if (stallAfterChunks is int stallAt && _emitted >= stallAt)
+                {
+                    await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken).ConfigureAwait(false);
+                }
+
+                if (_emitted >= chunks)
+                {
+                    return 0;
+                }
+
+                await Task.Delay(interChunkDelay, cancellationToken).ConfigureAwait(false);
+                var payload = Encoding.UTF8.GetBytes($"data: {{\"chunk\":\"chunk-{_emitted}\"}}\n\n");
+                _emitted++;
+                payload.CopyTo(buffer);
+                return payload.Length;
+            }
+
+            public override Task<int> ReadAsync(
+                byte[] buffer,
+                int offset,
+                int count,
+                CancellationToken cancellationToken) =>
+                ReadAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
+
+            public override int Read(byte[] buffer, int offset, int count) =>
+                ReadAsync(buffer, offset, count, CancellationToken.None).GetAwaiter().GetResult();
+
+            public override void Flush()
+            {
+            }
+
+            public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+            public override void SetLength(long value) => throw new NotSupportedException();
+
+            public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
         }
     }
 

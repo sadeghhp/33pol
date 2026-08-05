@@ -17,8 +17,6 @@ public sealed class GatewayRuntimeState
     private long _quotaRejections;
     private readonly ConcurrentDictionary<string, long> _requestsPerModel = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, long> _errorsPerModel = new(StringComparer.OrdinalIgnoreCase);
-    private readonly ConcurrentDictionary<string, long> _quotaUsage = new(StringComparer.OrdinalIgnoreCase);
-    private readonly HashSet<string> _quotaCommits = new(StringComparer.Ordinal);
 
     public int MaxRecentRequests { get; set; } = 500;
 
@@ -61,22 +59,6 @@ public sealed class GatewayRuntimeState
     public void RecordRateLimitRejection() => Interlocked.Increment(ref _rateLimitRejections);
 
     public void RecordQuotaRejection() => Interlocked.Increment(ref _quotaRejections);
-
-    public long GetQuotaUsage(string partitionKey) =>
-        _quotaUsage.GetOrAdd(partitionKey, static _ => 0);
-
-    public void AddQuotaUsage(string partitionKey, long tokens)
-    {
-        _quotaUsage.AddOrUpdate(partitionKey, tokens, (_, existing) => existing + tokens);
-    }
-
-    public bool TryCommitQuota(string requestId)
-    {
-        lock (_quotaCommits)
-        {
-            return _quotaCommits.Add(requestId);
-        }
-    }
 
     public void EnqueueRecent(RecentRequestEntry entry)
     {

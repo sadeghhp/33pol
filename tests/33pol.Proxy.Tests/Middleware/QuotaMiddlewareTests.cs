@@ -10,14 +10,6 @@ namespace Pol33.Proxy.Tests.Middleware;
 
 public sealed class QuotaMiddlewareTests
 {
-    private static IBudgetEnforcementService AllowedBudget()
-    {
-        var budget = Substitute.For<IBudgetEnforcementService>();
-        budget.CheckBeforeForwardAsync(Arg.Any<string?>(), Arg.Any<CancellationToken>())
-            .Returns(BudgetCheckResult.Allowed);
-        return budget;
-    }
-
     [Fact]
     public async Task InvokeAsync_NonInferencePath_SkipsQuotaCheck()
     {
@@ -34,7 +26,6 @@ public sealed class QuotaMiddlewareTests
                 return Task.CompletedTask;
             },
             quota,
-            AllowedBudget(),
             new OpenAiErrorResponseWriter());
 
         await middleware.InvokeAsync(context);
@@ -68,7 +59,6 @@ public sealed class QuotaMiddlewareTests
                 return Task.CompletedTask;
             },
             quota,
-            AllowedBudget(),
             new OpenAiErrorResponseWriter());
 
         await middleware.InvokeAsync(context);
@@ -97,7 +87,6 @@ public sealed class QuotaMiddlewareTests
                 return Task.CompletedTask;
             },
             quota,
-            AllowedBudget(),
             new OpenAiErrorResponseWriter());
 
         await middleware.InvokeAsync(context);
@@ -106,13 +95,16 @@ public sealed class QuotaMiddlewareTests
         context.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
     }
 
+    /// <summary>
+    /// Budget enforcement no longer runs here — it is done once, in ModelRouterMiddleware, by
+    /// TryReserveAsync (see ModelRouterBudgetReservationTests and
+    /// BillingBudgetEnforcementServiceTests). QuotaMiddleware is only responsible for token quotas.
+    /// </summary>
     [Fact]
-    public async Task InvokeAsync_BudgetHardStop_Returns429()
+    public async Task InvokeAsync_DoesNotPerformBudgetEnforcement()
     {
         var quota = Substitute.For<IQuotaService>();
-        var budget = Substitute.For<IBudgetEnforcementService>();
-        budget.CheckBeforeForwardAsync("tenant-a", Arg.Any<CancellationToken>())
-            .Returns(BudgetCheckResult.HardExceeded("Monthly cap"));
+        quota.CheckBeforeForward(Arg.Any<string>(), Arg.Any<string>()).Returns(QuotaCheckResult.Allowed);
 
         var context = new DefaultHttpContext();
         context.Request.Method = HttpMethods.Post;
@@ -132,13 +124,11 @@ public sealed class QuotaMiddlewareTests
                 return Task.CompletedTask;
             },
             quota,
-            budget,
             new OpenAiErrorResponseWriter());
 
         await middleware.InvokeAsync(context);
 
-        nextCalls.Should().Be(0);
-        context.Response.StatusCode.Should().Be(StatusCodes.Status429TooManyRequests);
-        quota.DidNotReceive().CheckBeforeForward(Arg.Any<string>(), Arg.Any<string>());
+        nextCalls.Should().Be(1);
+        quota.Received(1).CheckBeforeForward("tenant-a", Arg.Any<string>());
     }
 }

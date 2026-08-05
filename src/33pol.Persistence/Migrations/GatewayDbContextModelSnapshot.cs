@@ -383,6 +383,10 @@ namespace Pol33.Persistence.Migrations
                         .HasMaxLength(256)
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("ModelType")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
                     b.Property<bool>("PublicAccess")
                         .HasColumnType("INTEGER");
 

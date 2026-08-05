@@ -97,6 +97,15 @@ public sealed class BillingBudgetEnforcementService(
             }
         }
 
+        // An already-exhausted budget blocks regardless of the estimate. Without this, an unpriced
+        // model (estimate 0) would sail past a hard stop that persisted spend had already breached —
+        // the case the now-removed QuotaMiddleware pre-check used to catch. Reserving must subsume
+        // that check, or removing the duplicate would have weakened enforcement.
+        if (headroom <= 0m)
+        {
+            return BudgetCheckResult.HardExceeded(tightestBudgetName);
+        }
+
         var estimate = await EstimateMaxCostAsync(scope, canonicalModelId, requestedMaxTokens, cancellationToken)
             .ConfigureAwait(false);
 

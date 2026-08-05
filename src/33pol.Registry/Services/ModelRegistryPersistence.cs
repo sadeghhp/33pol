@@ -85,5 +85,6 @@ internal static class ModelRegistryPersistence
             Aliases = [.. model.Aliases],
             PublicAccess = model.PublicAccess,
             Capabilities = [.. model.Capabilities],
+            ModelType = model.ModelType,
         };
 }

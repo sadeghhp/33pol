@@ -28,6 +28,9 @@ public static class ServiceCollectionExtensions
 
         services.AddSingleton<IPostConfigureOptions<GatewayOptions>, GatewayCorsEnvironmentPostConfigure>();
         services.AddSingleton<IValidateOptions<GatewayOptions>, GatewayOptionsValidateOptions>();
+        // Cross-section: the reservation TTL is only meaningful relative to the resilience timeouts.
+        services.AddSingleton<IValidateOptions<BillingOptions>, BillingOptionsValidateOptions>();
+        services.AddOptions<BillingOptions>().ValidateOnStart();
         services.AddGatewayCors(configuration, environment);
         services.AddGatewayOpenTelemetry();
         services.AddGatewayObservability();

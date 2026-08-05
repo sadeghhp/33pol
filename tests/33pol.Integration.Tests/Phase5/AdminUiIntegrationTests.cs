@@ -30,7 +30,11 @@ public sealed class AdminUiIntegrationTests
         body.Should().Contain("settingsSubTab === 'cors'");
         body.Should().Contain("testModel(");
         body.Should().Contain("model-test-title");
-        body.Should().Contain("Hello world");
+        // The test dialog describes the probe for this model's type instead of a hardcoded chat prompt.
+        body.Should().Contain("modelTestHint(modelTestDialog?.modelId)");
+        body.Should().NotContain("Hello world");
+        body.Should().Contain("x-model=\"editModel.modelType\"");
+        body.Should().Contain("modelTypeLabel(resolveModelType(m))");
         body.Should().NotContain("Discover from provider");
         body.Should().Contain("id=\"model-upstream-api-key\"");
         body.Should().Contain("x-model=\"editModel.apiKey\"");
@@ -133,6 +137,8 @@ public sealed class AdminUiIntegrationTests
         body.Should().MatchRegex("async revokeKeyConfirmed\\(\\)[\\s\\S]*?await this\\.fetchKeys\\(\\)");
         body.Should().MatchRegex("async removeModel\\(id\\)[\\s\\S]*?await this\\.fetchModels\\(\\)");
         body.Should().Contain("testModel");
+        body.Should().Contain("resolveModelType");
+        body.Should().Contain("modelTestHint");
         body.Should().Contain("/models/");
         body.Should().Contain("apiKey");
         body.Should().Contain("gateApiKey");

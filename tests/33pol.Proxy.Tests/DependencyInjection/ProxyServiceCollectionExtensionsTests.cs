@@ -30,6 +30,14 @@ public sealed class ProxyServiceCollectionExtensionsTests
         public void RecordRateLimitRejection(string reason) { }
         public void RecordQuotaRejection() { }
         public void RecordTokenUsage(string modelId, long promptTokens, long completionTokens) { }
+        public void RecordEstimatedUsage(string modelId)
+        {
+        }
+
+        public void RecordUnsplitUsage(string modelId)
+        {
+        }
+
         public void RecordUsageParseFailure(string modelId) { }
         public void RecordInferenceRouted(string modelId, string route, bool isStreaming) { }
         public void RecordForwardAttempt(string modelId, string outcome) { }

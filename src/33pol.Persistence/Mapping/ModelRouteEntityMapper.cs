@@ -16,6 +16,7 @@ internal static class ModelRouteEntityMapper
         // Deep-clone the lists so callers cannot mutate tracked entity state.
         Aliases = [.. entity.Aliases],
         Capabilities = [.. entity.Capabilities],
+        ModelType = entity.ModelType,
         PublicAccess = entity.PublicAccess,
         UpstreamAuth = string.IsNullOrWhiteSpace(entity.UpstreamAuthJson)
             ? null
@@ -30,6 +31,7 @@ internal static class ModelRouteEntityMapper
         MaxContextLength = model.MaxContextLength,
         Aliases = [.. model.Aliases],
         Capabilities = [.. model.Capabilities],
+        ModelType = model.ModelType,
         PublicAccess = model.PublicAccess,
         UpstreamAuthJson = model.UpstreamAuth is null
             ? null

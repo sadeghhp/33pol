@@ -101,12 +101,17 @@ public sealed class StreamingHttpTransformer : HttpTransformer
         var capturingStream = _isStreaming
             ? new UsageCapturingStream(
                 originalStream,
-                captured => _usageCapture!.CaptureFromSseText(Encoding.UTF8.GetString(captured.Span)),
+                // Stats carry how much was actually streamed, so a body cut short before its usage
+                // frame can still be billed from an estimate rather than recorded as zero.
+                (captured, stats) => _usageCapture!.CaptureFromSseText(
+                    Encoding.UTF8.GetString(captured.Span), stats),
                 // SSE usage arrives in the final chunk: retain the tail, not the head.
-                retainTail: true)
+                retainTail: true,
+                onCaptureFailed: _usageCapture!.OnCaptureFailed)
             : new UsageCapturingStream(
                 originalStream,
-                captured => _usageCapture!.CaptureFromJsonBody(captured.Span));
+                (captured, _) => _usageCapture!.CaptureFromJsonBody(captured.Span),
+                onCaptureFailed: _usageCapture!.OnCaptureFailed);
 
         proxyResponse.Content = new StreamContent(capturingStream);
         if (contentType is not null)

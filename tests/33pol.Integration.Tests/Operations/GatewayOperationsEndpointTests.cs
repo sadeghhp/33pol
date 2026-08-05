@@ -13,16 +13,42 @@ public sealed class GatewayOperationsEndpointTests : IClassFixture<WebApplicatio
         _client = factory.CreateClient();
     }
 
+    /// <summary>
+    /// The model registry is populated by a hosted service, so under load the first request can
+    /// arrive before it has finished. Poll rather than asserting on a single shot — the fixed-shot
+    /// version failed intermittently whenever the suite ran under parallel load.
+    /// </summary>
     [Fact]
     public async Task GetHealth_ReturnsGatewayBackendShape()
     {
-        var response = await _client.GetAsync("/health");
+        HttpResponseMessage? response = null;
+        JsonDocument? json = null;
 
-        response.StatusCode.Should().Be(HttpStatusCode.OK);
-        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
-        json.RootElement.GetProperty("status").GetString().Should().Be("healthy");
-        json.RootElement.GetProperty("totalBackends").GetInt32().Should().BeGreaterThan(0);
-        json.RootElement.GetProperty("backends").GetArrayLength().Should().BeGreaterThan(0);
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (DateTime.UtcNow < deadline)
+        {
+            json?.Dispose();
+            response?.Dispose();
+
+            response = await _client.GetAsync("/health");
+            json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+
+            if (json.RootElement.GetProperty("totalBackends").GetInt32() > 0)
+            {
+                break;
+            }
+
+            await Task.Delay(100);
+        }
+
+        using (json)
+        using (response)
+        {
+            response!.StatusCode.Should().Be(HttpStatusCode.OK);
+            json!.RootElement.GetProperty("status").GetString().Should().Be("healthy");
+            json.RootElement.GetProperty("totalBackends").GetInt32().Should().BeGreaterThan(0);
+            json.RootElement.GetProperty("backends").GetArrayLength().Should().BeGreaterThan(0);
+        }
     }
 
     [Fact]

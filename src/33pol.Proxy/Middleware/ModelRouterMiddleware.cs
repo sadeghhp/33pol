@@ -38,7 +38,7 @@ public sealed class ModelRouterMiddleware
     private readonly IRateLimitPolicyResolver _rateLimitPolicyResolver;
     private readonly IDistributedRateLimitStore _rateLimitStore;
     private readonly IInferenceHttpForwarder _forwarder;
-    private readonly TimeSpan _forwardTimeout;
+    private readonly InferenceForwardTimeouts _forwardTimeouts;
     private readonly IUpstreamBearerTokenResolver _upstreamBearerTokenResolver;
     private readonly IBudgetEnforcementService _budgetEnforcement;
     private readonly ILogger<ModelRouterMiddleware> _logger;
@@ -79,7 +79,7 @@ public sealed class ModelRouterMiddleware
         _rateLimitPolicyResolver = rateLimitPolicyResolver;
         _rateLimitStore = rateLimitStore;
         _forwarder = forwarder;
-        _forwardTimeout = TimeSpan.FromSeconds(options.Value.Resilience.ForwardTimeoutSeconds);
+        _forwardTimeouts = InferenceForwardTimeouts.FromResilience(options.Value.Resilience);
         _upstreamBearerTokenResolver = upstreamBearerTokenResolver;
         _budgetEnforcement = budgetEnforcement;
         _logger = logger;
@@ -278,7 +278,7 @@ public sealed class ModelRouterMiddleware
 
             // Reserve the estimated max cost against hard-stop budgets before forwarding, so concurrent
             // requests (whose actual cost is unknown until the response returns) cannot collectively
-            // overshoot a hard cap. Released once the actual cost is persisted (or via TTL on failure).
+            // overshoot a hard cap.
             var budgetReservation = await _budgetEnforcement.TryReserveAsync(
                 usageTenant?.TenantId,
                 requestId,
@@ -295,6 +295,14 @@ public sealed class ModelRouterMiddleware
                 return;
             }
 
+            // Only a successful forward produces a usage event, and only that event's persistence
+            // settles the reservation. Every other exit — including a thrown exception — must hand
+            // the headroom back here; relying on the TTL meant a failed request held budget for the
+            // full TTL, and any request outliving the TTL had its reservation swept while still
+            // in flight, which is exactly the overshoot the ledger exists to prevent.
+            var settledByUsage = false;
+            try
+            {
             var transformer = new StreamingHttpTransformer(
                 requestInfo.Stream,
                 requestInfo.Model,
@@ -303,26 +311,35 @@ public sealed class ModelRouterMiddleware
                 stripClientAuthHeaders: true,
                 upstreamBearerToken: upstreamBearerToken);
 
-            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted);
-            timeoutCts.CancelAfter(_forwardTimeout);
-            var priorAborted = context.RequestAborted;
-            context.RequestAborted = timeoutCts.Token;
+            // The forwarder owns both deadlines (header timeout vs stream-idle timeout) and reports
+            // which one fired through its return value, so RequestAborted is left as the client's
+            // own token. Overwriting it with a total-duration deadline is what used to truncate
+            // healthy long streams and attribute the truncation to the backend.
+            var error = await _forwarder.SendAsync(
+                context,
+                modelConfig.Url,
+                upstreamBearerToken,
+                transformer,
+                requestInfo.Stream,
+                _forwardTimeouts,
+                context.RequestAborted).ConfigureAwait(false);
 
-            ForwarderError error;
-            try
+            if (error == ForwarderError.None)
             {
-                error = await _forwarder.SendAsync(
-                    context,
-                    modelConfig.Url,
-                    upstreamBearerToken,
-                    transformer,
-                    requestInfo.Stream,
-                    timeoutCts.Token).ConfigureAwait(false);
+                // Usage capture runs during response disposal, inside SendAsync, so by now we know
+                // whether an event was actually enqueued. If it was not (unparseable or absent usage)
+                // nothing downstream will settle the reservation, so the finally must release it.
+                settledByUsage = usageCapture.HasEnqueuedUsage;
+                circuitLease.RecordSuccess();
+                inferenceScope.SetOutcome(true);
+                _metricsCollector.RecordForwardAttempt(modelConfig.Id, "success");
+                RecordRecentRequest(context, modelConfig.Id, started, requestInfo.Stream, success: true);
+                return;
             }
-            catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested &&
-                                                       !priorAborted.IsCancellationRequested)
+
+            if (error == ForwarderError.RequestTimedOut)
             {
-                // A gateway-side timeout means the backend failed to respond in time: a real health signal.
+                // Headers never arrived: the backend failed to respond at all, a real health signal.
                 circuitLease.RecordFailure();
                 inferenceScope.SetOutcome(false, "upstream_timeout");
                 _metricsCollector.RecordForwardAttempt(modelConfig.Id, "upstream_timeout");
@@ -338,17 +355,19 @@ public sealed class ModelRouterMiddleware
                 RecordRecentRequest(context, modelConfig.Id, started, requestInfo.Stream, success: false);
                 return;
             }
-            finally
-            {
-                context.RequestAborted = priorAborted;
-            }
 
-            if (error == ForwarderError.None)
+            if (error == ForwarderError.ResponseBodyDestination)
             {
-                circuitLease.RecordSuccess();
-                inferenceScope.SetOutcome(true);
-                _metricsCollector.RecordForwardAttempt(modelConfig.Id, "success");
-                RecordRecentRequest(context, modelConfig.Id, started, requestInfo.Stream, success: true);
+                // The upstream stalled after the response had already started. The backend proved it
+                // was reachable and producing, so this is not evidence of ill health — abandon the
+                // probe (via lease dispose) rather than counting a failure.
+                _logger.LogWarning(
+                    "Stream for model {ModelId} stalled past the idle timeout after {ElapsedMs}ms",
+                    modelConfig.Id,
+                    (DateTimeOffset.UtcNow - started).TotalMilliseconds);
+                inferenceScope.SetOutcome(false, "stream_idle_timeout");
+                _metricsCollector.RecordForwardAttempt(modelConfig.Id, "stream_idle_timeout");
+                RecordRecentRequest(context, modelConfig.Id, started, requestInfo.Stream, success: false);
                 return;
             }
 
@@ -375,6 +394,16 @@ public sealed class ModelRouterMiddleware
             }
 
             RecordRecentRequest(context, modelConfig.Id, started, requestInfo.Stream, success: false);
+            }
+            finally
+            {
+                if (!settledByUsage)
+                {
+                    // Idempotent: releasing a request id the ledger no longer holds is a no-op, so
+                    // this is safe even if usage settlement won the race.
+                    _budgetEnforcement.ReleaseReservation(requestId);
+                }
+            }
             }
             finally
             {
@@ -432,10 +461,28 @@ public sealed class ModelRouterMiddleware
         return string.IsNullOrWhiteSpace(code) ? null : code;
     }
 
-    private static string ResolveRequestId(HttpContext context) =>
-        context.Items.TryGetValue(RequestIdKeys.HttpContextItemKey, out var rid)
-            ? rid?.ToString() ?? Guid.NewGuid().ToString("N")
-            : Guid.NewGuid().ToString("N");
+    /// <summary>
+    /// Resolves the request id once and writes any generated value back into
+    /// <see cref="HttpContext.Items"/>, so the usage event, the budget reservation and the
+    /// recent-request entry all carry the same id.
+    /// </summary>
+    /// <remarks>
+    /// Minting a fresh GUID per call (the previous behaviour) meant that when RequestIdMiddleware had
+    /// not run, the reservation was keyed to an id no release would ever match — it leaked until the
+    /// TTL swept it — and the dashboard entry could not be correlated with its billing event.
+    /// </remarks>
+    private static string ResolveRequestId(HttpContext context)
+    {
+        if (context.Items.TryGetValue(RequestIdKeys.HttpContextItemKey, out var existing) &&
+            existing?.ToString() is { Length: > 0 } requestId)
+        {
+            return requestId;
+        }
+
+        var generated = $"req_{Guid.NewGuid():N}";
+        context.Items[RequestIdKeys.HttpContextItemKey] = generated;
+        return generated;
+    }
 
     private static string ClassifyRoute(PathString path)
     {

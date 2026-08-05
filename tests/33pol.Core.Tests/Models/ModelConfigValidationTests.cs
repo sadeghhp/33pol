@@ -70,4 +70,22 @@ public sealed class ModelConfigValidationTests
 
         error.Should().Contain("both");
     }
+
+    [Fact]
+    public void TryValidate_UnknownModelType_ReturnsFalse()
+    {
+        ModelConfigValidation.TryValidate(
+            new ModelConfig { Id = "m", Url = "http://x", ModelType = "teleportation" },
+            out var error).Should().BeFalse();
+        error.Should().Contain("modelType");
+    }
+
+    [Fact]
+    public void TryValidate_KnownModelTypeAlias_ReturnsTrue()
+    {
+        ModelConfigValidation.TryValidate(
+            new ModelConfig { Id = "m", Url = "http://x", ModelType = "embeddings" },
+            out var error).Should().BeTrue();
+        error.Should().BeNull();
+    }
 }

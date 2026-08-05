@@ -12,7 +12,23 @@ public sealed class GatewaySecurityOptions
 
     public string KeyPepper { get; set; } = DefaultKeyPepper;
 
+    /// <summary>
+    /// Maximum age of a cached API-key validation or model-grant decision.
+    /// </summary>
+    /// <remarks>
+    /// This is the gateway's revocation SLA. Invalidation on write is in-process only, so on a
+    /// multi-replica deployment a revoked key or a removed model grant keeps being accepted by the
+    /// other replicas until their cached entry expires. That window is exactly this value, which is
+    /// why it is capped by <see cref="MaximumCacheTtlMinutes"/> rather than left unbounded.
+    /// </remarks>
     public int CacheTtlMinutes { get; set; } = 2;
+
+    /// <summary>
+    /// Upper bound on <see cref="CacheTtlMinutes"/>. A longer TTL would mean revocation of a
+    /// compromised credential takes more than five minutes to take effect across replicas, which is
+    /// not an acceptable security posture for a credential-bearing gateway.
+    /// </summary>
+    public const int MaximumCacheTtlMinutes = 5;
 
     /// <summary>
     /// Explicit opt-in to run without API-key authentication when no database is configured.

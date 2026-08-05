@@ -18,6 +18,9 @@ public sealed class ModelRouteEntity
 
     public List<string> Capabilities { get; set; } = [];
 
+    /// <summary>Canonical model type (see <c>ModelTypes</c>), or null when the operator left it unset.</summary>
+    public string? ModelType { get; set; }
+
     public bool PublicAccess { get; set; }
 
     /// <summary>Serialized <c>UpstreamAuthConfig</c> (JSON), or null when the model has no upstream auth.</summary>

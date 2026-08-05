@@ -56,22 +56,4 @@ public sealed class GatewayRuntimeStateTests
 
         runtime.GetRecent(1).Single().ErrorCode.Should().Be("upstream_error");
     }
-
-    [Fact]
-    public void TryCommitQuota_DuplicateRequestId_ReturnsFalseOnSecondCommit()
-    {
-        var runtime = new GatewayRuntimeState();
-        runtime.TryCommitQuota("req-1").Should().BeTrue();
-        runtime.TryCommitQuota("req-1").Should().BeFalse();
-    }
-
-    [Fact]
-    public void AddQuotaUsage_AccumulatesPerPartition()
-    {
-        var runtime = new GatewayRuntimeState();
-        runtime.AddQuotaUsage("tenant-a", 100);
-        runtime.AddQuotaUsage("tenant-a", 50);
-
-        runtime.GetQuotaUsage("tenant-a").Should().Be(150);
-    }
 }

@@ -46,11 +46,17 @@ public sealed class InferenceUsageCaptureTests
         var body = """{"usage":{"total_tokens":56}}"""u8.ToArray();
         capture.CaptureFromJsonBody(body);
 
+        // Behaviour change: the total is no longer folded into PromptTokens (which priced it at the
+        // input rate and under-billed). It is carried as TotalOnly so pricing applies the explicit
+        // conservative policy, and the approximation is metered.
         recorder.Received(1).Enqueue(Arg.Is<UsageEvent>(e =>
             e.RequestId == "req-rerank" &&
             e.ModelId == "reranker" &&
-            e.PromptTokens == 56 &&
+            e.TokenSource == UsageTokenSource.TotalOnly &&
+            e.TotalTokens == 56 &&
+            e.PromptTokens == 0 &&
             e.CompletionTokens == 0));
+        metrics.Received(1).RecordUnsplitUsage("reranker");
         metrics.DidNotReceive().RecordUsageParseFailure(Arg.Any<string>());
     }
 
@@ -71,5 +77,96 @@ public sealed class InferenceUsageCaptureTests
 
         recorder.DidNotReceive().Enqueue(Arg.Any<UsageEvent>());
         metrics.Received(1).RecordUsageParseFailure("canonical");
+    }
+
+    /// <summary>
+    /// A stream cut short before its terminal usage frame must be billed from an estimate. Recording
+    /// nothing meant a client that disconnects just before completion got free inference while the
+    /// upstream had already generated (and charged for) the tokens.
+    /// </summary>
+    [Fact]
+    public void CaptureFromSseText_TruncatedStreamWithOutput_EnqueuesAnEstimate()
+    {
+        var recorder = Substitute.For<IUsageRecorder>();
+        var metrics = Substitute.For<IGatewayMetricsCollector>();
+        var capture = new InferenceUsageCapture(
+            recorder, metrics, "gpt-4o", "req-cut", DateTimeOffset.UtcNow.AddSeconds(-2), tenant: null);
+
+        // No usage frame: the client disconnected first.
+        const string partial = "data: {\"choices\":[{\"delta\":{\"content\":\"a\"}}]}\n\n";
+
+        capture.CaptureFromSseText(partial, new UsageCaptureStats(FrameCount: 25, TotalBytes: 900));
+
+        recorder.Received(1).Enqueue(Arg.Is<UsageEvent>(e =>
+            e.RequestId == "req-cut" &&
+            e.TokenSource == UsageTokenSource.Estimated &&
+            e.CompletionTokens == 24 &&
+            e.PromptTokens == 0));
+        metrics.Received(1).RecordEstimatedUsage("gpt-4o");
+        capture.HasEnqueuedUsage.Should().BeTrue();
+    }
+
+    /// <summary>
+    /// A cancellation that produced no output must not have usage fabricated for it.
+    /// </summary>
+    [Fact]
+    public void CaptureFromSseText_NoOutput_DoesNotFabricateUsage()
+    {
+        var recorder = Substitute.For<IUsageRecorder>();
+        var metrics = Substitute.For<IGatewayMetricsCollector>();
+        var capture = new InferenceUsageCapture(
+            recorder, metrics, "gpt-4o", "req-empty", DateTimeOffset.UtcNow, tenant: null);
+
+        capture.CaptureFromSseText(string.Empty, new UsageCaptureStats(FrameCount: 0, TotalBytes: 0));
+
+        recorder.DidNotReceive().Enqueue(Arg.Any<UsageEvent>());
+        metrics.Received(1).RecordUsageParseFailure("gpt-4o");
+        metrics.DidNotReceive().RecordEstimatedUsage(Arg.Any<string>());
+        capture.HasEnqueuedUsage.Should().BeFalse();
+    }
+
+    /// <summary>Authoritative usage always wins over the estimate.</summary>
+    [Fact]
+    public void CaptureFromSseText_WithTerminalUsage_PrefersTheAuthoritativeCounts()
+    {
+        var recorder = Substitute.For<IUsageRecorder>();
+        var metrics = Substitute.For<IGatewayMetricsCollector>();
+        var capture = new InferenceUsageCapture(
+            recorder, metrics, "gpt-4o", "req-complete", DateTimeOffset.UtcNow, tenant: null);
+
+        const string sse = """
+            data: {"choices":[{"delta":{"content":"a"}}]}
+
+            data: {"usage":{"prompt_tokens":40,"completion_tokens":7}}
+
+            data: [DONE]
+
+            """;
+
+        capture.CaptureFromSseText(sse, new UsageCaptureStats(FrameCount: 300, TotalBytes: 9000));
+
+        recorder.Received(1).Enqueue(Arg.Is<UsageEvent>(e =>
+            e.TokenSource == UsageTokenSource.Split &&
+            e.PromptTokens == 40 &&
+            e.CompletionTokens == 7));
+        metrics.DidNotReceive().RecordEstimatedUsage(Arg.Any<string>());
+    }
+
+    /// <summary>A single streamed frame still bills at least one token rather than zero.</summary>
+    [Fact]
+    public void CaptureFromSseText_SingleFrame_EstimatesAtLeastOneToken()
+    {
+        var recorder = Substitute.For<IUsageRecorder>();
+        var capture = new InferenceUsageCapture(
+            recorder,
+            Substitute.For<IGatewayMetricsCollector>(),
+            "gpt-4o",
+            "req-one",
+            DateTimeOffset.UtcNow,
+            tenant: null);
+
+        capture.CaptureFromSseText("data: x\n\n", new UsageCaptureStats(FrameCount: 1, TotalBytes: 10));
+
+        recorder.Received(1).Enqueue(Arg.Is<UsageEvent>(e => e.CompletionTokens == 1));
     }
 }

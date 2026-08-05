@@ -31,6 +31,24 @@ public sealed class RateCardCostCalculator : IRateCardCostCalculator
             rateCard.Currency);
     }
 
+    public BillingCostBreakdown CalculateFromTotalTokens(RateCardRecord rateCard, long totalTokens)
+    {
+        ArgumentNullException.ThrowIfNull(rateCard);
+
+        if (totalTokens < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(totalTokens), "Token counts cannot be negative.");
+        }
+
+        // Conservative: without the split, price everything at the dearer of the two rates rather
+        // than assuming the cheaper (input) one, matching how budget reservation bounds unknown cost.
+        var rate = Math.Max(rateCard.InputPricePerMillionTokens, rateCard.OutputPricePerMillionTokens);
+        var cost = CalculateLineCost(totalTokens, rate);
+
+        // Attributed to output, since output is normally the dearer side and the one that varies.
+        return new BillingCostBreakdown(0m, cost, cost, rateCard.Currency);
+    }
+
     internal static decimal CalculateLineCost(long tokens, decimal pricePerMillionTokens) =>
         tokens == 0 ? 0m : decimal.Round(tokens / TokensPerMillion * pricePerMillionTokens, 6);
 }

@@ -116,7 +116,6 @@ public sealed class BillingBudgetWarningTests
         return new BillingUsagePersistenceHandler(
             billingEvents,
             rollups,
-            new DailyUsageRollupAggregator(),
             Substitute.For<IRateCardRepository>(),
             new RateCardCostCalculator(),
             budgets,

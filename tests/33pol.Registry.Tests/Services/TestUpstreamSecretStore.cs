@@ -23,4 +23,19 @@ internal sealed class TestUpstreamSecretStore : IUpstreamSecretStore
 
     public Task<bool> ExistsAsync(string modelId, CancellationToken cancellationToken = default) =>
         Task.FromResult(_secrets.ContainsKey(modelId.Trim()));
+
+    public Task<IReadOnlySet<string>> ListExistingAsync(
+        IEnumerable<string> modelIds,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var present = modelIds
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .Select(id => id.Trim())
+            .Where(_secrets.ContainsKey)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        return Task.FromResult<IReadOnlySet<string>>(present);
+    }
 }

@@ -10,7 +10,6 @@ namespace Pol33.Billing.Usage;
 public sealed class BillingUsagePersistenceHandler(
     IBillingEventRepository billingEvents,
     IDailyUsageRollupRepository rollups,
-    IDailyUsageRollupAggregator aggregator,
     IRateCardRepository rateCards,
     IRateCardCostCalculator costCalculator,
     IBudgetRepository budgets,
@@ -28,47 +27,128 @@ public sealed class BillingUsagePersistenceHandler(
         await PersistBatchAsync([usageEvent], cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Persists a whole batch with a per-batch, not per-event, database cost: rate cards are fetched
+    /// once, rollup changes are grouped into one atomic increment per bucket, api-key touches are
+    /// deduplicated per key, and budget warnings are evaluated once per tenant.
+    /// </summary>
+    /// <remarks>
+    /// This method previously looped calling a single-event path, so a batch of 100 issued roughly
+    /// 600 round-trips: a rate-card lookup, an append, a last-used touch, a rollup read, a rollup
+    /// write and a budget-warning scan for every event.
+    /// </remarks>
     public async Task PersistBatchAsync(
         IReadOnlyList<UsageEvent> usageEvents,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(usageEvents);
-
-        var updatedDays = new HashSet<(Guid TenantId, DateOnly UsageDate)>();
-        foreach (var usageEvent in usageEvents)
+        if (usageEvents.Count == 0)
         {
-            var updated = await PersistOneAsync(usageEvent, cancellationToken).ConfigureAwait(false);
-            if (updated is not null)
-            {
-                updatedDays.Add(updated.Value);
-            }
+            return;
         }
 
-        foreach (var (tenantId, usageDate) in updatedDays)
+        var pricedByModel = await ResolveRateCardsAsync(usageEvents, cancellationToken).ConfigureAwait(false);
+
+        // Each event still becomes its own billing_events row: that is the audit trail, and its
+        // per-request detail (request id, duration, per-event cost) must not be aggregated away.
+        var appended = new List<BillingEventRecord>(usageEvents.Count);
+        foreach (var usageEvent in usageEvents)
+        {
+            var record = BillingEventFactory.FromUsageEvent(usageEvent, PriceEvent(usageEvent, pricedByModel));
+
+            if (!await billingEvents.TryAppendAsync(record, cancellationToken).ConfigureAwait(false))
+            {
+                // Duplicate: the cost was already persisted for this request, so free its
+                // reservation and keep it out of the rollup aggregation.
+                reservationLedger.Release(usageEvent.RequestId);
+                continue;
+            }
+
+            appended.Add(record);
+        }
+
+        if (appended.Count == 0)
+        {
+            return;
+        }
+
+        // One touch per distinct api key, using its latest timestamp in this batch.
+        foreach (var group in appended
+                     .Where(r => r.ApiKeyId is not null)
+                     .GroupBy(r => r.ApiKeyId!.Value))
+        {
+            await lastUsedTracker
+                .TouchAsync(group.Key, group.Max(r => r.RecordedAt), cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        // One additive delta per (day, tenant, model, cost centre) bucket, applied atomically. The
+        // old read-add-write of an absolute total could lose a concurrent writer's usage entirely.
+        var deltas = appended
+            .GroupBy(DailyUsageRollupKey.FromEvent)
+            .Select(group => new DailyUsageRollupDelta(
+                group.Key.UsageDate,
+                group.Key.TenantId,
+                group.Key.ModelId,
+                group.Key.CostCenter,
+                group.Sum(r => r.PromptTokens),
+                group.Sum(r => r.CompletionTokens),
+                group.Sum(r => r.TotalCost ?? 0m),
+                group.Count()))
+            .ToList();
+
+        await rollups.IncrementRollupsAsync(deltas, cancellationToken).ConfigureAwait(false);
+
+        // Actual cost is now in the rollups; release the in-flight reservations (no accounting gap
+        // between reservation and persisted spend).
+        foreach (var record in appended)
+        {
+            reservationLedger.Release(record.RequestId);
+        }
+
+        var tenantDays = appended
+            .Where(r => r.TenantId is not null)
+            .Select(r => (TenantId: r.TenantId!.Value, UsageDate: DateOnly.FromDateTime(r.RecordedAt.UtcDateTime)))
+            .Distinct()
+            .ToList();
+
+        foreach (var tenantId in tenantDays.Select(d => d.TenantId).Distinct())
+        {
+            await CheckBudgetWarningsAsync(tenantId, cancellationToken).ConfigureAwait(false);
+        }
+
+        foreach (var (tenantId, usageDate) in tenantDays)
         {
             await DispatchDailyUsageAsync(tenantId, usageDate, cancellationToken).ConfigureAwait(false);
         }
     }
 
-    private async Task<(Guid TenantId, DateOnly UsageDate)?> PersistOneAsync(
-        UsageEvent usageEvent,
+    /// <summary>
+    /// Fetches the active rate card for every distinct model in the batch, once each, and warns once
+    /// per unpriced model.
+    /// </summary>
+    private async Task<Dictionary<string, RateCardRecord?>> ResolveRateCardsAsync(
+        IReadOnlyList<UsageEvent> usageEvents,
         CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(usageEvent);
+        var byModel = new Dictionary<string, RateCardRecord?>(StringComparer.OrdinalIgnoreCase);
 
-        var atUtc = usageEvent.TimestampUtc == default ? DateTimeOffset.UtcNow : usageEvent.TimestampUtc;
-        BillingCostBreakdown? costs = null;
-        if (!string.IsNullOrWhiteSpace(usageEvent.ModelId))
+        foreach (var usageEvent in usageEvents)
         {
+            if (string.IsNullOrWhiteSpace(usageEvent.ModelId) || byModel.ContainsKey(usageEvent.ModelId))
+            {
+                continue;
+            }
+
+            var atUtc = usageEvent.TimestampUtc == default ? DateTimeOffset.UtcNow : usageEvent.TimestampUtc;
             var rateCard = await rateCards
                 .GetActiveForModelAsync(usageEvent.ModelId, atUtc, cancellationToken)
                 .ConfigureAwait(false);
+
+            byModel[usageEvent.ModelId] = rateCard;
+
             if (rateCard is not null)
             {
-                costs = costCalculator.Calculate(
-                    rateCard,
-                    usageEvent.PromptTokens,
-                    usageEvent.CompletionTokens);
                 unpricedModelTracker.Clear(usageEvent.ModelId);
             }
             else if (unpricedModelTracker.TryMarkWarned(usageEvent.ModelId))
@@ -82,57 +162,25 @@ public sealed class BillingUsagePersistenceHandler(
             }
         }
 
-        var record = BillingEventFactory.FromUsageEvent(usageEvent, costs);
-        if (!await billingEvents.TryAppendAsync(record, cancellationToken).ConfigureAwait(false))
-        {
-            // Duplicate: the actual cost was already persisted for this request, so free its reservation.
-            reservationLedger.Release(usageEvent.RequestId);
-            return null;
-        }
+        return byModel;
+    }
 
-        if (record.ApiKeyId is Guid apiKeyId)
-        {
-            await lastUsedTracker.TouchAsync(apiKeyId, record.RecordedAt, cancellationToken).ConfigureAwait(false);
-        }
-
-        var usageDate = DateOnly.FromDateTime(record.RecordedAt.UtcDateTime);
-        var existingRollups = await rollups
-            .GetRollupsAsync(usageDate, usageDate, record.TenantId, cancellationToken)
-            .ConfigureAwait(false);
-
-        var existing = existingRollups.FirstOrDefault(r =>
-            string.Equals(r.ModelId, record.ModelId, StringComparison.Ordinal) &&
-            string.Equals(r.CostCenter, record.CostCenter, StringComparison.Ordinal));
-
-        DailyUsageRollupRecord merged;
-        if (existing is null)
-        {
-            merged = aggregator.Aggregate([record]).Single();
-        }
-        else
-        {
-            merged = existing with
-            {
-                PromptTokens = existing.PromptTokens + record.PromptTokens,
-                CompletionTokens = existing.CompletionTokens + record.CompletionTokens,
-                TotalCost = existing.TotalCost + (record.TotalCost ?? 0m),
-                RequestCount = existing.RequestCount + 1,
-            };
-        }
-
-        await rollups.UpsertRollupsAsync([merged], cancellationToken).ConfigureAwait(false);
-
-        // Actual cost is now in the rollups; release the in-flight reservation (no accounting gap
-        // between reservation and persisted spend).
-        reservationLedger.Release(usageEvent.RequestId);
-
-        if (record.TenantId is not Guid tenantId)
+    private BillingCostBreakdown? PriceEvent(
+        UsageEvent usageEvent,
+        Dictionary<string, RateCardRecord?> pricedByModel)
+    {
+        if (string.IsNullOrWhiteSpace(usageEvent.ModelId) ||
+            !pricedByModel.TryGetValue(usageEvent.ModelId, out var rateCard) ||
+            rateCard is null)
         {
             return null;
         }
 
-        await CheckBudgetWarningsAsync(tenantId, cancellationToken).ConfigureAwait(false);
-        return (tenantId, usageDate);
+        // Total-only usage carries no input/output split, so it cannot be priced with the per-side
+        // rates; the calculator applies the conservative (dearer-rate) policy.
+        return usageEvent.TokenSource == UsageTokenSource.TotalOnly
+            ? costCalculator.CalculateFromTotalTokens(rateCard, usageEvent.TotalTokens)
+            : costCalculator.Calculate(rateCard, usageEvent.PromptTokens, usageEvent.CompletionTokens);
     }
 
     private async Task DispatchDailyUsageAsync(

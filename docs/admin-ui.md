@@ -72,7 +72,7 @@ GET requests retry once on network failure. Usage export uses `downloadBlob` wit
 |---------|-----------|
 | Overview | `GET /admin/api/summary`, `GET /admin/api/requests?limit=25`, `GET /health/live`, `GET /health/ready` |
 | Usage | `GET /admin/api/usage?costCenter=`, `/usage/events?apiKeyId=&costCenter=`, `/usage/forecast`, `GET /usage/export` |
-| Routing — Models | `GET/POST/PATCH/DELETE /admin/api/models` (write body: `{ model, apiKey?, clearApiKey? }`; GET returns `{ model, hasUpstreamCredential }`) |
+| Routing — Models | `GET/POST/PATCH/DELETE /admin/api/models` (write body: `{ model, apiKey?, clearApiKey? }`; GET returns `{ model, hasUpstreamCredential }`), `POST /admin/api/models/{id}/test` (type-specific health check) |
 | Routing — Backends | `GET /admin/api/backends` |
 | API keys | `GET/POST /admin/api/keys`, `PATCH …/keys/{id}`, `GET …/keys/{id}/usage`, `POST …/revoke`, `GET/PUT …/keys/{id}/model-grants` |
 | Tenant model access | `GET/PUT /admin/api/tenant/model-grants` (optional ceiling; empty = all registry models) |
@@ -97,6 +97,27 @@ After adding or editing a model, verify **`GET /v1/models`** (link on Routing �
 
 **URL presets** in the drawer only fill the upstream URL (OpenRouter, Together, Groq, LM Studio, vLLM).
 
+### Model type and the Test button
+
+Each model carries a **model type** (`modelType` in the registry) that decides which health check the
+**Test** button runs. Set it in the model drawer; the Routing → Models table shows it per row.
+
+| Model type | Test probes | Passes when |
+|------------|-------------|-------------|
+| Text generation | `POST /v1/chat/completions` | response has `choices` |
+| Embedding | `POST /v1/embeddings` with `{ model, input: [<two test sentences>] }` | response has `data[].embedding` vectors of equal length |
+| Rerank | `POST /v1/rerank` | response has `results` |
+| OCR | `POST /v1/chat/completions` (OCR models are served as vision chat models) | response has `choices` |
+| Image / video generation, audio transcription | *nothing* — the dialog reports **Not available** rather than a false failure | — |
+
+The response records the type and endpoint it used (`modelType`, `endpoint`), so the dialog states
+which upstream route was actually called. A `2xx` whose body does not match the expected shape is
+reported as a failure — an embeddings upstream answering a chat probe is not a healthy model.
+
+`modelType` is optional. When unset, the gateway infers it from a single-purpose `capabilities` list
+(so models registered before the field existed still classify) and otherwise treats the model as
+text generation. An unrecognised value is rejected with `400` on save.
+
 **GitOps / env-var auth:** Existing entries with `upstreamAuth.envVar` still work. Set secrets in Docker `.env` and use the variable name in JSON — no UI discover flow required.
 
 **Provider discovery API** (`POST /admin/api/providers/...`) remains for scripts/automation (env-based only); there is no discover panel in the UI.
@@ -116,6 +137,7 @@ Rotating **KeyPepper** invalidates stored upstream secrets — re-enter API keys
 |---------|--------|-----|
 | 400 on save with `envVar` in JSON | Secret pasted as env var name | Use quick-add **API key** field, or a valid name like `OPENROUTER_API_KEY` in the model route's `envVar` |
 | Upstream 401 | Missing or wrong stored key | Edit model → set new API key; verify `hasUpstreamCredential` on GET |
+| Test fails on an embedding model | Model type left as text generation, so the probe hit `/v1/chat/completions` | Edit model → set **Model type** to *Embedding* |
 | Stale UI after upgrade | Cached admin assets | Hard refresh; assets use `?v=5` |
 | Docker local LLM fails | Used `localhost` in URL | Use `http://host.docker.internal:<port>` |
 

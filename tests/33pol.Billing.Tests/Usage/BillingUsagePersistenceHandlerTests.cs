@@ -25,7 +25,6 @@ public sealed class BillingUsagePersistenceHandlerTests
         new(
             billingEvents,
             rollups,
-            new DailyUsageRollupAggregator(),
             rateCards ?? Substitute.For<IRateCardRepository>(),
             new RateCardCostCalculator(),
             budgets ?? Substitute.For<IBudgetRepository>(),
@@ -63,9 +62,18 @@ public sealed class BillingUsagePersistenceHandlerTests
         });
 
         await billingEvents.Received(1).TryAppendAsync(Arg.Any<BillingEventRecord>(), Arg.Any<CancellationToken>());
-        await rollups.Received(1).UpsertRollupsAsync(
-            Arg.Is<IReadOnlyList<DailyUsageRollupRecord>>(list => list.Count == 1 && list[0].RequestCount == 1),
+
+        // Rollups are now applied as an atomic additive delta rather than read, added to in memory
+        // and written back as an absolute total, which could lose a concurrent writer's usage.
+        await rollups.Received(1).IncrementRollupsAsync(
+            Arg.Is<IReadOnlyList<DailyUsageRollupDelta>>(list =>
+                list.Count == 1 &&
+                list[0].RequestCount == 1 &&
+                list[0].PromptTokens == 10 &&
+                list[0].CompletionTokens == 5),
             Arg.Any<CancellationToken>());
+        await rollups.DidNotReceive().UpsertRollupsAsync(
+            Arg.Any<IReadOnlyList<DailyUsageRollupRecord>>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -378,8 +386,150 @@ public sealed class BillingUsagePersistenceHandlerTests
         ]);
 
         await billingEvents.Received(2).TryAppendAsync(Arg.Any<BillingEventRecord>(), Arg.Any<CancellationToken>());
-        await rollups.Received(2).UpsertRollupsAsync(
-            Arg.Any<IReadOnlyList<DailyUsageRollupRecord>>(),
+
+        // One rollup call for the whole batch, carrying one delta per distinct bucket — not one
+        // database round-trip per event.
+        await rollups.Received(1).IncrementRollupsAsync(
+            Arg.Is<IReadOnlyList<DailyUsageRollupDelta>>(list => list.Count == 2),
             Arg.Any<CancellationToken>());
     }
+
+    /// <summary>
+    /// Events sharing a bucket must collapse into one delta whose totals equal the sum of the
+    /// individual events — the batching must not change what is billed.
+    /// </summary>
+    [Fact]
+    public async Task PersistBatchAsync_EventsInTheSameBucket_CollapseIntoOneExactDelta()
+    {
+        var tenantId = Guid.NewGuid();
+        var billingEvents = Substitute.For<IBillingEventRepository>();
+        billingEvents.TryAppendAsync(Arg.Any<BillingEventRecord>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+
+        var rollups = Substitute.For<IDailyUsageRollupRepository>();
+        var handler = CreateHandler(billingEvents, rollups);
+
+        var timestamp = DateTimeOffset.UtcNow;
+        await handler.PersistBatchAsync(Enumerable.Range(1, 5).Select(i => new UsageEvent
+        {
+            RequestId = $"same-bucket-{i}",
+            TenantId = tenantId.ToString(),
+            ModelId = "gpt-4o",
+            PromptTokens = i,
+            CompletionTokens = i * 2,
+            DurationMs = 1,
+            TimestampUtc = timestamp,
+        }).ToList());
+
+        await rollups.Received(1).IncrementRollupsAsync(
+            Arg.Is<IReadOnlyList<DailyUsageRollupDelta>>(list =>
+                list.Count == 1 &&
+                list[0].RequestCount == 5 &&
+                list[0].PromptTokens == 15 &&
+                list[0].CompletionTokens == 30),
+            Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// Repository call counts must scale with the number of distinct groups, not with the number of
+    /// events. A 100-event batch used to issue roughly 600 round-trips.
+    /// </summary>
+    [Fact]
+    public async Task PersistBatchAsync_CallCountsScaleWithGroupsNotEvents()
+    {
+        var tenantId = Guid.NewGuid();
+        var apiKeyId = Guid.NewGuid();
+
+        var billingEvents = Substitute.For<IBillingEventRepository>();
+        billingEvents.TryAppendAsync(Arg.Any<BillingEventRecord>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+
+        var rollups = Substitute.For<IDailyUsageRollupRepository>();
+        var rateCards = Substitute.For<IRateCardRepository>();
+        var lastUsed = Substitute.For<IApiKeyLastUsedTracker>();
+        var budgets = Substitute.For<IBudgetRepository>();
+        budgets.GetByTenantAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>())
+            .Returns([]);
+
+        var handler = CreateHandler(
+            billingEvents, rollups, rateCards, budgets, lastUsedTracker: lastUsed);
+
+        var timestamp = DateTimeOffset.UtcNow;
+        await handler.PersistBatchAsync(Enumerable.Range(0, 100).Select(i => new UsageEvent
+        {
+            RequestId = $"scale-{i}",
+            TenantId = tenantId.ToString(),
+            ApiKeyId = apiKeyId.ToString(),
+            // Two distinct models => two rollup buckets, whatever the event count.
+            ModelId = i % 2 == 0 ? "gpt-4o" : "gpt-4o-mini",
+            PromptTokens = 1,
+            CompletionTokens = 1,
+            DurationMs = 1,
+            TimestampUtc = timestamp,
+        }).ToList());
+
+        // One rate-card lookup per distinct model.
+        await rateCards.Received(2).GetActiveForModelAsync(
+            Arg.Any<string>(), Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>());
+
+        // One rollup write for the whole batch, two deltas inside it.
+        await rollups.Received(1).IncrementRollupsAsync(
+            Arg.Is<IReadOnlyList<DailyUsageRollupDelta>>(list => list.Count == 2),
+            Arg.Any<CancellationToken>());
+
+        // One last-used touch per distinct api key, and one budget scan per distinct tenant.
+        await lastUsed.Received(1).TouchAsync(apiKeyId, Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>());
+        await budgets.Received(1).GetByTenantAsync(tenantId, Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// Buckets must stay isolated: different tenants, models, dates and cost centres each get their
+    /// own delta rather than being merged.
+    /// </summary>
+    [Fact]
+    public async Task PersistBatchAsync_MixedBuckets_RemainIsolated()
+    {
+        var tenantA = Guid.NewGuid();
+        var tenantB = Guid.NewGuid();
+        var today = DateTimeOffset.UtcNow;
+        var yesterday = today.AddDays(-1);
+
+        var billingEvents = Substitute.For<IBillingEventRepository>();
+        billingEvents.TryAppendAsync(Arg.Any<BillingEventRecord>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+
+        var rollups = Substitute.For<IDailyUsageRollupRepository>();
+        var handler = CreateHandler(billingEvents, rollups);
+
+        await handler.PersistBatchAsync([
+            NewEvent("a", tenantA, "gpt-4o", "cc-1", today),
+            NewEvent("b", tenantB, "gpt-4o", "cc-1", today),
+            NewEvent("c", tenantA, "gpt-4o-mini", "cc-1", today),
+            NewEvent("d", tenantA, "gpt-4o", "cc-2", today),
+            NewEvent("e", tenantA, "gpt-4o", "cc-1", yesterday),
+        ]);
+
+        await rollups.Received(1).IncrementRollupsAsync(
+            Arg.Is<IReadOnlyList<DailyUsageRollupDelta>>(list =>
+                list.Count == 5 && list.All(d => d.RequestCount == 1)),
+            Arg.Any<CancellationToken>());
+    }
+
+    private static UsageEvent NewEvent(
+        string requestId,
+        Guid tenantId,
+        string modelId,
+        string costCenter,
+        DateTimeOffset timestamp) =>
+        new()
+        {
+            RequestId = requestId,
+            TenantId = tenantId.ToString(),
+            ModelId = modelId,
+            CostCenter = costCenter,
+            PromptTokens = 1,
+            CompletionTokens = 1,
+            DurationMs = 1,
+            TimestampUtc = timestamp,
+        };
 }

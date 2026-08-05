@@ -8,6 +8,18 @@ public sealed class AdminModelTestResponse
 
     public string ModelId { get; set; } = string.Empty;
 
+    /// <summary>Canonical model type the probe dispatched on (see <c>ModelTypes</c>).</summary>
+    public string? ModelType { get; set; }
+
+    /// <summary>Upstream path the probe called, e.g. <c>/v1/embeddings</c>. Null when no call was made.</summary>
+    public string? Endpoint { get; set; }
+
+    /// <summary>
+    /// False when the model's type has no health check the gateway can express. The UI reports this
+    /// as "not available" rather than a failure, since nothing was actually tested.
+    /// </summary>
+    public bool Supported { get; set; } = true;
+
     public long LatencyMs { get; set; }
 
     public int? StatusCode { get; set; }

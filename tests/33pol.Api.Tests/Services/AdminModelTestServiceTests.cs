@@ -143,6 +143,159 @@ public sealed class AdminModelTestServiceTests
         handler.LastRequestBody.Should().Contain("\"documents\":[\"test document\"]");
     }
 
+    [Theory]
+    [InlineData("http://localhost:2215", "http://localhost:2215/v1/embeddings")]
+    [InlineData("http://localhost:2215/", "http://localhost:2215/v1/embeddings")]
+    [InlineData("https://openrouter.ai/api", "https://openrouter.ai/api/v1/embeddings")]
+    public void BuildEmbeddingsUri_NormalizesBase(string baseUrl, string expected)
+    {
+        AdminModelTestService.BuildEmbeddingsUri(baseUrl).ToString().Should().Be(expected);
+    }
+
+    [Fact]
+    public async Task TestAsync_EmbeddingModel_PostsEmbeddingsPayload()
+    {
+        var handler = new CapturingHandler(HttpStatusCode.OK, EmbeddingsBody);
+        var model = CreateModel("microsoft/harrier-oss-v1-27b", "http://localhost:2215");
+        model.ModelType = ModelTypes.Embedding;
+        var service = CreateService(handler, model);
+
+        var result = await service.TestAsync("microsoft/harrier-oss-v1-27b", null);
+
+        result.Ok.Should().BeTrue();
+        result.ModelType.Should().Be(ModelTypes.Embedding);
+        result.Endpoint.Should().Be("/v1/embeddings");
+        result.Content.Should().Be("2 embeddings × 3 dimensions");
+        handler.LastRequestUri!.AbsolutePath.Should().Be("/v1/embeddings");
+        handler.LastRequestBody.Should().Contain("\"model\":\"microsoft/harrier-oss-v1-27b\"");
+        handler.LastRequestBody.Should().Contain(
+            "\"input\":[\"This is a test sentence.\",\"This sentence is used for similarity testing.\"]");
+    }
+
+    [Fact]
+    public async Task TestAsync_EmbeddingModel_UsesPromptAsFirstInput()
+    {
+        var handler = new CapturingHandler(HttpStatusCode.OK, EmbeddingsBody);
+        var model = CreateModel("embedder", "http://upstream.test");
+        model.ModelType = ModelTypes.Embedding;
+        var service = CreateService(handler, model);
+
+        await service.TestAsync("embedder", new() { Prompt = "custom probe" });
+
+        handler.LastRequestBody.Should().Contain(
+            "\"input\":[\"custom probe\",\"This sentence is used for similarity testing.\"]");
+    }
+
+    /// <summary>Models registered before modelType existed must still route to the right probe.</summary>
+    [Fact]
+    public async Task TestAsync_EmbeddingCapabilityWithoutModelType_PostsEmbeddingsPayload()
+    {
+        var handler = new CapturingHandler(HttpStatusCode.OK, EmbeddingsBody);
+        var model = CreateModel("legacy-embedder", "http://upstream.test");
+        model.Capabilities = ["embeddings"];
+        var service = CreateService(handler, model);
+
+        var result = await service.TestAsync("legacy-embedder", null);
+
+        result.Ok.Should().BeTrue();
+        result.ModelType.Should().Be(ModelTypes.Embedding);
+        handler.LastRequestUri!.AbsolutePath.Should().Be("/v1/embeddings");
+    }
+
+    [Fact]
+    public async Task TestAsync_EmbeddingModel_EmptyDataIsFailure()
+    {
+        var handler = new CapturingHandler(HttpStatusCode.OK, """{"data":[],"model":"embedder"}""");
+        var model = CreateModel("embedder", "http://upstream.test");
+        model.ModelType = ModelTypes.Embedding;
+        var service = CreateService(handler, model);
+
+        var result = await service.TestAsync("embedder", null);
+
+        result.Ok.Should().BeFalse();
+        result.StatusCode.Should().Be(200);
+        result.Detail.Should().Contain("embedding");
+    }
+
+    [Fact]
+    public async Task TestAsync_EmbeddingModel_UpstreamErrorSurfacesDetail()
+    {
+        var handler = new CapturingHandler(
+            HttpStatusCode.BadRequest,
+            """{"error":{"message":"model does not support embeddings"}}""");
+        var model = CreateModel("embedder", "http://upstream.test");
+        model.ModelType = ModelTypes.Embedding;
+        var service = CreateService(handler, model);
+
+        var result = await service.TestAsync("embedder", null);
+
+        result.Ok.Should().BeFalse();
+        result.StatusCode.Should().Be(400);
+        result.Endpoint.Should().Be("/v1/embeddings");
+        result.Detail.Should().Contain("does not support embeddings");
+    }
+
+    [Fact]
+    public async Task TestAsync_TypeWithoutProbe_ReportsUnsupportedWithoutCallingUpstream()
+    {
+        var handler = new CapturingHandler(HttpStatusCode.OK, "{}");
+        var model = CreateModel("video", "http://upstream.test");
+        model.ModelType = ModelTypes.VideoGeneration;
+        var service = CreateService(handler, model);
+
+        var result = await service.TestAsync("video", null);
+
+        result.Ok.Should().BeFalse();
+        result.Supported.Should().BeFalse();
+        result.ModelType.Should().Be(ModelTypes.VideoGeneration);
+        result.Detail.Should().Contain("video-generation");
+        handler.LastRequestUri.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task TestAsync_OcrModel_UsesChatProbe()
+    {
+        var handler = new CapturingHandler(
+            HttpStatusCode.OK,
+            """{"choices":[{"message":{"content":"pong"}}]}""");
+        var model = CreateModel("ocr-model", "http://upstream.test");
+        model.ModelType = ModelTypes.Ocr;
+        var service = CreateService(handler, model);
+
+        var result = await service.TestAsync("ocr-model", null);
+
+        result.Ok.Should().BeTrue();
+        result.ModelType.Should().Be(ModelTypes.Ocr);
+        handler.LastRequestUri!.AbsolutePath.Should().Be("/v1/chat/completions");
+    }
+
+    [Fact]
+    public void TryExtractEmbeddingSummary_RejectsRaggedOrMissingVectors()
+    {
+        AdminModelTestService.TryExtractEmbeddingSummary(EmbeddingsBody)
+            .Should().Be("2 embeddings × 3 dimensions");
+        AdminModelTestService.TryExtractEmbeddingSummary("""{"data":[{"embedding":[]}]}""")
+            .Should().BeNull();
+        AdminModelTestService.TryExtractEmbeddingSummary("""{"data":[{"index":0}]}""")
+            .Should().BeNull();
+        AdminModelTestService.TryExtractEmbeddingSummary(
+            """{"data":[{"embedding":[0.1,0.2]},{"embedding":[0.1]}]}""")
+            .Should().BeNull();
+        AdminModelTestService.TryExtractEmbeddingSummary("not json").Should().BeNull();
+    }
+
+    private const string EmbeddingsBody =
+        """
+        {
+          "object": "list",
+          "data": [
+            { "object": "embedding", "index": 0, "embedding": [0.1, 0.2, 0.3] },
+            { "object": "embedding", "index": 1, "embedding": [0.4, 0.5, 0.6] }
+          ],
+          "model": "embedder"
+        }
+        """;
+
     private static AdminModelTestService CreateService(
         HttpMessageHandler handler,
         params ModelConfig[] models) =>

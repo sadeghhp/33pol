@@ -32,6 +32,15 @@ public sealed class ModelConfig
     [JsonPropertyName("capabilities")]
     public List<string> Capabilities { get; set; } = [];
 
+    /// <summary>
+    /// What the upstream model does (see <see cref="ModelTypes"/>): text-generation, embedding,
+    /// rerank, ocr, image-generation, video-generation, audio-transcription. Drives the shape of the
+    /// admin health check. Null means unset — <see cref="ModelTypes.Resolve"/> then infers from
+    /// <see cref="Capabilities"/>, so models registered before this field existed still classify.
+    /// </summary>
+    [JsonPropertyName("modelType")]
+    public string? ModelType { get; set; }
+
     public bool HasCapability(string capability) =>
         Capabilities.Count == 0 ||
         Capabilities.Contains(capability, StringComparer.OrdinalIgnoreCase);

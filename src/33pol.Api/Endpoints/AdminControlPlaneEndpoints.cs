@@ -20,6 +20,7 @@ public static class AdminControlPlaneEndpoints
         group.MapGet("/summary", GetSummary);
         group.MapGet("/backends", ListBackends);
         group.MapGet("/models", ListModels);
+        group.MapGet("/model-types", GetModelTypes);
         group.MapGet("/requests", ListRequests);
         group.MapPost("/models", AddModel);
         group.MapPatch("/models/{id}", UpdateModel);
@@ -39,6 +40,14 @@ public static class AdminControlPlaneEndpoints
         AdminModelProvisioningService provisioning,
         CancellationToken cancellationToken) =>
         Results.Json(await provisioning.ListModelsAsync(cancellationToken).ConfigureAwait(false));
+
+    /// <summary>
+    /// The canonical model-type taxonomy, so the admin UI does not keep its own copy. The UI's
+    /// hand-maintained duplicate had drifted to a fraction of the accepted aliases, which made
+    /// correctly-typed models display as text generation and silently be rewritten on save.
+    /// </summary>
+    private static IResult GetModelTypes() =>
+        Results.Json(AdminModelTypeDescriptor.All());
 
     private static IResult ListRequests(IControlPlaneCommands commands, int? limit) =>
         Results.Json(commands.ListRecentRequests(limit is > 0 and <= 500 ? limit.Value : 50));

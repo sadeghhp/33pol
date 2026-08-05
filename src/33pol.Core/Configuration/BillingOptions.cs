@@ -31,11 +31,16 @@ public sealed class BillingOptions
     public int BudgetReservationDefaultMaxTokens { get; set; } = 4096;
 
     /// <summary>
-    /// How long a budget reservation is held before it is reclaimed if the request never persists
-    /// usage (e.g. an upstream error). Prevents leaked reservations from permanently reducing a
-    /// tenant's available budget.
+    /// Backstop for reclaiming a budget reservation whose request never settled. Every terminal path
+    /// in the router now releases explicitly, so this should only ever fire after a process crash.
+    ///
+    /// It must comfortably exceed the longest possible in-flight request plus the usage-flush delay:
+    /// a TTL shorter than that sweeps reservations for requests that are still running, letting
+    /// concurrent requests each see full headroom and collectively blow through a hard-stop budget.
+    /// <see cref="BillingReservationTtlPolicy"/> derives the safe minimum and configuration
+    /// validation rejects anything below it.
     /// </summary>
-    public int BudgetReservationTtlSeconds { get; set; } = 120;
+    public int BudgetReservationTtlSeconds { get; set; } = 900;
 
     /// <summary>
     /// How long a model's rate card is cached. Budget enforcement prices every request before
@@ -43,4 +48,12 @@ public sealed class BillingOptions
     /// in-process; the TTL bounds staleness across replicas.
     /// </summary>
     public int RateCardCacheTtlSeconds { get; set; } = 60;
+
+    /// <summary>
+    /// How long a tenant's budget definitions are cached. Budget enforcement runs on every request,
+    /// so this keeps the definition lookup off the database. Only definitions are cached — spend is
+    /// always read fresh and in-flight cost is covered by the reservation ledger, so this cannot let
+    /// a tenant exceed a hard stop.
+    /// </summary>
+    public int BudgetCacheTtlSeconds { get; set; } = 30;
 }
