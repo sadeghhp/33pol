@@ -26,6 +26,7 @@ All notable changes to this project are documented here. Version tags follow [Se
 - Provider discovery validates the address each connection is actually opened to (closing a DNS-rebinding gap), fails closed on unresolvable hosts, and blocks `100.64.0.0/10`.
 - Explicit `Deny` model grants now deny. They were previously inert.
 - Upstream secrets and SQLite backups are written to owner-only directories; backups are pruned to the last 7.
+- The admin console's **Change key** field writes to a draft instead of the live credential. Bound straight to the session key, every keystroke replaced the key the 2-second poll and the connection watchdog were using, so typing a replacement 401'd the working session — and abandoning the panel left the in-memory key truncated until a reload.
 
 ### Fixed — resilience
 
@@ -41,6 +42,7 @@ All notable changes to this project are documented here. Version tags follow [Se
 - **Clearing tenant model grants requires `allowAllModels: true`.** An empty tenant list removes the tenant ceiling (allowing every registered model) rather than revoking access; the confirmation flag makes that deliberate.
 - Client request headers are forwarded upstream from an allowlist (`Accept`, `User-Agent`, `OpenAI-Beta`, `OpenAI-Organization`, provider version headers). Previously none were forwarded at all.
 - `GET /` reports `documentation.readme` instead of `documentation.implementationPlan`, and `documentation.architecture` now points at `docs/architecture.md`. Both previous paths pointed at planning documents that have been removed.
+- **`GET /stats` now requires an Admin API key.** The snapshot carries per-model request and error counts, average latency and active stream counts — the model inventory and traffic profile — which the console gates behind an Admin key at `/admin/api/summary` but this endpoint served anonymously. Monitoring that scrapes `/stats` must send `X-API-Key`; probes needing only up/down should use `/health`, `/health/live` or `/health/ready`, which stay anonymous, and `/metrics` is unchanged.
 
 ### Added
 
@@ -50,6 +52,7 @@ All notable changes to this project are documented here. Version tags follow [Se
 - `Gateway:Resilience:CircuitBreakerSamplingWindowSeconds` and `CircuitBreakerFailureRatioThreshold`.
 - `Billing:BudgetSpendCacheTtlSeconds` caches persisted period spend off the inference hot path (in-flight cost is still tracked exactly by the reservation ledger, so hard stops cannot overshoot).
 - Startup verification that stored upstream credentials decrypt with the configured pepper, so a rotated pepper is reported at boot rather than as opaque per-request failures.
+- **Durable admin audit trail.** `FileAuditLogger` appends one JSON Lines record per admin mutation — key create/update/revoke, model and tenant grants, CORS, rate limits, config reload, database backup, upstream-secret lifecycle — alongside the structured log event that was previously the only record. Configured by `Gateway:Security:AuditLogPath` (default `config/audit-log.jsonl`, same writable volume as `models.json`) and `AuditLogMaxBytes` (8 MB, rolls to `.1`). Retention previously depended entirely on the deployed Serilog configuration, which ships a console sink and nothing else, and the console's Logs tab is an in-memory diagnostics ring rather than an audit trail. A write failure is warned once and never fails the admin action that produced it.
 
 ## [2.0.0] — 2026-05-28
 

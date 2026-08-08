@@ -37,6 +37,10 @@ deploy/docker/config/models.json.local
 deploy/docker/config/upstream-secrets.enc
 deploy/docker/config/upstream-secrets.enc.local
 
+# Admin audit trail (FileAuditLogger) — operational record, never committed
+**/config/audit-log.jsonl
+**/config/audit-log.jsonl.1
+
 # Secret audit artifacts (local only)
 gitleaks-report.json
 trufflehog-report.json

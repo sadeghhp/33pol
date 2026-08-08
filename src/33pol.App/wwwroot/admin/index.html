@@ -17,11 +17,11 @@
        is that no expression below may contain an operator, a ternary or a call with arguments:
        every value comes from a getter, a zero-argument method, or a {get,set} pair on adminApp. -->
   <link rel="stylesheet" href="vendor/fonts.css?v=1" />
-  <link rel="stylesheet" href="admin.css?v=11" />
+  <link rel="stylesheet" href="admin.css?v=12" />
   <script defer src="admin-icons.js?v=9"></script>
   <script defer src="admin-errors.js?v=7"></script>
   <script defer src="admin-store.js?v=8"></script>
-  <script defer src="admin-app.js?v=22"></script>
+  <script defer src="admin-app.js?v=23"></script>
   <script defer src="vendor/alpine-csp-3.14.9.min.js"></script>
 </head>
 <body x-data="adminApp" x-cloak @keydown.window="onModalKeydown">
@@ -130,7 +130,9 @@
       <div class="card change-key-panel" x-show="showChangeKey">
         <label for="header-apiKey">Admin API key</label>
         <div class="key-row">
-          <input id="header-apiKey" :type="apiKeyInputType" x-model="mdl.apiKey" @keydown.enter.prevent="saveKey" autocomplete="off" />
+          <!-- Draft field, not the live key: see adminApp.headerApiKey. -->
+          <input id="header-apiKey" :type="apiKeyInputType" x-model="mdl.headerApiKey"
+            placeholder="Paste the new admin key" @keydown.enter.prevent="saveKey" autocomplete="off" />
           <button type="button" class="icon-btn" @click="toggleShowApiKey" :aria-label="showApiKeyLabel">
             <span class="icon" x-html="showApiKeyIcon"></span>
           </button>
@@ -276,7 +278,14 @@
             </label>
           </div>
           <div class="table-wrap">
-            <table x-show="requestsTableVisible">
+            <table class="t-requests" x-show="requestsTableVisible">
+              <!-- Column shares drive the fixed table layout: the wide free-text columns
+                   (path, error) absorb the space, the rest stay at their natural size. -->
+              <colgroup>
+                <col style="width:8%" /><col style="width:11%" /><col style="width:6%" />
+                <col style="width:24%" /><col style="width:17%" /><col style="width:6%" />
+                <col style="width:20%" /><col style="width:8%" />
+              </colgroup>
               <thead>
                 <tr>
                   <th class="sortable" @click="sortBy.requestsTime">Time<span x-html="sortIcon.requestsTime"></span></th>
@@ -309,9 +318,9 @@
                     </td>
                     <td><span class="tag" x-text="r.method"></span></td>
                     <td class="col-truncate" x-text="r.path" :title="r.path"></td>
-                    <td x-text="r.modelId"></td>
+                    <td class="col-truncate" x-text="r.modelId" :title="r.modelId"></td>
                     <td class="num" x-text="r.statusCode"></td>
-                    <td :class="r.errorClass" x-text="r.errorText"></td>
+                    <td class="col-truncate" :class="r.errorClass" x-text="r.errorText" :title="r.errorText"></td>
                     <td class="num" x-text="r.durationText"></td>
                   </tr>
                   <tr x-show="r.expanded" class="request-detail-row">
@@ -349,7 +358,7 @@
             <button type="button" class="preset" @click="usagePresetMtd">Month to date</button>
           </div>
 
-          <div class="card">
+          <div class="card form-card">
             <div class="grid">
               <label>From <input type="date" x-model="mdl.usageFrom" /></label>
               <label>To <input type="date" x-model="mdl.usageTo" /></label>
@@ -419,7 +428,11 @@
 
           <div class="section-header"><div><span class="eyebrow">Detail</span><h3>Daily rollups</h3></div></div>
           <div class="table-wrap">
-            <table x-show="hasUsageRollups">
+            <table class="t-usage-rollups" x-show="hasUsageRollups">
+              <colgroup>
+                <col style="width:12%" /><col style="width:24%" /><col style="width:20%" />
+                <col style="width:11%" /><col style="width:11%" /><col style="width:11%" /><col style="width:11%" />
+              </colgroup>
               <thead><tr><th>Date</th><th>Model</th><th>Cost center</th><th class="num">Prompt</th><th class="num">Completion</th><th class="num">Cost</th><th class="num">Req</th></tr></thead>
               <tbody>
                 <template x-for="row in usageRollupRows" :key="row.key">
@@ -439,7 +452,11 @@
 
           <div class="section-header"><div><span class="eyebrow">Ledger</span><h3>Recent billing events</h3></div></div>
           <div class="table-wrap">
-            <table x-show="hasUsageEvents">
+            <table class="t-usage-events" x-show="hasUsageEvents">
+              <colgroup>
+                <col style="width:14%" /><col style="width:11%" /><col style="width:17%" /><col style="width:22%" />
+                <col style="width:12%" /><col style="width:12%" /><col style="width:12%" />
+              </colgroup>
               <thead><tr><th>Time</th><th>Key</th><th>Assignee</th><th>Model</th><th class="num">Prompt</th><th class="num">Completion</th><th class="num">Cost</th></tr></thead>
               <tbody>
                 <template x-for="ev in usageEventRows" :key="ev.key">
@@ -491,11 +508,17 @@
               </button>
             </div>
             <div class="table-wrap">
-              <table x-show="hasModelRows">
+              <table class="t-models" x-show="hasModelRows">
+                <colgroup>
+                  <col style="width:16%" /><col style="width:20%" /><col style="width:10%" /><col style="width:10%" />
+                  <col style="width:7%" /><col style="width:10%" /><col style="width:9%" /><col style="width:7%" />
+                  <col style="width:11%" />
+                </colgroup>
                 <thead>
                   <tr>
                     <th class="sortable" @click="sortBy.modelsId">ID<span x-html="sortIcon.modelsId"></span></th>
-                    <th>Upstream URL</th><th>Type</th><th>Aliases</th><th class="num">Context</th><th class="num">Price in/out (1M)</th><th>Access</th><th>Credential</th><th></th>
+                    <th>Upstream URL</th><th>Type</th><th>Aliases</th><th class="num">Context</th><th class="num">Price in/out (1M)</th><th>Access</th><th>Credential</th>
+                    <th class="cell-actions"><span class="sr-only">Actions</span></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -503,23 +526,23 @@
                     <tr>
                       <td class="cell-code">
                         <span class="cell-code-inner">
-                          <code x-text="m.id"></code>
+                          <code x-text="m.id" :title="m.id"></code>
                           <button type="button" class="icon-btn" @click="m.copyId" title="Copy ID" aria-label="Copy ID"><span class="icon" x-html="icons.copy"></span></button>
                         </span>
                       </td>
                       <td class="cell-code">
                         <span class="cell-code-inner">
-                          <code x-text="m.url"></code>
+                          <code x-text="m.url" :title="m.url"></code>
                           <button type="button" class="icon-btn" @click="m.copyUrl" title="Copy URL" aria-label="Copy URL"><span class="icon" x-html="icons.copy"></span></button>
                         </span>
                       </td>
                       <td><span class="tag" x-text="m.typeLabel"></span></td>
-                      <td x-text="m.aliases"></td>
+                      <td class="col-truncate" x-text="m.aliases" :title="m.aliases"></td>
                       <td class="num" x-text="m.context"></td>
                       <td class="num" x-text="m.price"></td>
                       <td><span class="status-chip" :class="m.accessClass" x-text="m.accessText"></span></td>
                       <td><span class="tag" x-show="m.hasCredential">stored</span><span x-show="m.noCredential" class="muted">—</span></td>
-                      <td>
+                      <td class="cell-actions">
                         <span class="row-actions">
                           <button type="button" class="icon-btn" @click="m.test"
                             :disabled="m.testing" :aria-busy="m.testing"
@@ -553,26 +576,31 @@
               </button>
             </div>
             <div class="table-wrap">
-              <table x-show="hasBackendRows">
+              <table class="t-backends" x-show="hasBackendRows">
+                <colgroup>
+                  <col style="width:25%" /><col style="width:33%" /><col style="width:16%" />
+                  <col style="width:12%" /><col style="width:14%" />
+                </colgroup>
                 <thead>
                   <tr>
                     <th class="sortable" @click="sortBy.backendsModel">Model<span x-html="sortIcon.backendsModel"></span></th>
-                    <th>URL</th><th>Alias</th><th>Health</th><th></th>
+                    <th>URL</th><th>Alias</th><th>Health</th>
+                    <th class="cell-actions"><span class="sr-only">Actions</span></th>
                   </tr>
                 </thead>
                 <tbody>
                   <template x-for="b in backendRows" :key="b.key">
                     <tr>
-                      <td class="cell-code"><span class="cell-code-inner"><code x-text="b.modelId"></code></span></td>
-                      <td class="cell-code"><span class="cell-code-inner"><code x-text="b.url"></code></span></td>
-                      <td x-text="b.alias"></td>
+                      <td class="cell-code"><span class="cell-code-inner"><code x-text="b.modelId" :title="b.modelId"></code></span></td>
+                      <td class="cell-code"><span class="cell-code-inner"><code x-text="b.url" :title="b.url"></code></span></td>
+                      <td class="col-truncate" x-text="b.alias" :title="b.alias"></td>
                       <td>
                         <span class="cell-health-inner">
                           <span class="health-dot" :class="b.healthClass"></span>
                           <span x-text="b.healthText"></span>
                         </span>
                       </td>
-                      <td><button type="button" class="action ghost sm" @click="b.edit"><span class="icon" x-html="icons.edit"></span> Edit</button></td>
+                      <td class="cell-actions"><button type="button" class="action ghost sm" @click="b.edit"><span class="icon" x-html="icons.edit"></span> Edit</button></td>
                     </tr>
                   </template>
                 </tbody>
@@ -612,7 +640,12 @@
             </button>
           </div>
           <div class="table-wrap">
-            <table x-show="hasKeyRows">
+            <table class="t-keys" x-show="hasKeyRows">
+              <colgroup>
+                <col style="width:3.5%" /><col style="width:10%" /><col style="width:12%" /><col style="width:12%" />
+                <col style="width:7%" /><col style="width:10%" /><col style="width:8%" /><col style="width:7%" />
+                <col style="width:10%" /><col style="width:8%" /><col style="width:12.5%" />
+              </colgroup>
               <thead>
                 <tr>
                   <th class="cell-select">
@@ -630,7 +663,8 @@
                   <th class="num">MTD cost</th>
                   <th class="num">MTD req</th>
                   <th class="sortable" @click="sortBy.keysCreated">Created<span x-html="sortIcon.keysCreated"></span></th>
-                  <th>Status</th><th></th>
+                  <th>Status</th>
+                  <th class="cell-actions"><span class="sr-only">Actions</span></th>
                 </tr>
               </thead>
               <tbody>
@@ -640,16 +674,16 @@
                       <input type="checkbox" :disabled="k.revoked" :checked="k.selected"
                         @change="k.onSelect" :aria-label="k.selectLabel" />
                     </td>
-                    <td class="cell-code"><span class="cell-code-inner"><code x-text="k.keyPrefix"></code></span></td>
-                    <td x-text="k.label"></td>
-                    <td x-text="k.assignee"></td>
+                    <td class="cell-code"><span class="cell-code-inner"><code x-text="k.keyPrefix" :title="k.keyPrefix"></code></span></td>
+                    <td class="col-truncate" x-text="k.label" :title="k.label"></td>
+                    <td class="col-truncate" x-text="k.assignee" :title="k.assignee"></td>
                     <td><span class="tag role-tag" :class="k.roleClass" x-text="k.role"></span></td>
                     <td x-text="k.lastUsed"></td>
                     <td class="num" x-text="k.mtdCost"></td>
                     <td class="num" x-text="k.mtdRequests"></td>
                     <td x-text="k.created"></td>
                     <td><span class="status-chip" :class="k.statusClass" x-text="k.statusText"></span></td>
-                    <td>
+                    <td class="cell-actions">
                       <span class="row-actions" x-show="k.active">
                         <button type="button" class="icon-btn" @click="k.edit" title="Edit key" aria-label="Edit key"><span class="icon" x-html="icons.edit"></span></button>
                         <button type="button" class="icon-btn" x-show="k.canGrant" @click="k.access" title="Model access" aria-label="Model access"><span class="icon" x-html="icons.cpu"></span></button>
@@ -707,7 +741,11 @@
           </p>
 
           <div class="table-wrap">
-            <table x-show="hasLogs">
+            <table class="t-logs" x-show="hasLogs">
+              <colgroup>
+                <col style="width:13%" /><col style="width:12%" /><col style="width:20%" />
+                <col style="width:43%" /><col style="width:12%" />
+              </colgroup>
               <thead>
                 <tr>
                   <th>Time</th><th>Severity</th><th>Source</th><th>Message</th><th>Model</th>
@@ -729,9 +767,9 @@
                       <span class="tag" x-show="l.showRepeats" x-text="l.repeatsText"
                         title="Identical events collapsed into this row"></span>
                     </td>
-                    <td x-text="l.category"></td>
+                    <td class="col-truncate" x-text="l.category" :title="l.category"></td>
                     <td class="col-truncate" x-text="l.message" :title="l.message"></td>
-                    <td x-text="l.modelId"></td>
+                    <td class="col-truncate" x-text="l.modelId" :title="l.modelId"></td>
                   </tr>
                   <tr x-show="l.expanded" class="request-detail-row">
                     <td colspan="5">

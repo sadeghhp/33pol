@@ -10,7 +10,6 @@ public sealed class PublicGatewayPathsTests
     [InlineData("/health/live")]
     [InlineData("/health/ready")]
     [InlineData("/metrics")]
-    [InlineData("/stats")]
     public void IsAnonymous_PublicProbePaths_ReturnsTrue(string path)
     {
         PublicGatewayPaths.IsAnonymous(path).Should().BeTrue();
@@ -20,6 +19,9 @@ public sealed class PublicGatewayPathsTests
     [InlineData("/v1/models")]
     [InlineData("/admin/api/config/status")]
     [InlineData("/v1/chat/completions")]
+    // /stats returns per-model request and error counts — the model inventory and traffic profile —
+    // so it carries an Admin credential like the console's own summary endpoint does.
+    [InlineData("/stats")]
     public void IsAnonymous_ProtectedPaths_ReturnsFalse(string path)
     {
         PublicGatewayPaths.IsAnonymous(path).Should().BeFalse();

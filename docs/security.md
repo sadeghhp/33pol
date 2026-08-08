@@ -101,7 +101,29 @@ Operators may mark individual registry models with `"publicAccess": true` (admin
 
 ## Audit
 
-Admin mutations invoke `IAuditLogger` (structured logs). Durable audit retention is a post-GA enhancement.
+Every admin mutation calls `IAuditLogger`, implemented by `FileAuditLogger`, which writes **two** records:
+
+1. A structured `ILogger` event, so whatever Serilog sinks are configured keep collecting what they do today.
+2. An append-only **JSON Lines** trail on disk — one object per action, with `timestampUtc`, `action`, `tenantId`, `apiKeyId` and the action's `details`.
+
+| Setting | Default | Notes |
+|---------|---------|-------|
+| `Gateway:Security:AuditLogPath` | `config/audit-log.jsonl` | Relative paths resolve against the app base directory. Same writable volume as `models.json` and `upstream-secrets.enc` — back it up with them. |
+| `Gateway:Security:AuditLogMaxBytes` | `8388608` (8 MB) | At the cap the file rolls to `<path>.1`, keeping one generation. Floor: 64 KB. |
+
+Actions recorded: `api_key.create`, `api_key.update`, `api_key.revoke`, `api_key.revoke_batch`,
+`api_key.model_grants.replace`, `tenant.model_grants.replace`, `cors.update`, `rate_limits.update`,
+`config.reload`, `maintenance.backup`, `model.renamed`, `model.pricing.update`, and the
+`upstream_secret.*` lifecycle events.
+
+Call sites pass key **ids and prefixes**, model ids and counts — never a secret — which is what makes
+the file safe to retain and ship to a log collector. A write failure (read-only `config/` mount) is
+logged once as a warning and never fails the admin action that produced it, so a deployment with an
+unwritable volume degrades to structured logs only rather than rejecting valid changes.
+
+**Reading the trail:** `jq -c 'select(.action | startswith("api_key"))' config/audit-log.jsonl`. It is
+deliberately not exposed over the admin API — the console's Logs tab is an in-memory diagnostics ring
+(warnings and errors, 500 entries), not the audit trail.
 
 ## OWASP API Security Top 10 (mapping)
 

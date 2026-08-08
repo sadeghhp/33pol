@@ -105,6 +105,19 @@
 
   --rail-w: 15rem;
 
+  /* Layout
+     --content-max caps the readable width of the console; --page-pad is the minimum
+     edge gutter. --gutter resolves to whichever is larger, so the topbar, alerts and
+     page body all share one inline alignment and the content grows into wide displays
+     instead of being pinned to a narrow column. */
+  --content-max: 120rem;
+  --page-pad: var(--space-6);
+  --gutter: max(var(--page-pad), calc((100% - var(--content-max)) / 2));
+  /* Longest comfortable line for prose; keeps hints readable on ultrawide screens. */
+  --measure: 78ch;
+  /* Widest a settings/config form should get — inputs stop growing past this. */
+  --form-max: 76rem;
+
   /* Motion */
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --dur-fast: 130ms;
@@ -396,7 +409,7 @@ h1, h2, h3, h4 { font-family: var(--font-display); }
   align-items: center;
   gap: var(--space-4);
   min-height: 52px;
-  padding: var(--space-2) var(--space-5);
+  padding: var(--space-2) var(--gutter);
   background: color-mix(in srgb, var(--bg-elevated) 85%, transparent);
   backdrop-filter: saturate(1.4) blur(10px);
   border-bottom: 1px solid var(--border);
@@ -500,9 +513,7 @@ h1, h2, h3, h4 { font-family: var(--font-display); }
 .page-content {
   flex: 1;
   width: 100%;
-  max-width: 82rem;
-  margin: 0 auto;
-  padding: var(--space-6) var(--space-6) var(--space-8);
+  padding: var(--space-6) var(--gutter) var(--space-8);
 }
 
 .page-header {
@@ -519,7 +530,7 @@ h1, h2, h3, h4 { font-family: var(--font-display); }
   line-height: var(--leading-tight);
   color: var(--text-primary);
 }
-.page-header .page-sub { margin: 0.35rem 0 0; font-size: var(--text-sm); color: var(--text-secondary); }
+.page-header .page-sub { margin: 0.35rem 0 0; font-size: var(--text-sm); color: var(--text-secondary); max-width: var(--measure); }
 
 .section-header {
   display: flex; flex-wrap: wrap; align-items: center;
@@ -697,7 +708,16 @@ code.inp-hint { font-family: var(--font-mono); font-size: 0.95em; padding: 0.05r
 .card > h3 { margin: 0 0 0.3rem; font-size: var(--text-md); font-weight: var(--fw-semi); }
 .card .eyebrow { display: block; margin-bottom: 0.25rem; }
 
-.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: var(--space-4); }
+/* Field grid. The 22rem ceiling stops a four-field filter row from stretching each
+   input to half the screen on a wide monitor; min() keeps it single-column when narrow. */
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 22rem));
+  gap: var(--space-4);
+}
+
+/* Cards that hold a form rather than data stop at a comfortable form width. */
+.form-card, #panel-settings .card { max-width: var(--form-max); }
 
 /* ================================================================
    11. VITALS (Overview hero readouts)
@@ -829,7 +849,19 @@ code.inp-hint { font-family: var(--font-mono); font-size: 0.95em; padding: 0.05r
   box-shadow: var(--shadow-sm);
 }
 
-table { width: 100%; border-collapse: collapse; font-size: var(--text-sm); }
+/* Fixed layout is what makes a table fit its container: column widths come from the
+   <colgroup> percentages rather than from the widest cell, so a long upstream URL
+   ellipsizes instead of pushing the table into horizontal scroll. Each table declares
+   a min-width below which scrolling is genuinely preferable to crushing the columns. */
+table { width: 100%; border-collapse: collapse; font-size: var(--text-sm); table-layout: fixed; }
+
+.t-requests      { min-width: 56rem; }
+.t-usage-rollups { min-width: 44rem; }
+.t-usage-events  { min-width: 44rem; }
+.t-models        { min-width: 62rem; }
+.t-backends      { min-width: 46rem; }
+.t-keys          { min-width: 70rem; }
+.t-logs          { min-width: 46rem; }
 
 thead th {
   position: sticky; top: 0; z-index: 1;
@@ -840,7 +872,10 @@ thead th {
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--text-tertiary);
-  white-space: nowrap;
+  /* Headers wrap instead of clipping: with fixed column widths a long label like
+     "Price in/out (1M)" would otherwise lose its tail. */
+  line-height: 1.35;
+  overflow-wrap: break-word;
 }
 th.sortable { cursor: pointer; user-select: none; }
 th.sortable:hover { color: var(--accent-text); }
@@ -850,25 +885,38 @@ th, td {
   padding: 0.6rem 0.9rem;
   border-bottom: 1px solid var(--border);
   vertical-align: middle;
+  overflow: hidden;
 }
+/* Plain text cells wrap rather than clip — a taller row loses nothing, a clipped one does.
+   Cells that must stay on one line opt in via .col-truncate or .cell-code. */
+td { overflow-wrap: break-word; }
 tbody tr { transition: background var(--dur-fast); }
 tbody tr:hover { background: var(--bg-hover); }
 tbody tr:last-child td { border-bottom: none; }
 
-td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; font-family: var(--font-mono); font-size: var(--text-xs); }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; font-family: var(--font-mono); font-size: var(--text-xs); white-space: nowrap; }
 
-th.cell-select, td.cell-select { width: 2.75rem; text-align: center; padding-left: 0.5rem; padding-right: 0.5rem; }
+th.cell-select, td.cell-select { text-align: center; padding-left: 0.5rem; padding-right: 0.5rem; }
 th.cell-select input, td.cell-select input { width: auto; margin: 0; }
 
-.cell-code-inner { display: inline-flex; align-items: center; gap: 0.25rem; max-width: 100%; vertical-align: middle; }
-.cell-code-inner code { font-family: var(--font-mono); font-size: var(--text-xs); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Row-action columns are sized by their colgroup share; trimming the padding buys the
+   icon buttons the room they need at the table's min-width. */
+th.cell-actions, td.cell-actions { padding-left: 0.4rem; padding-right: 0.5rem; text-align: right; }
+th.cell-actions .row-actions, td.cell-actions .row-actions { justify-content: flex-end; }
 
-.col-truncate { max-width: 15rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cell-code-inner { display: flex; align-items: center; gap: 0.25rem; min-width: 0; }
+.cell-code-inner code { font-family: var(--font-mono); font-size: var(--text-xs); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cell-code-inner .icon-btn { flex: none; }
+
+.col-truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .tag {
   display: inline-block; font-family: var(--font-mono); font-size: var(--text-2xs);
   padding: 0.1rem 0.45rem; border-radius: var(--r-sm);
   background: var(--bg-sunken); color: var(--text-secondary); border: 1px solid var(--border);
+  /* In a fixed-layout table a tag that outgrows its column would be hard-clipped by the
+     cell; ellipsizing keeps the pill shape and signals there is more text. */
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; vertical-align: middle;
 }
 .role-tag { text-transform: uppercase; letter-spacing: 0.04em; }
 .role-tag.admin { color: var(--accent-text); border-color: var(--accent-border); background: var(--accent-soft); }
@@ -883,10 +931,8 @@ tr.row-error td.num, tr.row-warn td.num { color: inherit; }
 .sort-icon.icon-flip { transform: rotate(180deg); }
 .sort-icon svg { width: 13px; height: 13px; }
 
-/* Routing tables keep single-line rows */
-#panel-routing table { table-layout: auto; }
-#panel-routing th, #panel-routing td { white-space: nowrap; }
-#panel-routing td:not(.cell-code) code { display: inline-block; max-width: min(26rem, 46vw); overflow: hidden; text-overflow: ellipsis; vertical-align: middle; }
+/* Tags stay on one line; the cell around them may still wrap. */
+td .tag { white-space: nowrap; }
 
 /* Expandable request rows */
 tr.request-row { cursor: pointer; }
@@ -949,7 +995,7 @@ tr.request-detail-row td { background: var(--bg-inset); padding-top: 0.75rem; }
 
 .global-alert {
   display: flex; flex-wrap: wrap; align-items: flex-start; gap: 0.5rem 0.75rem;
-  margin: 0 var(--space-5) 0; margin-top: var(--space-3);
+  margin: var(--space-3) var(--gutter) 0;
   padding: var(--space-3) var(--space-4);
   border-radius: var(--r-md);
   border: 1px solid var(--error-border); border-left-width: 3px;
@@ -963,7 +1009,7 @@ tr.request-detail-row td { background: var(--bg-inset); padding-top: 0.75rem; }
 
 .notice {
   font-size: var(--text-sm); color: var(--text-secondary);
-  margin: 0 0 var(--space-4);
+  margin: 0 0 var(--space-4); max-width: var(--content-max);
   padding: var(--space-3) var(--space-4);
   border-radius: var(--r-md); border: 1px solid var(--border); border-left-width: 3px;
   background: var(--bg-surface);
@@ -972,9 +1018,9 @@ tr.request-detail-row td { background: var(--bg-inset); padding-top: 0.75rem; }
 .notice.error { color: var(--error-text); border-color: var(--error-border); border-left-color: var(--error); background: var(--error-soft); }
 .notice strong { color: var(--text-primary); font-weight: var(--fw-semi); }
 
-.change-key-panel { margin: var(--space-3) var(--space-5) 0; }
+.change-key-panel { margin: var(--space-3) var(--gutter) 0; }
 
-.hint { color: var(--text-secondary); font-size: var(--text-xs); margin: 0.35rem 0 0.6rem; line-height: 1.5; }
+.hint { color: var(--text-secondary); font-size: var(--text-xs); margin: 0.35rem 0 0.6rem; line-height: 1.5; max-width: var(--measure); }
 .hint code { font-size: 0.95em; padding: 0.05rem 0.3rem; border-radius: var(--r-xs); background: var(--bg-sunken); }
 .field-error { color: var(--error-text); font-size: var(--text-xs); margin: 0.1rem 0 0.5rem; font-weight: var(--fw-medium); }
 .warn-inline { color: var(--warn); font-size: var(--text-xs); margin: 0.1rem 0 0.5rem; }
@@ -1124,22 +1170,26 @@ tr.request-detail-row td { background: var(--bg-inset); padding-top: 0.75rem; }
 .grant-list label.checkbox:last-child { margin-bottom: 0; }
 
 /* Rate-limit + CORS rows */
-.rl-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(7.5rem, 1fr)); gap: 0.6rem 0.9rem; align-items: end; }
+/* Numeric tiers: the 13rem ceiling stops an RPM box from spanning a quarter of a wide screen. */
+.rl-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(7.5rem, 13rem)); gap: 0.6rem 0.9rem; align-items: end; }
 .rl-grid label { margin: 0; }
 .rl-grid .rl-name { display: flex; align-items: center; font-family: var(--font-mono); font-weight: var(--fw-semi); font-size: var(--text-sm); }
 .rl-plan { padding-top: 0.75rem; margin-top: 0.5rem; border-top: 1px solid var(--border); }
 .repeat-row { display: flex; gap: var(--space-2); align-items: flex-end; margin-bottom: var(--space-2); }
 .repeat-row .field, .repeat-row label { flex: 1; margin: 0; }
 
-.link-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr)); gap: var(--space-2); }
+.link-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(11rem, 18rem)); gap: var(--space-2); }
 .link-grid .action { justify-content: flex-start; }
 
 /* ================================================================
    19. RESPONSIVE
    ================================================================ */
 
+/* The edge gutter is a single token, so shrinking it here re-aligns the topbar,
+   the alert banners and the page body together. */
 @media (max-width: 1024px) {
-  .page-content { padding: var(--space-5) var(--space-4) var(--space-7); }
+  :root { --page-pad: var(--space-4); }
+  .page-content { padding-top: var(--space-5); padding-bottom: var(--space-7); }
 }
 
 @media (max-width: 860px) {
@@ -1159,12 +1209,11 @@ tr.request-detail-row td { background: var(--bg-inset); padding-top: 0.75rem; }
   .rail-nav button { padding: 0.5rem; }
   .rail-foot { flex-direction: row; margin: 0; padding: 0; border: none; margin-left: auto; }
   .theme-switch { border: 1px solid var(--border); }
-  .topbar { padding: var(--space-2) var(--space-4); }
-  .change-key-panel, .global-alert { margin-left: var(--space-4); margin-right: var(--space-4); }
 }
 
 @media (max-width: 560px) {
-  .page-content { padding: var(--space-4) var(--space-3) var(--space-6); }
+  :root { --page-pad: var(--space-3); }
+  .page-content { padding-top: var(--space-4); padding-bottom: var(--space-6); }
   .page-header h2 { font-size: var(--text-xl); }
   .vitals-grid { grid-template-columns: 1fr 1fr; }
   .vital-value { font-size: var(--text-2xl); }

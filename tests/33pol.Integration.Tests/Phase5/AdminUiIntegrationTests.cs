@@ -57,6 +57,10 @@ public sealed class AdminUiIntegrationTests
         body.Should().Contain("id=\"gate-apiKey\"");
         body.Should().Contain("x-model=\"mdl.gateApiKey\"");
         body.Should().NotMatchRegex("id=\"gate-apiKey\"[^>]*x-model=\"mdl\\.apiKey\"");
+        // Both key inputs write to a draft. Bound to the live key, every keystroke replaced the
+        // credential the 2s poll was using, so typing a replacement 401'd the working session.
+        body.Should().Contain("x-model=\"mdl.headerApiKey\"");
+        body.Should().NotContain("x-model=\"mdl.apiKey\"");
         body.Should().NotContain("function adminApp()");
         body.Should().NotContain("confirm(");
         // The CSP-friendly Alpine build resolves x-data through Alpine.data, not by calling adminApp().

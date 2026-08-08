@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text.Json;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Pol33.Integration.Tests.Support;
 
 namespace Pol33.Integration.Tests.Operations;
 
@@ -51,6 +52,11 @@ public sealed class GatewayOperationsEndpointTests : IClassFixture<WebApplicatio
         }
     }
 
+    /// <summary>
+    /// This fixture runs with authentication off, which is the only reason an unauthenticated call
+    /// gets the payload. The authorization contract is covered by
+    /// <see cref="GetStats_WithAuthenticationEnabled_RequiresAdminKey"/>.
+    /// </summary>
     [Fact]
     public async Task GetStats_ReturnsMinimalCounters()
     {
@@ -61,6 +67,42 @@ public sealed class GatewayOperationsEndpointTests : IClassFixture<WebApplicatio
         json.RootElement.GetProperty("totalRequests").GetInt64().Should().Be(0);
         json.RootElement.GetProperty("uptimeSeconds").GetInt64().Should().BeGreaterThanOrEqualTo(0);
         json.RootElement.TryGetProperty("uptime", out _).Should().BeTrue();
+    }
+
+    /// <summary>
+    /// The snapshot names every model that has served traffic and how often each one failed, so it is
+    /// gated exactly like the console's own summary. Serving it anonymously let any caller enumerate
+    /// the registry and read the traffic profile; probes that only need up/down use /health.
+    /// </summary>
+    [Fact]
+    public async Task GetStats_WithAuthenticationEnabled_RequiresAdminKey()
+    {
+        await using var factory = GatewayWebApplicationFactory.CreateWithInMemoryDatabase();
+        await GatewayWebApplicationFactory.EnsureAuthReadyAsync(factory);
+        var client = factory.CreateClient();
+
+        var anonymous = await client.GetAsync("/stats");
+        anonymous.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+
+        client.DefaultRequestHeaders.Add("X-API-Key", "sk-33pol-integration-admin-key");
+        var authorized = await client.GetAsync("/stats");
+        authorized.StatusCode.Should().Be(HttpStatusCode.OK);
+    }
+
+    /// <summary>Liveness and readiness stay anonymous: probes must not need a credential.</summary>
+    [Theory]
+    [InlineData("/health")]
+    [InlineData("/health/live")]
+    [InlineData("/health/ready")]
+    public async Task HealthProbes_WithAuthenticationEnabled_StayAnonymous(string path)
+    {
+        await using var factory = GatewayWebApplicationFactory.CreateWithInMemoryDatabase();
+        await GatewayWebApplicationFactory.EnsureAuthReadyAsync(factory);
+        var client = factory.CreateClient();
+
+        var response = await client.GetAsync(path);
+
+        response.StatusCode.Should().NotBe(HttpStatusCode.Unauthorized);
     }
 
     [Fact]

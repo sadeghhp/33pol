@@ -29,6 +29,14 @@ function adminApp() {
     showChangeKey: false,
     /** Draft key on the sign-in gate only; do not bind the gate to store.apiKey or the shell appears on first keystroke. */
     gateApiKey: '',
+    /**
+     * Draft key for the header's "Change key" panel, for the same reason the gate has one: bound
+     * straight to store.apiKey, every keystroke replaced the credential the 2s poll and the
+     * connection watchdog are actively using, so typing a new key 401'd the live session, flipped
+     * the header to "Invalid key" and raised the error banner — and abandoning the panel left the
+     * in-memory key truncated until a reload restored it from localStorage.
+     */
+    headerApiKey: '',
     poll: null,
     summary: null,
     summaryUpdatedAt: null,
@@ -113,8 +121,9 @@ function adminApp() {
     })(),
 
     get store() { return Alpine.store('admin'); },
+    // Read-only on purpose. The live key changes only through store.persistApiKey, so no template
+    // binding can leave the session holding a half-typed credential.
     get apiKey() { return this.store.apiKey; },
-    set apiKey(v) { this.store.apiKey = v; },
     get connectionStatus() { return this.store.connectionStatus; },
     get connectionDegraded() { return this.store.connectionDegraded; },
     get error() { return this.store.error; },
@@ -567,7 +576,9 @@ function adminApp() {
     },
 
     async saveKey() {
-      const key = ((this.apiKey ? this.apiKey : this.gateApiKey) || '').trim();
+      // A draft wins over the live key: whichever panel is open is the operator's intent. With both
+      // empty this is init() re-verifying the key restored from localStorage.
+      const key = ((this.headerApiKey || this.gateApiKey || this.apiKey) || '').trim();
       if (!key) {
         this.store.error = 'Enter an admin API key.';
         return;
@@ -575,6 +586,7 @@ function adminApp() {
       await this.runApi('auth', 'Connecting…', async () => {
         this.store.persistApiKey(key);
         this.gateApiKey = '';
+        this.headerApiKey = '';
         this.clearMessages();
         await this.store.verifyConnection(this.editModelUrl());
         this.store.startConnectionWatch(() => this.editModelUrl());
@@ -591,6 +603,8 @@ function adminApp() {
       this.store.stopConnectionWatch();
       this.store.persistApiKey('');
       this.gateApiKey = '';
+      this.headerApiKey = '';
+      this.showChangeKey = false;
       this.store.connectionStatus = '';
       this.store.connectionDegraded = false;
       this.summary = null;
@@ -1742,7 +1756,7 @@ function adminApp() {
       const b = p => this.bindPath(p);
       return {
         gateApiKey: b('gateApiKey'),
-        apiKey: b('apiKey'),
+        headerApiKey: b('headerApiKey'),
         requestsErrorsOnly: b('requestsErrorsOnly'),
         usageFrom: b('usageFrom'),
         usageTo: b('usageTo'),
@@ -1817,7 +1831,12 @@ function adminApp() {
 
     toggleShowApiKey() { this.showApiKey = !this.showApiKey; },
     toggleShowModelApiKey() { this.showModelApiKey = !this.showModelApiKey; },
-    toggleChangeKey() { this.showChangeKey = !this.showChangeKey; },
+    // Clearing the draft on both edges means an abandoned half-typed key cannot be picked up by a
+    // later Save, and reopening the panel never shows the previous attempt.
+    toggleChangeKey() {
+      this.showChangeKey = !this.showChangeKey;
+      this.headerApiKey = '';
+    },
     toggleAdvancedModel() { this.showAdvancedModel = !this.showAdvancedModel; },
 
     get loadingAuth() { return this.isLoading('auth'); },

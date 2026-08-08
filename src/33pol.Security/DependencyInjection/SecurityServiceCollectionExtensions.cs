@@ -43,24 +43,32 @@ public static class SecurityServiceCollectionExtensions
                 GatewayAuthSchemes.ApiKey,
                 _ => { });
 
+        // Bound before the anonymous-mode return below: the audit trail reads its path and size cap
+        // from this section, and a gateway running without a database still exposes the control plane
+        // and so still has admin actions worth recording.
+        services
+            .AddOptions<GatewaySecurityOptions>()
+            .Bind(configuration.GetSection(GatewaySecurityOptions.SectionName));
+
+        // A durable trail, not just a log line. Every admin mutation — key create/revoke, model
+        // grants, CORS, rate limits, config reload, database backup — used to be recorded only as an
+        // ILogger Information event, so whether it survived depended entirely on the deployed Serilog
+        // configuration (console sink only, by default) and it could not be reviewed from the console.
+        services.AddSingleton<IAuditLogger, FileAuditLogger>();
+
         if (string.IsNullOrWhiteSpace(connectionString))
         {
             services.AddSingleton<IApiKeyValidator, NullApiKeyValidator>();
             services.AddSingleton<IModelGrantService, NullModelGrantService>();
             services.AddSingleton<IModelGrantAdminService, NullModelGrantAdminService>();
             services.AddSingleton<IAdminKeyService, NullAdminKeyService>();
-            services.AddSingleton<IAuditLogger, NoOpAuditLogger>();
             return services;
         }
 
         services.AddMemoryCache();
         services.AddSingleton<IValidateOptions<GatewaySecurityOptions>, GatewaySecurityOptionsValidator>();
-        services
-            .AddOptions<GatewaySecurityOptions>()
-            .Bind(configuration.GetSection(GatewaySecurityOptions.SectionName))
-            .ValidateOnStart();
+        services.AddOptions<GatewaySecurityOptions>().ValidateOnStart();
 
-        services.AddSingleton<IAuditLogger, NoOpAuditLogger>();
         services.AddScoped<IApiKeyValidator, ApiKeyValidator>();
         services.AddScoped<IModelGrantService, ModelGrantService>();
         services.AddScoped<IModelGrantAdminService, ModelGrantAdminService>();

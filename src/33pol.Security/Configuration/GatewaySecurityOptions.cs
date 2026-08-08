@@ -36,4 +36,21 @@ public sealed class GatewaySecurityOptions
     /// rather than silently expose every endpoint anonymously.
     /// </summary>
     public bool AllowAnonymous { get; set; }
+
+    /// <summary>
+    /// Append-only JSON Lines trail of admin mutations, written by <c>FileAuditLogger</c>. Lives
+    /// beside <c>models.json</c> and the upstream secrets so one writable volume covers all of the
+    /// gateway's durable state.
+    /// </summary>
+    public string AuditLogPath { get; set; } = "config/audit-log.jsonl";
+
+    /// <summary>
+    /// Size at which the trail rolls to <c>.1</c> and starts fresh, keeping one generation of
+    /// history. Values below <see cref="MinimumAuditLogBytes"/> are raised to it: a cap small enough
+    /// to roll on every few actions would keep no usable history at all.
+    /// </summary>
+    public long AuditLogMaxBytes { get; set; } = 8 * 1024 * 1024;
+
+    /// <summary>Floor for <see cref="AuditLogMaxBytes"/>.</summary>
+    public const long MinimumAuditLogBytes = 64 * 1024;
 }

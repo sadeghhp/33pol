@@ -8,7 +8,6 @@ public static class PublicGatewayPaths
     [
         "/health",
         "/metrics",
-        "/stats",
     ];
 
     /// <summary>
@@ -19,6 +18,11 @@ public static class PublicGatewayPaths
     /// beginning with those characters anonymous — <c>/metrics-internal</c>, <c>/statsdump</c>,
     /// <c>/healthz-admin</c> — so this set silently governed far more of the URL space than it
     /// names, and any future route sharing a prefix would have been exposed without authentication.
+    ///
+    /// <c>/stats</c> is deliberately absent. It returned the same snapshot the admin console gates
+    /// behind an Admin key — per-model request and error counts, latency, active streams — so an
+    /// anonymous caller could enumerate the model inventory and read the traffic profile. Probes
+    /// need to answer up/down, not name the models.
     /// </remarks>
     public static bool IsAnonymous(PathString path)
     {
