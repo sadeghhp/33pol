@@ -33,6 +33,15 @@ public sealed class BackendHealthStoreTests
         store.IsBackendHealthy("model-a").Should().BeFalse();
     }
 
+    [Fact]
+    public void GetAllHealth_ReturnsStoredEntries()
+    {
+        var store = CreateStore(strictMode: false);
+        store.SetHealth(new BackendHealth("model-a", "http://a", true, 200, null, DateTimeOffset.UtcNow));
+
+        store.GetAllHealth().Should().ContainKey("model-a");
+    }
+
     private static BackendHealthStore CreateStore(bool strictMode) =>
         new(Options.Create(new GatewayOptions { HealthCheckStrictMode = strictMode }));
 }

@@ -69,6 +69,66 @@ public sealed class FileUpstreamSecretStoreTests
         }
     }
 
+    [Fact]
+    public async Task TryGet_AfterPepperRotation_ReturnsFalse()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"33pol-secrets-{Guid.NewGuid():N}.enc");
+        try
+        {
+            await CreateStore(path, pepper: "original").PutAsync("model-a", "sk-test");
+            var rotated = CreateStore(path, pepper: "rotated");
+
+            rotated.TryGet("model-a", out _).Should().BeFalse();
+            var (total, undecryptable) = rotated.VerifyStoredSecrets();
+            total.Should().Be(1);
+            undecryptable.Should().Be(1);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task ExistsAsync_AndListExistingAsync_ReportStoredIds()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"33pol-secrets-{Guid.NewGuid():N}.enc");
+        try
+        {
+            var store = CreateStore(path);
+            await store.PutAsync("model-a", "sk-a");
+            await store.PutAsync("model-b", "sk-b");
+
+            (await store.ExistsAsync("model-a")).Should().BeTrue();
+            (await store.ExistsAsync("missing")).Should().BeFalse();
+
+            var present = await store.ListExistingAsync(["model-a", "missing", "model-b"]);
+            present.Should().BeEquivalentTo(["model-a", "model-b"]);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void CorruptSecretsFile_StartsEmptyInsteadOfThrowing()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"33pol-secrets-{Guid.NewGuid():N}.enc");
+        try
+        {
+            File.WriteAllText(path, "{not-json");
+            var store = CreateStore(path);
+
+            store.TryGet("anything", out _).Should().BeFalse();
+            store.VerifyStoredSecrets().Should().Be((0, 0));
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
     private static FileUpstreamSecretStore CreateStore(
         string secretsPath,
         string? pepper = "test-pepper",

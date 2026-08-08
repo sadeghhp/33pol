@@ -27,6 +27,17 @@ public sealed class GatewayBackendHealthMetricsExporterTests
         measurements.Should().Contain(m => m.Value == 0);
     }
 
+    [Fact]
+    public async Task StartAndStopAsync_CompleteSuccessfully()
+    {
+        var exporter = new GatewayBackendHealthMetricsExporter(
+            new FakeModelRegistry([]),
+            new FakeBackendHealthStore());
+
+        await exporter.StartAsync(CancellationToken.None);
+        await exporter.StopAsync(CancellationToken.None);
+    }
+
     private sealed class FakeModelRegistry(IReadOnlyList<ModelConfig> models) : IModelRegistry
     {
         public IReadOnlyList<ModelConfig> GetAllModels() => models;

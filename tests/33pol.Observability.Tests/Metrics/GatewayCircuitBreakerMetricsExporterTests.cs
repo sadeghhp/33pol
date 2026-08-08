@@ -22,4 +22,15 @@ public sealed class GatewayCircuitBreakerMetricsExporterTests
         measurements.Should().Contain(m => m.Value == 0);
         measurements.Should().Contain(m => m.Value == 2);
     }
+
+    [Fact]
+    public async Task StartAndStopAsync_CompleteSuccessfully()
+    {
+        var source = Substitute.For<ICircuitBreakerStateSource>();
+        source.GetStates().Returns([]);
+        var exporter = new GatewayCircuitBreakerMetricsExporter(source);
+
+        await exporter.StartAsync(CancellationToken.None);
+        await exporter.StopAsync(CancellationToken.None);
+    }
 }

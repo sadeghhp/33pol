@@ -123,6 +123,53 @@ public sealed class HealthCheckServiceTests
     }
 
     [Fact]
+    public async Task ProbeBackendAsync_Unauthorized_TreatsBackendAsReachable()
+    {
+        var handler = SequenceHttpMessageHandler.AlwaysReturning(HttpStatusCode.Unauthorized);
+        var service = CreateService(handler);
+
+        var (isHealthy, statusCode, error) = await service.ProbeBackendAsync("http://backend:8000", "sk-test");
+
+        isHealthy.Should().BeTrue();
+        statusCode.Should().Be(401);
+        error.Should().Contain("credential");
+        handler.RequestedPaths.Should().Equal("/v1/models");
+    }
+
+    [Fact]
+    public async Task ProbeBackendAsync_InvalidUrl_ReturnsUnhealthyWithoutThrowing()
+    {
+        var handler = new SequenceHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK));
+        var service = CreateService(handler);
+
+        var (isHealthy, statusCode, error) = await service.ProbeBackendAsync("not a url");
+
+        isHealthy.Should().BeFalse();
+        statusCode.Should().BeNull();
+        error.Should().Contain("Invalid backend URL");
+    }
+
+    [Fact]
+    public async Task CheckBackendAsync_BearerResolverThrows_StillProbesWithoutCredential()
+    {
+        var handler = new SequenceHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK));
+        var resolver = Substitute.For<IUpstreamBearerTokenResolver>();
+        resolver.When(r => r.ResolveBearerToken(Arg.Any<UpstreamAuthConfig?>()))
+            .Do(_ => throw new InvalidOperationException("resolver failed"));
+        var healthStore = new BackendHealthStore(Options.Create(new GatewayOptions()));
+        var service = CreateService(handler, healthStore, bearerTokenResolver: resolver);
+
+        await service.CheckBackendAsync(new ModelConfig
+        {
+            Id = "model-a",
+            Url = "http://backend:8000",
+            UpstreamAuth = new UpstreamAuthConfig { Type = "bearer", EnvVar = "OPENAI_API_KEY" },
+        });
+
+        healthStore.IsBackendHealthy("model-a").Should().BeTrue();
+    }
+
+    [Fact]
     public void BuildProbeUri_TrimsAndCombinesPaths()
     {
         var uri = HealthCheckService.BuildProbeUri("http://backend:8000", "/api/tags");
