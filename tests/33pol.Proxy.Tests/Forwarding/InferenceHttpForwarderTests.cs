@@ -450,6 +450,8 @@ public sealed class InferenceHttpForwarderTests
         public void RecordBulkheadRejection(string modelId) { }
         public void RecordBulkheadInflightChange(string modelId, int delta) { }
         public void RecordTimeToFirstToken(string modelId, double seconds) { }
+
+        public void RecordBillingReconciliation(int discrepancyCount, double absoluteCostDrift) { }
     }
 
     private sealed class CapturingGatewayMetricsCollector : IGatewayMetricsCollector
@@ -477,6 +479,8 @@ public sealed class InferenceHttpForwarderTests
 
         public void RecordTimeToFirstToken(string modelId, double seconds) =>
             TimeToFirstTokenRecords.Add((modelId, seconds));
+
+        public void RecordBillingReconciliation(int discrepancyCount, double absoluteCostDrift) { }
     }
 
     private sealed class DelayedSseUpstreamHandler : HttpMessageHandler

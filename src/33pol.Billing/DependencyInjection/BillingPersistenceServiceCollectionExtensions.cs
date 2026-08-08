@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Pol33.Billing.Forecast;
 using Pol33.Billing.RateCards;
+using Pol33.Billing.Reconciliation;
 using Pol33.Billing.Usage;
 using Pol33.Billing.Webhooks;
 using Pol33.Core.Abstractions;
@@ -41,6 +42,11 @@ public static class BillingPersistenceServiceCollectionExtensions
         services.Replace(ServiceDescriptor.Scoped<IBillingUsageService, BillingUsageService>());
         services.AddScoped<DailyUsageWebhookPublisher>();
         services.AddHostedService<DailyUsageWebhookHostedService>();
+
+        // Reconciliation only exists where both sides do — with no persistence there is no ledger and
+        // no rollups to compare.
+        services.AddScoped<IBillingReconciliationService, BillingReconciliationService>();
+        services.AddHostedService<BillingReconciliationHostedService>();
         return services;
     }
 }

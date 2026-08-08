@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Pol33.Billing.DependencyInjection;
+using Pol33.Billing.Reconciliation;
 using Pol33.Billing.Usage;
 using Pol33.Core.Abstractions;
 using Pol33.Core.Billing;
@@ -50,6 +51,55 @@ public sealed class BillingPersistenceServiceCollectionExtensionsTests
         provider.GetServices<IHostedService>()
             .Should()
             .Contain(s => s is BillingUsageBatchPersistenceHandler);
+    }
+
+    /// <summary>
+    /// Reconciliation is the only thing that makes divergence between the ledger and the rollups
+    /// visible, so a wiring mistake that quietly leaves it unregistered restores exactly the silent
+    /// failure it was built to remove — with the added cost that the metric simply never appears
+    /// rather than reporting a problem.
+    /// </summary>
+    [Fact]
+    public void AddGatewayBillingPersistence_WithInMemoryDb_RegistersReconciliation()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["ConnectionStrings:GatewayDb"] = "InMemory:billing-reconciliation-di-test",
+            })
+            .Build();
+
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddGatewayPersistence(configuration);
+        services.AddGatewayBilling(configuration);
+        services.AddGatewayBillingPersistence(configuration);
+
+        // Deliberately no observability module: billing must compose on its own. Enumerating hosted
+        // services is what constructs them, so a required cross-module dependency fails right here.
+        using var provider = services.BuildServiceProvider();
+        using var scope = provider.CreateScope();
+
+        scope.ServiceProvider.GetService<IBillingReconciliationService>().Should().NotBeNull();
+        provider.GetServices<IHostedService>()
+            .Should()
+            .Contain(s => s is BillingReconciliationHostedService);
+    }
+
+    /// <summary>Without persistence there is no ledger and no rollups, so there is nothing to compare.</summary>
+    [Fact]
+    public void AddGatewayBillingPersistence_WithoutConnectionString_DoesNotRegisterReconciliation()
+    {
+        var configuration = new ConfigurationBuilder().Build();
+        var services = new ServiceCollection();
+        services.AddGatewayBilling(configuration);
+
+        using var provider = services.BuildServiceProvider();
+
+        provider.GetService<IBillingReconciliationService>().Should().BeNull();
+        provider.GetServices<IHostedService>()
+            .Should()
+            .NotContain(s => s is BillingReconciliationHostedService);
     }
 
     /// <summary>
@@ -233,5 +283,11 @@ public sealed class BillingPersistenceServiceCollectionExtensionsTests
             CancellationToken cancellationToken = default) =>
             Task.FromResult<IReadOnlyDictionary<Guid, ApiKeyUsageSummary>>(
                 new Dictionary<Guid, ApiKeyUsageSummary>());
+
+        public Task<IReadOnlyList<DailyUsageRollupRecord>> GetDailyTotalsAsync(
+            DateOnly fromDate,
+            DateOnly toDate,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<DailyUsageRollupRecord>>([]);
     }
 }

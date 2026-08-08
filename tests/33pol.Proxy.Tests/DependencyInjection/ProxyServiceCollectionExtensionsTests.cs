@@ -46,5 +46,7 @@ public sealed class ProxyServiceCollectionExtensionsTests
         public void RecordBulkheadRejection(string modelId) { }
         public void RecordBulkheadInflightChange(string modelId, int delta) { }
         public void RecordTimeToFirstToken(string modelId, double seconds) { }
+
+        public void RecordBillingReconciliation(int discrepancyCount, double absoluteCostDrift) { }
     }
 }

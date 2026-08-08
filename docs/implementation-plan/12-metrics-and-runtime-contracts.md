@@ -65,6 +65,11 @@
 | `gateway_usage_parse_failures_total` | Counter | `model` | 4 |
 | `gateway_usage_writer_queue_depth` | Gauge | — | 5 |
 | `gateway_usage_writer_dropped_total` | Counter | — | 5 |
+| `gateway_billing_reconciliation_discrepancies` | Gauge | — | post-GA |
+| `gateway_billing_reconciliation_cost_drift` | Gauge | — | post-GA |
+| `gateway_billing_reconciliation_runs_total` | Counter | — | post-GA |
+
+Reconciliation compares `billing_events` against `daily_usage_rollups`; see [finops.md](../finops.md#reconciliation). The two gauges are reported after every sweep including balanced ones, so a stale value means the sweep itself stopped — which is what the runs counter distinguishes.
 
 ### Runtime (framework)
 

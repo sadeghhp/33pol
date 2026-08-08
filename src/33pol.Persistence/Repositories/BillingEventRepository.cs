@@ -129,6 +129,77 @@ public sealed class BillingEventRepository(GatewayDbContext dbContext) : IBillin
                 });
     }
 
+    public async Task<IReadOnlyList<DailyUsageRollupRecord>> GetDailyTotalsAsync(
+        DateOnly fromDate,
+        DateOnly toDate,
+        CancellationToken cancellationToken = default)
+    {
+        if (toDate < fromDate)
+        {
+            return [];
+        }
+
+        var from = fromDate.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
+        var to = toDate.ToDateTime(TimeOnly.MaxValue, DateTimeKind.Utc);
+
+        // Streamed rather than materialised: a busy day's ledger is unbounded, and reconciliation
+        // must not be the thing that exhausts memory on the box it is meant to be watching. Only the
+        // per-bucket accumulator is held, which is bounded by (days x tenants x models x centres).
+        var rows = dbContext.BillingEvents
+            .AsNoTracking()
+            .Where(e => e.RecordedAt >= from && e.RecordedAt <= to)
+            .Select(e => new
+            {
+                e.RecordedAt,
+                e.TenantId,
+                e.ModelId,
+                e.CostCenter,
+                e.PromptTokens,
+                e.CompletionTokens,
+                e.TotalCost,
+            })
+            .AsAsyncEnumerable();
+
+        var buckets = new Dictionary<DailyUsageRollupKey, (long Prompt, long Completion, decimal Cost, int Count)>();
+
+        await foreach (var row in rows.WithCancellation(cancellationToken).ConfigureAwait(false))
+        {
+            // Bucketed identically to DailyUsageRollupKey.FromEvent — the rollup writer's own key —
+            // so a difference in the report is a difference in the data, never in the grouping.
+            var key = new DailyUsageRollupKey(
+                DateOnly.FromDateTime(row.RecordedAt.UtcDateTime),
+                row.TenantId,
+                row.ModelId,
+                DailyUsageRollupKey.NormalizeCostCenter(row.CostCenter));
+
+            var current = buckets.TryGetValue(key, out var existing)
+                ? existing
+                : (0L, 0L, 0m, 0);
+
+            buckets[key] = (
+                current.Item1 + row.PromptTokens,
+                current.Item2 + row.CompletionTokens,
+                current.Item3 + (row.TotalCost ?? 0m),
+                current.Item4 + 1);
+        }
+
+        return buckets
+            .Select(pair => new DailyUsageRollupRecord(
+                pair.Key.UsageDate,
+                pair.Key.TenantId,
+                pair.Key.ModelId,
+                pair.Key.CostCenter,
+                pair.Value.Prompt,
+                pair.Value.Completion,
+                pair.Value.Cost,
+                pair.Value.Count))
+            .OrderBy(r => r.UsageDate)
+            .ThenBy(r => r.TenantId)
+            .ThenBy(r => r.ModelId, StringComparer.Ordinal)
+            .ThenBy(r => r.CostCenter, StringComparer.Ordinal)
+            .ToList();
+    }
+
     private static bool IsDuplicateRequestId(DbUpdateException exception)
     {
         // SQLite surfaces a unique-index violation as "SQLite Error 19: 'UNIQUE constraint failed: ...'".

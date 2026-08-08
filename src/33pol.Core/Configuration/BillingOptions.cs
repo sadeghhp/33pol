@@ -68,4 +68,26 @@ public sealed class BillingOptions
     /// can take to engage.
     /// </remarks>
     public int BudgetSpendCacheTtlSeconds { get; set; } = 10;
+
+    /// <summary>
+    /// Whether the gateway periodically reconciles the billing event ledger against the daily usage
+    /// rollups derived from it. On by default: the comparison is the only thing that makes a
+    /// divergence between the two visible, and every known failure in that path is silent.
+    /// </summary>
+    public bool ReconciliationEnabled { get; set; } = true;
+
+    /// <summary>How often the reconciliation sweep runs.</summary>
+    public int ReconciliationIntervalMinutes { get; set; } = 60;
+
+    /// <summary>
+    /// How many days back each sweep reconciles, ending with yesterday (UTC).
+    /// </summary>
+    /// <remarks>
+    /// Ends at yesterday rather than today because today's rollups are still being written; comparing
+    /// a day in progress races the usage writer's flush interval and reports drift that resolves
+    /// itself seconds later. The window is clamped to <see cref="UsageRetentionDays"/> at use, since
+    /// retention prunes the ledger but not the rollups — reaching past it would report every pruned
+    /// day as a discrepancy.
+    /// </remarks>
+    public int ReconciliationLookbackDays { get; set; } = 3;
 }

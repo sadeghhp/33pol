@@ -73,4 +73,36 @@ public static class GatewayMeters
 
     public static readonly Counter<long> UsageWriterDropped =
         Meter.CreateCounter<long>("gateway_usage_writer_dropped_total");
+
+    /// <summary>Completed reconciliation sweeps. A flat line means the job has stopped running.</summary>
+    public static readonly Counter<long> BillingReconciliationRuns =
+        Meter.CreateCounter<long>("gateway_billing_reconciliation_runs_total");
+
+    private static int _reconciliationDiscrepancies;
+    private static double _reconciliationCostDrift;
+
+    /// <summary>
+    /// Rollup buckets whose totals disagree with the billing events behind them, as of the last
+    /// sweep. <b>Alert on any non-zero value.</b>
+    /// </summary>
+    public static readonly ObservableGauge<int> BillingReconciliationDiscrepancies =
+        Meter.CreateObservableGauge(
+            "gateway_billing_reconciliation_discrepancies",
+            static () => Volatile.Read(ref _reconciliationDiscrepancies));
+
+    /// <summary>
+    /// Total absolute money difference across those buckets, in the configured default currency.
+    /// Reported alongside the count because one bucket out by a large amount and many out by
+    /// rounding are very different incidents.
+    /// </summary>
+    public static readonly ObservableGauge<double> BillingReconciliationCostDrift =
+        Meter.CreateObservableGauge(
+            "gateway_billing_reconciliation_cost_drift",
+            static () => Volatile.Read(ref _reconciliationCostDrift));
+
+    internal static void SetBillingReconciliation(int discrepancyCount, double absoluteCostDrift)
+    {
+        Volatile.Write(ref _reconciliationDiscrepancies, discrepancyCount);
+        Volatile.Write(ref _reconciliationCostDrift, absoluteCostDrift);
+    }
 }

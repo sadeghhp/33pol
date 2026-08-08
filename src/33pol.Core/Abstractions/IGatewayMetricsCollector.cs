@@ -36,4 +36,17 @@ public interface IGatewayMetricsCollector
     void RecordBulkheadInflightChange(string modelId, int delta);
 
     void RecordTimeToFirstToken(string modelId, double seconds);
+
+    /// <summary>
+    /// Publishes the outcome of a billing reconciliation sweep: how many rollup buckets disagreed
+    /// with the ledger behind them, and by how much money in total.
+    /// </summary>
+    /// <remarks>
+    /// Alert on a non-zero <paramref name="discrepancyCount"/>. Everything an operator reads comes
+    /// from the rollups while the ledger is what records the request, so a divergence between them
+    /// produces wrong numbers that look entirely normal — this counter is the only place it surfaces.
+    /// A sweep that runs and finds nothing still reports zero, which is what distinguishes "balanced"
+    /// from "the job stopped running".
+    /// </remarks>
+    void RecordBillingReconciliation(int discrepancyCount, double absoluteCostDrift);
 }

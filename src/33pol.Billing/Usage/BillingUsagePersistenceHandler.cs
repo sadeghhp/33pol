@@ -1,8 +1,6 @@
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 using Pol33.Core.Abstractions;
 using Pol33.Core.Billing;
-using Pol33.Core.Configuration;
 using Pol33.Core.Models;
 
 namespace Pol33.Billing.Usage;
@@ -18,8 +16,7 @@ public sealed class BillingUsagePersistenceHandler(
     BillingUnpricedModelTracker unpricedModelTracker,
     IApiKeyLastUsedTracker lastUsedTracker,
     BudgetReservationLedger reservationLedger,
-    ILogger<BillingUsagePersistenceHandler> logger,
-    IOptions<BillingOptions> billingOptions) : IUsagePersistenceHandler
+    ILogger<BillingUsagePersistenceHandler> logger) : IUsagePersistenceHandler
 {
     public async ValueTask PersistAsync(UsageEvent usageEvent, CancellationToken cancellationToken = default)
     {

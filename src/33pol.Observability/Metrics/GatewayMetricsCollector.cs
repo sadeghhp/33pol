@@ -65,4 +65,14 @@ public sealed class GatewayMetricsCollector(GatewayRuntimeState runtimeState) : 
         GatewayMeters.TimeToFirstToken.Record(
             seconds,
             new KeyValuePair<string, object?>("model", modelId));
+
+    public void RecordBillingReconciliation(int discrepancyCount, double absoluteCostDrift)
+    {
+        // Recorded as gauges, not counters: the question is "is billing consistent right now", and a
+        // monotonic counter cannot answer that — it never returns to zero once a transient
+        // discrepancy is resolved. Every completed sweep overwrites both, so a stale value means the
+        // sweep itself stopped, which is why the job also emits a heartbeat.
+        GatewayMeters.SetBillingReconciliation(discrepancyCount, absoluteCostDrift);
+        GatewayMeters.BillingReconciliationRuns.Add(1);
+    }
 }

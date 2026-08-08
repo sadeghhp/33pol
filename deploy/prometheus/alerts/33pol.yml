@@ -27,6 +27,32 @@ groups:
         annotations:
           summary: Upstream usage JSON parse failures elevated
           description: Check upstream responses include usage blocks; see docs/observability.md
+      # The billing ledger and the rollups derived from it have diverged. Everything an operator
+      # reads — admin usage, budgets, the daily webhook — comes from the rollups, so this is the
+      # only signal that those numbers have stopped matching what was actually recorded.
+      - alert: GatewayBillingReconciliationDrift
+        expr: gateway_billing_reconciliation_discrepancies > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: Billing rollups disagree with the billing event ledger
+          description: >-
+            {{ $value }} rollup bucket(s) diverge from the ledger
+            (gateway_billing_reconciliation_cost_drift shows the money difference).
+            The ledger is authoritative. See docs/finops.md#reconciliation
+      # A sweep that stops running looks exactly like a healthy one on the gauge above, because the
+      # gauge simply holds its last value. This is what distinguishes the two.
+      - alert: GatewayBillingReconciliationStalled
+        expr: increase(gateway_billing_reconciliation_runs_total[3h]) == 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: Billing reconciliation has stopped running
+          description: >-
+            No reconciliation sweep completed in 3h. Billing divergence is now undetected.
+            See docs/finops.md#reconciliation
       - alert: GatewayCircuitBreakerOpen
         expr: max by (model) (gateway_circuit_breaker_state) == 2
         for: 5m

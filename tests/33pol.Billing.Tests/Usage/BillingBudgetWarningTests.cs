@@ -126,8 +126,7 @@ public sealed class BillingBudgetWarningTests
             new BillingUnpricedModelTracker(),
             Substitute.For<IApiKeyLastUsedTracker>(),
             new BudgetReservationLedger(TimeSpan.FromMinutes(2)),
-            NullLogger<BillingUsagePersistenceHandler>.Instance,
-            Options.Create(new BillingOptions()));
+            NullLogger<BillingUsagePersistenceHandler>.Instance);
     }
 
     private static UsageEvent CreateUsageEvent(Guid tenantId, string requestId) =>

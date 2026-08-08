@@ -43,6 +43,7 @@ All notable changes to this project are documented here. Version tags follow [Se
 
 ### Added
 
+- **Billing reconciliation.** A background sweep compares the `billing_events` ledger against the `daily_usage_rollups` derived from it, reporting divergence to logs and to `gateway_billing_reconciliation_discrepancies` / `_cost_drift` / `_runs_total`, with Prometheus alerts for both drift and the sweep stalling. Everything an operator reads comes from the rollups while the ledger is what records a request, so every defect between the two — several of which are fixed above — produced plausible wrong numbers and no error. The sweep reports and never repairs: a discrepancy means one side is wrong and the job cannot tell which. Configured by `Billing:ReconciliationEnabled` (default on), `ReconciliationIntervalMinutes` (60) and `ReconciliationLookbackDays` (3, ending yesterday UTC, clamped inside retention).
 - API keys support an optional `expiresAt` on create and update. The expiry column and `expired_api_key` error existed but were unreachable.
 - `Gateway:Resilience:ShutdownDrainSeconds` keeps the gateway serving after readiness reports unhealthy, so load balancers can deregister before Kestrel stops. Defaults to 0; the Helm chart sets 15.
 - `Gateway:Resilience:CircuitBreakerSamplingWindowSeconds` and `CircuitBreakerFailureRatioThreshold`.

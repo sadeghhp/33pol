@@ -32,8 +32,7 @@ public sealed class BillingUsagePersistenceHandlerTests
             new BillingUnpricedModelTracker(),
             lastUsedTracker ?? Substitute.For<IApiKeyLastUsedTracker>(),
             new BudgetReservationLedger(TimeSpan.FromMinutes(2)),
-            NullLogger<BillingUsagePersistenceHandler>.Instance,
-            Options.Create(new BillingOptions { DefaultCurrency = "USD" }));
+            NullLogger<BillingUsagePersistenceHandler>.Instance);
 
     [Fact]
     public async Task PersistAsync_NewEvent_AppendsAndUpsertsRollup()

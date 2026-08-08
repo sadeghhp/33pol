@@ -25,6 +25,8 @@ After changing the JSON or datasource provisioning, restart Grafana: `docker com
 
 ## Alerts
 
+`GatewayBillingReconciliationDrift` fires when the billing rollups stop matching the ledger behind them; `GatewayBillingReconciliationStalled` fires when the sweep that checks this stops running. Both are documented in [finops.md](finops.md#reconciliation) — the drift alert is the only signal that billing numbers have gone wrong, because every other symptom of it looks like normal operation.
+
 Validate rules:
 
 ```bash

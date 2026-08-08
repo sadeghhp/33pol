@@ -97,6 +97,34 @@ the cache.
 
 Prometheus metrics: `gateway_usage_writer_queue_depth`, `gateway_usage_writer_dropped_total`.
 
+## Reconciliation
+
+`billing_events` is the source of truth: an append-only, idempotent row per request. `daily_usage_rollups` is a derived aggregate — and it is the aggregate, not the ledger, that the admin usage pages, budget enforcement and the daily webhook all read. A defect anywhere between the two therefore produces numbers that are wrong but entirely plausible, with nothing logged and no request failing.
+
+A background sweep compares them and reports the result:
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `Billing:ReconciliationEnabled` | `true` | Run the sweep at all. |
+| `Billing:ReconciliationIntervalMinutes` | `60` | How often. |
+| `Billing:ReconciliationLookbackDays` | `3` | Days reconciled per sweep, ending **yesterday** (UTC). |
+
+The window ends at yesterday because today's rollups are still being written — comparing a day in progress races the usage writer's flush interval and reports drift that resolves itself seconds later. It is also clamped inside `UsageRetentionDays`, since retention prunes the ledger but not the rollups.
+
+Each bucket is `(date, tenant, model, cost centre)`, keyed exactly as the rollup writer keys it. Costs are compared **exactly**, with no tolerance: both sides are decimal sums of the same per-request values, so correct code agrees to the last digit, and any tolerance wide enough to absorb a rounding difference is also wide enough to hide a dropped request.
+
+Three findings are possible:
+
+- **`MissingFromRollups`** — the ledger recorded spend that no rollup reflects. Usually a rollup write that failed after the ledger append (which logs an error of its own). This spend is invisible to budgets and dashboards, so hard stops will not fire on it.
+- **`MissingFromEvents`** — a rollup with no ledger behind it. Check the window against retention first; otherwise suspect a double increment.
+- **`TotalsDiffer`** — both exist and disagree. A token or request-count difference at identical cost still counts: usage was mis-attributed even though the money happened to match.
+
+**The sweep never repairs what it finds.** A discrepancy means one of the two sides is wrong and the job cannot tell which; rewriting rollups from the ledger would destroy the evidence needed to diagnose it, and would itself be undetectable if the ledger were the faulty side.
+
+Metrics: `gateway_billing_reconciliation_discrepancies` (gauge — **alert on any non-zero value**), `gateway_billing_reconciliation_cost_drift` (gauge, absolute money difference), `gateway_billing_reconciliation_runs_total` (counter — a flat line means the sweep stopped running). A balanced sweep publishes zero rather than not publishing, so "healthy" stays distinguishable from "the job died".
+
+There is no admin endpoint for the full report: it spans every tenant while the admin usage surface is tenant-scoped, so serving it there would hand one tenant another's model ids, volumes and costs. Logs and metrics are the operator-level channel.
+
 **Retention:** `Billing:UsageRetentionDays` (default 90) is the configured TTL for `billing_events` and rollup history. A background purge job is not implemented in v1; operators may run scheduled SQL deletes or rely on table partitioning in production.
 
 Admin UI: `/admin` (static Alpine.js dashboard).
