@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Pol33.Core.Abstractions;
 using Pol33.Core.Billing;
+using Pol33.Core.Identity;
 using Pol33.Core.Models;
 using Pol33.Core.Security;
 
@@ -24,13 +25,18 @@ public static class AdminUsageEndpoints
     }
 
     private static async Task<IResult> GetUsage(
+        HttpContext httpContext,
         IBillingUsageService usageService,
         DateOnly? from,
         DateOnly? to,
-        Guid? tenantId,
         string? costCenter,
         CancellationToken cancellationToken)
     {
+        if (!TryGetTenantId(httpContext, out var tenantId))
+        {
+            return Results.Unauthorized();
+        }
+
         var report = await usageService
             .GetUsageReportAsync(
                 new UsageReportRequest
@@ -47,11 +53,16 @@ public static class AdminUsageEndpoints
     }
 
     private static async Task<IResult> GetForecast(
+        HttpContext httpContext,
         IBillingForecastService forecastService,
-        Guid? tenantId,
         int? days,
         CancellationToken cancellationToken)
     {
+        if (!TryGetTenantId(httpContext, out var tenantId))
+        {
+            return Results.Unauthorized();
+        }
+
         var report = await forecastService
             .GetForecastAsync(tenantId, days ?? 7, cancellationToken)
             .ConfigureAwait(false);
@@ -60,15 +71,20 @@ public static class AdminUsageEndpoints
     }
 
     private static async Task<IResult> GetEvents(
+        HttpContext httpContext,
         IBillingUsageService usageService,
         DateOnly? from,
         DateOnly? to,
-        Guid? tenantId,
         Guid? apiKeyId,
         string? costCenter,
         int? limit,
         CancellationToken cancellationToken)
     {
+        if (!TryGetTenantId(httpContext, out var tenantId))
+        {
+            return Results.Unauthorized();
+        }
+
         var page = await usageService
             .QueryEventsAsync(
                 new BillingEventQuery(from, to, tenantId, apiKeyId, costCenter, limit ?? 100),
@@ -79,14 +95,19 @@ public static class AdminUsageEndpoints
     }
 
     private static async Task<IResult> ExportUsage(
+        HttpContext httpContext,
         IBillingUsageService usageService,
         DateOnly? from,
         DateOnly? to,
-        Guid? tenantId,
         string? costCenter,
         string? format,
         CancellationToken cancellationToken)
     {
+        if (!TryGetTenantId(httpContext, out var tenantId))
+        {
+            return Results.Unauthorized();
+        }
+
         var report = await usageService
             .GetUsageReportAsync(
                 new UsageReportRequest
@@ -104,5 +125,17 @@ public static class AdminUsageEndpoints
             System.Text.Encoding.UTF8.GetBytes(export.Body),
             export.ContentType,
             export.FileName);
+    }
+
+    private static bool TryGetTenantId(HttpContext context, out Guid tenantId)
+    {
+        tenantId = default;
+        if (!context.Items.TryGetValue(TenantContextKeys.HttpContextItemKey, out var value) ||
+            value is not TenantContext tenant)
+        {
+            return false;
+        }
+
+        return Guid.TryParse(tenant.TenantId, out tenantId);
     }
 }

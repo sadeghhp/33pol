@@ -54,6 +54,11 @@ public static class InferenceRouteClassifier
             return false;
         }
 
+        if (path.Contains("://"))
+        {
+            return false;
+        }
+
         foreach (var suffix in RoutableSuffixes)
         {
             if (path.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))

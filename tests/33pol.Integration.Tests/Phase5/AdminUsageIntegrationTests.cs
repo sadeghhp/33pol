@@ -1,10 +1,12 @@
 using System.Net;
 using System.Net.Http.Json;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Pol33.Core.Abstractions;
 using Pol33.Core.Billing;
 using Pol33.Integration.Tests.Support;
+using Pol33.Persistence;
 
 namespace Pol33.Integration.Tests.Phase5;
 
@@ -28,13 +30,13 @@ public sealed class AdminUsageIntegrationTests
         await using var factory = GatewayWebApplicationFactory.CreateWithInMemoryDatabase();
         await GatewayWebApplicationFactory.EnsureAuthReadyAsync(factory);
 
-        var tenantId = Guid.NewGuid();
+        var tenantId = await GetBootstrapTenantIdAsync(factory);
         await SeedRollupsAsync(factory, tenantId);
 
         var client = factory.CreateClient();
         client.DefaultRequestHeaders.Add("X-API-Key", "sk-33pol-integration-admin-key");
 
-        var response = await client.GetAsync($"/admin/api/usage?tenantId={tenantId}");
+        var response = await client.GetAsync("/admin/api/usage");
         response.StatusCode.Should().Be(HttpStatusCode.OK);
 
         var report = await response.Content.ReadFromJsonAsync<UsageReportDto>();
@@ -52,13 +54,13 @@ public sealed class AdminUsageIntegrationTests
         await using var factory = GatewayWebApplicationFactory.CreateWithInMemoryDatabase();
         await GatewayWebApplicationFactory.EnsureAuthReadyAsync(factory);
 
-        var tenantId = Guid.NewGuid();
+        var tenantId = await GetBootstrapTenantIdAsync(factory);
         await SeedRollupsAsync(factory, tenantId);
 
         var client = factory.CreateClient();
         client.DefaultRequestHeaders.Add("X-API-Key", "sk-33pol-integration-admin-key");
 
-        var response = await client.GetAsync($"/admin/api/usage/export?format=csv&tenantId={tenantId}");
+        var response = await client.GetAsync("/admin/api/usage/export?format=csv");
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         response.Content.Headers.ContentType!.MediaType.Should().Be("text/csv");
 
@@ -88,13 +90,13 @@ public sealed class AdminUsageIntegrationTests
         await using var factory = GatewayWebApplicationFactory.CreateWithInMemoryDatabase();
         await GatewayWebApplicationFactory.EnsureAuthReadyAsync(factory);
 
-        var tenantId = Guid.NewGuid();
+        var tenantId = await GetBootstrapTenantIdAsync(factory);
         await SeedBillingEventAsync(factory, tenantId);
 
         var client = factory.CreateClient();
         client.DefaultRequestHeaders.Add("X-API-Key", "sk-33pol-integration-admin-key");
 
-        var response = await client.GetAsync($"/admin/api/usage/events?tenantId={tenantId}&limit=10");
+        var response = await client.GetAsync("/admin/api/usage/events?limit=10");
         response.StatusCode.Should().Be(HttpStatusCode.OK);
 
         var page = await response.Content.ReadFromJsonAsync<BillingEventsPageDto>();
@@ -109,13 +111,13 @@ public sealed class AdminUsageIntegrationTests
         await using var factory = GatewayWebApplicationFactory.CreateWithInMemoryDatabase();
         await GatewayWebApplicationFactory.EnsureAuthReadyAsync(factory);
 
-        var tenantId = Guid.NewGuid();
+        var tenantId = await GetBootstrapTenantIdAsync(factory);
         await SeedRollupsAsync(factory, tenantId);
 
         var client = factory.CreateClient();
         client.DefaultRequestHeaders.Add("X-API-Key", "sk-33pol-integration-admin-key");
 
-        var response = await client.GetAsync($"/admin/api/usage/forecast?tenantId={tenantId}&days=7");
+        var response = await client.GetAsync("/admin/api/usage/forecast?days=7");
         response.StatusCode.Should().Be(HttpStatusCode.OK);
 
         var forecast = await response.Content.ReadFromJsonAsync<UsageForecastDto>();
@@ -130,19 +132,27 @@ public sealed class AdminUsageIntegrationTests
         await using var factory = GatewayWebApplicationFactory.CreateWithInMemoryDatabase();
         await GatewayWebApplicationFactory.EnsureAuthReadyAsync(factory);
 
-        var tenantId = Guid.NewGuid();
+        var tenantId = await GetBootstrapTenantIdAsync(factory);
         await SeedRollupsAsync(factory, tenantId);
 
         var client = factory.CreateClient();
         client.DefaultRequestHeaders.Add("X-API-Key", "sk-33pol-integration-admin-key");
 
-        var response = await client.GetAsync($"/admin/api/usage/export?format=json&tenantId={tenantId}");
+        var response = await client.GetAsync("/admin/api/usage/export?format=json");
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         response.Content.Headers.ContentType!.MediaType.Should().Be("application/json");
 
         var body = await response.Content.ReadAsStringAsync();
         body.Should().Contain("\"modelId\": \"gpt-4o\"");
         body.Should().Contain("\"costCenter\": \"eng\"");
+    }
+
+    private static async Task<Guid> GetBootstrapTenantIdAsync(WebApplicationFactory<Program> factory)
+    {
+        await using var scope = factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<GatewayDbContext>();
+        var tenant = await db.Tenants.AsNoTracking().SingleAsync();
+        return tenant.Id;
     }
 
     private static async Task SeedBillingEventAsync(WebApplicationFactory<Program> factory, Guid tenantId)

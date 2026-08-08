@@ -89,7 +89,7 @@ public sealed class AdminModelProvisioningService(
 
         var previousId = existing?.Id;
         var renamedFrom = previousId is not null &&
-                          !string.Equals(previousId, prep.Model!.Id, StringComparison.Ordinal)
+                          !string.Equals(previousId, prep.Model!.Id, StringComparison.OrdinalIgnoreCase)
             ? previousId
             : null;
 
@@ -416,7 +416,7 @@ public sealed class AdminModelProvisioningService(
                 return PrepResult.Fail("upstreamAuth requires envVar or secretRef when not supplying apiKey.");
             }
         }
-        else if (!hasKey)
+        else if (!hasKey && !isUpdate)
         {
             normalized.UpstreamAuth = null;
         }

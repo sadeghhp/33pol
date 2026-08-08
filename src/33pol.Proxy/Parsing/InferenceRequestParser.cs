@@ -13,6 +13,11 @@ public static class InferenceRequestParser
         using var document = await JsonDocument.ParseAsync(body, cancellationToken: cancellationToken)
             .ConfigureAwait(false);
 
+        if (document.RootElement.ValueKind != JsonValueKind.Object)
+        {
+            throw new JsonException("Request body must be a JSON object.");
+        }
+
         string? model = null;
         var stream = false;
         int? maxTokens = null;

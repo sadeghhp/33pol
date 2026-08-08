@@ -17,6 +17,8 @@ public sealed class RegistryServiceCollectionExtensionsTests
         var services = new ServiceCollection();
         services.AddLogging();
         services.AddSingleton<IConfiguration>(new ConfigurationBuilder().Build());
+        // The secret store resolves the environment to decide whether a missing key pepper is fatal.
+        services.AddSingleton<Microsoft.Extensions.Hosting.IHostEnvironment>(new TestHostEnvironment());
         services.AddOptions<GatewayOptions>().Configure(o =>
         {
             o.ModelsConfigPath = "config/models.json";
@@ -30,5 +32,17 @@ public sealed class RegistryServiceCollectionExtensionsTests
         provider.GetRequiredService<IModelRegistryWriter>().Should().BeOfType<ModelRegistryWriter>();
         provider.GetRequiredService<IConfigReload>().Should().BeOfType<ModelRegistryConfigReload>();
         provider.GetRequiredService<RegistryGate>().Should().NotBeNull();
+    }
+
+    private sealed class TestHostEnvironment : Microsoft.Extensions.Hosting.IHostEnvironment
+    {
+        public string EnvironmentName { get; set; } = Microsoft.Extensions.Hosting.Environments.Development;
+
+        public string ApplicationName { get; set; } = "tests";
+
+        public string ContentRootPath { get; set; } = AppContext.BaseDirectory;
+
+        public Microsoft.Extensions.FileProviders.IFileProvider ContentRootFileProvider { get; set; } =
+            new Microsoft.Extensions.FileProviders.NullFileProvider();
     }
 }

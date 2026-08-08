@@ -1,5 +1,6 @@
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Pol33.Core.Configuration;
@@ -45,13 +46,42 @@ public sealed class FileUpstreamSecretStoreTests
         }
     }
 
-    private static FileUpstreamSecretStore CreateStore(string secretsPath)
+    /// <summary>
+    /// Outside Development a missing/weak pepper disables credential storage rather than crashing
+    /// host startup — deployments that never store upstream secrets must still boot.
+    /// </summary>
+    [Fact]
+    public async Task ProductionWithoutPepper_RefusesPutButStillConstructs()
     {
+        var path = Path.Combine(Path.GetTempPath(), $"33pol-secrets-{Guid.NewGuid():N}.enc");
+        try
+        {
+            var store = CreateStore(path, pepper: null, environmentName: Environments.Production);
+
+            store.TryGet("model-a", out _).Should().BeFalse();
+            var act = async () => await store.PutAsync("model-a", "sk-test");
+            await act.Should().ThrowAsync<InvalidOperationException>()
+                .WithMessage("*KeyPepper*");
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    private static FileUpstreamSecretStore CreateStore(
+        string secretsPath,
+        string? pepper = "test-pepper",
+        string? environmentName = null)
+    {
+        var values = new Dictionary<string, string?>();
+        if (pepper is not null)
+        {
+            values["Gateway:Security:KeyPepper"] = pepper;
+        }
+
         var config = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["Gateway:Security:KeyPepper"] = "test-pepper"
-            })
+            .AddInMemoryCollection(values)
             .Build();
 
         var options = Options.Create(new GatewayOptions
@@ -63,13 +93,13 @@ public sealed class FileUpstreamSecretStoreTests
         return new FileUpstreamSecretStore(
             options,
             config,
-            new TestHostEnvironment(),
+            new TestHostEnvironment { EnvironmentName = environmentName ?? Environments.Production },
             NullLogger<FileUpstreamSecretStore>.Instance);
     }
 
-    private sealed class TestHostEnvironment : Microsoft.Extensions.Hosting.IHostEnvironment
+    private sealed class TestHostEnvironment : IHostEnvironment
     {
-        public string EnvironmentName { get; set; } = Microsoft.Extensions.Hosting.Environments.Production;
+        public string EnvironmentName { get; set; } = Environments.Production;
 
         public string ApplicationName { get; set; } = "tests";
 

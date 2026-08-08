@@ -15,6 +15,8 @@ public sealed class GatewayReadinessServiceTests
         config.IsReloadInProgress.Returns(false);
 
         var registry = Substitute.For<IModelRegistry>();
+        // NSubstitute does not honour the interface default (IsLoaded => true).
+        registry.IsLoaded.Returns(true);
         registry.GetAllModels().Returns([new ModelConfig { Id = "m1", Url = "http://x" }]);
 
         var health = Substitute.For<IBackendHealthStore>();
@@ -38,6 +40,7 @@ public sealed class GatewayReadinessServiceTests
         config.IsReloadInProgress.Returns(false);
 
         var registry = Substitute.For<IModelRegistry>();
+        registry.IsLoaded.Returns(true);
         registry.GetAllModels().Returns([new ModelConfig { Id = "m1", Url = "http://x" }]);
 
         var health = Substitute.For<IBackendHealthStore>();
@@ -62,6 +65,7 @@ public sealed class GatewayReadinessServiceTests
         config.IsReloadInProgress.Returns(false);
 
         var registry = Substitute.For<IModelRegistry>();
+        registry.IsLoaded.Returns(true);
         registry.GetAllModels().Returns([new ModelConfig { Id = "m1", Url = "http://x" }]);
 
         var health = Substitute.For<IBackendHealthStore>();
@@ -74,5 +78,50 @@ public sealed class GatewayReadinessServiceTests
         var (_, status) = sut.GetReadiness();
 
         status.Should().Be(StatusCodes.Status503ServiceUnavailable);
+    }
+
+    [Fact]
+    public void GetReadiness_EmptyButLoadedRegistry_Returns200()
+    {
+        var config = Substitute.For<IConfigReload>();
+        config.GetStatus().Returns(new ConfigStatusResponse { ModelCount = 0 });
+        config.IsReloadInProgress.Returns(false);
+
+        var registry = Substitute.For<IModelRegistry>();
+        registry.IsLoaded.Returns(true);
+        registry.GetAllModels().Returns([]);
+
+        var health = Substitute.For<IBackendHealthStore>();
+        var drain = Substitute.For<IGatewayDrainState>();
+        drain.IsDraining.Returns(false);
+
+        var sut = new GatewayReadinessService(config, registry, health, drain);
+        var (body, status) = sut.GetReadiness();
+
+        status.Should().Be(StatusCodes.Status200OK);
+        body.RegistryLoaded.Should().BeTrue();
+        body.ModelCount.Should().Be(0);
+    }
+
+    [Fact]
+    public void GetReadiness_NotLoaded_Returns503()
+    {
+        var config = Substitute.For<IConfigReload>();
+        config.GetStatus().Returns(new ConfigStatusResponse { ModelCount = 0 });
+        config.IsReloadInProgress.Returns(false);
+
+        var registry = Substitute.For<IModelRegistry>();
+        registry.IsLoaded.Returns(false);
+        registry.GetAllModels().Returns([]);
+
+        var health = Substitute.For<IBackendHealthStore>();
+        var drain = Substitute.For<IGatewayDrainState>();
+        drain.IsDraining.Returns(false);
+
+        var sut = new GatewayReadinessService(config, registry, health, drain);
+        var (body, status) = sut.GetReadiness();
+
+        status.Should().Be(StatusCodes.Status503ServiceUnavailable);
+        body.RegistryLoaded.Should().BeFalse();
     }
 }

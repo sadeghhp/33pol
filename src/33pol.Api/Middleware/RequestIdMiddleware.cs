@@ -11,12 +11,22 @@ public sealed class RequestIdMiddleware
 
     public async Task InvokeAsync(HttpContext context)
     {
-        var requestId = ResolveRequestId(context.Request);
-        context.Items[RequestIdKeys.HttpContextItemKey] = requestId;
+        var serverRequestId = $"req_{Guid.NewGuid():N}";
+        context.Items[RequestIdKeys.HttpContextItemKey] = serverRequestId;
+
+        var echoId = serverRequestId;
+        if (context.Request.Headers.TryGetValue(GatewayHeaders.RequestId, out var incoming))
+        {
+            var clientValue = incoming.ToString().Trim();
+            if (!string.IsNullOrEmpty(clientValue))
+            {
+                echoId = clientValue;
+            }
+        }
 
         context.Response.OnStarting(() =>
         {
-            context.Response.Headers[GatewayHeaders.RequestId] = requestId;
+            context.Response.Headers[GatewayHeaders.RequestId] = echoId;
             return Task.CompletedTask;
         });
 
@@ -24,21 +34,7 @@ public sealed class RequestIdMiddleware
 
         if (!context.Response.Headers.ContainsKey(GatewayHeaders.RequestId))
         {
-            context.Response.Headers[GatewayHeaders.RequestId] = requestId;
+            context.Response.Headers[GatewayHeaders.RequestId] = echoId;
         }
-    }
-
-    public static string ResolveRequestId(HttpRequest request)
-    {
-        if (request.Headers.TryGetValue(GatewayHeaders.RequestId, out var incoming))
-        {
-            var value = incoming.ToString().Trim();
-            if (!string.IsNullOrEmpty(value))
-            {
-                return value;
-            }
-        }
-
-        return $"req_{Guid.NewGuid():N}";
     }
 }

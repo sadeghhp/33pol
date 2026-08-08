@@ -131,9 +131,9 @@ public sealed class ApiKeyValidatorTests
         await using var db = CreateDb();
         var tenantId = await SeedTenantAsync(db);
 
-        // Both secrets share the same 12-char prefix ("sk-33pol-aaa") but are otherwise different keys.
-        const string victimSecret = "sk-33pol-aaa-victim-admin";
-        const string attackerSecret = "sk-33pol-aaa-attacker-guess";
+        // Both secrets share the same 20-char prefix but are otherwise different keys.
+        const string victimSecret = "sk-33pol-collideXXX-victim-admin";
+        const string attackerSecret = "sk-33pol-collideXXX-attacker-guess";
         ApiKeyHashing.CreatePrefix(victimSecret).Should().Be(ApiKeyHashing.CreatePrefix(attackerSecret));
 
         await SeedKeyAsync(db, tenantId, victimSecret, ApiKeyRole.Admin);

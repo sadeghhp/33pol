@@ -305,6 +305,31 @@ public sealed class ModelRegistryWriterTests
         repo.Saved.Select(m => m.Id).Should().BeEquivalentTo(["renamed"]);
     }
 
+    /// <summary>
+    /// Routing, grants and rate cards all match model ids case-insensitively. Treating a
+    /// differently-cased spelling as a rename would re-key the model (and silently orphan its
+    /// price / credential under the old spelling).
+    /// </summary>
+    [Fact]
+    public async Task UpdateModelAsync_DifferentlyCasedId_KeepsCanonicalId()
+    {
+        var (writer, registry, repo) = CreateWriterWithSeed();
+
+        var result = await writer.UpdateModelAsync("SEED", new ModelConfig
+        {
+            Id = "SEED",
+            Url = "http://updated:9000",
+            Aliases = [],
+        });
+
+        result.Success.Should().BeTrue();
+        result.Message.Should().NotContain("renamed");
+        registry.TryGetModel("seed", out var model).Should().BeTrue();
+        model!.Id.Should().Be("seed");
+        model.Url.Should().Be("http://updated:9000");
+        repo.Saved.Select(m => m.Id).Should().BeEquivalentTo(["seed"]);
+    }
+
     [Fact]
     public async Task UpdateModelAsync_RenameOntoExistingId_Returns409()
     {

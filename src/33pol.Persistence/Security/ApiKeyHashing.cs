@@ -28,7 +28,7 @@ public static class ApiKeyHashing
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(secret);
 
-        const int visibleLength = 12;
+        const int visibleLength = 20;
         var trimmed = secret.Trim();
         return trimmed.Length <= visibleLength
             ? trimmed

@@ -14,8 +14,17 @@ public sealed class FileUpstreamSecretStore : IUpstreamSecretStore
     /// <summary>Published development default; rejected outside Development (see <c>WellKnownWeakSecrets</c>).</summary>
     private const string DevelopmentPepper = "dev-pepper-change-me";
 
+    private const string WeakPepperMessage =
+        "Gateway:Security:KeyPepper must be set to a strong, non-default value before the gateway will "
+        + "store or read upstream provider credentials: it is the encryption key for the secrets file, "
+        + "and a published default leaves every stored provider key readable by anyone who obtains that "
+        + "file. Set the GATEWAY_KEY_PEPPER environment variable.";
+
     private readonly GatewayOptions _gatewayOptions;
-    private readonly byte[] _key;
+
+    /// <summary>Null when no usable pepper is configured; the store then refuses to read or write secrets.</summary>
+    private readonly byte[]? _key;
+
     private readonly ILogger<FileUpstreamSecretStore> _logger;
     private readonly object _lock = new();
     private Dictionary<string, string> _cache = new(StringComparer.OrdinalIgnoreCase);
@@ -28,16 +37,24 @@ public sealed class FileUpstreamSecretStore : IUpstreamSecretStore
     {
         _gatewayOptions = gatewayOptions.Value;
         _logger = logger;
-        _key = UpstreamSecretFileCipher.DeriveKey(ResolvePepper(configuration, environment, logger));
+
+        var pepper = ResolvePepper(configuration, environment, logger);
+        _key = pepper is null ? null : UpstreamSecretFileCipher.DeriveKey(pepper);
         LoadFromDisk();
     }
 
     /// <summary>
-    /// The pepper is the encryption key for every upstream provider credential this gateway holds.
-    /// Falling back to a published constant meant the secrets file was decryptable by anyone who
-    /// obtained it, so outside Development a missing or well-known pepper fails closed instead.
+    /// Resolves the pepper that encrypts every upstream provider credential this gateway holds, or
+    /// null when there is no usable one.
     /// </summary>
-    private static string ResolvePepper(
+    /// <remarks>
+    /// Falling back to a published constant meant the secrets file was decryptable by anyone who
+    /// obtained it. Outside Development a missing or well-known pepper therefore disables the store
+    /// rather than silently encrypting with a known key. It disables rather than throwing so a
+    /// deployment that stores no upstream credentials at all still starts — the refusal lands on the
+    /// operation that would have used the key, where it can be reported to whoever triggered it.
+    /// </remarks>
+    private static string? ResolvePepper(
         IConfiguration configuration,
         IHostEnvironment environment,
         ILogger logger)
@@ -45,18 +62,18 @@ public sealed class FileUpstreamSecretStore : IUpstreamSecretStore
         var pepper = configuration["Gateway:Security:KeyPepper"]
             ?? configuration["Gateway:Bootstrap:KeyPepper"];
 
-        var isUsable = !string.IsNullOrWhiteSpace(pepper) && !WellKnownWeakSecrets.IsWeakPepper(pepper);
-        if (isUsable)
+        if (!string.IsNullOrWhiteSpace(pepper) && !WellKnownWeakSecrets.IsWeakPepper(pepper))
         {
-            return pepper!;
+            return pepper;
         }
 
         if (!environment.IsDevelopment())
         {
-            throw new InvalidOperationException(
-                "Gateway:Security:KeyPepper must be set to a strong, non-default value: it encrypts the "
-                + "stored upstream provider credentials, and a default one leaves them readable by anyone "
-                + "who can read the secrets file. Set the GATEWAY_KEY_PEPPER environment variable.");
+            logger.LogError(
+                "No strong key pepper is configured, so upstream provider credentials cannot be stored "
+                + "or read. {Message}",
+                WeakPepperMessage);
+            return null;
         }
 
         logger.LogWarning(
@@ -67,6 +84,12 @@ public sealed class FileUpstreamSecretStore : IUpstreamSecretStore
 
     public bool TryGet(string modelId, out string? secret)
     {
+        secret = null;
+        if (_key is null)
+        {
+            return false;
+        }
+
         lock (_lock)
         {
             if (_cache.TryGetValue(modelId, out var cipher) &&
@@ -77,7 +100,6 @@ public sealed class FileUpstreamSecretStore : IUpstreamSecretStore
             }
         }
 
-        secret = null;
         return false;
     }
 
@@ -85,6 +107,11 @@ public sealed class FileUpstreamSecretStore : IUpstreamSecretStore
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(modelId);
         ArgumentException.ThrowIfNullOrWhiteSpace(secret);
+
+        if (_key is null)
+        {
+            throw new InvalidOperationException(WeakPepperMessage);
+        }
 
         var cipher = UpstreamSecretFileCipher.Encrypt(secret.Trim(), _key);
         lock (_lock)

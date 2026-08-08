@@ -28,6 +28,11 @@ internal static class GatewayWebApplicationFactory
         {
             builder.UseSetting(WebHostDefaults.EnvironmentKey, environmentName ?? Environments.Development);
             builder.UseSetting("Gateway:OperatorConsole:Enabled", "false");
+            // Production (and any non-Development host) rejects the published default pepper at
+            // startup. Pin a strong test value so CORS-only factories that flip the environment
+            // still boot; configureSettings can override when a test needs a specific pepper.
+            builder.UseSetting("Gateway:Bootstrap:KeyPepper", "integration-test-pepper");
+            builder.UseSetting("Gateway:Security:KeyPepper", "integration-test-pepper");
             var extra = new Dictionary<string, string?>();
             configureSettings?.Invoke(extra);
             foreach (var (key, value) in extra)

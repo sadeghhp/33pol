@@ -101,7 +101,14 @@ public sealed class ModelRegistryWriter(
                 // A blank id in the body means "leave the id alone"; a different one is a rename.
                 // Silently pinning the id to the existing one (the old behaviour) reported success
                 // for a rename that never happened.
+                // Ids are matched case-insensitively everywhere else (routing, grants, rate cards), so
+                // differently-cased spelling of the same id addresses the same model rather than
+                // renaming it — treating it as a rename would silently re-key its price and credential.
                 var targetId = string.IsNullOrWhiteSpace(model.Id) ? existing.Id : model.Id.Trim();
+                if (string.Equals(targetId, existing.Id, StringComparison.OrdinalIgnoreCase))
+                {
+                    targetId = existing.Id;
+                }
 
                 if (!string.Equals(targetId, existing.Id, StringComparison.Ordinal))
                 {
