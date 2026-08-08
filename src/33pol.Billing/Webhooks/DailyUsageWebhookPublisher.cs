@@ -33,11 +33,15 @@ public sealed class DailyUsageWebhookPublisher(
             }
 
             var dayRollups = group.ToList();
+            var tenantId = group.Key;
+
+            // Release the once-per-tenant-day reservation if delivery never succeeds, so the next
+            // scheduled pass can retry rather than the summary being lost outright.
             await webhooks.DispatchAsync(
                 "usage.daily",
                 new
                 {
-                    tenantId = group.Key,
+                    tenantId,
                     usageDate = yesterday.ToString("O"),
                     promptTokens = dayRollups.Sum(r => r.PromptTokens),
                     completionTokens = dayRollups.Sum(r => r.CompletionTokens),
@@ -45,6 +49,7 @@ public sealed class DailyUsageWebhookPublisher(
                     requestCount = dayRollups.Sum(r => r.RequestCount),
                     currency = options.Value.DefaultCurrency,
                 },
+                onPermanentFailure: () => dailyTracker.Release(tenantId, yesterday),
                 cancellationToken).ConfigureAwait(false);
         }
     }

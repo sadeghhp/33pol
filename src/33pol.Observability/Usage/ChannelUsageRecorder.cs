@@ -27,6 +27,7 @@ public sealed class ChannelUsageRecorder : IUsageRecorder, IHostedService
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IGatewayMetricsCollector _metricsCollector;
     private readonly ILogger<ChannelUsageRecorder> _logger;
+    private readonly CancellationTokenSource _stopping = new();
     private Task? _worker;
 
     public ChannelUsageRecorder(
@@ -41,7 +42,7 @@ public sealed class ChannelUsageRecorder : IUsageRecorder, IHostedService
         _logger = logger;
     }
 
-    public void Enqueue(UsageEvent usageEvent)
+    public bool Enqueue(UsageEvent usageEvent)
     {
         _metricsCollector.RecordTokenUsage(
             usageEvent.ModelId,
@@ -51,28 +52,48 @@ public sealed class ChannelUsageRecorder : IUsageRecorder, IHostedService
         if (_channel.Writer.TryWrite(usageEvent))
         {
             GatewayMeters.UsageWriterQueueDepth.Add(1);
-            return;
+            return true;
         }
 
         // Channel saturated: in Wait mode TryWrite reports failure rather than evicting, so this drop
         // is accurate and counted (the previous DropOldest path lost the oldest event silently).
+        // Reporting it to the caller matters as much as counting it: the router settles the
+        // request's budget reservation only when persistence will actually run.
         GatewayMeters.UsageWriterDropped.Add(1);
         _logger.LogWarning("Usage event dropped (queue saturated) for request {RequestId}", usageEvent.RequestId);
+        return false;
     }
 
+    /// <remarks>
+    /// The worker runs on its own cancellation source rather than the token handed to
+    /// <see cref="StartAsync"/>. That token signals the host's <em>startup</em> deadline: when a
+    /// startup timeout is configured it is cancelled once startup completes, which would tear the
+    /// drain loop down immediately and silently stop all usage persistence for the process lifetime.
+    /// </remarks>
     public Task StartAsync(CancellationToken cancellationToken)
     {
-        _worker = Task.Run(() => ProcessAsync(cancellationToken), cancellationToken);
+        _worker = Task.Run(() => ProcessAsync(_stopping.Token), CancellationToken.None);
         return Task.CompletedTask;
     }
 
     public async Task StopAsync(CancellationToken cancellationToken)
     {
+        // Complete the writer first and let the loop drain what is already queued, so a graceful
+        // shutdown does not discard billing events that were accepted from clients.
         _channel.Writer.TryComplete();
+
         if (_worker is not null)
         {
-            await _worker.ConfigureAwait(false);
+            var drained = await Task.WhenAny(_worker, Task.Delay(Timeout.Infinite, cancellationToken))
+                .ConfigureAwait(false);
+            if (drained != _worker)
+            {
+                // Shutdown deadline hit before the queue drained; stop the loop rather than block.
+                await _stopping.CancelAsync().ConfigureAwait(false);
+            }
         }
+
+        _stopping.Dispose();
     }
 
     private async Task ProcessAsync(CancellationToken cancellationToken)
@@ -85,7 +106,8 @@ public sealed class ChannelUsageRecorder : IUsageRecorder, IHostedService
             {
                 var totalTokens = usage.PromptTokens + usage.CompletionTokens;
                 var partition = usage.TenantId ?? "anonymous";
-                _quotaService.CommitUsage(partition, usage.ModelId, totalTokens, usage.RequestId);
+                _quotaService.CommitUsage(
+                    partition, usage.ModelId, totalTokens, usage.RequestId, usage.TimestampUtc);
 
                 await using var scope = _scopeFactory.CreateAsyncScope();
                 var persistence = scope.ServiceProvider.GetRequiredService<IUsagePersistenceHandler>();

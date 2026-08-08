@@ -29,6 +29,23 @@ public sealed class GatewayResilienceOptions
 
     public long MaxRequestBodyBytes { get; set; } = 26_214_400;
 
+    /// <summary>
+    /// How long the gateway keeps serving after it starts draining, so load balancers have time to
+    /// observe the readiness probe flip and stop routing to this instance.
+    /// </summary>
+    /// <remarks>
+    /// <para>Should be a small multiple of the readiness probe interval, and the host's shutdown
+    /// timeout must exceed it or the drain is cut short.</para>
+    ///
+    /// <para>Defaults to 0 — stop immediately — because a nonzero value delays <em>every</em>
+    /// shutdown, including local runs and test hosts, and only load-balanced deployments benefit.
+    /// Set it wherever a load balancer or Kubernetes service fronts the gateway: without it the
+    /// readiness probe flips at the same instant Kestrel stops accepting, so the balancer keeps
+    /// routing to an instance that is already tearing down and every rolling restart drops requests.
+    /// The Helm chart sets it.</para>
+    /// </remarks>
+    public int ShutdownDrainSeconds { get; set; }
+
     public int MaxConcurrentForwardsPerModel { get; set; } = 64;
 
     public int MaxTrackedResilienceModels { get; set; } = 1024;
@@ -36,4 +53,22 @@ public sealed class GatewayResilienceOptions
     public int CircuitBreakerFailureThreshold { get; set; } = 5;
 
     public int CircuitBreakerBreakDurationSeconds { get; set; } = 30;
+
+    /// <summary>
+    /// How far back the breaker counts outcomes when deciding whether a backend is failing.
+    /// </summary>
+    /// <remarks>
+    /// Outcomes are counted over this rolling window rather than requiring an unbroken run of
+    /// failures. A backend failing intermittently — the usual way an overloaded model server
+    /// degrades — never produced a long enough consecutive run to trip the old counter, so the
+    /// breaker only ever caught backends that were completely down.
+    /// </remarks>
+    public int CircuitBreakerSamplingWindowSeconds { get; set; } = 30;
+
+    /// <summary>
+    /// Fraction of outcomes in the window that must be failures before the breaker opens, applied in
+    /// addition to <see cref="CircuitBreakerFailureThreshold"/>. Guards a high-throughput backend
+    /// against being opened by an absolute count that it reaches while still mostly succeeding.
+    /// </summary>
+    public double CircuitBreakerFailureRatioThreshold { get; set; } = 0.5;
 }

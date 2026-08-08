@@ -29,6 +29,11 @@ public sealed class FileUpstreamSecretStore : IUpstreamSecretStore
     private readonly object _lock = new();
     private Dictionary<string, string> _cache = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>Decrypted credentials, so the hot path does not repeat AES-GCM work per request.</summary>
+    private readonly Dictionary<string, string> _plaintextCache = new(StringComparer.OrdinalIgnoreCase);
+
+    private readonly HashSet<string> _undecryptableWarned = new(StringComparer.OrdinalIgnoreCase);
+
     public FileUpstreamSecretStore(
         IOptions<GatewayOptions> gatewayOptions,
         IConfiguration configuration,
@@ -82,6 +87,16 @@ public sealed class FileUpstreamSecretStore : IUpstreamSecretStore
         return DevelopmentPepper;
     }
 
+    /// <summary>
+    /// Returns the decrypted upstream credential for a model.
+    /// </summary>
+    /// <remarks>
+    /// The plaintext is memoised. This runs on the inference hot path — once per forwarded request —
+    /// and decrypting from scratch each time allocated an <see cref="System.Security.Cryptography.AesGcm"/>
+    /// instance plus the plaintext string under a global lock for every single request. The
+    /// plaintext is in this process's memory either way the instant it is used as a bearer token, so
+    /// holding it buys no additional exposure.
+    /// </remarks>
     public bool TryGet(string modelId, out string? secret)
     {
         secret = null;
@@ -90,17 +105,66 @@ public sealed class FileUpstreamSecretStore : IUpstreamSecretStore
             return false;
         }
 
+        var id = modelId.Trim();
+
         lock (_lock)
         {
-            if (_cache.TryGetValue(modelId, out var cipher) &&
-                UpstreamSecretFileCipher.TryDecrypt(cipher, _key, out var plain))
+            if (_plaintextCache.TryGetValue(id, out var cached))
             {
-                secret = plain;
+                secret = cached;
                 return true;
             }
+
+            if (!_cache.TryGetValue(id, out var cipher))
+            {
+                return false;
+            }
+
+            if (!UpstreamSecretFileCipher.TryDecrypt(cipher, _key, out var plain))
+            {
+                // Almost always a rotated pepper: the stored ciphertext was sealed with a different
+                // key and is now unrecoverable. Said once per model, loudly, because the symptom
+                // otherwise is every request to that model failing with an opaque
+                // "upstream auth token not configured".
+                if (_undecryptableWarned.Add(id))
+                {
+                    _logger.LogError(
+                        "Stored upstream credential for model '{ModelId}' cannot be decrypted with the "
+                        + "configured Gateway:Security:KeyPepper. This is what a rotated pepper looks like: "
+                        + "existing secrets were sealed with the previous value and cannot be recovered. "
+                        + "Re-enter this model's upstream API key in the admin UI.",
+                        id);
+                }
+
+                return false;
+            }
+
+            _plaintextCache[id] = plain;
+            secret = plain;
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Reports how many stored credentials cannot be decrypted with the configured pepper.
+    /// </summary>
+    /// <remarks>
+    /// Called at startup so a rotated pepper is discovered when the gateway boots, rather than one
+    /// failing request at a time after it is already serving traffic.
+    /// </remarks>
+    public (int Total, int Undecryptable) VerifyStoredSecrets()
+    {
+        if (_key is null)
+        {
+            return (0, 0);
         }
 
-        return false;
+        lock (_lock)
+        {
+            var undecryptable = _cache.Count(entry =>
+                !UpstreamSecretFileCipher.TryDecrypt(entry.Value, _key, out _));
+            return (_cache.Count, undecryptable);
+        }
     }
 
     public async Task PutAsync(string modelId, string secret, CancellationToken cancellationToken = default)
@@ -113,10 +177,14 @@ public sealed class FileUpstreamSecretStore : IUpstreamSecretStore
             throw new InvalidOperationException(WeakPepperMessage);
         }
 
-        var cipher = UpstreamSecretFileCipher.Encrypt(secret.Trim(), _key);
+        var trimmedSecret = secret.Trim();
+        var cipher = UpstreamSecretFileCipher.Encrypt(trimmedSecret, _key);
         lock (_lock)
         {
-            _cache[modelId.Trim()] = cipher;
+            var id = modelId.Trim();
+            _cache[id] = cipher;
+            _plaintextCache[id] = trimmedSecret;
+            _undecryptableWarned.Remove(id);
         }
 
         await PersistAsync(cancellationToken).ConfigureAwait(false);
@@ -129,7 +197,10 @@ public sealed class FileUpstreamSecretStore : IUpstreamSecretStore
         var removed = false;
         lock (_lock)
         {
-            removed = _cache.Remove(modelId.Trim());
+            var id = modelId.Trim();
+            removed = _cache.Remove(id);
+            _plaintextCache.Remove(id);
+            _undecryptableWarned.Remove(id);
         }
 
         if (removed)
@@ -204,7 +275,16 @@ public sealed class FileUpstreamSecretStore : IUpstreamSecretStore
         var path = ResolvePath();
         var directory = Path.GetDirectoryName(path)
             ?? throw new InvalidOperationException($"Cannot resolve directory for '{path}'.");
+
+        var createdDirectory = !Directory.Exists(directory);
         Directory.CreateDirectory(directory);
+        if (createdDirectory && !OperatingSystem.IsWindows())
+        {
+            // Owner-only: this directory holds every upstream provider credential the gateway has.
+            File.SetUnixFileMode(
+                directory,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
 
         Dictionary<string, string> snapshot;
         lock (_lock)

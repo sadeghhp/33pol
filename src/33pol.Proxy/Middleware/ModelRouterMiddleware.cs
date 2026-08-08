@@ -194,18 +194,23 @@ public sealed class ModelRouterMiddleware
         {
             // Gateway-side saturation, not backend ill health: abandon the probe rather than
             // recording a failure that would trip the breaker on a healthy backend.
+            //
+            // Reported as a concurrency limit (429 + Retry-After), not as UpstreamError. A 502
+            // backend_error told clients the model itself had failed, so OpenAI-compatible routers
+            // marked it down and failed over — when the correct signal is simply "retry shortly".
             _metricsCollector.RecordForwardAttempt(modelConfig.Id, "bulkhead_full");
             await context.WriteGatewayErrorAsync(
                 _errors.Write(
-                    GatewayErrorCode.UpstreamError,
-                    message: "Too many concurrent requests for this model."),
-                context.RequestAborted).ConfigureAwait(false);
+                    GatewayErrorCode.ConcurrencyLimitExceeded,
+                    message: "Too many concurrent requests for this model. Retry shortly."),
+                context.RequestAborted,
+                retryAfterSeconds: 1).ConfigureAwait(false);
             return;
         }
 
         using (bulkheadLease)
         {
-            var ratePartitionKey = ResolveRateLimitPartitionKey(context);
+            var ratePartitionKey = RateLimitPartition.Resolve(context);
             var planSlug = context.Items.TryGetValue(TenantContextKeys.HttpContextItemKey, out var rateTenantItem) &&
                            rateTenantItem is TenantContext rateTenantContext
                 ? rateTenantContext.PlanSlug
@@ -250,13 +255,19 @@ public sealed class ModelRouterMiddleware
                 usageTenant = tenantContextForUsage;
             }
 
+            // Length of the body actually forwarded. Used only to approximate prompt tokens when a
+            // stream ends before its authoritative usage frame — the upstream read and charged for
+            // the whole prompt regardless of how the response ended.
+            var requestBodyBytes = context.Request.Body.CanSeek ? context.Request.Body.Length : 0L;
+
             var usageCapture = new InferenceUsageCapture(
                 _usageRecorder,
                 _metricsCollector,
                 modelConfig.Id,
                 requestId,
                 started,
-                usageTenant);
+                usageTenant,
+                requestBodyBytes);
 
             var upstreamBearerToken = _upstreamBearerTokenResolver.ResolveBearerToken(modelConfig.UpstreamAuth);
             if (modelConfig.UpstreamAuth is not null && string.IsNullOrWhiteSpace(upstreamBearerToken))
@@ -509,11 +520,4 @@ public sealed class ModelRouterMiddleware
 
         return "unknown";
     }
-
-    private static string ResolveRateLimitPartitionKey(HttpContext context) =>
-        context.Items.TryGetValue(TenantContextKeys.HttpContextItemKey, out var value) &&
-        value is TenantContext tenant &&
-        !string.IsNullOrWhiteSpace(tenant.TenantId)
-            ? tenant.TenantId
-            : "anonymous";
 }

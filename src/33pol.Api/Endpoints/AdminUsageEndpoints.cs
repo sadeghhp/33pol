@@ -41,7 +41,7 @@ public static class AdminUsageEndpoints
             .GetUsageReportAsync(
                 new UsageReportRequest
                 {
-                    FromDate = from,
+                    FromDate = from ?? DefaultFromDate(to),
                     ToDate = to,
                     TenantId = tenantId,
                     CostCenter = costCenter,
@@ -112,7 +112,7 @@ public static class AdminUsageEndpoints
             .GetUsageReportAsync(
                 new UsageReportRequest
                 {
-                    FromDate = from,
+                    FromDate = from ?? DefaultFromDate(to),
                     ToDate = to,
                     TenantId = tenantId,
                     CostCenter = costCenter,
@@ -126,6 +126,17 @@ public static class AdminUsageEndpoints
             export.ContentType,
             export.FileName);
     }
+
+    /// <summary>Window applied when the caller supplies no <c>from</c> date.</summary>
+    /// <remarks>
+    /// The rollup query has no row limit and both date bounds were optional, so a parameterless call
+    /// materialised every rollup row ever written and serialised the lot into one response. A
+    /// bounded default keeps the common call cheap; callers wanting more supply an explicit range.
+    /// </remarks>
+    private const int DefaultUsageWindowDays = 30;
+
+    private static DateOnly DefaultFromDate(DateOnly? toDate) =>
+        (toDate ?? DateOnly.FromDateTime(DateTime.UtcNow)).AddDays(-DefaultUsageWindowDays);
 
     private static bool TryGetTenantId(HttpContext context, out Guid tenantId)
     {

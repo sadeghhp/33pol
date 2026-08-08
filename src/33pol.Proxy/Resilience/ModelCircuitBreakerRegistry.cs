@@ -25,7 +25,21 @@ public sealed class ModelCircuitBreakerRegistry : ICircuitBreakerStateSource
         _maxTrackedModels = options.Value.Resilience.MaxTrackedResilienceModels;
         _metrics = metrics;
         _logger = logger ?? NullLogger<ModelCircuitBreakerRegistry>.Instance;
+        _overflowBreaker = new CircuitBreaker(_policyOptions);
     }
+
+    /// <summary>
+    /// Shared breaker used once the per-model registry is at its cardinality limit.
+    /// </summary>
+    /// <remarks>
+    /// Overflow used to return a brand-new breaker on every call. Since every operation —
+    /// <see cref="TryEnter"/>, <see cref="RecordSuccess"/>, <see cref="RecordFailure"/> — goes
+    /// through <see cref="GetBreaker"/>, each got its own instance: admission always succeeded and
+    /// recorded failures mutated an object that was garbage before the next request. Past the limit
+    /// the breaker silently stopped protecting anything at all. A single shared instance keeps the
+    /// cardinality bound while still tripping, degrading to coarser granularity rather than to off.
+    /// </remarks>
+    private readonly CircuitBreaker _overflowBreaker;
 
     public CircuitBreaker GetBreaker(string modelId)
     {
@@ -36,11 +50,46 @@ public sealed class ModelCircuitBreakerRegistry : ICircuitBreakerStateSource
 
         if (_breakers.Count >= _maxTrackedModels)
         {
-            // Guardrail mode: do not grow registry cardinality past configured limit.
-            return new CircuitBreaker(_policyOptions);
+            if (_overflowWarned.TrySet())
+            {
+                _logger.LogWarning(
+                    "Circuit-breaker registry reached its limit of {MaxTrackedModels} models; further models "
+                    + "share one breaker. Raise Gateway:Resilience:MaxTrackedResilienceModels if this is a "
+                    + "legitimately large registry.",
+                    _maxTrackedModels);
+            }
+
+            return _overflowBreaker;
         }
 
         return _breakers.GetOrAdd(modelId, static (_, policy) => new CircuitBreaker(policy), _policyOptions);
+    }
+
+    /// <summary>
+    /// Removes tracking for a model that no longer exists, so live registry churn cannot walk the
+    /// dictionary up to its cardinality limit and force every model into the shared overflow breaker.
+    /// </summary>
+    public void Forget(string modelId) => _breakers.TryRemove(modelId, out _);
+
+    /// <summary>Drops tracking for every model outside <paramref name="knownModelIds"/>.</summary>
+    public void RetainOnly(IReadOnlySet<string> knownModelIds)
+    {
+        foreach (var key in _breakers.Keys)
+        {
+            if (!knownModelIds.Contains(key))
+            {
+                _breakers.TryRemove(key, out _);
+            }
+        }
+    }
+
+    private readonly OnceFlag _overflowWarned = new();
+
+    private sealed class OnceFlag
+    {
+        private int _set;
+
+        public bool TrySet() => Interlocked.Exchange(ref _set, 1) == 0;
     }
 
     public bool TryEnter(string modelId)

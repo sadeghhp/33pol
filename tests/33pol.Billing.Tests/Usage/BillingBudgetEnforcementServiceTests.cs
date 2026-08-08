@@ -160,6 +160,8 @@ public sealed class BillingBudgetEnforcementServiceTests
         var service = new BillingBudgetEnforcementService(
             provider.GetRequiredService<IServiceScopeFactory>(),
             new BudgetReservationLedger(TimeSpan.FromMinutes(2)),
+            new Microsoft.Extensions.Caching.Memory.MemoryCache(
+                new Microsoft.Extensions.Caching.Memory.MemoryCacheOptions()),
             Microsoft.Extensions.Options.Options.Create(new Pol33.Core.Configuration.BillingOptions()));
 
         var result = await service.CheckBeforeForwardAsync(Guid.NewGuid().ToString());

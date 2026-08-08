@@ -17,6 +17,17 @@ public sealed class CreateAdminApiKeyRequest
     public string? Description { get; init; }
 
     public string? CostCenter { get; init; }
+
+    /// <summary>
+    /// Optional absolute expiry, in UTC. Omit for a key that never expires.
+    /// </summary>
+    /// <remarks>
+    /// The <c>ExpiresAt</c> column, the <c>Expired</c> validation failure and the
+    /// <c>expired_api_key</c> error code all existed and were all unreachable: creation hardcoded a
+    /// null expiry and no update could set one, so keys were revoke-only and every credential issued
+    /// was effectively permanent.
+    /// </remarks>
+    public DateTimeOffset? ExpiresAt { get; init; }
 }
 
 public sealed class UpdateAdminApiKeyRequest
@@ -28,6 +39,15 @@ public sealed class UpdateAdminApiKeyRequest
     public string? Description { get; init; }
 
     public string? CostCenter { get; init; }
+
+    /// <summary>
+    /// New absolute expiry, in UTC. Only applied when <see cref="UpdateExpiry"/> is set, so an
+    /// ordinary metadata edit cannot clear an expiry by omitting the field.
+    /// </summary>
+    public DateTimeOffset? ExpiresAt { get; init; }
+
+    /// <summary>Set to apply <see cref="ExpiresAt"/>; pass it with a null value to remove the expiry.</summary>
+    public bool UpdateExpiry { get; init; }
 }
 
 public sealed class AdminApiKeyCreatedResponse
@@ -41,6 +61,8 @@ public sealed class AdminApiKeyCreatedResponse
     public required ApiKeyRole Role { get; init; }
 
     public required DateTimeOffset CreatedAt { get; init; }
+
+    public DateTimeOffset? ExpiresAt { get; init; }
 
     public string? Label { get; init; }
 

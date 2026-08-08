@@ -15,7 +15,6 @@ public sealed class BillingUsagePersistenceHandler(
     IBudgetRepository budgets,
     IBillingWebhookDispatcher webhooks,
     BillingBudgetWarningTracker warningTracker,
-    BillingDailyUsageWebhookTracker dailyWebhookTracker,
     BillingUnpricedModelTracker unpricedModelTracker,
     IApiKeyLastUsedTracker lastUsedTracker,
     BudgetReservationLedger reservationLedger,
@@ -97,29 +96,56 @@ public sealed class BillingUsagePersistenceHandler(
                 group.Count()))
             .ToList();
 
-        await rollups.IncrementRollupsAsync(deltas, cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await rollups.IncrementRollupsAsync(deltas, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // The billing_events rows are already committed but their spend never reached the
+            // rollups, so budgets will under-count these requests permanently. Surface that
+            // explicitly rather than letting the caller's catch-all log it as a generic failure —
+            // and still release the reservations, which would otherwise sit until their TTL.
+            logger.LogError(
+                ex,
+                "Rollup increment failed for {EventCount} persisted billing event(s) across {BucketCount} "
+                + "bucket(s). Their spend is recorded in billing_events but is NOT reflected in "
+                + "daily_usage_rollups, so budget and quota totals will under-count until the rollups "
+                + "are rebuilt from billing_events.",
+                appended.Count,
+                deltas.Count);
+
+            ReleaseReservations(appended);
+            throw;
+        }
 
         // Actual cost is now in the rollups; release the in-flight reservations (no accounting gap
         // between reservation and persisted spend).
-        foreach (var record in appended)
-        {
-            reservationLedger.Release(record.RequestId);
-        }
+        ReleaseReservations(appended);
 
-        var tenantDays = appended
+        var tenantIds = appended
             .Where(r => r.TenantId is not null)
-            .Select(r => (TenantId: r.TenantId!.Value, UsageDate: DateOnly.FromDateTime(r.RecordedAt.UtcDateTime)))
+            .Select(r => r.TenantId!.Value)
             .Distinct()
             .ToList();
 
-        foreach (var tenantId in tenantDays.Select(d => d.TenantId).Distinct())
+        foreach (var tenantId in tenantIds)
         {
             await CheckBudgetWarningsAsync(tenantId, cancellationToken).ConfigureAwait(false);
         }
 
-        foreach (var (tenantId, usageDate) in tenantDays)
+        // The daily usage summary is NOT dispatched here. It is owned by
+        // DailyUsageWebhookPublisher, which runs after the day closes and reports the day's totals.
+        // Firing it inline sent a "daily" summary containing whatever had accrued by a tenant's
+        // first request of the day — and, because both paths share the same dedup tracker, that
+        // send consumed the tracker slot so the real end-of-day summary was never delivered at all.
+    }
+
+    private void ReleaseReservations(IReadOnlyList<BillingEventRecord> appended)
+    {
+        foreach (var record in appended)
         {
-            await DispatchDailyUsageAsync(tenantId, usageDate, cancellationToken).ConfigureAwait(false);
+            reservationLedger.Release(record.RequestId);
         }
     }
 
@@ -183,40 +209,6 @@ public sealed class BillingUsagePersistenceHandler(
             : costCalculator.Calculate(rateCard, usageEvent.PromptTokens, usageEvent.CompletionTokens);
     }
 
-    private async Task DispatchDailyUsageAsync(
-        Guid tenantId,
-        DateOnly usageDate,
-        CancellationToken cancellationToken)
-    {
-        if (!dailyWebhookTracker.TryMarkSent(tenantId, usageDate))
-        {
-            return;
-        }
-
-        var dayRollups = await rollups
-            .GetRollupsAsync(usageDate, usageDate, tenantId, cancellationToken)
-            .ConfigureAwait(false);
-
-        if (dayRollups.Count == 0)
-        {
-            return;
-        }
-
-        await webhooks.DispatchAsync(
-            "usage.daily",
-            new
-            {
-                tenantId,
-                usageDate = usageDate.ToString("O"),
-                promptTokens = dayRollups.Sum(r => r.PromptTokens),
-                completionTokens = dayRollups.Sum(r => r.CompletionTokens),
-                totalCost = dayRollups.Sum(r => r.TotalCost),
-                requestCount = dayRollups.Sum(r => r.RequestCount),
-                currency = billingOptions.Value.DefaultCurrency,
-            },
-            cancellationToken).ConfigureAwait(false);
-    }
-
     private async Task CheckBudgetWarningsAsync(Guid tenantId, CancellationToken cancellationToken)
     {
         var tenantBudgets = await budgets.GetByTenantAsync(tenantId, cancellationToken).ConfigureAwait(false);
@@ -246,6 +238,8 @@ public sealed class BillingUsagePersistenceHandler(
                 continue;
             }
 
+            // Release the once-per-period reservation if delivery never succeeds, so a transient
+            // receiver outage does not permanently swallow this period's warning.
             await webhooks.DispatchAsync(
                 "quota.warning",
                 new
@@ -258,6 +252,7 @@ public sealed class BillingUsagePersistenceHandler(
                     currency = budget.Currency,
                     periodStart = periodStart.ToString("O"),
                 },
+                onPermanentFailure: () => warningTracker.Release(key),
                 cancellationToken).ConfigureAwait(false);
         }
     }

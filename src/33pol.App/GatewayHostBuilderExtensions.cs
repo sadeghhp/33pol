@@ -46,6 +46,14 @@ public static class GatewayHostBuilderExtensions
         app.UseRouting();
         app.UseCors();
         app.UseGatewayRequestId();
+
+        // Ahead of PublicModelDetection, which is the first thing to call EnableBuffering() and
+        // parse the body. Registered after it, this middleware's own body-size cap could never fire
+        // in time: an unauthenticated request was already buffered (spilling to a temp file past
+        // 30 KB) and fully JSON-parsed before the limit it exists to enforce was applied. The drain
+        // check belongs here for the same reason — a shutting-down gateway should reject before it
+        // spends work on the body.
+        app.UseInferenceResilience();
         app.UsePublicModelDetection();
         app.UseGatewaySecurity(app.Configuration);
 
@@ -76,7 +84,6 @@ public static class GatewayHostBuilderExtensions
             }
         });
         app.MapGatewayOperationsEndpoints();
-        app.UseInferenceResilience();
         app.UseGatewayRateLimiting();
         app.UseGatewayQuotas();
         app.UseModelRouter();

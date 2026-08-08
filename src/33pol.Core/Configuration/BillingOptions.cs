@@ -56,4 +56,16 @@ public sealed class BillingOptions
     /// a tenant exceed a hard stop.
     /// </summary>
     public int BudgetCacheTtlSeconds { get; set; } = 30;
+
+    /// <summary>
+    /// How long a tenant's period-to-date <em>persisted</em> spend is cached.
+    /// </summary>
+    /// <remarks>
+    /// Budget enforcement previously re-read and re-summed every rollup row in the billing period on
+    /// every inference request, for every hard-stop budget. Caching cannot let a tenant overshoot:
+    /// spend incurred since the last read is tracked exactly by the reservation ledger and added on
+    /// top of this figure. The TTL only bounds how long after spend lands in the rollups a hard stop
+    /// can take to engage.
+    /// </remarks>
+    public int BudgetSpendCacheTtlSeconds { get; set; } = 10;
 }

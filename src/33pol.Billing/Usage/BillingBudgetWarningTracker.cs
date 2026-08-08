@@ -14,6 +14,10 @@ public sealed class BillingBudgetWarningTracker
         _retentionLimit = Math.Max(1, retentionLimit);
     }
 
+    /// <summary>
+    /// Reserves the once-per-period send for <paramref name="key"/>. The reservation must be handed
+    /// back with <see cref="Release"/> if delivery ultimately fails.
+    /// </summary>
     public bool TryMarkSent(string key)
     {
         lock (_sync)
@@ -30,6 +34,22 @@ public sealed class BillingBudgetWarningTracker
             }
 
             return true;
+        }
+    }
+
+    /// <summary>
+    /// Hands back a reservation whose delivery permanently failed, so the warning can be sent again
+    /// on a later evaluation.
+    /// </summary>
+    /// <remarks>
+    /// Without this, marking before dispatching made delivery at-most-once: a receiver that was down
+    /// for one attempt consumed the only budget warning that period would ever produce.
+    /// </remarks>
+    public void Release(string key)
+    {
+        lock (_sync)
+        {
+            _sent.TryRemove(key, out _);
         }
     }
 }

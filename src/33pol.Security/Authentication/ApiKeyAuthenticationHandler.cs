@@ -59,7 +59,12 @@ public sealed class ApiKeyAuthenticationHandler : AuthenticationHandler<Authenti
         var result = await _validator.ValidateAsync(apiKey, Context.RequestAborted).ConfigureAwait(false);
         if (!result.IsSuccess)
         {
-            if (isPublicInference || allowsAnonymousModelsListing || !_authState.IsAuthenticationRequired)
+            // A credential was presented and it is not valid. That is an authentication failure even
+            // on the anonymous-capable routes: silently serving them as anonymous returned 200 to a
+            // caller whose key had been revoked or had expired, so clients and health checks had no
+            // way to detect that their credential had stopped working. Only the complete absence of
+            // a key (handled above) may fall through to anonymous access.
+            if (!_authState.IsAuthenticationRequired)
             {
                 return AuthenticateResult.NoResult();
             }
@@ -70,7 +75,7 @@ public sealed class ApiKeyAuthenticationHandler : AuthenticationHandler<Authenti
                 _ => "invalid_api_key",
             };
 
-            Context.Items["GatewayAuthErrorCode"] = code;
+            Context.Items[GatewayAuthContextItems.AuthFailureCode] = code;
             return AuthenticateResult.Fail(code);
         }
 
@@ -109,7 +114,7 @@ public sealed class ApiKeyAuthenticationHandler : AuthenticationHandler<Authenti
             return;
         }
 
-        var errorCode = Context.Items.TryGetValue("GatewayAuthErrorCode", out var value) &&
+        var errorCode = Context.Items.TryGetValue(GatewayAuthContextItems.AuthFailureCode, out var value) &&
                         value?.ToString() == "expired_api_key"
             ? GatewayErrorCode.ExpiredApiKey
             : GatewayErrorCode.InvalidApiKey;

@@ -31,8 +31,12 @@ public sealed class QuotaMiddleware
             return;
         }
 
-        var partitionKey = ResolvePartitionKey(context);
-        var modelHint = context.Request.Query.TryGetValue("model", out var q) ? q.ToString() : string.Empty;
+        var partitionKey = RateLimitPartition.Resolve(context);
+
+        // Model is not known here: routing reads it from the request body, which this middleware
+        // deliberately does not touch. Quota is counted per partition, not per model, so the
+        // parameter is passed empty rather than guessed from a query string the gateway never routes on.
+        const string modelHint = "";
 
         // Budget enforcement deliberately does NOT run here. ModelRouterMiddleware's
         // TryReserveAsync subsumes it — it evaluates the same hard budgets against the same spend
@@ -60,11 +64,4 @@ public sealed class QuotaMiddleware
 
         await _next(context).ConfigureAwait(false);
     }
-
-    private static string ResolvePartitionKey(HttpContext context) =>
-        context.Items.TryGetValue(TenantContextKeys.HttpContextItemKey, out var value) &&
-        value is TenantContext tenant &&
-        !string.IsNullOrWhiteSpace(tenant.TenantId)
-            ? tenant.TenantId
-            : "anonymous";
 }

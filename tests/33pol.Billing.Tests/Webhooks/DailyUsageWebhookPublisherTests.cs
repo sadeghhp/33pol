@@ -35,6 +35,7 @@ public sealed class DailyUsageWebhookPublisherTests
         await webhooks.Received(1).DispatchAsync(
             "usage.daily",
             Arg.Is<object>(p => p.ToString()!.Contains("EUR")),
+            Arg.Any<Action?>(),
             Arg.Any<CancellationToken>());
     }
 

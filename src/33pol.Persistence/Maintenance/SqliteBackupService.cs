@@ -37,7 +37,17 @@ public sealed class SqliteBackupService : ISqliteBackupService
         }
 
         var backupDir = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(dataSource))!, "backups");
+        var createdDirectory = !Directory.Exists(backupDir);
         Directory.CreateDirectory(backupDir);
+        if (createdDirectory && !OperatingSystem.IsWindows())
+        {
+            // A backup is a full copy of the gateway database: hashed API keys, tenant records and
+            // the entire billing history. It must not be world-readable.
+            File.SetUnixFileMode(
+                backupDir,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+
         var timestamp = DateTimeOffset.UtcNow.ToString("yyyyMMdd'T'HHmmss'Z'");
         var destination = Path.Combine(backupDir, $"gateway-{timestamp}.db");
 
@@ -68,12 +78,47 @@ public sealed class SqliteBackupService : ISqliteBackupService
             _logger.LogError("SQLite hot backup {Path} failed integrity_check: {Result}", destination, integrity);
         }
 
+        PruneOldBackups(backupDir);
+
         return new SqliteBackupResult(
             ok,
             destination,
             size,
             integrity,
             ok ? null : $"integrity_check returned '{integrity}'");
+    }
+
+    /// <summary>How many backup files are kept before the oldest are deleted.</summary>
+    /// <remarks>
+    /// Backups land on the same volume as the live database, and nothing pruned them. Repeated calls
+    /// — or any cron driving the endpoint — filled the volume the gateway's own database sits on,
+    /// turning a maintenance action into a total outage. Retention is deliberately conservative:
+    /// deploy tooling is expected to copy backups off the volume, and this only bounds what
+    /// accumulates when it does not.
+    /// </remarks>
+    private const int RetainedBackupCount = 7;
+
+    private void PruneOldBackups(string backupDir)
+    {
+        try
+        {
+            var stale = new DirectoryInfo(backupDir)
+                .GetFiles("gateway-*.db")
+                .OrderByDescending(file => file.Name, StringComparer.Ordinal)
+                .Skip(RetainedBackupCount)
+                .ToList();
+
+            foreach (var file in stale)
+            {
+                file.Delete();
+                _logger.LogInformation("Pruned old SQLite backup {Path}", file.FullName);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // A backup that succeeded must not be reported as failed because cleanup could not run.
+            _logger.LogWarning(ex, "Could not prune old SQLite backups in {BackupDir}", backupDir);
+        }
     }
 
     private static async Task<string> CheckIntegrityAsync(string path, CancellationToken cancellationToken)

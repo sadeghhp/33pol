@@ -1,12 +1,30 @@
 namespace Pol33.Policy.CircuitBreaker;
 
+/// <summary>
+/// Per-backend circuit breaker driven by the failure rate over a rolling window.
+/// </summary>
+/// <remarks>
+/// Outcomes are counted over <see cref="CircuitBreakerPolicyOptions.SamplingWindow"/> and the
+/// breaker opens once the window holds at least
+/// <see cref="CircuitBreakerPolicyOptions.FailureThreshold"/> failures <em>and</em> those failures
+/// are at least <see cref="CircuitBreakerPolicyOptions.FailureRatioThreshold"/> of all outcomes.
+/// Requiring both means a low-traffic backend still trips on a handful of failures, while a busy
+/// healthy one is not opened by an absolute count it reaches while mostly succeeding.
+/// </remarks>
 public sealed class CircuitBreaker
 {
     private readonly CircuitBreakerPolicyOptions _options;
     private readonly Func<DateTimeOffset> _clock;
     private readonly object _sync = new();
+
+    // Bounded ring of recent outcomes. Sized generously relative to the threshold: only the window
+    // matters for the decision, and capping the ring keeps a high-throughput backend from growing
+    // this without limit between evictions.
+    private readonly (DateTimeOffset At, bool Failed)[] _outcomes;
+    private int _outcomeStart;
+    private int _outcomeCount;
+
     private CircuitState _state = CircuitState.Closed;
-    private int _consecutiveFailures;
     private DateTimeOffset _openedAt;
     private bool _halfOpenPermit = true;
 
@@ -14,6 +32,7 @@ public sealed class CircuitBreaker
     {
         _options = options;
         _clock = clock ?? (static () => DateTimeOffset.UtcNow);
+        _outcomes = new (DateTimeOffset, bool)[Math.Max(16, Math.Max(1, options.FailureThreshold) * 8)];
     }
 
     public CircuitState State
@@ -60,9 +79,21 @@ public sealed class CircuitBreaker
     {
         lock (_sync)
         {
-            _consecutiveFailures = 0;
-            _state = CircuitState.Closed;
-            _halfOpenPermit = true;
+            // A probe that succeeds closes the breaker and clears the window it was judged on, so
+            // the failures that opened it cannot immediately re-trip it.
+            if (_state == CircuitState.HalfOpen)
+            {
+                _state = CircuitState.Closed;
+                _halfOpenPermit = true;
+                _outcomeCount = 0;
+                _outcomeStart = 0;
+                return;
+            }
+
+            // Deliberately does NOT force the state to Closed. A slow request that started before
+            // the breaker re-opened used to slam it shut on completion, discarding a decision made
+            // on newer evidence.
+            Append(failed: false);
         }
     }
 
@@ -94,19 +125,67 @@ public sealed class CircuitBreaker
                 return;
             }
 
-            _consecutiveFailures++;
-            if (_consecutiveFailures >= _options.FailureThreshold)
+            Append(failed: true);
+
+            var (failures, total) = CountWindow();
+            if (failures >= _options.FailureThreshold &&
+                total > 0 &&
+                (double)failures / total >= _options.FailureRatioThreshold)
             {
                 TripOpen();
             }
         }
     }
 
+    private void Append(bool failed)
+    {
+        var now = _clock();
+        EvictExpired(now);
+
+        if (_outcomeCount == _outcomes.Length)
+        {
+            // Ring full: drop the oldest.
+            _outcomes[_outcomeStart] = (now, failed);
+            _outcomeStart = (_outcomeStart + 1) % _outcomes.Length;
+            return;
+        }
+
+        _outcomes[(_outcomeStart + _outcomeCount) % _outcomes.Length] = (now, failed);
+        _outcomeCount++;
+    }
+
+    private void EvictExpired(DateTimeOffset now)
+    {
+        var cutoff = now - _options.SamplingWindow;
+        while (_outcomeCount > 0 && _outcomes[_outcomeStart].At < cutoff)
+        {
+            _outcomeStart = (_outcomeStart + 1) % _outcomes.Length;
+            _outcomeCount--;
+        }
+    }
+
+    private (int Failures, int Total) CountWindow()
+    {
+        EvictExpired(_clock());
+
+        var failures = 0;
+        for (var i = 0; i < _outcomeCount; i++)
+        {
+            if (_outcomes[(_outcomeStart + i) % _outcomes.Length].Failed)
+            {
+                failures++;
+            }
+        }
+
+        return (failures, _outcomeCount);
+    }
+
     private void TripOpen()
     {
         _state = CircuitState.Open;
         _openedAt = _clock();
-        _consecutiveFailures = 0;
+        _outcomeCount = 0;
+        _outcomeStart = 0;
         _halfOpenPermit = true;
     }
 }

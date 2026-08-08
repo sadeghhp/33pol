@@ -44,6 +44,11 @@ spec:
               value: {{ .Values.gateway.modelsConfigPath | quote }}
             - name: Gateway__OperatorConsole__Enabled
               value: {{ .Values.gateway.operatorConsole.enabled | quote }}
+            # Keeps serving after readiness flips to unhealthy, so the Service endpoint controller
+            # removes this pod before Kestrel stops accepting. Without it both happen at the same
+            # instant and every rolling restart drops in-flight requests.
+            - name: Gateway__Resilience__ShutdownDrainSeconds
+              value: {{ .Values.gateway.shutdownDrainSeconds | quote }}
             {{- range $index, $origin := .Values.gateway.cors.allowedOrigins }}
             - name: Gateway__Cors__AllowedOrigins__{{ $index }}
               value: {{ $origin | quote }}

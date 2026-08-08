@@ -3,23 +3,45 @@ using System.Buffers;
 namespace Pol33.Proxy.Forwarding;
 
 /// <summary>
+/// Receives the retained window of a proxied response body once the stream completes.
+/// </summary>
+/// <param name="head">
+/// Leading bytes, retained only for non-streaming responses and only up to
+/// <see cref="UsageCapturingStream.MaxHeadBytes"/>. Empty for streaming responses.
+/// </param>
+/// <param name="tail">Trailing bytes, always retained, up to <see cref="UsageCapturingStream.TailBufferBytes"/>.</param>
+/// <param name="stats">What was observed of the whole body, independent of the retained window.</param>
+internal delegate void UsageCaptureCallback(
+    ReadOnlySpan<byte> head,
+    ReadOnlySpan<byte> tail,
+    UsageCaptureStats stats);
+
+/// <summary>
 /// Buffers proxied response bytes (bounded) so usage can be parsed after the stream completes.
-/// For non-streaming JSON responses the leading bytes are retained (the whole small body fits).
-/// For streaming SSE responses the <em>trailing</em> bytes are retained instead, because the
-/// terminal <c>usage</c> chunk arrives at the end of the stream — keeping the head would drop it
-/// on any response larger than the buffer and silently under-bill the request.
 /// </summary>
 /// <remarks>
-/// Buffers are rented from <see cref="ArrayPool{T}"/>. They were previously allocated per request at
-/// 512 KB, which is well past the 85 KB Large Object Heap threshold: every streaming request put a
-/// fresh LOH array in gen-2, and a wrapped ring allocated a second one to reorder it. The tail is
-/// also far smaller now — a terminal SSE usage frame is a few hundred bytes, so 32 KB is ample.
+/// <para>The <em>tail</em> is retained for every response, because that is where the token counts
+/// live in both shapes the gateway proxies: the terminal <c>usage</c> SSE frame of a stream, and the
+/// trailing <c>usage</c> object of an OpenAI-shaped JSON body.</para>
+///
+/// <para>For non-streaming responses the <em>head</em> is retained as well, so a body that fits
+/// inside the cap can be parsed exactly as a whole document rather than recovered from a fragment.
+/// Retaining only the head was a billing hole: a response larger than the cap — which every batch
+/// embeddings response is — arrived at the parser truncated, failed to parse, and recorded no usage
+/// at all, so the request went unbilled. Keeping the tail as well means the <c>usage</c> object is
+/// always inside the retained window regardless of body size.</para>
+///
+/// <para>Buffers are rented from <see cref="ArrayPool{T}"/>. They were previously allocated per
+/// request at 512 KB, which is well past the 85 KB Large Object Heap threshold: every streaming
+/// request put a fresh LOH array in gen-2, and a wrapped ring allocated a second one to reorder it.
+/// The tail is also far smaller now — a terminal <c>usage</c> frame or object is a few hundred
+/// bytes, so 32 KB is ample.</para>
 /// </remarks>
 internal sealed class UsageCapturingStream : Stream
 {
     /// <summary>
-    /// Retained tail for streaming responses. Only needs to hold the final SSE frames; sized with
-    /// generous headroom over a realistic terminal <c>usage</c> chunk.
+    /// Retained tail. Only needs to hold the final frames (streaming) or the trailing <c>usage</c>
+    /// object (non-streaming); sized with generous headroom over either.
     /// </summary>
     internal const int TailBufferBytes = 32 * 1024;
 
@@ -27,9 +49,9 @@ internal sealed class UsageCapturingStream : Stream
     internal const int MaxHeadBytes = 256 * 1024;
 
     private readonly Stream _inner;
-    private readonly Action<ReadOnlyMemory<byte>, UsageCaptureStats> _onComplete;
+    private readonly UsageCaptureCallback _onComplete;
     private readonly Action<Exception>? _onCaptureFailed;
-    private readonly bool _retainTail;
+    private readonly bool _isStreaming;
 
     // Progress counters, tracked over the whole stream rather than the retained window. When the
     // terminal usage frame never arrives (client disconnect), the frame count is what lets the
@@ -40,7 +62,7 @@ internal sealed class UsageCapturingStream : Stream
 
     // Rented arrays may be larger than requested, so the logical capacity is tracked separately —
     // using buffer.Length for the ring arithmetic would silently change the retained window.
-    private readonly byte[]? _tail;
+    private readonly byte[] _tail;
     private readonly int _tailCapacity;
     private byte[]? _head;
     private int _headLength;
@@ -49,21 +71,22 @@ internal sealed class UsageCapturingStream : Stream
     private bool _completed;
     private bool _disposed;
 
+    /// <param name="isStreaming">
+    /// Streaming responses skip head retention (their body is unbounded and the head is worthless
+    /// for usage) and count SSE frames; non-streaming responses retain both ends.
+    /// </param>
     public UsageCapturingStream(
         Stream inner,
-        Action<ReadOnlyMemory<byte>, UsageCaptureStats> onComplete,
-        bool retainTail = false,
+        UsageCaptureCallback onComplete,
+        bool isStreaming = false,
         Action<Exception>? onCaptureFailed = null)
     {
         _inner = inner;
         _onComplete = onComplete;
         _onCaptureFailed = onCaptureFailed;
-        _retainTail = retainTail;
-        if (retainTail)
-        {
-            _tail = ArrayPool<byte>.Shared.Rent(TailBufferBytes);
-            _tailCapacity = TailBufferBytes;
-        }
+        _isStreaming = isStreaming;
+        _tail = ArrayPool<byte>.Shared.Rent(TailBufferBytes);
+        _tailCapacity = TailBufferBytes;
     }
 
     public override bool CanRead => _inner.CanRead;
@@ -112,14 +135,16 @@ internal sealed class UsageCapturingStream : Stream
 
         _totalBytes += chunk.Length;
 
-        if (_retainTail)
+        if (_isStreaming)
         {
             CountFrames(chunk);
-            AppendTail(chunk);
-            return;
+        }
+        else
+        {
+            AppendHead(chunk);
         }
 
-        AppendHead(chunk);
+        AppendTail(chunk);
     }
 
     /// <summary>
@@ -182,7 +207,7 @@ internal sealed class UsageCapturingStream : Stream
 
     private void AppendTail(ReadOnlySpan<byte> chunk)
     {
-        var tail = _tail!.AsSpan(0, _tailCapacity);
+        var tail = _tail.AsSpan(0, _tailCapacity);
         if (chunk.Length >= _tailCapacity)
         {
             // Only the final TailBufferBytes bytes can ever be retained.
@@ -203,48 +228,43 @@ internal sealed class UsageCapturingStream : Stream
     }
 
     /// <summary>
-    /// Returns the retained bytes oldest-to-newest. Reordering a wrapped ring needs a scratch buffer;
-    /// it is rented and returned rather than allocated, and the callback consumes it synchronously.
+    /// Invokes the completion callback with the retained head and the retained tail in
+    /// oldest-to-newest order. Reordering a wrapped ring needs a scratch buffer; it is rented and
+    /// returned rather than allocated, and the callback consumes both spans synchronously.
     /// </summary>
-    private void WithSnapshot(Action<ReadOnlyMemory<byte>, UsageCaptureStats> onComplete)
+    private void InvokeWithSnapshot()
     {
         var stats = new UsageCaptureStats(_frameCount, _totalBytes);
-        void consume(ReadOnlyMemory<byte> snapshot) => onComplete(snapshot, stats);
-
-        if (!_retainTail)
-        {
-            consume(_headLength == 0 || _head is null
-                ? ReadOnlyMemory<byte>.Empty
-                : _head.AsMemory(0, _headLength));
-            return;
-        }
+        var head = _headLength == 0 || _head is null
+            ? ReadOnlySpan<byte>.Empty
+            : _head.AsSpan(0, _headLength);
 
         if (_tailWritten == 0)
         {
-            consume(ReadOnlyMemory<byte>.Empty);
+            _onComplete(head, ReadOnlySpan<byte>.Empty, stats);
             return;
         }
 
         if (_tailWritten < _tailCapacity)
         {
             // Never wrapped: bytes are in order at [0.._tailWritten).
-            consume(_tail!.AsMemory(0, (int)_tailWritten));
+            _onComplete(head, _tail.AsSpan(0, (int)_tailWritten), stats);
             return;
         }
 
         var start = (int)(_tailWritten % _tailCapacity);
         if (start == 0)
         {
-            consume(_tail!.AsMemory(0, _tailCapacity));
+            _onComplete(head, _tail.AsSpan(0, _tailCapacity), stats);
             return;
         }
 
         var ordered = ArrayPool<byte>.Shared.Rent(_tailCapacity);
         try
         {
-            _tail!.AsSpan(start, _tailCapacity - start).CopyTo(ordered);
+            _tail.AsSpan(start, _tailCapacity - start).CopyTo(ordered);
             _tail.AsSpan(0, start).CopyTo(ordered.AsSpan(_tailCapacity - start));
-            consume(ordered.AsMemory(0, _tailCapacity));
+            _onComplete(head, ordered.AsSpan(0, _tailCapacity), stats);
         }
         finally
         {
@@ -260,7 +280,7 @@ internal sealed class UsageCapturingStream : Stream
         }
 
         _completed = true;
-        WithSnapshot(_onComplete);
+        InvokeWithSnapshot();
     }
 
     protected override void Dispose(bool disposing)
@@ -302,10 +322,7 @@ internal sealed class UsageCapturingStream : Stream
             _head = null;
         }
 
-        if (_tail is not null)
-        {
-            ArrayPool<byte>.Shared.Return(_tail);
-        }
+        ArrayPool<byte>.Shared.Return(_tail);
     }
 
     public override void Flush() => _inner.Flush();

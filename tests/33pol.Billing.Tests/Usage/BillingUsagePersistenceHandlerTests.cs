@@ -20,7 +20,6 @@ public sealed class BillingUsagePersistenceHandlerTests
         IBudgetRepository? budgets = null,
         IBillingWebhookDispatcher? webhooks = null,
         BillingBudgetWarningTracker? warningTracker = null,
-        BillingDailyUsageWebhookTracker? dailyTracker = null,
         IApiKeyLastUsedTracker? lastUsedTracker = null) =>
         new(
             billingEvents,
@@ -30,7 +29,6 @@ public sealed class BillingUsagePersistenceHandlerTests
             budgets ?? Substitute.For<IBudgetRepository>(),
             webhooks ?? Substitute.For<IBillingWebhookDispatcher>(),
             warningTracker ?? new BillingBudgetWarningTracker(),
-            dailyTracker ?? new BillingDailyUsageWebhookTracker(),
             new BillingUnpricedModelTracker(),
             lastUsedTracker ?? Substitute.For<IApiKeyLastUsedTracker>(),
             new BudgetReservationLedger(TimeSpan.FromMinutes(2)),
@@ -182,49 +180,6 @@ public sealed class BillingUsagePersistenceHandlerTests
     }
 
     [Fact]
-    public async Task PersistAsync_WithTenant_DispatchesUsageDailyWebhook()
-    {
-        var tenantId = Guid.NewGuid();
-        var billingEvents = Substitute.For<IBillingEventRepository>();
-        billingEvents.TryAppendAsync(Arg.Any<BillingEventRecord>(), Arg.Any<CancellationToken>())
-            .Returns(true);
-
-        var rollups = Substitute.For<IDailyUsageRollupRepository>();
-        rollups.GetRollupsAsync(Arg.Any<DateOnly?>(), Arg.Any<DateOnly?>(), tenantId, Arg.Any<CancellationToken>())
-            .Returns([
-                new DailyUsageRollupRecord(
-                    DateOnly.FromDateTime(DateTime.UtcNow),
-                    tenantId,
-                    "gpt-4o",
-                    "eng",
-                    100,
-                    50,
-                    0.15m,
-                    2),
-            ]);
-
-        var webhooks = Substitute.For<IBillingWebhookDispatcher>();
-        var handler = CreateHandler(billingEvents, rollups, webhooks: webhooks);
-
-        await handler.PersistAsync(new UsageEvent
-        {
-            RequestId = "req-daily",
-            TenantId = tenantId.ToString(),
-            ModelId = "gpt-4o",
-            CostCenter = "eng",
-            PromptTokens = 100,
-            CompletionTokens = 50,
-            DurationMs = 1,
-            TimestampUtc = DateTimeOffset.UtcNow,
-        });
-
-        await webhooks.Received(1).DispatchAsync(
-            "usage.daily",
-            Arg.Is<object>(payload => payload.ToString()!.Contains("totalCost")),
-            Arg.Any<CancellationToken>());
-    }
-
-    [Fact]
     public async Task PersistAsync_BudgetThresholdCrossed_DispatchesQuotaWarningOnce()
     {
         var tenantId = Guid.NewGuid();
@@ -294,11 +249,17 @@ public sealed class BillingUsagePersistenceHandlerTests
         await webhooks.Received(1).DispatchAsync(
             "quota.warning",
             Arg.Any<object>(),
+            Arg.Any<Action?>(),
             Arg.Any<CancellationToken>());
     }
-
+    /// <summary>
+    /// The persistence handler must not send the daily usage summary. Firing it inline reported
+    /// whatever had accrued by a tenant's first request of the day — and, because both paths shared
+    /// one dedup tracker, consumed the slot so DailyUsageWebhookPublisher's real end-of-day summary
+    /// was never delivered at all.
+    /// </summary>
     [Fact]
-    public async Task PersistAsync_SecondEventSameDay_SendsUsageDailyOnce()
+    public async Task PersistAsync_DoesNotSendUsageDaily()
     {
         var tenantId = Guid.NewGuid();
         var billingEvents = Substitute.For<IBillingEventRepository>();
@@ -309,19 +270,11 @@ public sealed class BillingUsagePersistenceHandlerTests
         rollups.GetRollupsAsync(Arg.Any<DateOnly?>(), Arg.Any<DateOnly?>(), tenantId, Arg.Any<CancellationToken>())
             .Returns([
                 new DailyUsageRollupRecord(
-                    DateOnly.FromDateTime(DateTime.UtcNow),
-                    tenantId,
-                    "gpt-4o",
-                    null,
-                    1,
-                    1,
-                    0.01m,
-                    1),
+                    DateOnly.FromDateTime(DateTime.UtcNow), tenantId, "gpt-4o", null, 1, 1, 0.01m, 1),
             ]);
 
         var webhooks = Substitute.For<IBillingWebhookDispatcher>();
-        var dailyTracker = new BillingDailyUsageWebhookTracker();
-        var handler = CreateHandler(billingEvents, rollups, webhooks: webhooks, dailyTracker: dailyTracker);
+        var handler = CreateHandler(billingEvents, rollups, webhooks: webhooks);
 
         await handler.PersistAsync(new UsageEvent
         {
@@ -334,20 +287,15 @@ public sealed class BillingUsagePersistenceHandlerTests
             TimestampUtc = DateTimeOffset.UtcNow,
         });
 
-        await handler.PersistAsync(new UsageEvent
-        {
-            RequestId = "req-2",
-            TenantId = tenantId.ToString(),
-            ModelId = "gpt-4o",
-            PromptTokens = 1,
-            CompletionTokens = 1,
-            DurationMs = 1,
-            TimestampUtc = DateTimeOffset.UtcNow,
-        });
-
-        await webhooks.Received(1).DispatchAsync(
+        await webhooks.DidNotReceive().DispatchAsync(
             "usage.daily",
             Arg.Any<object>(),
+            Arg.Any<Action?>(),
+            Arg.Any<CancellationToken>());
+        await webhooks.DidNotReceive().DispatchAsync(
+            "usage.daily",
+            Arg.Any<object>(),
+            Arg.Any<Action?>(),
             Arg.Any<CancellationToken>());
     }
 

@@ -54,7 +54,7 @@ public sealed class RateLimitMiddleware
 
         var planSlug = tenantContext?.PlanSlug;
         var tenantSlug = tenantContext?.TenantId;
-        var partitionKey = tenantContext?.TenantId ?? "anonymous";
+        var partitionKey = RateLimitPartition.Resolve(context);
 
         var policy = _policyResolver.Resolve(planSlug, tenantSlug);
         var now = _timeProvider.GetUtcNow();

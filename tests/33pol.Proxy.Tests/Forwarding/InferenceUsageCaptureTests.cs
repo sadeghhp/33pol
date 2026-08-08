@@ -88,9 +88,21 @@ public sealed class InferenceUsageCaptureTests
     public void CaptureFromSseText_TruncatedStreamWithOutput_EnqueuesAnEstimate()
     {
         var recorder = Substitute.For<IUsageRecorder>();
+
+        // Accepted by the queue. HasEnqueuedUsage tracks acceptance rather than the attempt: a
+        // saturated queue drops silently, and treating a dropped event as persisted left the
+        // router's budget reservation held for its whole TTL.
+        recorder.Enqueue(Arg.Any<UsageEvent>()).Returns(true);
+
         var metrics = Substitute.For<IGatewayMetricsCollector>();
         var capture = new InferenceUsageCapture(
-            recorder, metrics, "gpt-4o", "req-cut", DateTimeOffset.UtcNow.AddSeconds(-2), tenant: null);
+            recorder,
+            metrics,
+            "gpt-4o",
+            "req-cut",
+            DateTimeOffset.UtcNow.AddSeconds(-2),
+            tenant: null,
+            requestBodyBytes: 4_000);
 
         // No usage frame: the client disconnected first.
         const string partial = "data: {\"choices\":[{\"delta\":{\"content\":\"a\"}}]}\n\n";
@@ -101,9 +113,42 @@ public sealed class InferenceUsageCaptureTests
             e.RequestId == "req-cut" &&
             e.TokenSource == UsageTokenSource.Estimated &&
             e.CompletionTokens == 24 &&
-            e.PromptTokens == 0));
+            // Prompt approximated from the body the upstream actually read and charged for.
+            // Leaving it at zero meant a disconnect just before the usage frame billed nothing
+            // for the input, which dominates cost on long-context workloads.
+            e.PromptTokens == 1_000));
         metrics.Received(1).RecordEstimatedUsage("gpt-4o");
         capture.HasEnqueuedUsage.Should().BeTrue();
+    }
+
+    /// <summary>
+    /// A dropped usage event must not report as enqueued.
+    /// </summary>
+    /// <remarks>
+    /// The router settles a request's budget reservation only when persistence will actually run.
+    /// Marking the event enqueued regardless of whether the queue accepted it meant a saturated
+    /// queue — which drops silently — left the reservation held for its full TTL, so sustained load
+    /// accumulated phantom spend and hard-stopped tenants nowhere near their budget.
+    /// </remarks>
+    [Fact]
+    public void CaptureFromJsonBody_WhenRecorderDropsTheEvent_DoesNotReportEnqueued()
+    {
+        var recorder = Substitute.For<IUsageRecorder>();
+        recorder.Enqueue(Arg.Any<UsageEvent>()).Returns(false);
+
+        var capture = new InferenceUsageCapture(
+            recorder,
+            Substitute.For<IGatewayMetricsCollector>(),
+            "gpt-4o",
+            "req-dropped",
+            DateTimeOffset.UtcNow,
+            tenant: null);
+
+        capture.CaptureFromJsonBody(
+            """{"usage":{"prompt_tokens":5,"completion_tokens":7}}"""u8);
+
+        recorder.Received(1).Enqueue(Arg.Any<UsageEvent>());
+        capture.HasEnqueuedUsage.Should().BeFalse();
     }
 
     /// <summary>

@@ -503,14 +503,42 @@ public sealed class AdminModelProvisioningService(
         }
     }
 
-    private static bool LooksLikeInvalidApiKeyPlacement(string value)
+    /// <summary>
+    /// Detects an environment variable <em>name</em> pasted into the <c>apiKey</c> field.
+    /// </summary>
+    /// <remarks>
+    /// The signal is the shouting-snake-case convention environment variables use
+    /// (<c>OPENROUTER_API_KEY</c>), not "parses as an identifier". Accepting the latter rejected real
+    /// credentials: any token built from letters, digits and underscores — a Hugging Face
+    /// <c>hf_…</c> token, for one — satisfies the identifier grammar, so the most common admin flow
+    /// (paste the provider key) refused a whole class of valid keys and told the operator they had
+    /// entered a variable name.
+    /// </remarks>
+    internal static bool LooksLikeInvalidApiKeyPlacement(string value)
     {
-        if (EnvVarNameValidator.TryValidate(value, out _, out _))
+        var trimmed = value.Trim();
+
+        // Real credentials are long. A short all-caps identifier is a variable name.
+        if (trimmed.Length is 0 or > 64)
         {
-            return true;
+            return false;
         }
 
-        return false;
+        if (!EnvVarNameValidator.TryValidate(trimmed, out _, out _))
+        {
+            return false;
+        }
+
+        foreach (var c in trimmed)
+        {
+            if (char.IsLower(c))
+            {
+                return false;
+            }
+        }
+
+        // All-caps, underscore-separated, and it names a credential — the environment variable shape.
+        return trimmed.Contains('_', StringComparison.Ordinal);
     }
 
     private sealed record PrepResult(bool Success, ModelConfig? Model, string? SecretToStore, bool ClearSecret, string? Error)

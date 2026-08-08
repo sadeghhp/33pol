@@ -27,6 +27,7 @@ public sealed class BillingBudgetWarningTests
         await webhooks.Received(1).DispatchAsync(
             "quota.warning",
             Arg.Any<object>(),
+            Arg.Any<Action?>(),
             Arg.Any<CancellationToken>());
     }
 
@@ -43,6 +44,7 @@ public sealed class BillingBudgetWarningTests
         await webhooks.DidNotReceive().DispatchAsync(
             "quota.warning",
             Arg.Any<object>(),
+            Arg.Any<Action?>(),
             Arg.Any<CancellationToken>());
     }
 
@@ -121,7 +123,6 @@ public sealed class BillingBudgetWarningTests
             budgets,
             webhooks,
             new BillingBudgetWarningTracker(),
-            new BillingDailyUsageWebhookTracker(),
             new BillingUnpricedModelTracker(),
             Substitute.For<IApiKeyLastUsedTracker>(),
             new BudgetReservationLedger(TimeSpan.FromMinutes(2)),
@@ -162,6 +163,8 @@ internal static class BillingBudgetEnforcementServiceTestsHelper
         return new BillingBudgetEnforcementService(
             provider.GetRequiredService<IServiceScopeFactory>(),
             ledger ?? new BudgetReservationLedger(TimeSpan.FromMinutes(2)),
+            new Microsoft.Extensions.Caching.Memory.MemoryCache(
+                new Microsoft.Extensions.Caching.Memory.MemoryCacheOptions()),
             Microsoft.Extensions.Options.Options.Create(new Pol33.Core.Configuration.BillingOptions()));
     }
 }

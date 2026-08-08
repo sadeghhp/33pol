@@ -76,6 +76,10 @@ public sealed class ModelRouterBudgetReservationTests
         var budget = CreateBudgetEnforcement();
         var usageRecorder = Substitute.For<IUsageRecorder>();
 
+        // Accepted for persistence. Enqueue reports acceptance because a saturated queue drops
+        // silently, and the router must only skip its own release when persistence will actually run.
+        usageRecorder.Enqueue(Arg.Any<UsageEvent>()).Returns(true);
+
         await RunAsync(
             budget,
             CreateForwarderReturning(ForwarderError.None, enqueueUsage: true),

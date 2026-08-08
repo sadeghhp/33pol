@@ -35,27 +35,180 @@ public static class UsageJsonParser
                 return ParsedUsage.None;
             }
 
-            var hasPrompt = TryReadTokenCount(usage, "prompt_tokens", out var promptTokens);
-            var hasCompletion = TryReadTokenCount(usage, "completion_tokens", out var completionTokens);
-
-            if ((hasPrompt || hasCompletion) && (promptTokens > 0 || completionTokens > 0))
-            {
-                return ParsedUsage.Split(promptTokens, completionTokens);
-            }
-
-            // Only a combined total. Deliberately NOT folded into prompt tokens: the split is
-            // genuinely unknown and pricing must be told so.
-            if (TryReadTokenCount(usage, "total_tokens", out var totalTokens) && totalTokens > 0)
-            {
-                return ParsedUsage.TotalOnly(totalTokens);
-            }
-
-            return ParsedUsage.None;
+            return FromUsageElement(usage);
         }
         catch (JsonException)
         {
             return ParsedUsage.None;
         }
+    }
+
+    /// <summary>Reads the token counts out of an already-located <c>usage</c> object.</summary>
+    private static ParsedUsage FromUsageElement(JsonElement usage)
+    {
+        var hasPrompt = TryReadTokenCount(usage, "prompt_tokens", out var promptTokens);
+        var hasCompletion = TryReadTokenCount(usage, "completion_tokens", out var completionTokens);
+
+        if ((hasPrompt || hasCompletion) && (promptTokens > 0 || completionTokens > 0))
+        {
+            return ParsedUsage.Split(promptTokens, completionTokens);
+        }
+
+        // Only a combined total. Deliberately NOT folded into prompt tokens: the split is
+        // genuinely unknown and pricing must be told so.
+        if (TryReadTokenCount(usage, "total_tokens", out var totalTokens) && totalTokens > 0)
+        {
+            return ParsedUsage.TotalOnly(totalTokens);
+        }
+
+        return ParsedUsage.None;
+    }
+
+    private static ReadOnlySpan<byte> UsagePropertyToken => "\"usage\""u8;
+
+    /// <summary>
+    /// Recovers usage from a <em>fragment</em> of a JSON body — bytes that are not a complete,
+    /// parseable document — by locating the last <c>"usage"</c> property and parsing only the object
+    /// that follows it.
+    /// </summary>
+    /// <remarks>
+    /// This exists because a non-streaming response can be far larger than any bounded capture
+    /// buffer (a batch embeddings body is routinely megabytes). Retaining only a truncated prefix
+    /// made <see cref="Parse"/> throw and the request record zero usage — i.e. go unbilled entirely.
+    /// The <c>usage</c> object sits at the end of an OpenAI-shaped body, so scanning the retained
+    /// tail recovers it exactly, without needing the surrounding document to be well-formed.
+    /// </remarks>
+    public static ParsedUsage ParseUsageFragment(ReadOnlySpan<byte> json)
+    {
+        if (json.IsEmpty)
+        {
+            return ParsedUsage.None;
+        }
+
+        // Scan candidates newest-first: the terminal usage object is the authoritative one, and an
+        // earlier match may be a truncated or nested occurrence.
+        var searchLimit = json.Length;
+        while (searchLimit >= UsagePropertyToken.Length)
+        {
+            var index = json[..searchLimit].LastIndexOf(UsagePropertyToken);
+            if (index < 0)
+            {
+                return ParsedUsage.None;
+            }
+
+            searchLimit = index;
+
+            var objectStart = FindObjectStart(json, index + UsagePropertyToken.Length);
+            if (objectStart < 0)
+            {
+                continue;
+            }
+
+            var objectEnd = FindMatchingBrace(json, objectStart);
+            if (objectEnd < 0)
+            {
+                continue;
+            }
+
+            try
+            {
+                var reader = new Utf8JsonReader(json[objectStart..(objectEnd + 1)]);
+                using var doc = JsonDocument.ParseValue(ref reader);
+                if (doc.RootElement.ValueKind == JsonValueKind.Object)
+                {
+                    var parsed = FromUsageElement(doc.RootElement);
+                    if (parsed.HasUsage)
+                    {
+                        return parsed;
+                    }
+                }
+            }
+            catch (JsonException)
+            {
+                // Not a usable occurrence; keep scanning backwards.
+            }
+        }
+
+        return ParsedUsage.None;
+    }
+
+    /// <summary>Expects <c>: {</c> after a property name, tolerating whitespace. Returns the index of the brace.</summary>
+    private static int FindObjectStart(ReadOnlySpan<byte> json, int from)
+    {
+        var i = SkipWhitespace(json, from);
+        if (i >= json.Length || json[i] != (byte)':')
+        {
+            return -1;
+        }
+
+        i = SkipWhitespace(json, i + 1);
+        return i < json.Length && json[i] == (byte)'{' ? i : -1;
+    }
+
+    private static int SkipWhitespace(ReadOnlySpan<byte> json, int from)
+    {
+        var i = from;
+        while (i < json.Length && json[i] is (byte)' ' or (byte)'\t' or (byte)'\r' or (byte)'\n')
+        {
+            i++;
+        }
+
+        return i;
+    }
+
+    /// <summary>
+    /// Returns the index of the brace closing the object that opens at <paramref name="openIndex"/>,
+    /// or -1 if the fragment ends first. String literals are skipped so a brace inside a string
+    /// value cannot unbalance the count.
+    /// </summary>
+    private static int FindMatchingBrace(ReadOnlySpan<byte> json, int openIndex)
+    {
+        var depth = 0;
+        var inString = false;
+        var escaped = false;
+
+        for (var i = openIndex; i < json.Length; i++)
+        {
+            var c = json[i];
+
+            if (inString)
+            {
+                if (escaped)
+                {
+                    escaped = false;
+                }
+                else if (c == (byte)'\\')
+                {
+                    escaped = true;
+                }
+                else if (c == (byte)'"')
+                {
+                    inString = false;
+                }
+
+                continue;
+            }
+
+            switch (c)
+            {
+                case (byte)'"':
+                    inString = true;
+                    break;
+                case (byte)'{':
+                    depth++;
+                    break;
+                case (byte)'}':
+                    depth--;
+                    if (depth == 0)
+                    {
+                        return i;
+                    }
+
+                    break;
+            }
+        }
+
+        return -1;
     }
 
     /// <summary>

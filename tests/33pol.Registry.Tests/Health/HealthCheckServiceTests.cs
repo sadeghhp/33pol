@@ -39,13 +39,13 @@ public sealed class HealthCheckServiceTests
 
         await service.CheckAllBackendsAsync();
 
-        handler.RequestedPaths.Where(p => p == "/health").Should().HaveCount(2);
+        handler.RequestedPaths.Where(p => p == "/v1/models").Should().HaveCount(2);
     }
 
     [Fact]
     public async Task CheckBackendAsync_Unhealthy_StoresUnhealthyState()
     {
-        var handler = new SequenceHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.ServiceUnavailable));
+        var handler = SequenceHttpMessageHandler.AlwaysReturning(HttpStatusCode.ServiceUnavailable);
         var healthStore = new BackendHealthStore(Options.Create(new GatewayOptions()));
         var service = CreateService(handler, healthStore);
 
@@ -56,7 +56,8 @@ public sealed class HealthCheckServiceTests
         });
 
         healthStore.IsBackendHealthy("model-a").Should().BeFalse();
-        healthStore.GetHealth("model-a")!.Error.Should().Be("All probe endpoints failed");
+        healthStore.GetHealth("model-a")!.Error.Should().Contain("503");
+        healthStore.GetHealth("model-a")!.StatusCode.Should().Be(503);
     }
 
     [Fact]
@@ -72,7 +73,7 @@ public sealed class HealthCheckServiceTests
         isHealthy.Should().BeTrue();
         statusCode.Should().Be(200);
         error.Should().BeNull();
-        handler.RequestedPaths.Should().Equal("/health", "/api/tags");
+        handler.RequestedPaths.Should().Equal("/v1/models", "/health");
     }
 
     [Fact]
@@ -80,7 +81,7 @@ public sealed class HealthCheckServiceTests
     {
         var handler = new SequenceHttpMessageHandler(
             _ => new HttpResponseMessage(HttpStatusCode.OK),
-            _ => throw new InvalidOperationException("Should not probe /api/tags after /health succeeds"));
+            _ => throw new InvalidOperationException("Should not probe further after /v1/models succeeds"));
         var service = CreateService(handler);
 
         var (isHealthy, statusCode, error) = await service.ProbeBackendAsync("http://backend:8000");
@@ -88,20 +89,20 @@ public sealed class HealthCheckServiceTests
         isHealthy.Should().BeTrue();
         statusCode.Should().Be(200);
         error.Should().BeNull();
-        handler.RequestedPaths.Should().Equal("/health");
+        handler.RequestedPaths.Should().Equal("/v1/models");
     }
 
     [Fact]
     public async Task ProbeBackendAsync_AllEndpointsFail_ReturnsUnhealthy()
     {
-        var handler = new SequenceHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.ServiceUnavailable));
+        var handler = SequenceHttpMessageHandler.AlwaysReturning(HttpStatusCode.ServiceUnavailable);
         var service = CreateService(handler);
 
         var (isHealthy, _, error) = await service.ProbeBackendAsync("http://backend:8000");
 
         isHealthy.Should().BeFalse();
-        error.Should().Be("All probe endpoints failed");
-        handler.RequestedPaths.Should().Equal("/health", "/api/tags", "/");
+        error.Should().Contain("503");
+        handler.RequestedPaths.Should().Equal("/v1/models", "/health", "/api/tags", "/");
     }
 
     [Fact]
@@ -132,13 +133,15 @@ public sealed class HealthCheckServiceTests
     private static HealthCheckService CreateService(
         HttpMessageHandler handler,
         IBackendHealthStore? healthStore = null,
-        IModelRegistry? registry = null)
+        IModelRegistry? registry = null,
+        IUpstreamBearerTokenResolver? bearerTokenResolver = null)
     {
         var modelRegistry = registry ?? Substitute.For<IModelRegistry>();
         var store = healthStore ?? new BackendHealthStore(Options.Create(new GatewayOptions()));
         return new HealthCheckService(
             modelRegistry,
             store,
+            bearerTokenResolver ?? Substitute.For<IUpstreamBearerTokenResolver>(),
             Options.Create(new GatewayOptions { HealthCheckIntervalSeconds = 30 }),
             NullLogger<HealthCheckService>.Instance,
             new HttpClient(handler));
@@ -154,6 +157,11 @@ public sealed class HealthCheckServiceTests
         {
             _responses = responses;
         }
+
+        /// <summary>Answers every probe path with the same status, rather than falling back to 404.</summary>
+        public static SequenceHttpMessageHandler AlwaysReturning(HttpStatusCode statusCode) =>
+            new(Enumerable.Repeat<Func<HttpRequestMessage, HttpResponseMessage>>(
+                _ => new HttpResponseMessage(statusCode), 8).ToArray());
 
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,

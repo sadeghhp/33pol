@@ -25,7 +25,10 @@ public static class BillingServiceCollectionExtensions
             .AddOptions<BillingWebhookOptions>()
             .Bind(configuration.GetSection(BillingWebhookOptions.SectionName));
 
-        services.AddHttpClient(nameof(BillingWebhookDispatcher));
+        // Explicit, short timeout: the default 100s let one wedged receiver hold a delivery slot for
+        // over a minute. Delivery is retried by the sender service, so failing fast is strictly better.
+        services.AddHttpClient(BillingWebhookSenderHostedService.HttpClientName)
+            .ConfigureHttpClient(client => client.Timeout = TimeSpan.FromSeconds(15));
         services.AddSingleton<IRateCardCostCalculator, RateCardCostCalculator>();
         services.AddSingleton<IDailyUsageRollupAggregator, DailyUsageRollupAggregator>();
         services.AddSingleton<BudgetReservationLedger>(sp =>
@@ -47,7 +50,11 @@ public static class BillingServiceCollectionExtensions
         services.AddSingleton<BillingUnpricedModelTracker>();
         services.AddSingleton<IRateCardAdminService, NoOpRateCardAdminService>();
         services.AddSingleton<IBudgetEnforcementService, NoOpBudgetEnforcementService>();
-        services.AddSingleton<IBillingWebhookDispatcher, BillingWebhookDispatcher>();
+        // Registered concretely as well: the sender service reads the dispatcher's queue, and both
+        // must observe the same instance.
+        services.AddSingleton<BillingWebhookDispatcher>();
+        services.AddSingleton<IBillingWebhookDispatcher>(sp => sp.GetRequiredService<BillingWebhookDispatcher>());
+        services.AddHostedService<BillingWebhookSenderHostedService>();
         services.AddSingleton<IBillingForecastService, NoOpBillingForecastService>();
         services.AddSingleton<IBillingUsageService, NoOpBillingUsageService>();
         services.AddSingleton<IUsagePersistenceHandler, NoOpUsagePersistenceHandler>();

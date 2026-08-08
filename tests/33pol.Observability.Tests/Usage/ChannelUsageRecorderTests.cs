@@ -39,7 +39,8 @@ public sealed class ChannelUsageRecorderTests
         await Task.Delay(200);
         await recorder.StopAsync(CancellationToken.None);
 
-        quota.Received(1).CommitUsage("tenant-a", "gpt-4o", 15, "req-1");
+        quota.Received(1).CommitUsage(
+            "tenant-a", "gpt-4o", 15, "req-1", Arg.Any<DateTimeOffset?>());
         await persistence.Received(1).PersistAsync(Arg.Is<UsageEvent>(e => e.RequestId == "req-1"), Arg.Any<CancellationToken>());
         metrics.Received(1).RecordTokenUsage("gpt-4o", 10, 5);
     }

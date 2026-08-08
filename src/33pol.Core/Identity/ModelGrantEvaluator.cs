@@ -36,10 +36,38 @@ public static class ModelGrantEvaluator
             canonicalModelId);
     }
 
+    /// <summary>
+    /// Evaluates one grant list. An explicit <see cref="GrantEffect.Deny"/> for the model wins over
+    /// any <see cref="GrantEffect.Allow"/>.
+    /// </summary>
+    /// <remarks>
+    /// Deny used to be inert: only Allow entries were examined, so a Deny alongside an Allow for the
+    /// same model changed nothing. The admin API never writes Deny, which kept it from being an
+    /// active hole — but the effect is persisted, so anything seeding grants outside that API
+    /// (GitOps, a migration, a future UI) would have had its denials silently ignored. Deny-wins is
+    /// the only safe reading of an authorization rule.
+    /// </remarks>
     private static bool MatchesAllowGrant(
         IEnumerable<(GrantEffect Effect, string ModelPattern)> grants,
-        string canonicalModelId) =>
-        grants.Any(g =>
-            g.Effect == GrantEffect.Allow
-            && string.Equals(g.ModelPattern, canonicalModelId, StringComparison.OrdinalIgnoreCase));
+        string canonicalModelId)
+    {
+        var allowed = false;
+
+        foreach (var (effect, pattern) in grants)
+        {
+            if (!string.Equals(pattern, canonicalModelId, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (effect == GrantEffect.Deny)
+            {
+                return false;
+            }
+
+            allowed = true;
+        }
+
+        return allowed;
+    }
 }

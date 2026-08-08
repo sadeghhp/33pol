@@ -39,6 +39,11 @@ public sealed class AdminKeyService : IAdminKeyService
         var hash = ApiKeyHashing.Hash(secret, _securityOptions.KeyPepper);
         var now = DateTimeOffset.UtcNow;
 
+        if (request.ExpiresAt is { } requestedExpiry && requestedExpiry <= now)
+        {
+            throw new ArgumentException("expiresAt must be in the future.", nameof(request));
+        }
+
         var record = await _apiKeys.CreateAsync(
             new ApiKeyRecord(
                 Guid.NewGuid(),
@@ -47,7 +52,7 @@ public sealed class AdminKeyService : IAdminKeyService
                 prefix,
                 request.Role,
                 request.Scopes,
-                ExpiresAt: null,
+                ExpiresAt: request.ExpiresAt,
                 RevokedAt: null,
                 now,
                 LastUsedAt: null,
@@ -98,13 +103,22 @@ public sealed class AdminKeyService : IAdminKeyService
             throw new InvalidOperationException("Revoked API keys cannot be updated.");
         }
 
+        if (request.UpdateExpiry &&
+            request.ExpiresAt is { } requestedExpiry &&
+            requestedExpiry <= DateTimeOffset.UtcNow)
+        {
+            throw new ArgumentException("expiresAt must be in the future.", nameof(request));
+        }
+
         var updated = await _apiKeys.UpdateMetadataAsync(
             keyId,
             new ApiKeyMetadataUpdate(
                 request.Label,
                 request.Assignee,
                 request.Description,
-                request.CostCenter),
+                request.CostCenter,
+                request.ExpiresAt,
+                request.UpdateExpiry),
             cancellationToken).ConfigureAwait(false);
 
         _validator.InvalidateCache(keyId);
@@ -235,6 +249,7 @@ public sealed class AdminKeyService : IAdminKeyService
             KeyPrefix = record.KeyPrefix,
             Role = record.Role,
             CreatedAt = record.CreatedAt,
+            ExpiresAt = record.ExpiresAt,
             Label = record.Label,
             Assignee = record.Assignee,
             Description = record.Description,

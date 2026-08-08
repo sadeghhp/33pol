@@ -97,31 +97,36 @@ public sealed class BillingEventRepository(GatewayDbContext dbContext) : IBillin
         var from = fromDate.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
         var to = toDate.ToDateTime(TimeOnly.MaxValue, DateTimeKind.Utc);
 
+        // Projected and aggregated in memory, deliberately. SQLite has no decimal type — EF stores
+        // decimal as TEXT — so a server-side SUM() coerces every value to a REAL and adds them in
+        // IEEE-754 double precision before handing the result back as a decimal. That silently
+        // drifts money totals away from the exact sum of the underlying rows, by an amount that
+        // depends on row order. DailyUsageRollupRepository sums in memory for the same reason.
         var rows = await dbContext.BillingEvents
             .AsNoTracking()
             .Where(e => e.TenantId == tenantId && e.ApiKeyId != null)
             .Where(e => e.RecordedAt >= from && e.RecordedAt <= to)
-            .GroupBy(e => e.ApiKeyId!.Value)
-            .Select(g => new
+            .Select(e => new
             {
-                ApiKeyId = g.Key,
-                RequestCount = g.Count(),
-                PromptTokens = g.Sum(e => e.PromptTokens),
-                CompletionTokens = g.Sum(e => e.CompletionTokens),
-                TotalCost = g.Sum(e => e.TotalCost ?? 0m),
+                ApiKeyId = e.ApiKeyId!.Value,
+                e.PromptTokens,
+                e.CompletionTokens,
+                e.TotalCost,
             })
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
 
-        return rows.ToDictionary(
-            row => row.ApiKeyId,
-            row => new ApiKeyUsageSummary
-            {
-                RequestCount = row.RequestCount,
-                PromptTokens = row.PromptTokens,
-                CompletionTokens = row.CompletionTokens,
-                TotalCost = row.TotalCost,
-            });
+        return rows
+            .GroupBy(row => row.ApiKeyId)
+            .ToDictionary(
+                group => group.Key,
+                group => new ApiKeyUsageSummary
+                {
+                    RequestCount = group.Count(),
+                    PromptTokens = group.Sum(row => row.PromptTokens),
+                    CompletionTokens = group.Sum(row => row.CompletionTokens),
+                    TotalCost = group.Sum(row => row.TotalCost ?? 0m),
+                });
     }
 
     private static bool IsDuplicateRequestId(DbUpdateException exception)

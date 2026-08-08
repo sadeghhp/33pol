@@ -18,7 +18,17 @@ public sealed class AdminModelTestService(
 {
     public const string LogCategory = "ModelTest";
 
-    public const string HttpClientName = Core.Http.UpstreamHttpClientNames.Inference;
+    /// <summary>
+    /// Dedicated client that refuses redirects.
+    /// </summary>
+    /// <remarks>
+    /// This no longer borrows the inference client, which follows redirects: the probe returns the
+    /// upstream's status to the caller, so a 3xx could steer that response oracle at a host the
+    /// operator never configured. Private and loopback targets stay allowed — local upstreams are a
+    /// primary supported deployment, and the probe only reaches URLs already configured as a model's
+    /// upstream.
+    /// </remarks>
+    public const string HttpClientName = "admin-model-test";
 
     public const string DefaultPrompt = "ping";
 

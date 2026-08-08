@@ -25,6 +25,7 @@ public sealed class DailyUsageWebhookHostedServiceTests
         await webhooks.DidNotReceive().DispatchAsync(
             Arg.Any<string>(),
             Arg.Any<object>(),
+            Arg.Any<Action?>(),
             Arg.Any<CancellationToken>());
     }
 
@@ -55,6 +56,7 @@ public sealed class DailyUsageWebhookHostedServiceTests
         await webhooks.Received().DispatchAsync(
             "usage.daily",
             Arg.Any<object>(),
+            Arg.Any<Action?>(),
             Arg.Any<CancellationToken>());
     }
 

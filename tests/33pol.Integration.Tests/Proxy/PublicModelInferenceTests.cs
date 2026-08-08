@@ -26,8 +26,17 @@ public sealed class PublicModelInferenceTests
         response.StatusCode.Should().Be(HttpStatusCode.OK);
     }
 
+    /// <summary>
+    /// A key that was presented and rejected is an authentication failure, even on a public model.
+    /// </summary>
+    /// <remarks>
+    /// Serving these anonymously answered 200 to a caller whose key had been revoked or had expired,
+    /// so clients, CI checks and SDKs had no way to discover that their credential had stopped
+    /// working — the failure looked exactly like success. Omitting the key entirely still works;
+    /// that is the case <c>publicAccess</c> exists for.
+    /// </remarks>
     [Fact]
-    public async Task PublicModel_GarbageApiKey_AllowsInference()
+    public async Task PublicModel_GarbageApiKey_ReturnsUnauthorized()
     {
         await using var factory = CreateFactoryWithPublicModel();
         var client = factory.CreateClient();
@@ -36,7 +45,7 @@ public sealed class PublicModelInferenceTests
         using var body = ChatBody(ModelAlias);
         var response = await client.PostAsync("/v1/chat/completions", body);
 
-        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
     }
 
     [Fact]

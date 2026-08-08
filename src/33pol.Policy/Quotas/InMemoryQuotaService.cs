@@ -55,7 +55,12 @@ public sealed class InMemoryQuotaService(
         return QuotaCheckResult.Allowed;
     }
 
-    public void CommitUsage(string partitionKey, string modelId, long totalTokens, string requestId)
+    public void CommitUsage(
+        string partitionKey,
+        string modelId,
+        long totalTokens,
+        string requestId,
+        DateTimeOffset? occurredAt = null)
     {
         _ = modelId;
         if (totalTokens <= 0)
@@ -74,13 +79,43 @@ public sealed class InMemoryQuotaService(
             TrimCommittedRequestIdsIfNeeded();
         }
 
-        var period = CurrentPeriod();
+        var currentPeriod = CurrentPeriod();
+
+        // Attributed to the period the request happened in, not the period it was drained in. Usage
+        // is committed off a queue, so an event enqueued at 23:59:59 on the last day of the month
+        // was otherwise counted against the following month's fresh allowance.
+        var eventPeriod = occurredAt is { } at ? ToPeriod(at) : currentPeriod;
+
+        // Nothing carries usage backwards into a closed period: the allowance for it has already
+        // been decided and the snapshot for it may already be written.
+        if (!string.Equals(eventPeriod, currentPeriod, StringComparison.Ordinal))
+        {
+            return;
+        }
+
         _usage.AddOrUpdate(
             partitionKey,
-            _ => new PeriodUsage(period, totalTokens),
-            (_, existing) => existing.Period == period
+            _ => new PeriodUsage(currentPeriod, totalTokens),
+            (_, existing) => existing.Period == currentPeriod
                 ? existing with { Used = existing.Used + totalTokens }
-                : new PeriodUsage(period, totalTokens));
+                : new PeriodUsage(currentPeriod, totalTokens));
+
+        EvictStalePeriods(currentPeriod);
+    }
+
+    /// <summary>
+    /// Drops partitions whose usage belongs to a closed period, so the map does not retain an entry
+    /// per tenant indefinitely.
+    /// </summary>
+    private void EvictStalePeriods(string currentPeriod)
+    {
+        foreach (var (key, value) in _usage)
+        {
+            if (!string.Equals(value.Period, currentPeriod, StringComparison.Ordinal))
+            {
+                _usage.TryRemove(new KeyValuePair<string, PeriodUsage>(key, value));
+            }
+        }
     }
 
     public IReadOnlyList<QuotaUsageSnapshot> ExportUsage() =>
@@ -106,7 +141,10 @@ public sealed class InMemoryQuotaService(
         }
     }
 
-    private string CurrentPeriod() => _clock().UtcDateTime.ToString("yyyy-MM", CultureInfo.InvariantCulture);
+    private string CurrentPeriod() => ToPeriod(_clock());
+
+    private static string ToPeriod(DateTimeOffset at) =>
+        at.UtcDateTime.ToString("yyyy-MM", CultureInfo.InvariantCulture);
 
     private void TrimCommittedRequestIdsIfNeeded()
     {

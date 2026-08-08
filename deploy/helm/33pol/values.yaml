@@ -53,6 +53,10 @@ gateway:
   modelsConfigPath: /app/config/models.json
   operatorConsole:
     enabled: false
+  # Seconds to keep serving after shutdown begins, while readiness already reports unhealthy, so
+  # kube-proxy stops routing to this pod before Kestrel closes. Should be a few readiness-probe
+  # intervals and must stay below terminationGracePeriodSeconds.
+  shutdownDrainSeconds: 15
   # Browser SPA origins for Production (scheme + host + port, no trailing slash).
   cors:
     allowedOrigins: []

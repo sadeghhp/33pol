@@ -59,8 +59,15 @@ internal static class BlockedProviderModelsListHost
         }
         catch (SocketException)
         {
-            // Unresolvable host: let the actual HTTP request fail naturally with its own DNS error.
-            return null;
+            // Fail closed. Letting an unresolvable host through "so the HTTP request fails
+            // naturally" assumed both resolvers agree — but a host form this resolver rejects and
+            // the socket layer accepts would then reach the connection completely unchecked.
+            return $"modelsUrl host '{uri.Host}' could not be resolved.";
+        }
+
+        if (addresses.Length == 0)
+        {
+            return $"modelsUrl host '{uri.Host}' did not resolve to any address.";
         }
 
         foreach (var address in addresses)
@@ -113,6 +120,26 @@ internal static class BlockedProviderModelsListHost
         }
 
         if (bytes[0] == 169 && bytes[1] == 254)
+        {
+            return true;
+        }
+
+        // 100.64.0.0/10 — carrier-grade NAT, and the range managed Kubernetes offerings routinely
+        // use for pod and service networks, which makes it internal in exactly the deployments this
+        // gateway targets.
+        if (bytes[0] == 100 && bytes[1] >= 64 && bytes[1] <= 127)
+        {
+            return true;
+        }
+
+        // 192.0.0.0/24 (IETF protocol assignments) and 198.18.0.0/15 (benchmarking) are neither
+        // routable nor legitimate upstream targets.
+        if (bytes[0] == 192 && bytes[1] == 0 && bytes[2] == 0)
+        {
+            return true;
+        }
+
+        if (bytes[0] == 198 && bytes[1] is 18 or 19)
         {
             return true;
         }

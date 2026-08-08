@@ -49,6 +49,18 @@ public sealed class RateCardCostCalculator : IRateCardCostCalculator
         return new BillingCostBreakdown(0m, cost, cost, rateCard.Currency);
     }
 
+    /// <summary>
+    /// Scale at which a single request's cost is stored.
+    /// </summary>
+    /// <remarks>
+    /// Rounding each line to 6 places zeroed out small requests: at $0.15 per million tokens a
+    /// handful of tokens costs less than 0.0000005, which rounded to exactly zero. Every such
+    /// request was billed nothing, and the shortfall grew with request volume — the workload profile
+    /// (many small calls) where it hurts most. Ten places keeps a single token of the cheapest
+    /// realistic model representable while staying well inside the storage column's range.
+    /// </remarks>
+    internal const int CostScale = 10;
+
     internal static decimal CalculateLineCost(long tokens, decimal pricePerMillionTokens) =>
-        tokens == 0 ? 0m : decimal.Round(tokens / TokensPerMillion * pricePerMillionTokens, 6);
+        tokens == 0 ? 0m : decimal.Round(tokens / TokensPerMillion * pricePerMillionTokens, CostScale);
 }

@@ -40,6 +40,21 @@ public sealed class ModelGrantAdminService : IModelGrantAdminService
         CancellationToken cancellationToken = default)
     {
         var modelIds = ValidateModelIds(request.ModelIds);
+
+        // An empty tenant allowlist removes the ceiling entirely rather than removing access, so it
+        // must be asked for explicitly. Submitting an empty list reads as "revoke everything" and
+        // silently did the opposite: it promoted the tenant from its granted models to every model
+        // in the registry.
+        if (modelIds.Count == 0 && !request.AllowAllModels)
+        {
+            throw new ArgumentException(
+                "An empty tenant model list removes the tenant ceiling, allowing every model in the "
+                + "registry — it does not revoke access. Set allowAllModels=true to confirm that is "
+                + "intended. To restrict the tenant instead, submit the models it may use; to remove "
+                + "all access, clear the grants on its API keys.",
+                nameof(request));
+        }
+
         await _tenantGrants.ReplaceForTenantAsync(tenantId, modelIds, cancellationToken).ConfigureAwait(false);
         _grantService.InvalidateTenantGrants(tenantId);
         return ToTenantResponse(modelIds);

@@ -76,6 +76,11 @@ public sealed class ApiKeyRepository : IApiKeyRepository
         entity.Description = NormalizeOptional(update.Description);
         entity.CostCenter = NormalizeOptional(update.CostCenter);
 
+        if (update.UpdateExpiry)
+        {
+            entity.ExpiresAt = update.ExpiresAt;
+        }
+
         await _db.SaveChangesAsync(cancellationToken);
         return IdentityEntityMapper.ToRecord(entity);
     }

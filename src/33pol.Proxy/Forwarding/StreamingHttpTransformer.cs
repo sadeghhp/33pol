@@ -44,6 +44,8 @@ public sealed class StreamingHttpTransformer : HttpTransformer
             httpContext.Request.Path,
             httpContext.Request.QueryString);
 
+        CopyAllowedRequestHeaders(httpContext.Request, proxyRequest);
+
         if (_stripClientAuthHeaders)
         {
             proxyRequest.Headers.Authorization = null;
@@ -102,21 +104,70 @@ public sealed class StreamingHttpTransformer : HttpTransformer
             ? new UsageCapturingStream(
                 originalStream,
                 // Stats carry how much was actually streamed, so a body cut short before its usage
-                // frame can still be billed from an estimate rather than recorded as zero.
-                (captured, stats) => _usageCapture!.CaptureFromSseText(
-                    Encoding.UTF8.GetString(captured.Span), stats),
-                // SSE usage arrives in the final chunk: retain the tail, not the head.
-                retainTail: true,
+                // frame can still be billed from an estimate rather than recorded as zero. SSE usage
+                // arrives in the final frames, so only the tail is meaningful here.
+                (_, tail, stats) => _usageCapture!.CaptureFromSseText(
+                    Encoding.UTF8.GetString(tail), stats),
+                isStreaming: true,
                 onCaptureFailed: _usageCapture!.OnCaptureFailed)
             : new UsageCapturingStream(
                 originalStream,
-                (captured, _) => _usageCapture!.CaptureFromJsonBody(captured.Span),
+                // Head for bodies that fit (exact parse), tail as the fallback for bodies that do
+                // not — the trailing usage object is what makes large responses billable at all.
+                (head, tail, stats) => _usageCapture!.CaptureFromJsonBody(head, tail, stats),
+                isStreaming: false,
                 onCaptureFailed: _usageCapture!.OnCaptureFailed);
 
         proxyResponse.Content = new StreamContent(capturingStream);
         if (contentType is not null)
         {
             proxyResponse.Content.Headers.ContentType = contentType;
+        }
+    }
+
+    /// <summary>
+    /// Client request headers the gateway relays to the upstream.
+    /// </summary>
+    /// <remarks>
+    /// <para>An allowlist, not a copy-everything. The forwarder builds a fresh request and this
+    /// transformer never chained to <c>base.TransformRequestAsync</c>, so previously <em>no</em>
+    /// client header reached the upstream at all. That silently broke any provider feature carried
+    /// by a header — <c>OpenAI-Beta</c>, <c>OpenAI-Organization</c>, provider API versions — with no
+    /// diagnostic beyond the feature not working.</para>
+    ///
+    /// <para>Deliberately excluded: anything that would let a client influence routing, identity or
+    /// framing. <c>Authorization</c> and <c>X-API-Key</c> are the gateway's own credential to
+    /// replace; <c>Host</c>, <c>Content-Length</c> and <c>Transfer-Encoding</c> belong to the new
+    /// request; <c>Accept-Encoding</c> is omitted so upstream bodies arrive uncompressed and stay
+    /// parseable for usage capture; forwarding headers (<c>X-Forwarded-*</c>) are not relayed
+    /// because a client could otherwise spoof them.</para>
+    /// </remarks>
+    private static readonly string[] ForwardableRequestHeaders =
+    [
+        "Accept",
+        "Accept-Language",
+        "User-Agent",
+        "OpenAI-Beta",
+        "OpenAI-Organization",
+        "OpenAI-Project",
+        "anthropic-version",
+        "anthropic-beta",
+        "X-Stainless-Lang",
+        "X-Stainless-Package-Version",
+        "X-Stainless-Runtime",
+        "X-Stainless-Runtime-Version",
+    ];
+
+    private static void CopyAllowedRequestHeaders(HttpRequest source, HttpRequestMessage destination)
+    {
+        foreach (var name in ForwardableRequestHeaders)
+        {
+            if (!source.Headers.TryGetValue(name, out var values) || values.Count == 0)
+            {
+                continue;
+            }
+
+            destination.Headers.TryAddWithoutValidation(name, values.ToArray());
         }
     }
 

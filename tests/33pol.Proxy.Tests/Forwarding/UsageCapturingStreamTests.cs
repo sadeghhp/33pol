@@ -15,19 +15,33 @@ public sealed class UsageCapturingStreamTests
 
     private const int MaxHeadBytes = UsageCapturingStream.MaxHeadBytes;
 
+    /// <summary>
+    /// Yields the window a consumer would parse: the head when it holds the whole body, otherwise
+    /// the tail — which is the recovery path that makes oversized bodies billable.
+    /// </summary>
     private static Stream Create(
         Stream inner,
         Action<ReadOnlyMemory<byte>> onComplete,
         bool retainTail = false,
         Action<Exception>? onCaptureFailed = null) =>
-        new UsageCapturingStream(inner, (captured, _) => onComplete(captured), retainTail, onCaptureFailed);
+        new UsageCapturingStream(
+            inner,
+            (head, tail, stats) => onComplete(
+                !retainTail && !head.IsEmpty && stats.TotalBytes <= head.Length
+                    ? head.ToArray()
+                    : tail.ToArray()),
+            retainTail,
+            onCaptureFailed);
 
     /// <summary>Overload for tests that assert on the streamed-progress statistics.</summary>
     private static Stream CreateWithStats(
         Stream inner,
         Action<ReadOnlyMemory<byte>, UsageCaptureStats> onComplete,
         bool retainTail = true) =>
-        new UsageCapturingStream(inner, onComplete, retainTail);
+        new UsageCapturingStream(
+            inner,
+            (_, tail, stats) => onComplete(tail.ToArray(), stats),
+            retainTail);
 
     [Fact]
     public async Task NonStreaming_RetainsHead_AndParsesUsage()
@@ -117,16 +131,27 @@ public sealed class UsageCapturingStreamTests
     [Fact]
     public async Task NonStreaming_HeadGrowthIsBounded()
     {
-        var captured = -1;
+        var capturedHead = -1;
+        var capturedTail = -1;
 
-        await using (var stream = Create(
+        await using (var stream = new UsageCapturingStream(
             new MemoryStream(Encoding.UTF8.GetBytes(new string('z', MaxHeadBytes * 3))),
-            snapshot => captured = snapshot.Length))
+            (head, tail, _) =>
+            {
+                capturedHead = head.Length;
+                capturedTail = tail.Length;
+            },
+            isStreaming: false))
         {
             await stream.CopyToAsync(Stream.Null);
         }
 
-        captured.Should().Be(MaxHeadBytes);
+        capturedHead.Should().Be(MaxHeadBytes);
+
+        // The tail is retained for non-streaming bodies too. Keeping only the head meant any
+        // response larger than the cap reached the parser truncated, failed to parse, and recorded
+        // no usage — so it was never billed. The trailing usage object is always in this window.
+        capturedTail.Should().Be(TailBufferBytes);
     }
 
     /// <summary>

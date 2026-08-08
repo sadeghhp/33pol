@@ -427,7 +427,7 @@ public sealed class ModelRouterMiddlewareTests
     }
 
     [Fact]
-    public async Task InvokeAsync_BulkheadSaturated_Returns502UpstreamError()
+    public async Task InvokeAsync_BulkheadSaturated_Returns429ConcurrencyLimit()
     {
         var registry = Substitute.For<IModelRegistry>();
         registry.TryGetModel("m1", out Arg.Any<ModelConfig?>())
@@ -454,9 +454,13 @@ public sealed class ModelRouterMiddlewareTests
 
             await middleware.InvokeAsync(context);
 
-            context.Response.StatusCode.Should().Be(StatusCodes.Status502BadGateway);
+            // Gateway-side admission control, not a backend failure. Reporting it as 502
+            // backend_error told OpenAI-compatible routers the model itself had failed, so they
+            // marked it down and failed over instead of simply retrying.
+            context.Response.StatusCode.Should().Be(StatusCodes.Status429TooManyRequests);
             var body = await ReadResponseBodyAsync(context);
-            body.Should().Contain("upstream_error");
+            body.Should().Contain("concurrency_limit_exceeded");
+            context.Response.Headers.RetryAfter.ToString().Should().NotBeNullOrEmpty();
         }
         finally
         {

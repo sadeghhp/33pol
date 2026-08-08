@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Pol33.Core.Abstractions;
@@ -10,6 +11,7 @@ namespace Pol33.Billing.Usage;
 public sealed class BillingBudgetEnforcementService(
     IServiceScopeFactory scopeFactory,
     BudgetReservationLedger reservationLedger,
+    IMemoryCache memoryCache,
     IOptions<BillingOptions> billingOptions) : IBudgetEnforcementService
 {
     public async ValueTask<BudgetCheckResult> CheckBeforeForwardAsync(
@@ -125,7 +127,17 @@ public sealed class BillingBudgetEnforcementService(
         return tenantBudgets.Where(b => b.HardStopEnabled).ToList();
     }
 
-    private static async Task<decimal> GetPeriodSpendAsync(
+    /// <summary>
+    /// Period-to-date spend for one budget, cached briefly per (tenant, period).
+    /// </summary>
+    /// <remarks>
+    /// This runs on the inference hot path — once per budget, per request — and each call scanned
+    /// every rollup row in the billing period and summed them in memory. The cache is safe against
+    /// overshoot because it only covers <em>persisted</em> spend: cost incurred since the last read
+    /// is held by the reservation ledger, which is exact and consulted separately. The TTL is short
+    /// so a hard stop takes effect promptly once spend does land in the rollups.
+    /// </remarks>
+    private async Task<decimal> GetPeriodSpendAsync(
         IDailyUsageRollupRepository rollups,
         Guid tenantId,
         BudgetRecord budget,
@@ -133,10 +145,23 @@ public sealed class BillingBudgetEnforcementService(
         CancellationToken cancellationToken)
     {
         var periodStart = BillingUsagePersistenceHandler.GetPeriodStart(today, budget.PeriodStartDay);
+        var cacheKey = $"budget-spend:{tenantId:N}:{periodStart:yyyy-MM-dd}:{today:yyyy-MM-dd}";
+
+        if (memoryCache.TryGetValue<decimal>(cacheKey, out var cached))
+        {
+            return cached;
+        }
+
         var periodRollups = await rollups
             .GetRollupsAsync(periodStart, today, tenantId, cancellationToken)
             .ConfigureAwait(false);
-        return periodRollups.Sum(r => r.TotalCost);
+        var spend = periodRollups.Sum(r => r.TotalCost);
+
+        memoryCache.Set(
+            cacheKey,
+            spend,
+            TimeSpan.FromSeconds(Math.Max(1, billingOptions.Value.BudgetSpendCacheTtlSeconds)));
+        return spend;
     }
 
     private async Task<decimal> EstimateMaxCostAsync(

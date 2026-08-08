@@ -125,8 +125,17 @@ public sealed class StreamingHttpTransformerTests
         metrics.DidNotReceive().RecordUsageParseFailure(Arg.Any<string>());
     }
 
+    /// <summary>
+    /// A non-streaming body far larger than the head buffer must still be billed.
+    /// </summary>
+    /// <remarks>
+    /// This previously recorded a parse failure and no usage at all, because only the head was
+    /// retained and the truncated prefix could not be parsed as a document. Batch embeddings
+    /// responses are routinely megabytes, which made "never billed" the normal case for them rather
+    /// than an edge case. The trailing usage object is recovered from the retained tail.
+    /// </remarks>
     [Fact]
-    public async Task TransformResponseAsync_NonStreaming_WhenBodyExceedsCaptureLimit_RecordsParseFailure()
+    public async Task TransformResponseAsync_NonStreaming_WhenBodyExceedsCaptureLimit_StillRecordsUsage()
     {
         var usageRecorder = Substitute.For<IUsageRecorder>();
         var metrics = Substitute.For<IGatewayMetricsCollector>();
@@ -158,7 +167,8 @@ public sealed class StreamingHttpTransformerTests
 
         var copiedBody = await response.Content.ReadAsStringAsync();
         copiedBody.Should().Be(payload);
-        usageRecorder.DidNotReceive().Enqueue(Arg.Any<Pol33.Core.Models.UsageEvent>());
-        metrics.Received(1).RecordUsageParseFailure("mock-gpt");
+        usageRecorder.Received(1).Enqueue(Arg.Is<Pol33.Core.Models.UsageEvent>(
+            e => e.PromptTokens == 3 && e.CompletionTokens == 2));
+        metrics.DidNotReceive().RecordUsageParseFailure(Arg.Any<string>());
     }
 }

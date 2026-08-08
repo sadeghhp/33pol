@@ -35,10 +35,9 @@ public sealed class GatewayAuthorizationMiddleware
             return;
         }
 
-        var path = context.Request.Path.Value ?? string.Empty;
-        var policy = path.StartsWith("/admin/api", StringComparison.OrdinalIgnoreCase)
+        var policy = context.Request.Path.StartsWithSegments("/admin/api", StringComparison.OrdinalIgnoreCase)
             ? GatewayAuthPolicies.Admin
-            : RequiresInferencePolicy(path)
+            : RequiresInferencePolicy(context.Request.Path)
                 ? GatewayAuthPolicies.Inference
                 : null;
 
@@ -49,6 +48,7 @@ public sealed class GatewayAuthorizationMiddleware
         }
 
         if (policy == GatewayAuthPolicies.Inference &&
+            !PublicModelAccess.HasRejectedCredential(context) &&
             (PublicModelAccess.IsPublicInferenceRequest(context) ||
              PublicModelAccess.AllowsAnonymousModelsListing(context)))
         {
@@ -76,6 +76,9 @@ public sealed class GatewayAuthorizationMiddleware
             context.RequestAborted).ConfigureAwait(false);
     }
 
-    private static bool RequiresInferencePolicy(string path) =>
-        path.StartsWith("/v1/", StringComparison.OrdinalIgnoreCase);
+    /// <summary>
+    /// Segment-anchored, so a path cannot slip past policy selection while still being routable.
+    /// </summary>
+    private static bool RequiresInferencePolicy(PathString path) =>
+        path.StartsWithSegments("/v1", StringComparison.OrdinalIgnoreCase);
 }

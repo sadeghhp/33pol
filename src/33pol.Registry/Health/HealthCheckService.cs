@@ -1,3 +1,5 @@
+using System.Net;
+using System.Net.Http.Headers;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -9,30 +11,47 @@ namespace Pol33.Registry.Health;
 
 public sealed class HealthCheckService : BackgroundService
 {
-    private static readonly string[] ProbePaths = ["/health", "/api/tags", "/"];
+    /// <summary>
+    /// Probed in order. <c>/v1/models</c> first because it is the surface the gateway actually
+    /// forwards to — a backend that answers it is a backend that can serve inference.
+    /// </summary>
+    /// <remarks>
+    /// The fallbacks exist for runtimes that do not implement the models endpoint. <c>/</c> is
+    /// deliberately last and deliberately weak: many things answer 200 on the site root without the
+    /// model server being up, so it is a last resort rather than the primary signal it used to be.
+    /// </remarks>
+    private static readonly string[] ProbePaths = ["/v1/models", "/health", "/api/tags", "/"];
+
+    /// <summary>Bounds fan-out so a large registry does not open one connection per model at once.</summary>
+    private const int MaxConcurrentProbes = 8;
 
     private readonly IModelRegistry _registry;
     private readonly IBackendHealthStore _healthStore;
+    private readonly IUpstreamBearerTokenResolver _bearerTokenResolver;
     private readonly GatewayOptions _options;
     private readonly ILogger<HealthCheckService> _logger;
     private readonly HttpClient _httpClient;
+    private readonly bool _ownsHttpClient;
 
     public HealthCheckService(
         IModelRegistry registry,
         IBackendHealthStore healthStore,
+        IUpstreamBearerTokenResolver bearerTokenResolver,
         IOptions<GatewayOptions> options,
         ILogger<HealthCheckService> logger,
         HttpClient? httpClient = null)
     {
         _registry = registry;
         _healthStore = healthStore;
+        _bearerTokenResolver = bearerTokenResolver;
         _options = options.Value;
         _logger = logger;
-        _httpClient = httpClient ?? new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+        _httpClient = httpClient ?? new HttpClient(new SocketsHttpHandler { AllowAutoRedirect = false })
+        {
+            Timeout = TimeSpan.FromSeconds(10),
+        };
         _ownsHttpClient = httpClient is null;
     }
-
-    private readonly bool _ownsHttpClient;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -40,7 +59,21 @@ public sealed class HealthCheckService : BackgroundService
 
         do
         {
-            await CheckAllBackendsAsync(stoppingToken).ConfigureAwait(false);
+            try
+            {
+                await CheckAllBackendsAsync(stoppingToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (Exception ex)
+            {
+                // Never let one bad model (a malformed URL, say) escape: an unhandled exception here
+                // takes the whole host down under the default BackgroundService behaviour, and
+                // freezes every backend's health state on the way out.
+                _logger.LogError(ex, "Backend health sweep failed; will retry on the next interval");
+            }
         }
         while (await timer.WaitForNextTickAsync(stoppingToken).ConfigureAwait(false));
     }
@@ -53,13 +86,31 @@ public sealed class HealthCheckService : BackgroundService
             return;
         }
 
-        var tasks = models.Select(model => CheckBackendAsync(model, cancellationToken));
+        using var gate = new SemaphoreSlim(MaxConcurrentProbes, MaxConcurrentProbes);
+        var tasks = models.Select(async model =>
+        {
+            await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await CheckBackendAsync(model, cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                gate.Release();
+            }
+        });
+
         await Task.WhenAll(tasks).ConfigureAwait(false);
     }
 
     public async Task CheckBackendAsync(ModelConfig model, CancellationToken cancellationToken = default)
     {
-        var (isHealthy, statusCode, error) = await ProbeBackendAsync(model.Url, cancellationToken)
+        // Probes carry the model's own upstream credential. Without it an authenticated upstream
+        // answers 401 to every probe path, so the backend was permanently marked unhealthy and every
+        // inference request to it returned 502 — a total outage for any cloud provider.
+        var bearerToken = ResolveBearerTokenSafely(model);
+
+        var (isHealthy, statusCode, error) = await ProbeBackendAsync(model.Url, bearerToken, cancellationToken)
             .ConfigureAwait(false);
 
         _healthStore.SetHealth(new BackendHealth(
@@ -80,30 +131,93 @@ public sealed class HealthCheckService : BackgroundService
         }
     }
 
+    private string? ResolveBearerTokenSafely(ModelConfig model)
+    {
+        try
+        {
+            return _bearerTokenResolver.ResolveBearerToken(model.UpstreamAuth);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex, "Could not resolve upstream credential for model {ModelId}; probing without it", model.Id);
+            return null;
+        }
+    }
+
+    public Task<(bool IsHealthy, int? StatusCode, string? Error)> ProbeBackendAsync(
+        string baseUrl,
+        CancellationToken cancellationToken = default) =>
+        ProbeBackendAsync(baseUrl, bearerToken: null, cancellationToken);
+
+    /// <summary>
+    /// Probes a backend, returning the most informative outcome observed across the probe paths.
+    /// </summary>
+    /// <remarks>
+    /// A 401/403 counts as <em>healthy</em>: the backend answered, so it is reachable and serving.
+    /// A credential problem is a configuration fault that belongs in the model's upstream auth
+    /// settings, not a reason to take the model out of rotation — and reporting it as ill health
+    /// produced an opaque 502 that pointed at the wrong thing entirely.
+    ///
+    /// The real status code and error are retained rather than collapsed into a fixed string; they
+    /// are what the admin backends view shows an operator trying to work out why a model is down.
+    /// </remarks>
     public async Task<(bool IsHealthy, int? StatusCode, string? Error)> ProbeBackendAsync(
         string baseUrl,
+        string? bearerToken,
         CancellationToken cancellationToken = default)
     {
+        int? lastStatusCode = null;
+        string? lastError = null;
+
         foreach (var path in ProbePaths)
         {
+            Uri requestUri;
             try
             {
-                var requestUri = BuildProbeUri(baseUrl, path);
-                using var response = await _httpClient.GetAsync(requestUri, cancellationToken)
-                    .ConfigureAwait(false);
+                requestUri = BuildProbeUri(baseUrl, path);
+            }
+            catch (Exception ex) when (ex is UriFormatException or ArgumentException)
+            {
+                return (false, null, $"Invalid backend URL '{baseUrl}': {ex.Message}");
+            }
+
+            try
+            {
+                using var request = new HttpRequestMessage(HttpMethod.Get, requestUri);
+                if (!string.IsNullOrWhiteSpace(bearerToken))
+                {
+                    request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearerToken);
+                }
+
+                using var response = await _httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
+                var status = (int)response.StatusCode;
 
                 if (response.IsSuccessStatusCode)
                 {
-                    return (true, (int)response.StatusCode, null);
+                    return (true, status, null);
                 }
+
+                if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+                {
+                    return (true, status, $"Backend reachable but rejected the gateway's credential (HTTP {status}). "
+                                          + "Check this model's upstream auth configuration.");
+                }
+
+                lastStatusCode = status;
+                lastError = $"{path} returned HTTP {status}";
             }
-            catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
-                // Try next probe path.
+                throw;
+            }
+            catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or OperationCanceledException)
+            {
+                lastError = $"{path}: {ex.Message}";
             }
         }
 
-        return (false, null, "All probe endpoints failed");
+        return (false, lastStatusCode, lastError ?? "All probe endpoints failed");
     }
 
     public static Uri BuildProbeUri(string baseUrl, string path)

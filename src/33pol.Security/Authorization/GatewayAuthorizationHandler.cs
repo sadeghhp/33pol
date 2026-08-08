@@ -30,6 +30,7 @@ public sealed class GatewayAuthorizationHandler : AuthorizationHandler<GatewayAu
 
         if (context.Resource is HttpContext httpContext &&
             requirement.PolicyName == GatewayAuthPolicies.Inference &&
+            !PublicModelAccess.HasRejectedCredential(httpContext) &&
             (PublicModelAccess.IsPublicInferenceRequest(httpContext) ||
              PublicModelAccess.AllowsAnonymousModelsListing(httpContext)))
         {

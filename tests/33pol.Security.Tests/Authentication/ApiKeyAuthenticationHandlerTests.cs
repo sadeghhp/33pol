@@ -33,8 +33,16 @@ public sealed class ApiKeyAuthenticationHandlerTests
         result.None.Should().BeTrue();
     }
 
+    /// <summary>
+    /// A key that was presented and rejected is an authentication failure, even on a public model.
+    /// </summary>
+    /// <remarks>
+    /// Falling through to anonymous access here answered 200 to a caller whose key had been revoked
+    /// or had expired, so clients, CI checks and SDKs had no way to discover that their credential
+    /// had stopped working. Only the complete absence of a key may use the anonymous path.
+    /// </remarks>
     [Fact]
-    public async Task HandleAuthenticateAsync_PublicInferenceInvalidKey_ReturnsNoResult()
+    public async Task HandleAuthenticateAsync_PublicInferenceInvalidKey_Fails()
     {
         var validator = Substitute.For<IApiKeyValidator>();
         validator.ValidateAsync("sk-garbage", Arg.Any<CancellationToken>())
@@ -51,7 +59,30 @@ public sealed class ApiKeyAuthenticationHandlerTests
         await handler.InitializeAsync(new AuthenticationScheme(GatewayAuthSchemes.ApiKey, null, typeof(ApiKeyAuthenticationHandler)), context);
         var result = await handler.AuthenticateAsync();
 
+        result.None.Should().BeFalse();
+        result.Succeeded.Should().BeFalse();
+        PublicModelAccess.HasRejectedCredential(context).Should().BeTrue();
+    }
+
+    /// <summary>
+    /// No key at all on a public model still authenticates anonymously — that is the whole point of
+    /// <c>publicAccess</c>, and only the rejected-credential case changes.
+    /// </summary>
+    [Fact]
+    public async Task HandleAuthenticateAsync_PublicInferenceNoKey_ReturnsNoResult()
+    {
+        var handler = CreateHandler(out var authState, out _, Substitute.For<IApiKeyValidator>());
+        authState.IsAuthenticationRequired = true;
+
+        var context = new DefaultHttpContext();
+        context.Request.Path = "/v1/chat/completions";
+        context.Items[PublicModelAccessKeys.IsPublicInference] = true;
+
+        await handler.InitializeAsync(new AuthenticationScheme(GatewayAuthSchemes.ApiKey, null, typeof(ApiKeyAuthenticationHandler)), context);
+        var result = await handler.AuthenticateAsync();
+
         result.None.Should().BeTrue();
+        PublicModelAccess.HasRejectedCredential(context).Should().BeFalse();
     }
 
     [Fact]
