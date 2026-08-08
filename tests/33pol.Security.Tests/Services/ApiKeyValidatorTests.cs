@@ -148,6 +148,51 @@ public sealed class ApiKeyValidatorTests
         result.Failure.Should().Be(ApiKeyValidationFailure.Invalid);
     }
 
+    [Fact]
+    public async Task ValidateAsync_KeyStoredWithLegacyShortPrefix_ReturnsSuccess()
+    {
+        await using var db = CreateDb();
+        var tenantId = await SeedTenantAsync(db);
+        const string secret = "sk-33pol-797a8b0b67b157d4d26dd186e5cc2c84";
+        await SeedKeyAsync(db, tenantId, secret, ApiKeyRole.Admin, storedPrefix: secret[..12]);
+
+        var sut = CreateValidator(db);
+        var result = await sut.ValidateAsync(secret);
+
+        result.IsSuccess.Should().BeTrue();
+        result.Role.Should().Be(ApiKeyRole.Admin);
+    }
+
+    [Fact]
+    public async Task ValidateAsync_WrongKeySharingLegacyShortPrefix_ReturnsInvalid()
+    {
+        await using var db = CreateDb();
+        var tenantId = await SeedTenantAsync(db);
+        const string storedSecret = "sk-33pol-797a8b0b67b157d4d26dd186e5cc2c84";
+        const string attackerSecret = "sk-33pol-797zzzzzzzzzzzzzzzzzzzzzzzzzzzz";
+        await SeedKeyAsync(db, tenantId, storedSecret, ApiKeyRole.Admin, storedPrefix: storedSecret[..12]);
+
+        var sut = CreateValidator(db);
+        var result = await sut.ValidateAsync(attackerSecret);
+
+        result.IsSuccess.Should().BeFalse();
+        result.Failure.Should().Be(ApiKeyValidationFailure.Invalid);
+    }
+
+    [Fact]
+    public async Task ValidateAsync_RevokedKeyWithLegacyShortPrefix_ReturnsRevokedFailure()
+    {
+        await using var db = CreateDb();
+        var tenantId = await SeedTenantAsync(db);
+        const string secret = "sk-33pol-legacy-revoked-key-0001";
+        await SeedKeyAsync(db, tenantId, secret, ApiKeyRole.Inference, revoked: true, storedPrefix: secret[..12]);
+
+        var sut = CreateValidator(db);
+        var result = await sut.ValidateAsync(secret);
+
+        result.Failure.Should().Be(ApiKeyValidationFailure.Revoked);
+    }
+
     private static ApiKeyValidator CreateValidator(Pol33.Persistence.GatewayDbContext db) =>
         new(
             new ApiKeyRepository(db),
@@ -190,7 +235,8 @@ public sealed class ApiKeyValidatorTests
         ApiKeyRole role,
         bool revoked = false,
         DateTimeOffset? expiresAt = null,
-        string? keyCostCenter = null)
+        string? keyCostCenter = null,
+        string? storedPrefix = null)
     {
         var keyId = Guid.NewGuid();
         db.ApiKeys.Add(new Pol33.Persistence.Entities.ApiKeyEntity
@@ -198,7 +244,7 @@ public sealed class ApiKeyValidatorTests
             Id = keyId,
             TenantId = tenantId,
             KeyHash = ApiKeyHashing.Hash(secret, Pepper),
-            KeyPrefix = ApiKeyHashing.CreatePrefix(secret),
+            KeyPrefix = storedPrefix ?? ApiKeyHashing.CreatePrefix(secret),
             Role = role,
             CostCenter = keyCostCenter,
             CreatedAt = DateTimeOffset.UtcNow,

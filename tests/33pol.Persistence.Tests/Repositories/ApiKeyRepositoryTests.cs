@@ -39,6 +39,58 @@ public sealed class ApiKeyRepositoryTests
     }
 
     [Fact]
+    public async Task FindByPrefixesAsync_MixedPrefixFormats_ReturnsEveryMatch()
+    {
+        await using var db = PersistenceTestDbContextFactory.CreateInMemory(nameof(FindByPrefixesAsync_MixedPrefixFormats_ReturnsEveryMatch));
+        var tenantRepo = new TenantRepository(db);
+        var sut = new ApiKeyRepository(db);
+        var now = DateTimeOffset.UtcNow;
+        var tenantId = Guid.NewGuid();
+
+        await tenantRepo.CreateAsync(new TenantRecord(tenantId, "t1", "Tenant 1", null, null, true, now, now));
+        await sut.CreateAsync(CreateKey(tenantId, "legacy-hash", "sk-33pol-797", now));
+        await sut.CreateAsync(CreateKey(tenantId, "current-hash", "sk-33pol-797a8b0b67b", now));
+        await sut.CreateAsync(CreateKey(tenantId, "other-hash", "sk-33pol-000", now));
+
+        var loaded = await sut.FindByPrefixesAsync(["sk-33pol-797a8b0b67b", "sk-33pol-797"]);
+
+        loaded.Select(k => k.KeyHash).Should().BeEquivalentTo(["legacy-hash", "current-hash"]);
+    }
+
+    [Fact]
+    public async Task FindByPrefixesAsync_EmptyPrefixes_ReturnsEmpty()
+    {
+        await using var db = PersistenceTestDbContextFactory.CreateInMemory(nameof(FindByPrefixesAsync_EmptyPrefixes_ReturnsEmpty));
+        var sut = new ApiKeyRepository(db);
+
+        var loaded = await sut.FindByPrefixesAsync([]);
+
+        loaded.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task FindByPrefixesAsync_NullPrefixes_Throws()
+    {
+        await using var db = PersistenceTestDbContextFactory.CreateInMemory(nameof(FindByPrefixesAsync_NullPrefixes_Throws));
+        var sut = new ApiKeyRepository(db);
+
+        await Assert.ThrowsAsync<ArgumentNullException>(() => sut.FindByPrefixesAsync(null!));
+    }
+
+    private static ApiKeyRecord CreateKey(Guid tenantId, string hash, string prefix, DateTimeOffset now) =>
+        new(
+            Guid.NewGuid(),
+            tenantId,
+            hash,
+            prefix,
+            ApiKeyRole.Inference,
+            ["inference"],
+            null,
+            null,
+            now,
+            null);
+
+    [Fact]
     public async Task RevokeAsync_SetsRevokedAt()
     {
         await using var db = PersistenceTestDbContextFactory.CreateInMemory(nameof(RevokeAsync_SetsRevokedAt));

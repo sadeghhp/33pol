@@ -8,6 +8,14 @@ public interface IApiKeyRepository
 
     Task<ApiKeyRecord?> FindByPrefixAsync(string keyPrefix, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Loads every key stored under any of <paramref name="keyPrefixes"/>. Prefixes are not unique, so the
+    /// caller must verify the hash of each candidate before treating one as authenticated.
+    /// </summary>
+    Task<IReadOnlyList<ApiKeyRecord>> FindByPrefixesAsync(
+        IReadOnlyCollection<string> keyPrefixes,
+        CancellationToken cancellationToken = default);
+
     Task<IReadOnlyList<ApiKeyRecord>> ListByTenantAsync(Guid tenantId, CancellationToken cancellationToken = default);
 
     Task<ApiKeyRecord> CreateAsync(ApiKeyRecord apiKey, CancellationToken cancellationToken = default);

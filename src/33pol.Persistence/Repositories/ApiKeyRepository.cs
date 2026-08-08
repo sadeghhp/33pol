@@ -31,6 +31,26 @@ public sealed class ApiKeyRepository : IApiKeyRepository
         return entity is null ? null : IdentityEntityMapper.ToRecord(entity);
     }
 
+    public async Task<IReadOnlyList<ApiKeyRecord>> FindByPrefixesAsync(
+        IReadOnlyCollection<string> keyPrefixes,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(keyPrefixes);
+
+        if (keyPrefixes.Count == 0)
+        {
+            return [];
+        }
+
+        var prefixes = keyPrefixes.ToArray();
+        var entities = await _db.ApiKeys
+            .AsNoTracking()
+            .Where(k => prefixes.Contains(k.KeyPrefix))
+            .ToListAsync(cancellationToken);
+
+        return entities.Select(IdentityEntityMapper.ToRecord).ToList();
+    }
+
     public async Task<IReadOnlyList<ApiKeyRecord>> ListByTenantAsync(
         Guid tenantId,
         CancellationToken cancellationToken = default)
