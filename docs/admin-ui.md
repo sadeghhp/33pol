@@ -12,10 +12,34 @@ Files under `src/33pol.App/wwwroot/admin/` (served at `/admin/`):
 | `admin.css` | Design tokens, layout, components |
 | `admin-errors.js` | `AdminErrors.classifyError` — shared error taxonomy |
 | `admin-store.js` | `Alpine.store('admin')` — API client, loading scopes, toasts, connection |
-| `admin-app.js` | `adminApp()` — navigation and feature logic |
-| (CDN) | Alpine.js 3.x |
+| `admin-app.js` | `adminApp()` — navigation, feature logic, and the CSP view layer |
+| `admin-icons.js` | `AdminIcons(name)` and `AdminIcons.map` — inline SVG set |
+| `vendor/alpine-csp-3.14.9.min.js` | Alpine.js 3.14.9, **CSP build**, self-hosted |
+| `vendor/fonts.css`, `vendor/fonts/` | Self-hosted IBM Plex / Space Grotesk |
 
-**Load order:** `admin.css` → `admin-errors.js` → `admin-store.js` → `admin-app.js` → Alpine (all deferred). Query `?v=5` on static assets busts caches after upgrades.
+**Load order:** `admin.css` → `admin-icons.js` → `admin-errors.js` → `admin-store.js` → `admin-app.js` → Alpine (all deferred). Query `?v=N` on static assets busts caches after upgrades.
+
+### Writing markup for the CSP build
+
+The console ships Alpine's **CSP-friendly build** so `/admin` can be served under `script-src 'self'`
+(see `AdminSecurityHeaders.cs`); the stock build compiles every directive with `new Function()` and
+needs `unsafe-eval`. That build's evaluator resolves a directive's value as a **property path and
+nothing else** — a function it finds there is invoked with the directive's own arguments (the event,
+for `x-on`), and nothing else is parsed. So in `index.html`:
+
+- no operators, ternaries, optional chaining, or calls with arguments — `x-text="formatNum(n)"`,
+  `:class="{ active: tab === 'keys' }"` and `x-show="a && b"` all fail silently at runtime;
+- every displayed value comes from a getter or a zero-argument method on `adminApp`
+  (`x-text="totalErrorsText"`, `x-html="icons.trash"`);
+- `x-model` needs a `{get, set}` pair, which `adminApp.mdl` supplies, shaped like the state it
+  writes: `x-model="mdl.editModel.url"`;
+- per-row values and actions are precomputed onto the row objects, so a template reaches
+  `copyText(id)` as `@click="r.copyId"`;
+- `x-for` clones only the template's **first** element — a row plus its detail panel must share one
+  root (the requests and logs tables wrap each pair in its own `<tbody>`).
+
+`AdminAssetSecurityTests.AdminIndex_UsesOnlyExpressionsTheCspEvaluatorCanResolve` enforces this, so a
+directive that the evaluator could not resolve fails the build instead of the operator's browser.
 
 **Cache:** `/admin/*` static files are served with `Cache-Control: no-store`.
 
@@ -154,7 +178,7 @@ Rotating **KeyPepper** invalidates stored upstream secrets — re-enter API keys
 | 7 | New inference key display | **ACCEPTED** | Secret shown once in create drawer |
 | 8 | Usage export | **LOW RISK** | Dates/format in query; key in header only |
 | 9 | Usage/events query | **LOW RISK** | Optional `tenantId`, dates — no secrets |
-| 10 | Alpine.js CDN | **DEFERRED** | Post-GA self-host + CSP (G-20) |
+| 10 | Alpine.js CDN | **PASS** | Self-hosted CSP build; `script-src 'self'`, no `unsafe-eval` |
 | 11 | Static asset caching | **PASS** | `/admin/*` → `no-store` |
 | 12 | Proxy/access logs | **NOTE** | Legacy GET with secrets in query may still be logged |
 
@@ -191,7 +215,6 @@ When the gateway runs in Docker, upstream URLs must use `http://host.docker.inte
 ## Deferred (post-GA)
 
 - SSE live dashboard (`GET /admin/api/events/stream`, G-12)
-- Self-hosted Alpine + strict CSP (G-20)
 - Playwright E2E (G-20)
 
 ## Related

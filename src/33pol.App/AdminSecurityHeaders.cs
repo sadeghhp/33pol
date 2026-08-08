@@ -10,6 +10,11 @@ namespace Pol33.App;
 /// secrets and pricing — so its assets are all served from this origin and the CSP says so. Every
 /// script, style, font and connection is restricted to 'self', which means a compromised or spoofed
 /// third-party origin has no way to execute in an admin session.
+///
+/// <c>script-src</c> stays free of 'unsafe-eval' because the console ships Alpine's CSP-friendly
+/// build, which resolves directives as property paths rather than compiling them with
+/// <c>new Function()</c>. Its markup therefore has to stay expression-free — see docs/admin-ui.md
+/// and AdminAssetSecurityTests.AdminIndex_UsesOnlyExpressionsTheCspEvaluatorCanResolve.
 /// </remarks>
 internal static class AdminSecurityHeaders
 {

@@ -21,44 +21,47 @@ public sealed class AdminUiIntegrationTests
         body.Should().MatchRegex("src=\"admin-errors\\.js\\?v=\\d+\"");
         body.Should().MatchRegex("src=\"admin-store\\.js\\?v=\\d+\"");
         body.Should().MatchRegex("src=\"admin-app\\.js\\?v=\\d+\"");
-        body.Should().Contain("openKeyAccess");
+        body.Should().Contain("keyAccessDrawerOpen");
         body.Should().Contain("keysEditDrawerOpen");
         body.Should().Contain("usageFilterApiKeyId");
         body.Should().Contain("Assignee");
         body.Should().Contain("Tenant model access");
         body.Should().Contain("CORS allowed origins");
-        body.Should().Contain("settingsSubTab === 'cors'");
-        body.Should().Contain("testModel(");
+        body.Should().Contain("x-show=\"isSettingsCors\"");
+        body.Should().Contain("rerunModelTest");
         body.Should().Contain("model-test-title");
         // The test dialog describes the probe for this model's type instead of a hardcoded chat prompt.
-        body.Should().Contain("modelTestHint(modelTestDialog?.modelId)");
+        body.Should().Contain("x-text=\"modelTest.hint\"");
         body.Should().NotContain("Hello world");
-        body.Should().Contain("x-model=\"editModel.modelType\"");
-        body.Should().Contain("modelTypeLabel(resolveModelType(m))");
+        body.Should().Contain("x-model=\"mdl.editModel.modelType\"");
+        body.Should().Contain("x-text=\"m.typeLabel\"");
         body.Should().NotContain("Discover from provider");
         body.Should().Contain("id=\"model-upstream-api-key\"");
-        body.Should().Contain("x-model=\"editModel.apiKey\"");
-        body.Should().NotMatchRegex(@"<label[^>]*x-text=[^>]*>[\s\S]*?x-model=""editModel\.apiKey""");
+        body.Should().Contain("x-model=\"mdl.editModel.apiKey\"");
+        body.Should().NotMatchRegex(@"<label[^>]*x-text=[^>]*>[\s\S]*?x-model=""mdl\.editModel\.apiKey""");
         body.Should().Contain("class=\"hint\"");
-        body.Should().Contain("x-model=\"editModel.inputPricePerMillion\"");
-        body.Should().Contain("x-model=\"editModel.outputPricePerMillion\"");
+        body.Should().Contain("x-model=\"mdl.editModel.inputPricePerMillion\"");
+        body.Should().Contain("x-model=\"mdl.editModel.outputPricePerMillion\"");
         body.Should().Contain("Input price (per 1M tokens)");
-        body.Should().Contain("formatModelPrice(m.pricing)");
+        body.Should().Contain("x-text=\"m.price\"");
         body.Should().Contain("Errors by model");
-        body.Should().Contain("x-model=\"requestsErrorsOnly\"");
+        body.Should().Contain("x-model=\"mdl.requestsErrorsOnly\"");
         body.Should().Contain("Errors only");
         body.Should().Contain("Request ID");
-        body.Should().Contain("errorsByModelRows");
+        body.Should().Contain("errorModelBars");
         body.Should().Contain("aria-expanded");
-        body.Should().Contain("showModelApiKey");
+        body.Should().Contain("toggleShowModelApiKey");
         body.Should().Contain("x-cloak");
         body.Should().Contain("role=\"tabpanel\"");
         body.Should().Contain("app-shell");
         body.Should().Contain("id=\"gate-apiKey\"");
-        body.Should().Contain("x-model=\"gateApiKey\"");
-        body.Should().NotMatchRegex("id=\"gate-apiKey\"[^>]*x-model=\"apiKey\"");
+        body.Should().Contain("x-model=\"mdl.gateApiKey\"");
+        body.Should().NotMatchRegex("id=\"gate-apiKey\"[^>]*x-model=\"mdl\\.apiKey\"");
         body.Should().NotContain("function adminApp()");
         body.Should().NotContain("confirm(");
+        // The CSP-friendly Alpine build resolves x-data through Alpine.data, not by calling adminApp().
+        body.Should().Contain("x-data=\"adminApp\"");
+        body.Should().Contain("vendor/alpine-csp-3.14.9.min.js");
     }
 
     [Fact]
@@ -142,7 +145,7 @@ public sealed class AdminUiIntegrationTests
         body.Should().Contain("/models/");
         body.Should().Contain("apiKey");
         body.Should().Contain("gateApiKey");
-        body.Should().Contain("errorsByModelRows");
+        body.Should().Contain("errorModelBars");
         body.Should().Contain("requestsErrorsOnly");
         body.Should().Contain("shortRequestId");
         body.Should().MatchRegex("loadSummary\\([\\s\\S]*?/admin/api/requests");
@@ -151,6 +154,7 @@ public sealed class AdminUiIntegrationTests
         body.Should().Contain("modelPricingError");
         body.Should().Contain("clearPricing");
         body.Should().NotContain("confirm(");
+        body.Should().Contain("Alpine.data('adminApp'");
         body.Should().NotContain("openDiscover");
         body.Should().NotContain("fetchProviderModels");
     }

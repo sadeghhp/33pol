@@ -50,7 +50,7 @@ public sealed class AdminAssetSecurityTests
     }
 
     [Theory]
-    [InlineData("/admin/vendor/alpine-3.14.9.min.js")]
+    [InlineData("/admin/vendor/alpine-csp-3.14.9.min.js")]
     [InlineData("/admin/vendor/fonts.css")]
     [InlineData("/admin/vendor/fonts/IBMPlexSans-400.woff2")]
     [InlineData("/admin/vendor/fonts/IBMPlexMono-400.woff2")]
@@ -113,6 +113,48 @@ public sealed class AdminAssetSecurityTests
         // allowed because Alpine's x-show writes style="display:none" at runtime.
         csp.Should().NotContain("script-src 'self' 'unsafe-inline'");
         csp.Should().NotContain("unsafe-eval");
+    }
+
+    /// <summary>
+    /// The console keeps <c>script-src 'self'</c> only because it runs on Alpine's CSP-friendly
+    /// build, whose evaluator resolves a directive's value as a property path instead of compiling
+    /// it with <c>new Function()</c>. An expression with an operator, a ternary or a call therefore
+    /// does not merely look different — it silently fails to evaluate at runtime. This test is the
+    /// tripwire: it fails on the markup rather than in an operator's browser console.
+    /// </summary>
+    [Fact]
+    public async Task AdminIndex_UsesOnlyExpressionsTheCspEvaluatorCanResolve()
+    {
+        using var factory = GatewayWebApplicationFactory.Create();
+        using var client = factory.CreateClient();
+
+        var html = Regex.Replace(await GetIndexAsync(client), "<!--.*?-->", string.Empty, RegexOptions.Singleline);
+
+        // A bare property path, dotted or hyphenated: `summary`, `mdl.editModel.url`, `icons.bar-chart`.
+        var path = @"[A-Za-z_$][A-Za-z0-9_$\-]*(?:\.[A-Za-z0-9_$\-]+)*";
+        var pathOnly = new Regex($"^{path}$");
+        // x-for takes one extra shape the evaluator parses itself: `item in <path>`.
+        var forExpression = new Regex($@"^\(?\s*[A-Za-z_$][A-Za-z0-9_$]*\s*(?:,\s*[A-Za-z_$][A-Za-z0-9_$]*\s*)?\)?\s+(?:in|of)\s+{path}$");
+
+        var offenders = Regex
+            .Matches(html, @"\s(?<name>(?:x-|@|:)[A-Za-z0-9_:.\-]*)=""(?<value>[^""]*)""")
+            .Where(m =>
+            {
+                var value = m.Groups["value"].Value.Trim();
+                if (value.Length == 0) return false;
+                var name = m.Groups["name"].Value;
+                // x-ref names an element; it is stored verbatim and never evaluated.
+                if (name.StartsWith("x-ref", StringComparison.Ordinal)) return false;
+                if (name.StartsWith("x-for", StringComparison.Ordinal)) return !forExpression.IsMatch(value);
+                return !pathOnly.IsMatch(value);
+            })
+            .Select(m => m.Groups["name"].Value + "=\"" + m.Groups["value"].Value + "\"")
+            .Distinct()
+            .ToList();
+
+        offenders.Should().BeEmpty(
+            "the CSP-friendly Alpine build evaluates property paths only — move the logic into a getter, " +
+            "a zero-argument method or a {get,set} pair on adminApp; found: " + string.Join(" | ", offenders));
     }
 
     [Fact]

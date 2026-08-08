@@ -1,3 +1,11 @@
+/**
+ * The console runs on Alpine's CSP-friendly build so the admin surface can keep `script-src 'self'`
+ * (see AdminSecurityHeaders.cs). That build's evaluator resolves a directive's value as a property
+ * path and nothing else — no operators, no ternaries, no calls with arguments — so everything the
+ * markup needs is exposed from here as a getter, a zero-argument method, or a {get,set} pair for
+ * x-model. Row-level actions ride on the row objects as bound closures, which is how a template
+ * reaches copyText(id) without writing an argument. See the "CSP view layer" section below.
+ */
 function adminApp() {
   const TABS = ['dashboard', 'usage', 'routing', 'keys', 'logs', 'settings'];
   const LEGACY = {
@@ -1698,6 +1706,726 @@ function adminApp() {
           this.editModelUrl());
         this.toast('Export downloaded.');
       });
+    },
+
+    // =====================================================================================
+    // CSP view layer
+    //
+    // Everything below exists because the CSP-friendly evaluator only walks property paths.
+    // Nothing here holds state of its own: each member derives from the fields above, so the
+    // behaviour of the console lives in one place and the markup stays declarative.
+    // =====================================================================================
+
+    icons: (window.AdminIcons && window.AdminIcons.map) || {},
+
+    /** Backing pair for one x-model binding; the CSP build writes through {get,set} objects. */
+    bindPath(path) {
+      const self = this;
+      const parts = path.split('.');
+      const last = parts.pop();
+      const owner = () => parts.reduce((o, p) => (o == null ? o : o[p]), self);
+      return {
+        get() {
+          const o = owner();
+          return o == null ? '' : o[last];
+        },
+        set(v) {
+          const o = owner();
+          if (o != null) o[last] = v;
+        }
+      };
+    },
+
+    /** Every x-model target, shaped like the state it writes to: x-model="mdl.editModel.url". */
+    get mdl() {
+      const self = this;
+      const b = p => this.bindPath(p);
+      return {
+        gateApiKey: b('gateApiKey'),
+        apiKey: b('apiKey'),
+        requestsErrorsOnly: b('requestsErrorsOnly'),
+        usageFrom: b('usageFrom'),
+        usageTo: b('usageTo'),
+        usageFilterCostCenter: b('usageFilterCostCenter'),
+        usageFilterApiKeyId: b('usageFilterApiKeyId'),
+        modelsFilter: b('modelsFilter'),
+        backendsFilter: b('backendsFilter'),
+        keysFilter: b('keysFilter'),
+        keysTextFilter: b('keysTextFilter'),
+        keysCreatedAck: b('keysCreatedAck'),
+        logsSearch: b('logsSearch'),
+        logsLevel: b('logsLevel'),
+        logsAutoRefresh: b('logsAutoRefresh'),
+        // Unchecking the restriction drops the selection, so saving cannot resurrect a stale list.
+        tenantGrantRestricted: {
+          get() { return self.tenantGrantRestricted; },
+          set(v) {
+            self.tenantGrantRestricted = v;
+            if (!v) self.tenantGrantSelected = [];
+          }
+        },
+        editModel: {
+          id: b('editModel.id'),
+          url: b('editModel.url'),
+          modelType: b('editModel.modelType'),
+          publicAccess: b('editModel.publicAccess'),
+          apiKey: b('editModel.apiKey'),
+          clearApiKey: b('editModel.clearApiKey'),
+          inputPricePerMillion: b('editModel.inputPricePerMillion'),
+          outputPricePerMillion: b('editModel.outputPricePerMillion'),
+          maxContextLength: b('editModel.maxContextLength'),
+          aliasesText: b('editModel.aliasesText')
+        },
+        rateLimits: {
+          enabled: b('rateLimits.enabled'),
+          default: {
+            rpm: b('rateLimits.default.rpm'),
+            burst: b('rateLimits.default.burst'),
+            maxConcurrentStreams: b('rateLimits.default.maxConcurrentStreams')
+          }
+        },
+        newKey: {
+          role: b('newKey.role'),
+          label: b('newKey.label'),
+          assignee: b('newKey.assignee'),
+          costCenter: b('newKey.costCenter'),
+          description: b('newKey.description')
+        },
+        keyEdit: {
+          label: b('keyEdit.label'),
+          assignee: b('keyEdit.assignee'),
+          costCenter: b('keyEdit.costCenter'),
+          description: b('keyEdit.description')
+        }
+      };
+    },
+
+    // ---- session, shell and chrome ----
+
+    get signedOut() { return !this.apiKey; },
+    get signedIn() { return !!this.apiKey; },
+    get keyPrefix() { return this.store.keyPrefix(); },
+    get errorTitleText() { return this.errorTitle || 'Error'; },
+    get apiKeyInputType() { return this.showApiKey ? 'text' : 'password'; },
+    get showApiKeyLabel() { return this.showApiKey ? 'Hide key' : 'Show key'; },
+    get showApiKeyIcon() { return this.icon(this.showApiKey ? 'eye-off' : 'eye'); },
+    get modelApiKeyInputType() { return this.showModelApiKey ? 'text' : 'password'; },
+    get modelApiKeyIcon() { return this.icon(this.showModelApiKey ? 'eye-off' : 'eye'); },
+    get modelApiKeyToggleLabel() { return this.showModelApiKey ? 'Hide' : 'Show'; },
+    get advancedModelIcon() { return this.icon(this.showAdvancedModel ? 'chevron-down' : 'chevron-right'); },
+    get advancedModelLabel() { return this.showAdvancedModel ? 'Hide advanced' : 'Advanced options'; },
+
+    toggleShowApiKey() { this.showApiKey = !this.showApiKey; },
+    toggleShowModelApiKey() { this.showModelApiKey = !this.showModelApiKey; },
+    toggleChangeKey() { this.showChangeKey = !this.showChangeKey; },
+    toggleAdvancedModel() { this.showAdvancedModel = !this.showAdvancedModel; },
+
+    get loadingAuth() { return this.isLoading('auth'); },
+    get loadingOverview() { return this.isLoading('overview'); },
+    get loadingUsage() { return this.isLoading('usage'); },
+    get loadingModels() { return this.isLoading('routingModels'); },
+    get loadingBackends() { return this.isLoading('routingBackends'); },
+    get loadingKeys() { return this.isLoading('keys'); },
+    get loadingSettings() { return this.isLoading('settings'); },
+    get loadingLogs() { return this.isLoading('logs'); },
+
+    get toastRows() {
+      return (this.toasts || []).map(t => ({
+        key: t.id,
+        type: t.type || 'success',
+        message: t.message || '',
+        icon: this.icon(t.type === 'success' ? 'check-circle' : 'alert-triangle')
+      }));
+    },
+
+    get navTabs() {
+      const defs = [
+        ['dashboard', 'Overview', 'gauge'],
+        ['usage', 'Usage & cost', 'bar-chart'],
+        ['routing', 'Routing', 'git-branch'],
+        ['keys', 'API keys', 'key'],
+        ['logs', 'Logs', 'file-text'],
+        ['settings', 'Settings', 'settings']
+      ];
+      return defs.map(([id, label, iconName]) => ({
+        key: id,
+        tabId: 'tab-' + id,
+        label,
+        icon: this.icon(iconName),
+        active: this.tab === id,
+        cls: this.tab === id ? 'active' : '',
+        select: () => this.setTab(id)
+      }));
+    },
+
+    get themeButtons() {
+      const defs = [
+        ['light', 'sun', 'Light', 'Light theme'],
+        ['dark', 'moon', 'Dark', 'Dark theme'],
+        ['system', 'monitor', 'Match system', 'Match system theme']
+      ];
+      return defs.map(([mode, iconName, title, label]) => ({
+        key: mode,
+        icon: this.icon(iconName),
+        title,
+        label,
+        active: this.isTheme(mode),
+        cls: this.isTheme(mode) ? 'active' : '',
+        select: () => this.setTheme(mode)
+      }));
+    },
+
+    get routingTabs() {
+      const defs = [['models', 'Models'], ['backends', 'Backends & health']];
+      return defs.map(([id, label]) => ({
+        key: id,
+        label,
+        cls: this.routingSubTab === id ? 'active' : '',
+        select: () => this.setRoutingSubTab(id)
+      }));
+    },
+
+    get settingsTabs() {
+      const defs = [
+        ['runtime', 'Runtime'],
+        ['limits', 'Rate limits'],
+        ['cors', 'CORS'],
+        ['access', 'Model access'],
+        ['observability', 'Observability']
+      ];
+      return defs.map(([id, label]) => ({
+        key: id,
+        label,
+        cls: this.settingsSubTab === id ? 'active' : '',
+        select: () => this.setSettingsSubTab(id)
+      }));
+    },
+
+    get isDashboard() { return this.tab === 'dashboard'; },
+    get isUsage() { return this.tab === 'usage'; },
+    get isRouting() { return this.tab === 'routing'; },
+    get isKeys() { return this.tab === 'keys'; },
+    get isLogs() { return this.tab === 'logs'; },
+    get isSettings() { return this.tab === 'settings'; },
+    get isRoutingModels() { return this.routingSubTab === 'models'; },
+    get isRoutingBackends() { return this.routingSubTab === 'backends'; },
+    get isSettingsRuntime() { return this.settingsSubTab === 'runtime'; },
+    get isSettingsLimits() { return this.settingsSubTab === 'limits'; },
+    get isSettingsCors() { return this.settingsSubTab === 'cors'; },
+    get isSettingsAccess() { return this.settingsSubTab === 'access'; },
+    get isSettingsObservability() { return this.settingsSubTab === 'observability'; },
+
+    // ---- live-vitals bar ----
+
+    get topbarClass() { return this.connectionStatus === 'fail' ? 'auth-fail' : ''; },
+    get isConnected() { return this.connectionStatus === 'ok'; },
+    get connectionFailed() { return this.connectionStatus === 'fail'; },
+    get sessionCheckFailed() { return this.connectionDegraded && this.connectionStatus === 'ok'; },
+    get healthLiveKnown() { return this.healthLive !== null; },
+    get healthLiveClass() { return this.healthLive ? 'is-ok' : 'is-fail'; },
+    get healthLiveDotClass() { return this.healthLive ? 'live' : ''; },
+    get healthLiveText() { return this.healthLive ? 'Live' : 'Live down'; },
+    get healthReadyKnown() { return this.healthReady !== null; },
+    get healthReadyClass() { return this.healthReady ? 'is-ok' : 'is-fail'; },
+    get healthReadyText() { return this.healthReady ? 'ok' : 'no'; },
+    get activeStreamsCount() { return Number(this.summary?.activeStreams ?? 0); },
+    get hasActiveStreams() { return !!this.summary && this.activeStreamsCount > 0; },
+    get noActiveStreams() { return this.activeStreamsCount === 0; },
+    get totalErrorsCount() { return Number(this.summary?.totalErrors ?? 0); },
+    get hasErrors() { return !!this.summary && this.totalErrorsCount > 0; },
+
+    // ---- overview ----
+
+    get showStaleNotice() { return this.overviewStale && this.connectionStatus !== 'fail'; },
+    get totalRequestsText() { return this.formatNum(this.summary?.totalInferenceRequests ?? 0); },
+    get totalErrorsText() { return this.formatNum(this.totalErrorsCount); },
+    get avgLatencyText() { return Number(this.summary?.averageLatencyMs ?? 0).toFixed(1); },
+    get errorsVitalClass() { return this.totalErrorsCount > 0 ? 'accent-error' : ''; },
+    get errorRateText() { return this.errorRatePct().toFixed(2) + '% error rate'; },
+    get hasThroughput() { return this.currentThroughput() > 0; },
+    get noThroughput() { return this.currentThroughput() === 0; },
+    get throughputText() {
+      const v = this.currentThroughput();
+      return v.toFixed(v < 10 ? 1 : 0) + '/s';
+    },
+    get uptimeText() { return this.summary?.uptime ?? '—'; },
+    get rateLimitedCount() { return Number(this.summary?.rateLimitRejections ?? 0); },
+    get rateLimitedText() { return this.formatNum(this.rateLimitedCount); },
+    get rateLimitedClass() { return this.rateLimitedCount > 0 ? 'warn' : ''; },
+    get quotaBlockedCount() { return Number(this.summary?.quotaRejections ?? 0); },
+    get quotaBlockedText() { return this.formatNum(this.quotaBlockedCount); },
+    get quotaBlockedClass() { return this.quotaBlockedCount > 0 ? 'warn' : ''; },
+
+    get spark() {
+      const one = metric => ({
+        has: this.hasSpark(metric),
+        fill: this.sparkFill(metric),
+        line: this.sparkLine(metric)
+      });
+      return {
+        throughput: one('throughput'),
+        errorRate: one('errorRate'),
+        latency: one('latency'),
+        streams: one('streams')
+      };
+    },
+
+    modelBars(rows) {
+      return rows.map(row => ({
+        key: row.modelId,
+        modelId: row.modelId,
+        countText: this.formatNum(row.count),
+        style: 'width:' + this.barWidth(row.count, rows)
+      }));
+    },
+
+    get requestModelBars() { return this.modelBars(this.requestsByModelRows()); },
+    get hasRequestModelBars() { return this.requestModelBars.length > 0; },
+    get noRequestModelBars() { return this.requestModelBars.length === 0; },
+    get errorModelBars() { return this.modelBars(this.errorsByModelRows()); },
+    get hasErrorModelBars() { return this.errorModelBars.length > 0; },
+    get noErrorModelBars() { return this.errorModelBars.length === 0; },
+
+    get sortIcon() {
+      return {
+        requestsTime: this.sortIndicator('requests', 'timestampUtc'),
+        requestsStatus: this.sortIndicator('requests', 'statusCode'),
+        modelsId: this.sortIndicator('models', 'id'),
+        backendsModel: this.sortIndicator('backends', 'modelId'),
+        keysPrefix: this.sortIndicator('keys', 'keyPrefix'),
+        keysLabel: this.sortIndicator('keys', 'label'),
+        keysAssignee: this.sortIndicator('keys', 'assignee'),
+        keysLastUsed: this.sortIndicator('keys', 'lastUsedAt'),
+        keysCreated: this.sortIndicator('keys', 'createdAt')
+      };
+    },
+
+    get sortBy() {
+      return {
+        requestsTime: () => this.sortToggle('requests', 'timestampUtc'),
+        requestsStatus: () => this.sortToggle('requests', 'statusCode'),
+        modelsId: () => this.sortToggle('models', 'id'),
+        backendsModel: () => this.sortToggle('backends', 'modelId'),
+        keysPrefix: () => this.sortToggle('keys', 'keyPrefix'),
+        keysLabel: () => this.sortToggle('keys', 'label'),
+        keysAssignee: () => this.sortToggle('keys', 'assignee'),
+        keysLastUsed: () => this.sortToggle('keys', 'lastUsedAt'),
+        keysCreated: () => this.sortToggle('keys', 'createdAt')
+      };
+    },
+
+    get requestRows() {
+      return this.sortedRequests().map(r => {
+        const expanded = this.isRequestExpanded(r.requestId);
+        const duration = r.durationMs;
+        return {
+          key: r.requestId,
+          requestId: r.requestId ?? '—',
+          shortId: this.shortRequestId(r.requestId),
+          time: this.formatTime(r.timestampUtc),
+          method: r.method ?? '—',
+          path: r.path ?? '',
+          modelId: r.modelId ?? '—',
+          statusCode: r.statusCode ?? '—',
+          errorText: r.errorCode ?? '—',
+          errorClass: r.errorCode ? 'error' : '',
+          durationText: typeof duration?.toFixed === 'function' ? duration.toFixed(0) : (duration ?? '—'),
+          rowClass: this.requestRowClass(r),
+          expanded,
+          ariaExpanded: expanded ? 'true' : 'false',
+          ariaLabel: 'Request ' + this.shortRequestId(r.requestId) +
+            (r.errorCode ? ', error ' + r.errorCode : ''),
+          tenant: r.tenantId ?? '—',
+          streaming: r.isStreaming ? 'Yes' : 'No',
+          toggle: () => this.toggleRequestDetails(r.requestId),
+          copyId: () => this.copyText(r.requestId, 'Request ID copied.')
+        };
+      });
+    },
+
+    get requestsSkeleton() { return this.isLoading('overview') && this.requestRows.length === 0; },
+    get requestsTableVisible() { return this.requestRows.length > 0; },
+    get requestsEmpty() { return !this.isLoading('overview') && this.requestRows.length === 0; },
+    get requestsEmptyText() {
+      return this.requestsErrorsOnly
+        ? 'No error requests in the gateway buffer.'
+        : 'No recent requests in the gateway buffer yet. Traffic will appear here as it flows.';
+    },
+
+    // ---- usage & cost ----
+
+    get usageCurrency() { return this.forecast?.currency || this.usage?.currency; },
+
+    usagePreset7() { return this.setUsagePreset(7); },
+    usagePreset30() { return this.setUsagePreset(30); },
+    usagePresetMtd() { return this.setUsagePreset('mtd'); },
+    downloadExportJson() { return this.downloadExport('json'); },
+    downloadExportCsv() { return this.downloadExport('csv'); },
+
+    get usageKeyOptions() {
+      return (this.keys || []).map(k => ({
+        key: k.id,
+        id: k.id,
+        label: (k.label || k.keyPrefix) + (k.assignee ? ' · ' + k.assignee : '')
+      }));
+    },
+
+    get usageSummary() {
+      const s = this.usage?.summary;
+      const currency = this.usageCurrency;
+      return {
+        has: !!s,
+        promptCompact: this.formatCompact(s?.totalPromptTokens ?? 0),
+        promptTotal: this.formatNum(s?.totalPromptTokens ?? 0) + ' total',
+        completionCompact: this.formatCompact(s?.totalCompletionTokens ?? 0),
+        completionTotal: this.formatNum(s?.totalCompletionTokens ?? 0) + ' total',
+        costText: this.formatCost(s?.totalCost, currency),
+        requestsText: this.formatNum(s?.totalRequests ?? 0),
+        hasForecast: !!this.forecast,
+        forecastText: this.formatCost(this.forecast?.projectedMonthlyCost, this.forecast?.currency) + '/mo projected'
+      };
+    },
+
+    get usageCols() {
+      const series = this.usageDailySeries();
+      return series.map(d => ({
+        key: d.date,
+        title: d.date + ' · ' + this.formatCost(d.cost, this.usageCurrency) + ' · ' +
+          this.formatNum(d.requests) + ' req',
+        style: 'height:' + this.colHeight(d.cost)
+      }));
+    },
+
+    get hasUsageCols() { return this.usageDailySeries().length > 0; },
+    get usageAxisStart() { return this.shortDate(this.usageDailySeries()[0]?.date); },
+    get usageAxisEnd() {
+      const series = this.usageDailySeries();
+      return this.shortDate(series[series.length - 1]?.date);
+    },
+
+    get usageRollupRows() {
+      const currency = this.usageCurrency;
+      return (this.usage?.rollups ?? []).map(row => ({
+        key: row.usageDate + row.modelId + (row.costCenter || ''),
+        usageDate: row.usageDate,
+        modelId: row.modelId,
+        costCenter: row.costCenter ?? '—',
+        promptTokens: this.formatNum(row.promptTokens),
+        completionTokens: this.formatNum(row.completionTokens),
+        totalCost: this.formatCost(row.totalCost, currency),
+        requestCount: this.formatNum(row.requestCount)
+      }));
+    },
+
+    get hasUsageRollups() { return this.usageRollupRows.length > 0; },
+    get usageRollupsEmpty() { return !this.isLoading('usage') && this.usageRollupRows.length === 0; },
+
+    get usageEventRows() {
+      const currency = this.usageCurrency;
+      return (this.usageEvents ?? []).map(ev => ({
+        key: ev.id,
+        time: this.formatTime(ev.recordedAt),
+        keyPrefix: ev.keyPrefix ?? '—',
+        assignee: ev.assignee ?? '—',
+        modelId: ev.modelId ?? '—',
+        promptTokens: this.formatNum(ev.promptTokens ?? '—'),
+        completionTokens: this.formatNum(ev.completionTokens ?? '—'),
+        totalCost: this.formatCost(ev.totalCost, currency)
+      }));
+    },
+
+    get hasUsageEvents() { return this.usageEventRows.length > 0; },
+    get usageEventsEmpty() { return !this.isLoading('usage') && this.usageEventRows.length === 0; },
+
+    // ---- routing ----
+
+    openNewModelDrawer() { this.openModelDrawer(); },
+
+    get modelRows() {
+      return this.filteredModelsList().map(m => {
+        const testing = this.isLoading('modelTest') && this.modelTestDialog?.modelId === m.id;
+        return {
+          key: m.id,
+          id: m.id,
+          url: m.url,
+          typeLabel: this.modelTypeLabel(this.resolveModelType(m)),
+          aliases: (m.aliases || []).join(', ') || '—',
+          context: this.formatNum(m.maxContextLength),
+          price: this.formatModelPrice(m.pricing),
+          accessClass: m.publicAccess ? 'warn' : 'ok',
+          accessText: m.publicAccess ? 'Public' : 'Key required',
+          hasCredential: !!m.hasUpstreamCredential,
+          noCredential: !m.hasUpstreamCredential,
+          testing,
+          copyId: () => this.copyText(m.id, 'ID copied.'),
+          copyUrl: () => this.copyText(m.url, 'URL copied.'),
+          test: () => this.testModel(m.id),
+          edit: () => this.openModelDrawer(m),
+          remove: () => this.confirmRemoveModel(m.id)
+        };
+      });
+    },
+
+    get hasModelRows() { return this.modelRows.length > 0; },
+    get modelsEmpty() { return !this.isLoading('routingModels') && this.modelRows.length === 0; },
+
+    get backendRows() {
+      return this.filteredBackends().map(b => ({
+        key: b.modelId + (b.alias || ''),
+        modelId: b.modelId,
+        url: b.url,
+        alias: b.alias ?? '—',
+        healthClass: b.isHealthy ? 'dot-ok' : 'dot-fail',
+        healthText: b.isHealthy ? 'Healthy' : 'Unhealthy',
+        edit: () => this.editModelFromBackend(b.modelId)
+      }));
+    },
+
+    get hasBackendRows() { return this.backendRows.length > 0; },
+    get backendsEmpty() { return !this.isLoading('routingBackends') && this.backendRows.length === 0; },
+
+    // ---- API keys ----
+
+    onSelectAllKeys(event) {
+      this.toggleSelectAllFilteredKeys(!!event?.target?.checked);
+    },
+
+    get keysHeaderChecked() { return this.allFilteredActiveKeysSelected(); },
+    get keysHeaderIndeterminate() {
+      return this.someFilteredActiveKeysSelected() && !this.allFilteredActiveKeysSelected();
+    },
+    get revokeSelectedDisabled() { return this.isLoading('keys') || this.selectedActiveKeyCount() === 0; },
+    get selectedKeyCountText() { return this.selectedActiveKeyCount(); },
+
+    get keyRows() {
+      const currency = this.forecast?.currency;
+      return this.filteredKeys().map(k => {
+        const cost = this.keyMtdCost(k);
+        return {
+          key: k.id,
+          keyPrefix: k.keyPrefix,
+          label: k.label || '—',
+          assignee: k.assignee || '—',
+          role: k.role,
+          roleClass: k.role === 'Admin' ? 'admin' : '',
+          lastUsed: k.lastUsedAt ? this.formatTime(k.lastUsedAt) : '—',
+          mtdCost: cost != null ? this.formatCost(cost, currency) : '—',
+          mtdRequests: this.keyMtdRequests(k) ?? '—',
+          created: this.formatTime(k.createdAt),
+          statusClass: k.isRevoked ? 'fail' : 'ok',
+          statusText: k.isRevoked ? 'Revoked' : 'Active',
+          active: !k.isRevoked,
+          revoked: !!k.isRevoked,
+          selected: this.isKeySelected(k.id),
+          canGrant: k.role !== 'Admin',
+          selectLabel: 'Select key ' + k.keyPrefix,
+          onSelect: event => this.toggleKeySelection(k.id, !!event?.target?.checked),
+          edit: () => this.openKeyEditDrawer(k),
+          access: () => this.openKeyAccess(k),
+          usage: () => this.viewKeyUsage(k),
+          revoke: () => this.confirmRevoke(k.id)
+        };
+      });
+    },
+
+    get hasKeyRows() { return this.keyRows.length > 0; },
+    get keysEmpty() { return !this.isLoading('keys') && this.keyRows.length === 0; },
+
+    get showCreateKeyForm() { return !this.createdKey; },
+    get closeKeysDisabled() { return !!this.createdKey && !this.keysCreatedAck; },
+    copyCreatedKey() { return this.copyText(this.createdKey, 'Secret copied.'); },
+    get keyAccessPrefix() { return this.keyAccessEdit?.keyPrefix ?? ''; },
+
+    grantRows(selected, toggle) {
+      const chosen = selected || [];
+      return (this.models || []).map(m => ({
+        key: m.id,
+        id: m.id,
+        checked: chosen.includes(m.id),
+        toggle: () => toggle(m.id)
+      }));
+    },
+
+    get keyAccessRows() {
+      return this.grantRows(this.keyAccessSelected, id => this.toggleKeyAccessModel(id));
+    },
+
+    get tenantGrantRows() {
+      return this.grantRows(this.tenantGrantSelected, id => this.toggleTenantGrantModel(id));
+    },
+
+    // ---- logs ----
+
+    /** The template's refresh triggers pass a DOM event; loadLogs' first argument means "quiet". */
+    refreshLogs() { return this.loadLogs(); },
+
+    get clearLogsDisabled() { return this.isLoading('logs') || !this.logs.length; },
+    get logsTruncated() { return this.logs.length >= this.logsPageSize; },
+    get logsSkeleton() { return this.isLoading('logs') && !this.logs.length; },
+    get hasLogs() { return this.logs.length > 0; },
+    get logsEmpty() { return !this.isLoading('logs') && !this.logs.length; },
+    get logsEmptyText() {
+      return this.logsSearch || this.logsLevel !== 'all'
+        ? 'No log entries match this filter.'
+        : 'No warnings or errors recorded since the gateway started.';
+    },
+
+    get logRows() {
+      return (this.logs || []).map(l => {
+        const expanded = this.isLogExpanded(l.id);
+        return {
+          key: l.id,
+          time: this.formatTime(l.lastTimestampUtc || l.timestampUtc),
+          level: l.level,
+          levelClass: this.logLevelClass(l.level),
+          repeats: l.repeats,
+          repeatsText: '×' + l.repeats,
+          showRepeats: l.repeats > 1,
+          category: l.category,
+          message: l.message,
+          modelId: l.modelId ?? '—',
+          rowClass: this.logRowClass(l),
+          expanded,
+          ariaExpanded: expanded ? 'true' : 'false',
+          ariaLabel: l.level + ' from ' + l.category + ': ' + l.message,
+          hint: l.hint ?? '',
+          hasHint: !!l.hint,
+          firstSeen: this.formatTime(l.timestampUtc),
+          eventCode: l.eventCode ?? '—',
+          requestId: l.requestId ?? '—',
+          detail: l.detail ?? '',
+          hasDetail: !!l.detail,
+          toggle: () => this.toggleLogDetails(l.id),
+          copy: () => this.copyText(this.formatLogForCopy(l), 'Log entry copied.')
+        };
+      });
+    },
+
+    // ---- settings ----
+
+    get hasConfigStatus() { return !!this.configStatus; },
+    get configHotReloadText() { return this.configStatus?.hotReloadEnabled ? 'on' : 'off'; },
+    get configWatchText() { return this.configStatus?.watchEnabled ? 'on' : 'off'; },
+    get configModelCountText() { return this.configStatus?.modelCount ?? 0; },
+
+    get rateLimitsLoading() {
+      return !this.rateLimits && !this.rateLimitsLoadError && this.isLoading('settings');
+    },
+    get rateLimitsDisabled() { return !!this.rateLimits && !this.rateLimits.enabled; },
+
+    get rateLimitPlanViewRows() {
+      return this.rateLimitPlanRows.map((_, index) => ({
+        key: index,
+        slug: this.bindPath('rateLimitPlanRows.' + index + '.slug'),
+        rpm: this.bindPath('rateLimitPlanRows.' + index + '.rpm'),
+        burst: this.bindPath('rateLimitPlanRows.' + index + '.burst'),
+        maxConcurrentStreams: this.bindPath('rateLimitPlanRows.' + index + '.maxConcurrentStreams'),
+        remove: () => this.removeRateLimitPlanRow(index)
+      }));
+    },
+
+    get corsLoading() {
+      return this.corsOrigins === null && !this.corsLoadError && this.isLoading('settings');
+    },
+    get corsLoaded() { return this.corsOrigins !== null; },
+
+    get corsRows() {
+      return (this.corsOrigins || []).map((_, index) => ({
+        key: index,
+        value: this.bindPath('corsOrigins.' + index),
+        remove: () => this.removeCorsOriginRow(index)
+      }));
+    },
+
+    // ---- model drawer ----
+
+    applyModelTemplateFromEvent(event) {
+      const select = event?.target;
+      if (!select) return;
+      this.applyModelTemplate(select.value);
+      select.value = '';
+    },
+
+    get editingModel() { return !!this.editModel._existing; },
+    get modelDrawerTitle() { return this.editModel._existing ? 'Edit model' : 'Add model'; },
+    get modelSaveLabel() { return this.editModel._existing ? 'Save changes' : 'Add model'; },
+    get modelApiKeyLabel() {
+      return this.editModel._existing
+        ? 'New API key (leave blank to keep current)'
+        : 'API key (optional)';
+    },
+    get showStoredCredentialHint() {
+      return !!this.editModel._existing && !!this.editModel.hasUpstreamCredential &&
+        !(this.editModel.apiKey || '').trim();
+    },
+    get showClearCredential() {
+      return !!this.editModel._existing && !!this.editModel.hasUpstreamCredential;
+    },
+    get editModelTypeUnknown() { return this.isUnknownModelType(this.editModel.modelType); },
+    get editModelTypeUnknownLabel() { return this.editModel.modelType + ' (unrecognised)'; },
+    get modelTypeOptions() { return this.modelTypes(); },
+    get modelTestEndpointHint() {
+      const entry = this.modelTypes().find(t => t.value === this.editModel.modelType);
+      return entry?.testEndpoint || 'no automated test available';
+    },
+
+    // ---- model test dialog ----
+
+    rerunModelTest() { return this.testModel(this.modelTestDialog?.modelId); },
+
+    get modelTest() {
+      const dialog = this.modelTestDialog;
+      const result = dialog?.result;
+      const unsupported = result?.supported === false;
+      const failed = !!result && !result.ok;
+      const model = (this.models || []).find(m => m.id === dialog?.modelId);
+      return {
+        open: !!dialog,
+        modelId: dialog?.modelId ?? '',
+        typeLabel: this.modelTypeLabel(this.resolveModelType(model)),
+        hint: this.modelTestHint(dialog?.modelId),
+        loading: !!dialog?.loading,
+        showResult: !!result && !dialog?.loading,
+        resultClass: result?.ok ? 'ok' : (unsupported ? 'warn' : 'bad'),
+        resultIcon: this.icon(result?.ok ? 'check-circle' : (unsupported ? 'alert-triangle' : 'x-circle')),
+        resultText: result?.ok ? 'Success' : (unsupported ? 'Not available' : 'Failed'),
+        endpoint: result?.endpoint ?? '',
+        hasEndpoint: !!result?.endpoint,
+        latencyMs: result?.latencyMs ?? '',
+        hasLatency: result?.latencyMs != null && !unsupported,
+        statusCode: result?.statusCode ?? '',
+        hasStatusCode: !!result?.statusCode,
+        content: result?.content ?? '',
+        hasContent: !!result?.content,
+        detail: result?.detail ?? '',
+        showDetail: !!result?.detail && failed,
+        resultHint: result?.hint ?? '',
+        showHint: !!result?.hint && failed,
+        showLogNote: failed && !unsupported,
+        error: dialog?.error ?? '',
+        showError: !!dialog?.error && !dialog?.loading,
+        rerunDisabled: !!dialog?.loading || !dialog?.modelId
+      };
+    },
+
+    // ---- confirm dialogs ----
+
+    get confirmView() {
+      const d = this.confirmDialog;
+      return {
+        open: !!d,
+        title: d?.title ?? '',
+        message: d?.message ?? '',
+        confirmLabel: d?.confirmLabel || 'Confirm',
+        confirmClass: d?.danger ? 'danger' : '',
+        labelledBy: d ? 'confirm-title' : null
+      };
     }
   };
 }
+
+// Registered as an Alpine component rather than left as a global: the CSP-friendly build resolves
+// x-data="adminApp" through Alpine's data registry, and it cannot evaluate the call x-data="adminApp()".
+document.addEventListener('alpine:init', () => {
+  Alpine.data('adminApp', adminApp);
+});

@@ -9,30 +9,36 @@
   <!-- Fonts and Alpine are served from this origin, not a public CDN. The admin console handles API
        keys, upstream provider secrets and pricing, so a CDN compromise would execute arbitrary
        script in a fully-privileged admin session; self-hosting also keeps the console working in
-       air-gapped deployments and stops admin activity leaking to a third party. -->
+       air-gapped deployments and stops admin activity leaking to a third party.
+
+       Alpine is the CSP-friendly build, whose evaluator resolves a directive's value as a property
+       path instead of compiling it with new Function(). That is what lets the console keep
+       script-src 'self' (AdminSecurityHeaders.cs) — the stock build needs 'unsafe-eval'. The cost
+       is that no expression below may contain an operator, a ternary or a call with arguments:
+       every value comes from a getter, a zero-argument method, or a {get,set} pair on adminApp. -->
   <link rel="stylesheet" href="vendor/fonts.css?v=1" />
   <link rel="stylesheet" href="admin.css?v=11" />
-  <script defer src="admin-icons.js?v=8"></script>
+  <script defer src="admin-icons.js?v=9"></script>
   <script defer src="admin-errors.js?v=7"></script>
   <script defer src="admin-store.js?v=8"></script>
-  <script defer src="admin-app.js?v=20"></script>
-  <script defer src="vendor/alpine-3.14.9.min.js"></script>
+  <script defer src="admin-app.js?v=21"></script>
+  <script defer src="vendor/alpine-csp-3.14.9.min.js"></script>
 </head>
-<body x-data="adminApp()" x-init="init()" x-cloak @keydown.window="onModalKeydown($event)">
+<body x-data="adminApp" x-cloak @keydown.window="onModalKeydown">
 
   <div class="toast-container" aria-live="polite">
-    <template x-for="t in toasts" :key="t.id">
+    <template x-for="t in toastRows" :key="t.key">
       <div class="toast" :class="t.type">
-        <span class="toast-icon icon" x-html="icon(t.type === 'success' ? 'check-circle' : 'alert-triangle')"></span>
+        <span class="toast-icon icon" x-html="t.icon"></span>
         <span x-text="t.message"></span>
       </div>
     </template>
   </div>
 
   <!-- Auth gate -->
-  <div class="auth-gate" x-show="!apiKey" role="main">
+  <div class="auth-gate" x-show="signedOut" role="main">
     <div class="auth-brand">
-      <span class="brand-mark"><span class="icon" x-html="icon('zap')"></span></span>
+      <span class="brand-mark"><span class="icon" x-html="icons.zap"></span></span>
       <div>
         <h1>33pol control plane</h1>
         <span class="brand-sub">LLM gateway admin</span>
@@ -41,105 +47,82 @@
     <p class="lede">Sign in with an Admin API key. It's stored in this browser only (localStorage) — use a private window on shared machines.</p>
     <label for="gate-apiKey">Admin API key</label>
     <div class="key-row">
-      <input id="gate-apiKey" :type="showApiKey ? 'text' : 'password'" x-model="gateApiKey" placeholder="sk-…"
-        @keydown.enter.prevent="saveKey()" autocomplete="off" />
-      <button type="button" class="icon-btn" @click="showApiKey = !showApiKey" :aria-label="showApiKey ? 'Hide key' : 'Show key'">
-        <span class="icon" x-html="showApiKey ? icon('eye-off') : icon('eye')"></span>
+      <input id="gate-apiKey" :type="apiKeyInputType" x-model="mdl.gateApiKey" placeholder="sk-…"
+        @keydown.enter.prevent="saveKey" autocomplete="off" />
+      <button type="button" class="icon-btn" @click="toggleShowApiKey" :aria-label="showApiKeyLabel">
+        <span class="icon" x-html="showApiKeyIcon"></span>
       </button>
     </div>
-    <button type="button" class="action" @click="saveKey()" :disabled="isLoading('auth')">
-      <span class="icon" x-html="icon('log-out')"></span> Connect
+    <button type="button" class="action" @click="saveKey" :disabled="loadingAuth">
+      <span class="icon" x-html="icons.log-out"></span> Connect
     </button>
     <p class="field-error" x-show="error" x-text="error"></p>
   </div>
 
-  <div class="app-shell" x-show="apiKey">
+  <div class="app-shell" x-show="signedIn">
     <!-- Rail -->
     <aside class="rail" role="navigation" aria-label="Main">
       <div class="rail-top">
         <div class="brand">
-          <span class="brand-mark"><span class="icon" x-html="icon('zap')"></span></span>
+          <span class="brand-mark"><span class="icon" x-html="icons.zap"></span></span>
           <div>
             <span class="brand-name">33pol</span>
             <span class="brand-sub">Gateway</span>
           </div>
         </div>
         <nav class="rail-nav" role="tablist" aria-label="Sections">
-          <button type="button" role="tab" id="tab-dashboard" :aria-selected="tab === 'dashboard'"
-            :class="{ active: tab === 'dashboard' }" @click="setTab('dashboard')">
-            <span class="icon" x-html="icon('gauge')"></span> <span>Overview</span>
-          </button>
-          <button type="button" role="tab" id="tab-usage" :aria-selected="tab === 'usage'"
-            :class="{ active: tab === 'usage' }" @click="setTab('usage')">
-            <span class="icon" x-html="icon('bar-chart')"></span> <span>Usage &amp; cost</span>
-          </button>
-          <button type="button" role="tab" id="tab-routing" :aria-selected="tab === 'routing'"
-            :class="{ active: tab === 'routing' }" @click="setTab('routing')">
-            <span class="icon" x-html="icon('git-branch')"></span> <span>Routing</span>
-          </button>
-          <button type="button" role="tab" id="tab-keys" :aria-selected="tab === 'keys'"
-            :class="{ active: tab === 'keys' }" @click="setTab('keys')">
-            <span class="icon" x-html="icon('key')"></span> <span>API keys</span>
-          </button>
-          <button type="button" role="tab" id="tab-logs" :aria-selected="tab === 'logs'"
-            :class="{ active: tab === 'logs' }" @click="setTab('logs')">
-            <span class="icon" x-html="icon('file-text')"></span> <span>Logs</span>
-          </button>
-          <button type="button" role="tab" id="tab-settings" :aria-selected="tab === 'settings'"
-            :class="{ active: tab === 'settings' }" @click="setTab('settings')">
-            <span class="icon" x-html="icon('settings')"></span> <span>Settings</span>
-          </button>
+          <template x-for="t in navTabs" :key="t.key">
+            <button type="button" role="tab" :id="t.tabId" :aria-selected="t.active" :class="t.cls" @click="t.select">
+              <span class="icon" x-html="t.icon"></span> <span x-text="t.label"></span>
+            </button>
+          </template>
         </nav>
       </div>
       <div class="rail-foot">
         <div class="theme-switch" role="group" aria-label="Theme">
-          <button type="button" @click="setTheme('light')" :class="{ active: isTheme('light') }" :aria-pressed="isTheme('light')" title="Light" aria-label="Light theme">
-            <span class="icon" x-html="icon('sun')"></span>
-          </button>
-          <button type="button" @click="setTheme('dark')" :class="{ active: isTheme('dark') }" :aria-pressed="isTheme('dark')" title="Dark" aria-label="Dark theme">
-            <span class="icon" x-html="icon('moon')"></span>
-          </button>
-          <button type="button" @click="setTheme('system')" :class="{ active: isTheme('system') }" :aria-pressed="isTheme('system')" title="Match system" aria-label="Match system theme">
-            <span class="icon" x-html="icon('monitor')"></span>
-          </button>
+          <template x-for="t in themeButtons" :key="t.key">
+            <button type="button" @click="t.select" :class="t.cls" :aria-pressed="t.active" :title="t.title" :aria-label="t.label">
+              <span class="icon" x-html="t.icon"></span>
+            </button>
+          </template>
         </div>
       </div>
     </aside>
 
     <div class="app-main">
       <!-- Live-vitals bar -->
-      <header class="topbar" :class="{ 'auth-fail': connectionStatus === 'fail' }">
+      <header class="topbar" :class="topbarClass">
         <div class="vitals">
-          <span class="vital-chip is-ok" x-show="connectionStatus === 'ok'"><span class="pulse-dot"></span> Connected</span>
-          <span class="vital-chip is-fail" x-show="connectionStatus === 'fail'">Invalid key</span>
-          <span class="vital-chip is-warn" x-show="connectionDegraded && connectionStatus === 'ok'">Session check failed</span>
+          <span class="vital-chip is-ok" x-show="isConnected"><span class="pulse-dot"></span> Connected</span>
+          <span class="vital-chip is-fail" x-show="connectionFailed">Invalid key</span>
+          <span class="vital-chip is-warn" x-show="sessionCheckFailed">Session check failed</span>
 
-          <span class="vital-chip" :class="healthLive ? 'is-ok' : 'is-fail'" x-show="healthLive !== null">
-            <span class="pulse-dot" :class="{ live: healthLive }"></span>
-            <span x-text="healthLive ? 'Live' : 'Live down'"></span>
+          <span class="vital-chip" :class="healthLiveClass" x-show="healthLiveKnown">
+            <span class="pulse-dot" :class="healthLiveDotClass"></span>
+            <span x-text="healthLiveText"></span>
           </span>
-          <span class="vital-chip" :class="healthReady ? 'is-ok' : 'is-fail'" x-show="healthReady !== null">
+          <span class="vital-chip" :class="healthReadyClass" x-show="healthReadyKnown">
             <span class="vc-label">Ready</span>
-            <span class="vc-value" x-text="healthReady ? 'ok' : 'no'"></span>
+            <span class="vc-value" x-text="healthReadyText"></span>
           </span>
-          <span class="vital-chip is-live" x-show="summary && (summary.activeStreams ?? 0) > 0">
+          <span class="vital-chip is-live" x-show="hasActiveStreams">
             <span class="pulse-dot live"></span>
-            <span class="vc-value" x-text="summary?.activeStreams ?? 0"></span> <span class="vc-label">streams</span>
+            <span class="vc-value" x-text="activeStreamsCount"></span> <span class="vc-label">streams</span>
           </span>
-          <span class="vital-chip is-fail" x-show="summary && (summary.totalErrors ?? 0) > 0">
-            <span class="vc-value" x-text="formatNum(summary?.totalErrors ?? 0)"></span> <span class="vc-label">errors</span>
+          <span class="vital-chip is-fail" x-show="hasErrors">
+            <span class="vc-value" x-text="totalErrorsText"></span> <span class="vc-label">errors</span>
           </span>
         </div>
 
         <div class="topbar-right">
-          <span class="key-tag" x-show="store.keyPrefix()">
-            <span class="vc-label">key</span> <code x-text="store.keyPrefix()"></code>
+          <span class="key-tag" x-show="keyPrefix">
+            <span class="vc-label">key</span> <code x-text="keyPrefix"></code>
           </span>
-          <button type="button" class="icon-btn" @click="showChangeKey = !showChangeKey" title="Change key" aria-label="Change key">
-            <span class="icon" x-html="icon('key')"></span>
+          <button type="button" class="icon-btn" @click="toggleChangeKey" title="Change key" aria-label="Change key">
+            <span class="icon" x-html="icons.key"></span>
           </button>
-          <button type="button" class="action ghost sm" @click="clearSession()">
-            <span class="icon" x-html="icon('log-out')"></span> Sign out
+          <button type="button" class="action ghost sm" @click="clearSession">
+            <span class="icon" x-html="icons.log-out"></span> Sign out
           </button>
         </div>
       </header>
@@ -147,100 +130,100 @@
       <div class="card change-key-panel" x-show="showChangeKey">
         <label for="header-apiKey">Admin API key</label>
         <div class="key-row">
-          <input id="header-apiKey" :type="showApiKey ? 'text' : 'password'" x-model="apiKey" @keydown.enter.prevent="saveKey()" autocomplete="off" />
-          <button type="button" class="icon-btn" @click="showApiKey = !showApiKey" :aria-label="showApiKey ? 'Hide key' : 'Show key'">
-            <span class="icon" x-html="showApiKey ? icon('eye-off') : icon('eye')"></span>
+          <input id="header-apiKey" :type="apiKeyInputType" x-model="mdl.apiKey" @keydown.enter.prevent="saveKey" autocomplete="off" />
+          <button type="button" class="icon-btn" @click="toggleShowApiKey" :aria-label="showApiKeyLabel">
+            <span class="icon" x-html="showApiKeyIcon"></span>
           </button>
-          <button type="button" class="action" @click="saveKey()" :disabled="isLoading('auth')">Save</button>
+          <button type="button" class="action" @click="saveKey" :disabled="loadingAuth">Save</button>
         </div>
       </div>
 
       <div id="global-alert" class="global-alert" role="alert" aria-live="assertive"
         x-show="error" x-transition.opacity>
         <div class="global-alert-body">
-          <strong x-text="errorTitle || 'Error'"></strong>
+          <strong x-text="errorTitleText"></strong>
           <p x-text="error"></p>
           <details x-show="errorDetail" class="global-alert-details">
             <summary>Technical details</summary>
             <pre x-text="errorDetail"></pre>
           </details>
         </div>
-        <button type="button" class="action ghost sm" @click="clearMessages()">Dismiss</button>
+        <button type="button" class="action ghost sm" @click="clearMessages">Dismiss</button>
       </div>
 
       <main class="page-content" role="main">
 
         <!-- ============================ OVERVIEW ============================ -->
-        <section x-show="tab === 'dashboard'" role="tabpanel" aria-labelledby="tab-dashboard" id="panel-dashboard">
+        <section x-show="isDashboard" role="tabpanel" aria-labelledby="tab-dashboard" id="panel-dashboard">
           <div class="page-header">
             <div class="titles">
               <span class="eyebrow">Telemetry</span>
               <h2>Overview</h2>
-              <p class="page-sub" x-show="summaryUpdatedAt">Updated <span x-text="summaryAgeText()"></span> · live, refreshing every 2s</p>
+              <p class="page-sub" x-show="summaryUpdatedAt">Updated <span x-text="summaryAgeText"></span> · live, refreshing every 2s</p>
             </div>
-            <button type="button" class="action secondary" @click="loadOverviewData()" :disabled="isLoading('overview')" title="Refresh">
-              <span class="icon" x-html="icon('refresh')"></span> Refresh
+            <button type="button" class="action secondary" @click="loadOverviewData" :disabled="loadingOverview" title="Refresh">
+              <span class="icon" x-html="icons.refresh"></span> Refresh
             </button>
           </div>
 
-          <p class="notice warn" x-show="overviewStale && connectionStatus !== 'fail'" role="status">Live data may be stale — the last refresh failed. Check your connection.</p>
-          <p class="notice error" x-show="connectionStatus === 'fail'" role="status">Your admin API key was rejected. Use <strong>Change key</strong> in the top bar to sign in again.</p>
+          <p class="notice warn" x-show="showStaleNotice" role="status">Live data may be stale — the last refresh failed. Check your connection.</p>
+          <p class="notice error" x-show="connectionFailed" role="status">Your admin API key was rejected. Use <strong>Change key</strong> in the top bar to sign in again.</p>
 
           <!-- Primary vitals -->
           <div class="vitals-grid" x-show="summary">
             <article class="vital">
-              <div class="vital-head"><span class="vital-label">Requests</span><span class="icon" x-html="icon('activity')"></span></div>
-              <strong class="vital-value" x-text="formatNum(summary?.totalInferenceRequests ?? 0)"></strong>
+              <div class="vital-head"><span class="vital-label">Requests</span><span class="icon" x-html="icons.activity"></span></div>
+              <strong class="vital-value" x-text="totalRequestsText"></strong>
               <div class="vital-foot">
-                <span class="vital-trend up" x-show="currentThroughput() > 0">
-                  <span class="icon" x-html="icon('trending-up')"></span>
-                  <span x-text="currentThroughput().toFixed(currentThroughput() < 10 ? 1 : 0) + '/s'"></span>
+                <span class="vital-trend up" x-show="hasThroughput">
+                  <span class="icon" x-html="icons.trending-up"></span>
+                  <span x-text="throughputText"></span>
                 </span>
-                <span x-show="currentThroughput() === 0">total routed</span>
+                <span x-show="noThroughput">total routed</span>
               </div>
-              <div class="vital-spark" x-show="hasSpark('throughput')" aria-hidden="true">
+              <div class="vital-spark" x-show="spark.throughput.has" aria-hidden="true">
                 <svg viewBox="0 0 100 100" preserveAspectRatio="none">
-                  <path class="spark-fill" :d="sparkFill('throughput')"></path>
-                  <polyline class="spark-line" :points="sparkLine('throughput')"></polyline>
+                  <path class="spark-fill" :d="spark.throughput.fill"></path>
+                  <polyline class="spark-line" :points="spark.throughput.line"></polyline>
                 </svg>
               </div>
             </article>
 
-            <article class="vital" :class="{ 'accent-error': (summary?.totalErrors ?? 0) > 0 }">
-              <div class="vital-head"><span class="vital-label">Errors</span><span class="icon" x-html="icon('alert-circle')"></span></div>
-              <strong class="vital-value" x-text="formatNum(summary?.totalErrors ?? 0)"></strong>
-              <div class="vital-foot"><span x-text="errorRatePct().toFixed(2) + '% error rate'"></span></div>
-              <div class="vital-spark" x-show="hasSpark('errorRate')" aria-hidden="true">
+            <article class="vital" :class="errorsVitalClass">
+              <div class="vital-head"><span class="vital-label">Errors</span><span class="icon" x-html="icons.alert-circle"></span></div>
+              <strong class="vital-value" x-text="totalErrorsText"></strong>
+              <div class="vital-foot"><span x-text="errorRateText"></span></div>
+              <div class="vital-spark" x-show="spark.errorRate.has" aria-hidden="true">
                 <svg viewBox="0 0 100 100" preserveAspectRatio="none">
-                  <path class="spark-fill" :d="sparkFill('errorRate')"></path>
-                  <polyline class="spark-line" :points="sparkLine('errorRate')"></polyline>
+                  <path class="spark-fill" :d="spark.errorRate.fill"></path>
+                  <polyline class="spark-line" :points="spark.errorRate.line"></polyline>
                 </svg>
               </div>
             </article>
 
             <article class="vital">
-              <div class="vital-head"><span class="vital-label">Avg latency</span><span class="icon" x-html="icon('timer')"></span></div>
-              <strong class="vital-value"><span x-text="(summary?.averageLatencyMs ?? 0).toFixed(1)"></span><span class="unit">ms</span></strong>
+              <div class="vital-head"><span class="vital-label">Avg latency</span><span class="icon" x-html="icons.timer"></span></div>
+              <strong class="vital-value"><span x-text="avgLatencyText"></span><span class="unit">ms</span></strong>
               <div class="vital-foot"><span>mean upstream round-trip</span></div>
-              <div class="vital-spark" x-show="hasSpark('latency')" aria-hidden="true">
+              <div class="vital-spark" x-show="spark.latency.has" aria-hidden="true">
                 <svg viewBox="0 0 100 100" preserveAspectRatio="none">
-                  <path class="spark-fill" :d="sparkFill('latency')"></path>
-                  <polyline class="spark-line" :points="sparkLine('latency')"></polyline>
+                  <path class="spark-fill" :d="spark.latency.fill"></path>
+                  <polyline class="spark-line" :points="spark.latency.line"></polyline>
                 </svg>
               </div>
             </article>
 
             <article class="vital accent-live">
-              <div class="vital-head"><span class="vital-label">Active streams</span><span class="icon" x-html="icon('radio')"></span></div>
-              <strong class="vital-value" x-text="summary?.activeStreams ?? 0"></strong>
+              <div class="vital-head"><span class="vital-label">Active streams</span><span class="icon" x-html="icons.radio"></span></div>
+              <strong class="vital-value" x-text="activeStreamsCount"></strong>
               <div class="vital-foot">
-                <span class="vital-trend up" x-show="(summary?.activeStreams ?? 0) > 0"><span class="pulse-dot live"></span> streaming now</span>
-                <span x-show="(summary?.activeStreams ?? 0) === 0">idle</span>
+                <span class="vital-trend up" x-show="hasActiveStreams"><span class="pulse-dot live"></span> streaming now</span>
+                <span x-show="noActiveStreams">idle</span>
               </div>
-              <div class="vital-spark" x-show="hasSpark('streams')" aria-hidden="true">
+              <div class="vital-spark" x-show="spark.streams.has" aria-hidden="true">
                 <svg viewBox="0 0 100 100" preserveAspectRatio="none">
-                  <path class="spark-fill" :d="sparkFill('streams')"></path>
-                  <polyline class="spark-line" :points="sparkLine('streams')"></polyline>
+                  <path class="spark-fill" :d="spark.streams.fill"></path>
+                  <polyline class="spark-line" :points="spark.streams.line"></polyline>
                 </svg>
               </div>
             </article>
@@ -248,9 +231,9 @@
 
           <!-- Secondary stats -->
           <div class="mini-stats" x-show="summary">
-            <span class="mini-stat"><span class="ms-label">Uptime</span><span class="ms-value" x-text="summary?.uptime ?? '—'"></span></span>
-            <span class="mini-stat" :class="{ warn: (summary?.rateLimitRejections ?? 0) > 0 }"><span class="ms-label">Rate-limited</span><span class="ms-value" x-text="formatNum(summary?.rateLimitRejections ?? 0)"></span></span>
-            <span class="mini-stat" :class="{ warn: (summary?.quotaRejections ?? 0) > 0 }"><span class="ms-label">Quota-blocked</span><span class="ms-value" x-text="formatNum(summary?.quotaRejections ?? 0)"></span></span>
+            <span class="mini-stat"><span class="ms-label">Uptime</span><span class="ms-value" x-text="uptimeText"></span></span>
+            <span class="mini-stat" :class="rateLimitedClass"><span class="ms-label">Rate-limited</span><span class="ms-value" x-text="rateLimitedText"></span></span>
+            <span class="mini-stat" :class="quotaBlockedClass"><span class="ms-label">Quota-blocked</span><span class="ms-value" x-text="quotaBlockedText"></span></span>
           </div>
 
           <!-- Model breakdown charts -->
@@ -258,30 +241,30 @@
             <div class="card">
               <span class="eyebrow">Traffic</span>
               <h3>Requests by model</h3>
-              <div class="hbars" x-show="requestsByModelRows().length">
-                <template x-for="row in requestsByModelRows()" :key="row.modelId">
+              <div class="hbars" x-show="hasRequestModelBars">
+                <template x-for="row in requestModelBars" :key="row.key">
                   <div class="hbar">
                     <span class="hbar-label" x-text="row.modelId" :title="row.modelId"></span>
-                    <span class="hbar-track"><span class="hbar-fill" :style="'width:' + barWidth(row.count, requestsByModelRows())"></span></span>
-                    <span class="hbar-value" x-text="formatNum(row.count)"></span>
+                    <span class="hbar-track"><span class="hbar-fill" :style="row.style"></span></span>
+                    <span class="hbar-value" x-text="row.countText"></span>
                   </div>
                 </template>
               </div>
-              <p class="hint" x-show="!requestsByModelRows().length">No traffic recorded yet.</p>
+              <p class="hint" x-show="noRequestModelBars">No traffic recorded yet.</p>
             </div>
             <div class="card">
               <span class="eyebrow">Reliability</span>
               <h3>Errors by model</h3>
-              <div class="hbars" x-show="errorsByModelRows().length">
-                <template x-for="row in errorsByModelRows()" :key="row.modelId">
+              <div class="hbars" x-show="hasErrorModelBars">
+                <template x-for="row in errorModelBars" :key="row.key">
                   <div class="hbar is-error">
                     <span class="hbar-label" x-text="row.modelId" :title="row.modelId"></span>
-                    <span class="hbar-track"><span class="hbar-fill" :style="'width:' + barWidth(row.count, errorsByModelRows())"></span></span>
-                    <span class="hbar-value" x-text="formatNum(row.count)"></span>
+                    <span class="hbar-track"><span class="hbar-fill" :style="row.style"></span></span>
+                    <span class="hbar-value" x-text="row.countText"></span>
                   </div>
                 </template>
               </div>
-              <p class="hint healthy" x-show="!errorsByModelRows().length">No errors — every model is clean.</p>
+              <p class="hint healthy" x-show="noErrorModelBars">No errors — every model is clean.</p>
             </div>
           </div>
 
@@ -289,258 +272,260 @@
           <div class="section-header">
             <div><span class="eyebrow">Live tail</span><h3>Recent requests</h3></div>
             <label class="checkbox field-inline">
-              <input type="checkbox" x-model="requestsErrorsOnly" /> Errors only
+              <input type="checkbox" x-model="mdl.requestsErrorsOnly" /> Errors only
             </label>
           </div>
           <div class="table-wrap">
-            <table x-show="sortedRequests().length">
+            <table x-show="requestsTableVisible">
               <thead>
                 <tr>
-                  <th class="sortable" @click="sortToggle('requests','timestampUtc')">Time<span x-html="sortIndicator('requests','timestampUtc')"></span></th>
+                  <th class="sortable" @click="sortBy.requestsTime">Time<span x-html="sortIcon.requestsTime"></span></th>
                   <th>Request ID</th>
                   <th>Method</th><th>Path</th><th>Model</th>
-                  <th class="sortable" @click="sortToggle('requests','statusCode')">Status<span x-html="sortIndicator('requests','statusCode')"></span></th>
+                  <th class="sortable" @click="sortBy.requestsStatus">Status<span x-html="sortIcon.requestsStatus"></span></th>
                   <th>Error</th>
                   <th class="num">ms</th>
                 </tr>
               </thead>
-              <tbody>
-                <template x-for="r in sortedRequests()" :key="r.requestId">
+              <!-- One tbody per request: x-for clones only the template's first element, so the row
+                   and its detail panel have to travel together inside a single root. -->
+              <template x-for="r in requestRows" :key="r.key">
+                <tbody>
                   <tr class="request-row" role="button" tabindex="0"
-                    :class="requestRowClass(r)"
-                    :aria-expanded="isRequestExpanded(r.requestId) ? 'true' : 'false'"
-                    :aria-label="'Request ' + shortRequestId(r.requestId) + (r.errorCode ? ', error ' + r.errorCode : '')"
-                    @click="toggleRequestDetails(r.requestId)"
-                    @keydown.enter.prevent="toggleRequestDetails(r.requestId)"
-                    @keydown.space.prevent="toggleRequestDetails(r.requestId)">
-                    <td x-text="formatTime(r.timestampUtc)"></td>
+                    :class="r.rowClass"
+                    :aria-expanded="r.ariaExpanded"
+                    :aria-label="r.ariaLabel"
+                    @click="r.toggle"
+                    @keydown.enter.prevent="r.toggle"
+                    @keydown.space.prevent="r.toggle">
+                    <td x-text="r.time"></td>
                     <td class="cell-code" @click.stop>
                       <span class="cell-code-inner">
-                        <code x-text="shortRequestId(r.requestId)" :title="r.requestId"></code>
-                        <button type="button" class="icon-btn" @click="copyText(r.requestId,'Request ID copied.')" title="Copy request ID" aria-label="Copy request ID">
-                          <span class="icon" x-html="icon('copy')"></span>
+                        <code x-text="r.shortId" :title="r.requestId"></code>
+                        <button type="button" class="icon-btn" @click="r.copyId" title="Copy request ID" aria-label="Copy request ID">
+                          <span class="icon" x-html="icons.copy"></span>
                         </button>
                       </span>
                     </td>
                     <td><span class="tag" x-text="r.method"></span></td>
                     <td class="col-truncate" x-text="r.path" :title="r.path"></td>
-                    <td x-text="r.modelId ?? '—'"></td>
+                    <td x-text="r.modelId"></td>
                     <td class="num" x-text="r.statusCode"></td>
-                    <td :class="r.errorCode ? 'error' : ''" x-text="r.errorCode ?? '—'"></td>
-                    <td class="num" x-text="r.durationMs?.toFixed?.(0) ?? r.durationMs"></td>
+                    <td :class="r.errorClass" x-text="r.errorText"></td>
+                    <td class="num" x-text="r.durationText"></td>
                   </tr>
-                  <tr x-show="isRequestExpanded(r.requestId)" class="request-detail-row">
+                  <tr x-show="r.expanded" class="request-detail-row">
                     <td colspan="8">
                       <dl class="request-detail-list">
                         <div><dt>Request ID</dt><dd><code x-text="r.requestId"></code></dd></div>
-                        <div><dt>Error code</dt><dd x-text="r.errorCode ?? '—'"></dd></div>
-                        <div><dt>Tenant</dt><dd x-text="r.tenantId ?? '—'"></dd></div>
-                        <div><dt>Streaming</dt><dd x-text="r.isStreaming ? 'Yes' : 'No'"></dd></div>
+                        <div><dt>Error code</dt><dd x-text="r.errorText"></dd></div>
+                        <div><dt>Tenant</dt><dd x-text="r.tenant"></dd></div>
+                        <div><dt>Streaming</dt><dd x-text="r.streaming"></dd></div>
                       </dl>
                     </td>
                   </tr>
-                </template>
-              </tbody>
+                </tbody>
+              </template>
             </table>
-            <table x-show="isLoading('overview') && !sortedRequests().length">
+            <table x-show="requestsSkeleton">
               <tbody><tr class="skeleton-row"><td colspan="8"></td></tr><tr class="skeleton-row"><td colspan="8"></td></tr><tr class="skeleton-row"><td colspan="8"></td></tr></tbody>
             </table>
           </div>
-          <div class="empty-state" x-show="!isLoading('overview') && sortedRequests().length === 0">
-            <span class="empty-state-icon icon" x-html="icon('activity')"></span>
-            <p x-text="requestsErrorsOnly ? 'No error requests in the gateway buffer.' : 'No recent requests in the gateway buffer yet. Traffic will appear here as it flows.'"></p>
+          <div class="empty-state" x-show="requestsEmpty">
+            <span class="empty-state-icon icon" x-html="icons.activity"></span>
+            <p x-text="requestsEmptyText"></p>
           </div>
         </section>
 
         <!-- ============================ USAGE ============================ -->
-        <section x-show="tab === 'usage'" role="tabpanel" aria-labelledby="tab-usage" id="panel-usage">
+        <section x-show="isUsage" role="tabpanel" aria-labelledby="tab-usage" id="panel-usage">
           <div class="page-header">
             <div class="titles"><span class="eyebrow">Billing</span><h2>Usage &amp; cost</h2></div>
           </div>
 
           <div class="chip-row">
-            <button type="button" class="preset" @click="setUsagePreset(7)">Last 7 days</button>
-            <button type="button" class="preset" @click="setUsagePreset(30)">Last 30 days</button>
-            <button type="button" class="preset" @click="setUsagePreset('mtd')">Month to date</button>
+            <button type="button" class="preset" @click="usagePreset7">Last 7 days</button>
+            <button type="button" class="preset" @click="usagePreset30">Last 30 days</button>
+            <button type="button" class="preset" @click="usagePresetMtd">Month to date</button>
           </div>
 
           <div class="card">
             <div class="grid">
-              <label>From <input type="date" x-model="usageFrom" /></label>
-              <label>To <input type="date" x-model="usageTo" /></label>
-              <label>Cost center <input x-model="usageFilterCostCenter" placeholder="Filter rollups &amp; events" /></label>
+              <label>From <input type="date" x-model="mdl.usageFrom" /></label>
+              <label>To <input type="date" x-model="mdl.usageTo" /></label>
+              <label>Cost center <input x-model="mdl.usageFilterCostCenter" placeholder="Filter rollups &amp; events" /></label>
               <label>API key
-                <select x-model="usageFilterApiKeyId">
+                <select x-model="mdl.usageFilterApiKeyId">
                   <option value="">All keys</option>
-                  <template x-for="k in keys" :key="k.id">
-                    <option :value="k.id" x-text="(k.label || k.keyPrefix) + (k.assignee ? ' · ' + k.assignee : '')"></option>
+                  <template x-for="k in usageKeyOptions" :key="k.key">
+                    <option :value="k.id" x-text="k.label"></option>
                   </template>
                 </select>
               </label>
             </div>
             <p class="hint" x-show="usageFilterApiKeyId">Rollups are grouped by cost center; use the billing events below for per-key detail.</p>
             <div class="toolbar" style="margin-top: var(--space-3); margin-bottom: 0">
-              <button type="button" class="action" @click="applyUsageRange()" :disabled="isLoading('usage')">Apply range</button>
-              <button type="button" class="action secondary" @click="clearUsageFilters()" :disabled="isLoading('usage')">Clear filters</button>
+              <button type="button" class="action" @click="applyUsageRange" :disabled="loadingUsage">Apply range</button>
+              <button type="button" class="action secondary" @click="clearUsageFilters" :disabled="loadingUsage">Clear filters</button>
               <span class="spacer"></span>
-              <button type="button" class="action secondary" @click="downloadExport('json')" :disabled="isLoading('usage')"><span class="icon" x-html="icon('download')"></span> JSON</button>
-              <button type="button" class="action secondary" @click="downloadExport('csv')" :disabled="isLoading('usage')"><span class="icon" x-html="icon('download')"></span> CSV</button>
+              <button type="button" class="action secondary" @click="downloadExportJson" :disabled="loadingUsage"><span class="icon" x-html="icons.download"></span> JSON</button>
+              <button type="button" class="action secondary" @click="downloadExportCsv" :disabled="loadingUsage"><span class="icon" x-html="icons.download"></span> CSV</button>
             </div>
           </div>
 
-          <div class="vitals-grid" x-show="usage?.summary" style="margin-top: var(--space-4)">
+          <div class="vitals-grid" x-show="usageSummary.has" style="margin-top: var(--space-4)">
             <article class="vital">
-              <div class="vital-head"><span class="vital-label">Prompt tokens</span><span class="icon" x-html="icon('hash')"></span></div>
-              <strong class="vital-value" x-text="formatCompact(usage?.summary?.totalPromptTokens ?? 0)"></strong>
-              <div class="vital-foot"><span x-text="formatNum(usage?.summary?.totalPromptTokens ?? 0) + ' total'"></span></div>
+              <div class="vital-head"><span class="vital-label">Prompt tokens</span><span class="icon" x-html="icons.hash"></span></div>
+              <strong class="vital-value" x-text="usageSummary.promptCompact"></strong>
+              <div class="vital-foot"><span x-text="usageSummary.promptTotal"></span></div>
             </article>
             <article class="vital">
-              <div class="vital-head"><span class="vital-label">Completion tokens</span><span class="icon" x-html="icon('hash')"></span></div>
-              <strong class="vital-value" x-text="formatCompact(usage?.summary?.totalCompletionTokens ?? 0)"></strong>
-              <div class="vital-foot"><span x-text="formatNum(usage?.summary?.totalCompletionTokens ?? 0) + ' total'"></span></div>
+              <div class="vital-head"><span class="vital-label">Completion tokens</span><span class="icon" x-html="icons.hash"></span></div>
+              <strong class="vital-value" x-text="usageSummary.completionCompact"></strong>
+              <div class="vital-foot"><span x-text="usageSummary.completionTotal"></span></div>
             </article>
             <article class="vital accent-live">
-              <div class="vital-head"><span class="vital-label">Cost</span><span class="icon" x-html="icon('dollar-sign')"></span></div>
-              <strong class="vital-value" x-text="formatCost(usage?.summary?.totalCost, forecast?.currency || usage?.currency)"></strong>
-              <div class="vital-foot" x-show="forecast">
-                <span class="vital-trend up"><span class="icon" x-html="icon('trending-up')"></span> <span x-text="formatCost(forecast?.projectedMonthlyCost, forecast?.currency) + '/mo projected'"></span></span>
+              <div class="vital-head"><span class="vital-label">Cost</span><span class="icon" x-html="icons.dollar-sign"></span></div>
+              <strong class="vital-value" x-text="usageSummary.costText"></strong>
+              <div class="vital-foot" x-show="usageSummary.hasForecast">
+                <span class="vital-trend up"><span class="icon" x-html="icons.trending-up"></span> <span x-text="usageSummary.forecastText"></span></span>
               </div>
             </article>
             <article class="vital">
-              <div class="vital-head"><span class="vital-label">Requests</span><span class="icon" x-html="icon('activity')"></span></div>
-              <strong class="vital-value" x-text="formatNum(usage?.summary?.totalRequests ?? 0)"></strong>
+              <div class="vital-head"><span class="vital-label">Requests</span><span class="icon" x-html="icons.activity"></span></div>
+              <strong class="vital-value" x-text="usageSummary.requestsText"></strong>
               <div class="vital-foot"><span>billed inference calls</span></div>
             </article>
           </div>
 
           <!-- Cost-per-day chart -->
-          <div class="card" x-show="usageDailySeries().length" style="margin-top: var(--space-4)">
+          <div class="card" x-show="hasUsageCols" style="margin-top: var(--space-4)">
             <span class="eyebrow">Trend</span>
             <h3>Cost per day</h3>
             <div class="colchart">
               <div class="colchart-plot">
-                <template x-for="d in usageDailySeries()" :key="d.date">
-                  <div class="col" :title="d.date + ' · ' + formatCost(d.cost, forecast?.currency || usage?.currency) + ' · ' + formatNum(d.requests) + ' req'">
-                    <span class="col-fill" :style="'height:' + colHeight(d.cost)"></span>
+                <template x-for="d in usageCols" :key="d.key">
+                  <div class="col" :title="d.title">
+                    <span class="col-fill" :style="d.style"></span>
                   </div>
                 </template>
               </div>
               <div class="colchart-axis">
-                <span x-text="shortDate(usageDailySeries()[0]?.date)"></span>
-                <span x-text="shortDate(usageDailySeries()[usageDailySeries().length - 1]?.date)"></span>
+                <span x-text="usageAxisStart"></span>
+                <span x-text="usageAxisEnd"></span>
               </div>
             </div>
           </div>
 
           <div class="section-header"><div><span class="eyebrow">Detail</span><h3>Daily rollups</h3></div></div>
           <div class="table-wrap">
-            <table x-show="usage?.rollups?.length">
+            <table x-show="hasUsageRollups">
               <thead><tr><th>Date</th><th>Model</th><th>Cost center</th><th class="num">Prompt</th><th class="num">Completion</th><th class="num">Cost</th><th class="num">Req</th></tr></thead>
               <tbody>
-                <template x-for="row in usage?.rollups ?? []" :key="row.usageDate + row.modelId + (row.costCenter || '')">
+                <template x-for="row in usageRollupRows" :key="row.key">
                   <tr>
-                    <td x-text="row.usageDate"></td><td x-text="row.modelId"></td><td x-text="row.costCenter ?? '—'"></td>
-                    <td class="num" x-text="formatNum(row.promptTokens)"></td><td class="num" x-text="formatNum(row.completionTokens)"></td>
-                    <td class="num" x-text="formatCost(row.totalCost, forecast?.currency || usage?.currency)"></td><td class="num" x-text="formatNum(row.requestCount)"></td>
+                    <td x-text="row.usageDate"></td><td x-text="row.modelId"></td><td x-text="row.costCenter"></td>
+                    <td class="num" x-text="row.promptTokens"></td><td class="num" x-text="row.completionTokens"></td>
+                    <td class="num" x-text="row.totalCost"></td><td class="num" x-text="row.requestCount"></td>
                   </tr>
                 </template>
               </tbody>
             </table>
           </div>
-          <div class="empty-state" x-show="!isLoading('usage') && !usage?.rollups?.length">
-            <span class="empty-state-icon icon" x-html="icon('bar-chart')"></span>
+          <div class="empty-state" x-show="usageRollupsEmpty">
+            <span class="empty-state-icon icon" x-html="icons.bar-chart"></span>
             <p>No usage in this date range. Try widening the range or clearing filters.</p>
           </div>
 
           <div class="section-header"><div><span class="eyebrow">Ledger</span><h3>Recent billing events</h3></div></div>
           <div class="table-wrap">
-            <table x-show="usageEvents?.length">
+            <table x-show="hasUsageEvents">
               <thead><tr><th>Time</th><th>Key</th><th>Assignee</th><th>Model</th><th class="num">Prompt</th><th class="num">Completion</th><th class="num">Cost</th></tr></thead>
               <tbody>
-                <template x-for="ev in usageEvents ?? []" :key="ev.id">
+                <template x-for="ev in usageEventRows" :key="ev.key">
                   <tr>
-                    <td x-text="formatTime(ev.recordedAt)"></td>
-                    <td><span class="tag" x-text="ev.keyPrefix ?? '—'"></span></td>
-                    <td x-text="ev.assignee ?? '—'"></td>
-                    <td x-text="ev.modelId ?? '—'"></td>
-                    <td class="num" x-text="formatNum(ev.promptTokens ?? '—')"></td><td class="num" x-text="formatNum(ev.completionTokens ?? '—')"></td>
-                    <td class="num" x-text="formatCost(ev.totalCost, forecast?.currency || usage?.currency)"></td>
+                    <td x-text="ev.time"></td>
+                    <td><span class="tag" x-text="ev.keyPrefix"></span></td>
+                    <td x-text="ev.assignee"></td>
+                    <td x-text="ev.modelId"></td>
+                    <td class="num" x-text="ev.promptTokens"></td><td class="num" x-text="ev.completionTokens"></td>
+                    <td class="num" x-text="ev.totalCost"></td>
                   </tr>
                 </template>
               </tbody>
             </table>
           </div>
-          <div class="empty-state" x-show="!isLoading('usage') && !usageEvents?.length">
-            <span class="empty-state-icon icon" x-html="icon('clock')"></span>
+          <div class="empty-state" x-show="usageEventsEmpty">
+            <span class="empty-state-icon icon" x-html="icons.clock"></span>
             <p>No billing events in this range.</p>
           </div>
         </section>
 
         <!-- ============================ ROUTING ============================ -->
-        <section x-show="tab === 'routing'" role="tabpanel" aria-labelledby="tab-routing" id="panel-routing">
+        <section x-show="isRouting" role="tabpanel" aria-labelledby="tab-routing" id="panel-routing">
           <div class="page-header">
             <div class="titles"><span class="eyebrow">Registry</span><h2>Routing</h2></div>
           </div>
           <nav class="sub-nav" aria-label="Routing views">
-            <button type="button" :class="{ active: routingSubTab === 'models' }" @click="setRoutingSubTab('models')">Models</button>
-            <button type="button" :class="{ active: routingSubTab === 'backends' }" @click="setRoutingSubTab('backends')">Backends &amp; health</button>
+            <template x-for="t in routingTabs" :key="t.key">
+              <button type="button" :class="t.cls" @click="t.select" x-text="t.label"></button>
+            </template>
           </nav>
 
           <!-- Models -->
-          <div x-show="routingSubTab === 'models'">
+          <div x-show="isRoutingModels">
             <div class="toolbar">
               <label class="filter-field narrow">
-                <span class="icon" x-html="icon('search')"></span>
-                <input x-model="modelsFilter" placeholder="id, url, alias…" aria-label="Search models" />
+                <span class="icon" x-html="icons.search"></span>
+                <input x-model="mdl.modelsFilter" placeholder="id, url, alias…" aria-label="Search models" />
               </label>
               <span class="spacer"></span>
               <a class="action secondary" href="/v1/models" target="_blank" rel="noopener">
-                <span class="icon" x-html="icon('external-link')"></span> /v1/models
+                <span class="icon" x-html="icons.external-link"></span> /v1/models
               </a>
-              <button type="button" class="action secondary" @click="loadModels()" :disabled="isLoading('routingModels')">
-                <span class="icon" x-html="icon('refresh')"></span> Refresh
+              <button type="button" class="action secondary" @click="loadModels" :disabled="loadingModels">
+                <span class="icon" x-html="icons.refresh"></span> Refresh
               </button>
-              <button type="button" class="action" @click="openModelDrawer()">
-                <span class="icon" x-html="icon('plus')"></span> Add model
+              <button type="button" class="action" @click="openNewModelDrawer">
+                <span class="icon" x-html="icons.plus"></span> Add model
               </button>
             </div>
             <div class="table-wrap">
-              <table x-show="filteredModelsList().length">
+              <table x-show="hasModelRows">
                 <thead>
                   <tr>
-                    <th class="sortable" @click="sortToggle('models','id')">ID<span x-html="sortIndicator('models','id')"></span></th>
+                    <th class="sortable" @click="sortBy.modelsId">ID<span x-html="sortIcon.modelsId"></span></th>
                     <th>Upstream URL</th><th>Type</th><th>Aliases</th><th class="num">Context</th><th class="num">Price in/out (1M)</th><th>Access</th><th>Credential</th><th></th>
                   </tr>
                 </thead>
                 <tbody>
-                  <template x-for="m in filteredModelsList()" :key="m.id">
+                  <template x-for="m in modelRows" :key="m.key">
                     <tr>
                       <td class="cell-code">
                         <span class="cell-code-inner">
                           <code x-text="m.id"></code>
-                          <button type="button" class="icon-btn" @click="copyText(m.id,'ID copied.')" title="Copy ID" aria-label="Copy ID"><span class="icon" x-html="icon('copy')"></span></button>
+                          <button type="button" class="icon-btn" @click="m.copyId" title="Copy ID" aria-label="Copy ID"><span class="icon" x-html="icons.copy"></span></button>
                         </span>
                       </td>
                       <td class="cell-code">
                         <span class="cell-code-inner">
                           <code x-text="m.url"></code>
-                          <button type="button" class="icon-btn" @click="copyText(m.url,'URL copied.')" title="Copy URL" aria-label="Copy URL"><span class="icon" x-html="icon('copy')"></span></button>
+                          <button type="button" class="icon-btn" @click="m.copyUrl" title="Copy URL" aria-label="Copy URL"><span class="icon" x-html="icons.copy"></span></button>
                         </span>
                       </td>
-                      <td><span class="tag" x-text="modelTypeLabel(resolveModelType(m))"></span></td>
-                      <td x-text="(m.aliases || []).join(', ') || '—'"></td>
-                      <td class="num" x-text="formatNum(m.maxContextLength)"></td>
-                      <td class="num" x-text="formatModelPrice(m.pricing)"></td>
-                      <td><span class="status-chip" :class="m.publicAccess ? 'warn' : 'ok'" x-text="m.publicAccess ? 'Public' : 'Key required'"></span></td>
-                      <td><span class="tag" x-show="m.hasUpstreamCredential">stored</span><span x-show="!m.hasUpstreamCredential" class="muted">—</span></td>
+                      <td><span class="tag" x-text="m.typeLabel"></span></td>
+                      <td x-text="m.aliases"></td>
+                      <td class="num" x-text="m.context"></td>
+                      <td class="num" x-text="m.price"></td>
+                      <td><span class="status-chip" :class="m.accessClass" x-text="m.accessText"></span></td>
+                      <td><span class="tag" x-show="m.hasCredential">stored</span><span x-show="m.noCredential" class="muted">—</span></td>
                       <td>
                         <span class="row-actions">
-                          <button type="button" class="icon-btn" @click="testModel(m.id)"
-                            :disabled="isLoading('modelTest') && modelTestDialog?.modelId === m.id"
-                            :aria-busy="isLoading('modelTest') && modelTestDialog?.modelId === m.id"
-                            title="Test model" aria-label="Test model"><span class="icon" x-html="icon('play')"></span></button>
-                          <button type="button" class="icon-btn" @click="openModelDrawer(m)" title="Edit model" aria-label="Edit model"><span class="icon" x-html="icon('edit')"></span></button>
-                          <button type="button" class="icon-btn danger" @click="confirmRemoveModel(m.id)" title="Remove model" aria-label="Remove model"><span class="icon" x-html="icon('trash')"></span></button>
+                          <button type="button" class="icon-btn" @click="m.test"
+                            :disabled="m.testing" :aria-busy="m.testing"
+                            title="Test model" aria-label="Test model"><span class="icon" x-html="icons.play"></span></button>
+                          <button type="button" class="icon-btn" @click="m.edit" title="Edit model" aria-label="Edit model"><span class="icon" x-html="icons.edit"></span></button>
+                          <button type="button" class="icon-btn danger" @click="m.remove" title="Remove model" aria-label="Remove model"><span class="icon" x-html="icons.trash"></span></button>
                         </span>
                       </td>
                     </tr>
@@ -548,128 +533,128 @@
                 </tbody>
               </table>
             </div>
-            <div class="empty-state" x-show="!isLoading('routingModels') && !filteredModelsList().length">
-              <span class="empty-state-icon icon" x-html="icon('cpu')"></span>
+            <div class="empty-state" x-show="modelsEmpty">
+              <span class="empty-state-icon icon" x-html="icons.cpu"></span>
               <p>No models registered. Add one to start routing inference traffic.</p>
-              <button type="button" class="action" @click="openModelDrawer()"><span class="icon" x-html="icon('plus')"></span> Add your first model</button>
+              <button type="button" class="action" @click="openNewModelDrawer"><span class="icon" x-html="icons.plus"></span> Add your first model</button>
             </div>
           </div>
 
           <!-- Backends -->
-          <div x-show="routingSubTab === 'backends'">
+          <div x-show="isRoutingBackends">
             <div class="toolbar">
               <label class="filter-field">
-                <span class="icon" x-html="icon('search')"></span>
-                <input x-model="backendsFilter" placeholder="model, url, alias…" aria-label="Filter backends" />
+                <span class="icon" x-html="icons.search"></span>
+                <input x-model="mdl.backendsFilter" placeholder="model, url, alias…" aria-label="Filter backends" />
               </label>
               <span class="spacer"></span>
-              <button type="button" class="action secondary" @click="loadBackends()" :disabled="isLoading('routingBackends')">
-                <span class="icon" x-html="icon('refresh')"></span> Refresh
+              <button type="button" class="action secondary" @click="loadBackends" :disabled="loadingBackends">
+                <span class="icon" x-html="icons.refresh"></span> Refresh
               </button>
             </div>
             <div class="table-wrap">
-              <table x-show="filteredBackends().length">
+              <table x-show="hasBackendRows">
                 <thead>
                   <tr>
-                    <th class="sortable" @click="sortToggle('backends','modelId')">Model<span x-html="sortIndicator('backends','modelId')"></span></th>
+                    <th class="sortable" @click="sortBy.backendsModel">Model<span x-html="sortIcon.backendsModel"></span></th>
                     <th>URL</th><th>Alias</th><th>Health</th><th></th>
                   </tr>
                 </thead>
                 <tbody>
-                  <template x-for="b in filteredBackends()" :key="b.modelId + (b.alias || '')">
+                  <template x-for="b in backendRows" :key="b.key">
                     <tr>
                       <td class="cell-code"><span class="cell-code-inner"><code x-text="b.modelId"></code></span></td>
                       <td class="cell-code"><span class="cell-code-inner"><code x-text="b.url"></code></span></td>
-                      <td x-text="b.alias ?? '—'"></td>
+                      <td x-text="b.alias"></td>
                       <td>
                         <span class="cell-health-inner">
-                          <span class="health-dot" :class="b.isHealthy ? 'dot-ok' : 'dot-fail'"></span>
-                          <span x-text="b.isHealthy ? 'Healthy' : 'Unhealthy'"></span>
+                          <span class="health-dot" :class="b.healthClass"></span>
+                          <span x-text="b.healthText"></span>
                         </span>
                       </td>
-                      <td><button type="button" class="action ghost sm" @click="editModelFromBackend(b.modelId)"><span class="icon" x-html="icon('edit')"></span> Edit</button></td>
+                      <td><button type="button" class="action ghost sm" @click="b.edit"><span class="icon" x-html="icons.edit"></span> Edit</button></td>
                     </tr>
                   </template>
                 </tbody>
               </table>
             </div>
-            <div class="empty-state" x-show="!isLoading('routingBackends') && !filteredBackends().length">
-              <span class="empty-state-icon icon" x-html="icon('server')"></span>
+            <div class="empty-state" x-show="backendsEmpty">
+              <span class="empty-state-icon icon" x-html="icons.server"></span>
               <p>No backends — register models first.</p>
             </div>
           </div>
         </section>
 
         <!-- ============================ API KEYS ============================ -->
-        <section x-show="tab === 'keys'" role="tabpanel" aria-labelledby="tab-keys" id="panel-keys">
+        <section x-show="isKeys" role="tabpanel" aria-labelledby="tab-keys" id="panel-keys">
           <div class="page-header">
             <div class="titles"><span class="eyebrow">Access</span><h2>API keys</h2></div>
-            <button type="button" class="action" @click="openKeysDrawer()"><span class="icon" x-html="icon('plus')"></span> Create key</button>
+            <button type="button" class="action" @click="openKeysDrawer"><span class="icon" x-html="icons.plus"></span> Create key</button>
           </div>
           <div class="toolbar">
             <label class="field-inline">Show
-              <select class="inline-select" x-model="keysFilter">
+              <select class="inline-select" x-model="mdl.keysFilter">
                 <option value="active">Active only</option>
                 <option value="revoked">Revoked only</option>
                 <option value="all">All</option>
               </select>
             </label>
             <label class="filter-field">
-              <span class="icon" x-html="icon('search')"></span>
-              <input x-model="keysTextFilter" placeholder="prefix, label, assignee…" aria-label="Filter keys" />
+              <span class="icon" x-html="icons.search"></span>
+              <input x-model="mdl.keysTextFilter" placeholder="prefix, label, assignee…" aria-label="Filter keys" />
             </label>
             <span class="spacer"></span>
-            <button type="button" class="action danger" @click="confirmRevokeSelected()" :disabled="isLoading('keys') || selectedActiveKeyCount() === 0">
-              <span class="icon" x-html="icon('trash')"></span> Revoke selected (<span x-text="selectedActiveKeyCount()"></span>)
+            <button type="button" class="action danger" @click="confirmRevokeSelected" :disabled="revokeSelectedDisabled">
+              <span class="icon" x-html="icons.trash"></span> Revoke selected (<span x-text="selectedKeyCountText"></span>)
             </button>
-            <button type="button" class="action secondary" @click="loadKeys()" :disabled="isLoading('keys')">
-              <span class="icon" x-html="icon('refresh')"></span> Refresh
+            <button type="button" class="action secondary" @click="loadKeys" :disabled="loadingKeys">
+              <span class="icon" x-html="icons.refresh"></span> Refresh
             </button>
           </div>
           <div class="table-wrap">
-            <table x-show="filteredKeys().length">
+            <table x-show="hasKeyRows">
               <thead>
                 <tr>
                   <th class="cell-select">
                     <input type="checkbox"
-                      :checked="allFilteredActiveKeysSelected()"
-                      :indeterminate.prop="someFilteredActiveKeysSelected() && !allFilteredActiveKeysSelected()"
-                      @change="toggleSelectAllFilteredKeys($event.target.checked)"
+                      :checked="keysHeaderChecked"
+                      :indeterminate.prop="keysHeaderIndeterminate"
+                      @change="onSelectAllKeys"
                       aria-label="Select all visible active API keys" />
                   </th>
-                  <th class="sortable" @click="sortToggle('keys','keyPrefix')">Prefix<span x-html="sortIndicator('keys','keyPrefix')"></span></th>
-                  <th class="sortable" @click="sortToggle('keys','label')">Label<span x-html="sortIndicator('keys','label')"></span></th>
-                  <th class="sortable" @click="sortToggle('keys','assignee')">Assignee<span x-html="sortIndicator('keys','assignee')"></span></th>
+                  <th class="sortable" @click="sortBy.keysPrefix">Prefix<span x-html="sortIcon.keysPrefix"></span></th>
+                  <th class="sortable" @click="sortBy.keysLabel">Label<span x-html="sortIcon.keysLabel"></span></th>
+                  <th class="sortable" @click="sortBy.keysAssignee">Assignee<span x-html="sortIcon.keysAssignee"></span></th>
                   <th>Role</th>
-                  <th class="sortable" @click="sortToggle('keys','lastUsedAt')">Last used<span x-html="sortIndicator('keys','lastUsedAt')"></span></th>
+                  <th class="sortable" @click="sortBy.keysLastUsed">Last used<span x-html="sortIcon.keysLastUsed"></span></th>
                   <th class="num">MTD cost</th>
                   <th class="num">MTD req</th>
-                  <th class="sortable" @click="sortToggle('keys','createdAt')">Created<span x-html="sortIndicator('keys','createdAt')"></span></th>
+                  <th class="sortable" @click="sortBy.keysCreated">Created<span x-html="sortIcon.keysCreated"></span></th>
                   <th>Status</th><th></th>
                 </tr>
               </thead>
               <tbody>
-                <template x-for="k in filteredKeys()" :key="k.id">
+                <template x-for="k in keyRows" :key="k.key">
                   <tr>
                     <td class="cell-select">
-                      <input type="checkbox" :disabled="k.isRevoked" :checked="isKeySelected(k.id)"
-                        @change="toggleKeySelection(k.id, $event.target.checked)" :aria-label="'Select key ' + k.keyPrefix" />
+                      <input type="checkbox" :disabled="k.revoked" :checked="k.selected"
+                        @change="k.onSelect" :aria-label="k.selectLabel" />
                     </td>
                     <td class="cell-code"><span class="cell-code-inner"><code x-text="k.keyPrefix"></code></span></td>
-                    <td x-text="k.label || '—'"></td>
-                    <td x-text="k.assignee || '—'"></td>
-                    <td><span class="tag role-tag" :class="{ admin: k.role === 'Admin' }" x-text="k.role"></span></td>
-                    <td x-text="k.lastUsedAt ? formatTime(k.lastUsedAt) : '—'"></td>
-                    <td class="num" x-text="keyMtdCost(k) != null ? formatCost(keyMtdCost(k), forecast?.currency) : '—'"></td>
-                    <td class="num" x-text="keyMtdRequests(k) ?? '—'"></td>
-                    <td x-text="formatTime(k.createdAt)"></td>
-                    <td><span class="status-chip" :class="k.isRevoked ? 'fail' : 'ok'" x-text="k.isRevoked ? 'Revoked' : 'Active'"></span></td>
+                    <td x-text="k.label"></td>
+                    <td x-text="k.assignee"></td>
+                    <td><span class="tag role-tag" :class="k.roleClass" x-text="k.role"></span></td>
+                    <td x-text="k.lastUsed"></td>
+                    <td class="num" x-text="k.mtdCost"></td>
+                    <td class="num" x-text="k.mtdRequests"></td>
+                    <td x-text="k.created"></td>
+                    <td><span class="status-chip" :class="k.statusClass" x-text="k.statusText"></span></td>
                     <td>
-                      <span class="row-actions" x-show="!k.isRevoked">
-                        <button type="button" class="icon-btn" @click="openKeyEditDrawer(k)" title="Edit key" aria-label="Edit key"><span class="icon" x-html="icon('edit')"></span></button>
-                        <button type="button" class="icon-btn" x-show="k.role !== 'Admin'" @click="openKeyAccess(k)" title="Model access" aria-label="Model access"><span class="icon" x-html="icon('cpu')"></span></button>
-                        <button type="button" class="icon-btn" @click="viewKeyUsage(k)" title="View usage" aria-label="View usage"><span class="icon" x-html="icon('bar-chart')"></span></button>
-                        <button type="button" class="icon-btn danger" @click="confirmRevoke(k.id)" title="Revoke key" aria-label="Revoke key"><span class="icon" x-html="icon('trash')"></span></button>
+                      <span class="row-actions" x-show="k.active">
+                        <button type="button" class="icon-btn" @click="k.edit" title="Edit key" aria-label="Edit key"><span class="icon" x-html="icons.edit"></span></button>
+                        <button type="button" class="icon-btn" x-show="k.canGrant" @click="k.access" title="Model access" aria-label="Model access"><span class="icon" x-html="icons.cpu"></span></button>
+                        <button type="button" class="icon-btn" @click="k.usage" title="View usage" aria-label="View usage"><span class="icon" x-html="icons.bar-chart"></span></button>
+                        <button type="button" class="icon-btn danger" @click="k.revoke" title="Revoke key" aria-label="Revoke key"><span class="icon" x-html="icons.trash"></span></button>
                       </span>
                     </td>
                   </tr>
@@ -677,14 +662,14 @@
               </tbody>
             </table>
           </div>
-          <div class="empty-state" x-show="!isLoading('keys') && !filteredKeys().length">
-            <span class="empty-state-icon icon" x-html="icon('key')"></span>
+          <div class="empty-state" x-show="keysEmpty">
+            <span class="empty-state-icon icon" x-html="icons.key"></span>
             <p>No API keys match the filter.</p>
           </div>
         </section>
 
         <!-- ============================ LOGS ============================ -->
-        <section x-show="tab === 'logs'" role="tabpanel" aria-labelledby="tab-logs" id="panel-logs">
+        <section x-show="isLogs" role="tabpanel" aria-labelledby="tab-logs" id="panel-logs">
           <div class="page-header">
             <div class="titles">
               <span class="eyebrow">Diagnostics</span><h2>Logs</h2>
@@ -695,164 +680,159 @@
 
           <div class="toolbar">
             <label class="filter-field">
-              <span class="icon" x-html="icon('search')"></span>
-              <input x-model="logsSearch" @input.debounce.400ms="loadLogs()"
+              <span class="icon" x-html="icons.search"></span>
+              <input x-model="mdl.logsSearch" @input.debounce.400ms="refreshLogs"
                 placeholder="model id, request id, message, code…" aria-label="Search logs" />
             </label>
-            <select class="inline-select" x-model="logsLevel" @change="loadLogs()" aria-label="Minimum severity">
+            <select class="inline-select" x-model="mdl.logsLevel" @change="refreshLogs" aria-label="Minimum severity">
               <option value="all">All severities</option>
               <option value="warning">Warning and above</option>
               <option value="error">Errors only</option>
             </select>
             <label class="checkbox field-inline">
-              <input type="checkbox" x-model="logsAutoRefresh" @change="syncPoll()" /> Auto-refresh
+              <input type="checkbox" x-model="mdl.logsAutoRefresh" @change="syncPoll" /> Auto-refresh
             </label>
             <span class="spacer"></span>
-            <button type="button" class="action secondary" @click="loadLogs()" :disabled="isLoading('logs')">
-              <span class="icon" x-html="icon('refresh')"></span> Refresh
+            <button type="button" class="action secondary" @click="refreshLogs" :disabled="loadingLogs">
+              <span class="icon" x-html="icons.refresh"></span> Refresh
             </button>
-            <button type="button" class="action danger" @click="confirmClearLogs()"
-              :disabled="isLoading('logs') || !logs.length">
-              <span class="icon" x-html="icon('trash')"></span> Clear
+            <button type="button" class="action danger" @click="confirmClearLogs" :disabled="clearLogsDisabled">
+              <span class="icon" x-html="icons.trash"></span> Clear
             </button>
           </div>
 
-          <p class="hint" x-show="logs.length >= logsPageSize">
+          <p class="hint" x-show="logsTruncated">
             Showing the newest <span x-text="logsPageSize"></span> matching entries. The gateway keeps at
             most <span x-text="logsCapacity"></span> in memory — narrow the search to see older ones.
           </p>
 
           <div class="table-wrap">
-            <table x-show="logs.length">
+            <table x-show="hasLogs">
               <thead>
                 <tr>
                   <th>Time</th><th>Severity</th><th>Source</th><th>Message</th><th>Model</th>
                 </tr>
               </thead>
-              <tbody>
-                <template x-for="l in logs" :key="l.id">
+              <!-- One tbody per entry — see the note on the requests table. -->
+              <template x-for="l in logRows" :key="l.key">
+                <tbody>
                   <tr class="request-row" role="button" tabindex="0"
-                    :class="logRowClass(l)"
-                    :aria-expanded="isLogExpanded(l.id) ? 'true' : 'false'"
-                    :aria-label="l.level + ' from ' + l.category + ': ' + l.message"
-                    @click="toggleLogDetails(l.id)"
-                    @keydown.enter.prevent="toggleLogDetails(l.id)"
-                    @keydown.space.prevent="toggleLogDetails(l.id)">
-                    <td x-text="formatTime(l.lastTimestampUtc || l.timestampUtc)"></td>
+                    :class="l.rowClass"
+                    :aria-expanded="l.ariaExpanded"
+                    :aria-label="l.ariaLabel"
+                    @click="l.toggle"
+                    @keydown.enter.prevent="l.toggle"
+                    @keydown.space.prevent="l.toggle">
+                    <td x-text="l.time"></td>
                     <td>
-                      <span class="tag" :class="logLevelClass(l.level)" x-text="l.level"></span>
-                      <span class="tag" x-show="l.repeats > 1" x-text="'×' + l.repeats"
+                      <span class="tag" :class="l.levelClass" x-text="l.level"></span>
+                      <span class="tag" x-show="l.showRepeats" x-text="l.repeatsText"
                         title="Identical events collapsed into this row"></span>
                     </td>
                     <td x-text="l.category"></td>
                     <td class="col-truncate" x-text="l.message" :title="l.message"></td>
-                    <td x-text="l.modelId ?? '—'"></td>
+                    <td x-text="l.modelId"></td>
                   </tr>
-                  <tr x-show="isLogExpanded(l.id)" class="request-detail-row">
+                  <tr x-show="l.expanded" class="request-detail-row">
                     <td colspan="5">
-                      <p class="log-hint" x-show="l.hint">
-                        <span class="icon" x-html="icon('lightbulb')"></span>
+                      <p class="log-hint" x-show="l.hasHint">
+                        <span class="icon" x-html="icons.lightbulb"></span>
                         <span x-text="l.hint"></span>
                       </p>
                       <dl class="request-detail-list">
-                        <div><dt>First seen</dt><dd x-text="formatTime(l.timestampUtc)"></dd></div>
+                        <div><dt>First seen</dt><dd x-text="l.firstSeen"></dd></div>
                         <div><dt>Occurrences</dt><dd x-text="l.repeats"></dd></div>
-                        <div><dt>Event code</dt><dd><code x-text="l.eventCode ?? '—'"></code></dd></div>
-                        <div><dt>Request ID</dt><dd><code x-text="l.requestId ?? '—'"></code></dd></div>
+                        <div><dt>Event code</dt><dd><code x-text="l.eventCode"></code></dd></div>
+                        <div><dt>Request ID</dt><dd><code x-text="l.requestId"></code></dd></div>
                       </dl>
-                      <p x-show="l.detail" style="margin-bottom:0"><strong>Detail</strong></p>
-                      <pre class="model-test-content" x-show="l.detail" x-text="l.detail"></pre>
+                      <p x-show="l.hasDetail" style="margin-bottom:0"><strong>Detail</strong></p>
+                      <pre class="model-test-content" x-show="l.hasDetail" x-text="l.detail"></pre>
                       <div class="row-actions" @click.stop>
-                        <button type="button" class="action secondary"
-                          @click="copyText(formatLogForCopy(l), 'Log entry copied.')">
-                          <span class="icon" x-html="icon('copy')"></span> Copy entry
+                        <button type="button" class="action secondary" @click="l.copy">
+                          <span class="icon" x-html="icons.copy"></span> Copy entry
                         </button>
                       </div>
                     </td>
                   </tr>
-                </template>
-              </tbody>
+                </tbody>
+              </template>
             </table>
-            <table x-show="isLoading('logs') && !logs.length">
+            <table x-show="logsSkeleton">
               <tbody><tr class="skeleton-row"><td colspan="5"></td></tr><tr class="skeleton-row"><td colspan="5"></td></tr><tr class="skeleton-row"><td colspan="5"></td></tr></tbody>
             </table>
           </div>
-          <div class="empty-state" x-show="!isLoading('logs') && !logs.length">
-            <span class="empty-state-icon icon" x-html="icon('file-text')"></span>
-            <p x-text="logsSearch || logsLevel !== 'all'
-              ? 'No log entries match this filter.'
-              : 'No warnings or errors recorded since the gateway started.'"></p>
+          <div class="empty-state" x-show="logsEmpty">
+            <span class="empty-state-icon icon" x-html="icons.file-text"></span>
+            <p x-text="logsEmptyText"></p>
           </div>
         </section>
 
         <!-- ============================ SETTINGS ============================ -->
-        <section x-show="tab === 'settings'" role="tabpanel" aria-labelledby="tab-settings" id="panel-settings">
+        <section x-show="isSettings" role="tabpanel" aria-labelledby="tab-settings" id="panel-settings">
           <div class="page-header">
             <div class="titles"><span class="eyebrow">Configuration</span><h2>Settings</h2></div>
-            <button type="button" class="action secondary" @click="loadSettings()" :disabled="isLoading('settings')">
-              <span class="icon" x-html="icon('refresh')"></span> Reload all
+            <button type="button" class="action secondary" @click="loadSettings" :disabled="loadingSettings">
+              <span class="icon" x-html="icons.refresh"></span> Reload all
             </button>
           </div>
 
           <nav class="sub-nav" aria-label="Settings sections">
-            <button type="button" :class="{ active: settingsSubTab === 'runtime' }" @click="setSettingsSubTab('runtime')">Runtime</button>
-            <button type="button" :class="{ active: settingsSubTab === 'limits' }" @click="setSettingsSubTab('limits')">Rate limits</button>
-            <button type="button" :class="{ active: settingsSubTab === 'cors' }" @click="setSettingsSubTab('cors')">CORS</button>
-            <button type="button" :class="{ active: settingsSubTab === 'access' }" @click="setSettingsSubTab('access')">Model access</button>
-            <button type="button" :class="{ active: settingsSubTab === 'observability' }" @click="setSettingsSubTab('observability')">Observability</button>
+            <template x-for="t in settingsTabs" :key="t.key">
+              <button type="button" :class="t.cls" @click="t.select" x-text="t.label"></button>
+            </template>
           </nav>
 
           <!-- Runtime -->
-          <div class="card" x-show="settingsSubTab === 'runtime'">
+          <div class="card" x-show="isSettingsRuntime">
             <span class="eyebrow">Config file</span>
             <h3>Runtime configuration</h3>
-            <p class="hint" x-show="configStatus">
-              Hot reload <strong x-text="configStatus?.hotReloadEnabled ? 'on' : 'off'"></strong> ·
-              File watch <strong x-text="configStatus?.watchEnabled ? 'on' : 'off'"></strong> ·
-              <strong x-text="configStatus?.modelCount ?? 0"></strong> models in file
+            <p class="hint" x-show="hasConfigStatus">
+              Hot reload <strong x-text="configHotReloadText"></strong> ·
+              File watch <strong x-text="configWatchText"></strong> ·
+              <strong x-text="configModelCountText"></strong> models in file
             </p>
             <p class="hint">Reloading applies <code>models.json</code> edits from disk. Live registry changes made via the API are preserved.</p>
             <div class="toolbar" style="margin-bottom: 0">
-              <button type="button" class="action" @click="confirmReloadConfig()" :disabled="isLoading('settings')"><span class="icon" x-html="icon('refresh')"></span> Reload config from disk</button>
-              <button type="button" class="action secondary" @click="loadConfigStatus()" :disabled="isLoading('settings')">Refresh status</button>
+              <button type="button" class="action" @click="confirmReloadConfig" :disabled="loadingSettings"><span class="icon" x-html="icons.refresh"></span> Reload config from disk</button>
+              <button type="button" class="action secondary" @click="loadConfigStatus" :disabled="loadingSettings">Refresh status</button>
             </div>
           </div>
 
           <!-- Rate limits -->
-          <div class="card" x-show="settingsSubTab === 'limits'">
+          <div class="card" x-show="isSettingsLimits">
             <span class="eyebrow">Throttling</span>
             <h3>Rate limits</h3>
             <p class="hint">Default tier and plan tiers (RPM, burst, max concurrent streams). Stored in the database and applied without a restart.</p>
             <p class="notice error" x-show="rateLimitsLoadError" x-text="rateLimitsLoadError"></p>
-            <p class="hint" x-show="!rateLimits && !rateLimitsLoadError && isLoading('settings')">Loading rate limits…</p>
+            <p class="hint" x-show="rateLimitsLoading">Loading rate limits…</p>
             <template x-if="rateLimits">
               <div>
                 <label class="checkbox">
-                  <input type="checkbox" x-model="rateLimits.enabled" />
+                  <input type="checkbox" x-model="mdl.rateLimits.enabled" />
                   Enforce rate limits
                 </label>
                 <p class="hint">Turning this off disables request-rate and concurrent-stream limits for every tenant and plan. The values below stay saved and take effect again when you re-enable it.</p>
-                <p class="notice error" x-show="!rateLimits.enabled">Rate limiting is disabled — clients can send unlimited requests. Quotas and budgets still apply.</p>
+                <p class="notice error" x-show="rateLimitsDisabled">Rate limiting is disabled — clients can send unlimited requests. Quotas and budgets still apply.</p>
                 <div class="rl-grid">
                   <span class="rl-name">Default</span>
-                  <label>RPM <input type="number" min="1" x-model.number="rateLimits.default.rpm" /></label>
-                  <label>Burst <input type="number" min="0" x-model.number="rateLimits.default.burst" /></label>
-                  <label>Max streams <input type="number" min="0" x-model.number="rateLimits.default.maxConcurrentStreams" /></label>
+                  <label>RPM <input type="number" min="1" x-model.number="mdl.rateLimits.default.rpm" /></label>
+                  <label>Burst <input type="number" min="0" x-model.number="mdl.rateLimits.default.burst" /></label>
+                  <label>Max streams <input type="number" min="0" x-model.number="mdl.rateLimits.default.maxConcurrentStreams" /></label>
                 </div>
-                <template x-for="(row, index) in rateLimitPlanRows" :key="index">
+                <template x-for="row in rateLimitPlanViewRows" :key="row.key">
                   <div class="rl-grid rl-plan">
                     <label>Plan slug <input type="text" x-model="row.slug" placeholder="standard" /></label>
                     <label>RPM <input type="number" min="1" x-model.number="row.rpm" /></label>
                     <label>Burst <input type="number" min="0" x-model.number="row.burst" /></label>
                     <label>Max streams <input type="number" min="0" x-model.number="row.maxConcurrentStreams" /></label>
-                    <button type="button" class="action secondary" @click="removeRateLimitPlanRow(index)"><span class="icon" x-html="icon('trash')"></span> Remove</button>
+                    <button type="button" class="action secondary" @click="row.remove"><span class="icon" x-html="icons.trash"></span> Remove</button>
                   </div>
                 </template>
                 <div class="toolbar" style="margin-top: var(--space-4); margin-bottom: 0">
-                  <button type="button" class="action secondary" @click="addRateLimitPlanRow()"><span class="icon" x-html="icon('plus')"></span> Add plan</button>
+                  <button type="button" class="action secondary" @click="addRateLimitPlanRow"><span class="icon" x-html="icons.plus"></span> Add plan</button>
                   <span class="spacer"></span>
-                  <button type="button" class="action secondary" @click="loadRateLimits()" :disabled="isLoading('settings')">Reload</button>
-                  <button type="button" class="action" @click="saveRateLimits()" :disabled="isLoading('settings')">Save rate limits</button>
+                  <button type="button" class="action secondary" @click="loadRateLimits" :disabled="loadingSettings">Reload</button>
+                  <button type="button" class="action" @click="saveRateLimits" :disabled="loadingSettings">Save rate limits</button>
                 </div>
                 <p class="field-error" x-show="rateLimitFieldError" x-text="rateLimitFieldError"></p>
               </div>
@@ -860,7 +840,7 @@
           </div>
 
           <!-- CORS -->
-          <div class="card" x-show="settingsSubTab === 'cors'">
+          <div class="card" x-show="isSettingsCors">
             <span class="eyebrow">Browser origins</span>
             <h3>CORS allowed origins</h3>
             <p class="hint">
@@ -869,20 +849,20 @@
               redeploys, also set <code>GATEWAY_CORS_ALLOWED_ORIGIN_*</code> via <code>docker-compose.cors.override.example.yml</code>.
             </p>
             <p class="notice error" x-show="corsLoadError" x-text="corsLoadError"></p>
-            <p class="hint" x-show="corsOrigins === null && !corsLoadError && isLoading('settings')">Loading CORS settings…</p>
-            <template x-if="corsOrigins !== null">
+            <p class="hint" x-show="corsLoading">Loading CORS settings…</p>
+            <template x-if="corsLoaded">
               <div>
-                <template x-for="(row, index) in corsOrigins" :key="index">
+                <template x-for="row in corsRows" :key="row.key">
                   <div class="repeat-row">
-                    <label>Origin <input type="text" x-model="corsOrigins[index]" placeholder="https://sadeghhp.github.io" /></label>
-                    <button type="button" class="action secondary" @click="removeCorsOriginRow(index)"><span class="icon" x-html="icon('trash')"></span> Remove</button>
+                    <label>Origin <input type="text" x-model="row.value" placeholder="https://sadeghhp.github.io" /></label>
+                    <button type="button" class="action secondary" @click="row.remove"><span class="icon" x-html="icons.trash"></span> Remove</button>
                   </div>
                 </template>
                 <div class="toolbar" style="margin-top: var(--space-3); margin-bottom: 0">
-                  <button type="button" class="action secondary" @click="addCorsOriginRow()"><span class="icon" x-html="icon('plus')"></span> Add origin</button>
+                  <button type="button" class="action secondary" @click="addCorsOriginRow"><span class="icon" x-html="icons.plus"></span> Add origin</button>
                   <span class="spacer"></span>
-                  <button type="button" class="action secondary" @click="loadCors()" :disabled="isLoading('settings')">Reload</button>
-                  <button type="button" class="action" @click="saveCors()" :disabled="isLoading('settings')">Save CORS</button>
+                  <button type="button" class="action secondary" @click="loadCors" :disabled="loadingSettings">Reload</button>
+                  <button type="button" class="action" @click="saveCors" :disabled="loadingSettings">Save CORS</button>
                 </div>
                 <p class="field-error" x-show="corsFieldError" x-text="corsFieldError"></p>
               </div>
@@ -890,40 +870,40 @@
           </div>
 
           <!-- Model access (tenant) -->
-          <div class="card" x-show="settingsSubTab === 'access'">
+          <div class="card" x-show="isSettingsAccess">
             <span class="eyebrow">Tenant ceiling</span>
             <h3>Tenant model access</h3>
             <p class="hint">Optional tenant ceiling. Inference keys have <strong>no model access by default</strong>; assign allowed models per key under API keys → model access.</p>
             <label class="checkbox">
-              <input type="checkbox" x-model="tenantGrantRestricted" @change="if (!tenantGrantRestricted) tenantGrantSelected = []" />
+              <input type="checkbox" x-model="mdl.tenantGrantRestricted" />
               Restrict tenant to selected models (empty = all registry models)
             </label>
             <template x-if="tenantGrantRestricted">
               <div class="grant-list">
-                <template x-for="m in models" :key="m.id">
+                <template x-for="m in tenantGrantRows" :key="m.key">
                   <label class="checkbox">
-                    <input type="checkbox" :value="m.id" :checked="tenantGrantSelected.includes(m.id)" @change="toggleTenantGrantModel(m.id)" />
+                    <input type="checkbox" :value="m.id" :checked="m.checked" @change="m.toggle" />
                     <span x-text="m.id"></span>
                   </label>
                 </template>
               </div>
             </template>
             <div class="toolbar" style="margin-top: var(--space-4); margin-bottom: 0">
-              <button type="button" class="action secondary" @click="loadTenantGrants()" :disabled="isLoading('settings')">Reload</button>
-              <button type="button" class="action" @click="saveTenantGrants()" :disabled="isLoading('settings')">Save tenant access</button>
+              <button type="button" class="action secondary" @click="loadTenantGrants" :disabled="loadingSettings">Reload</button>
+              <button type="button" class="action" @click="saveTenantGrants" :disabled="loadingSettings">Save tenant access</button>
             </div>
           </div>
 
           <!-- Observability -->
-          <div class="card" x-show="settingsSubTab === 'observability'">
+          <div class="card" x-show="isSettingsObservability">
             <span class="eyebrow">Endpoints</span>
             <h3>Observability</h3>
             <p class="hint">Raw operational endpoints (open in a new tab).</p>
             <div class="link-grid">
-              <a class="action secondary" href="/metrics" target="_blank" rel="noopener"><span class="icon" x-html="icon('activity')"></span> Prometheus /metrics</a>
-              <a class="action secondary" href="/health" target="_blank" rel="noopener"><span class="icon" x-html="icon('pulse')"></span> Health</a>
-              <a class="action secondary" href="/health/live" target="_blank" rel="noopener"><span class="icon" x-html="icon('pulse')"></span> Liveness</a>
-              <a class="action secondary" href="/health/ready" target="_blank" rel="noopener"><span class="icon" x-html="icon('check')"></span> Readiness</a>
+              <a class="action secondary" href="/metrics" target="_blank" rel="noopener"><span class="icon" x-html="icons.activity"></span> Prometheus /metrics</a>
+              <a class="action secondary" href="/health" target="_blank" rel="noopener"><span class="icon" x-html="icons.pulse"></span> Health</a>
+              <a class="action secondary" href="/health/live" target="_blank" rel="noopener"><span class="icon" x-html="icons.pulse"></span> Liveness</a>
+              <a class="action secondary" href="/health/ready" target="_blank" rel="noopener"><span class="icon" x-html="icons.check"></span> Readiness</a>
             </div>
           </div>
         </section>
@@ -932,16 +912,16 @@
   </div>
 
   <!-- Model drawer -->
-  <div class="drawer-backdrop" x-show="modelDrawerOpen" x-transition.opacity @click.self="closeModelDrawer()" role="presentation">
+  <div class="drawer-backdrop" x-show="modelDrawerOpen" x-transition.opacity @click.self="closeModelDrawer" role="presentation">
     <div class="drawer" role="dialog" aria-modal="true" aria-labelledby="model-drawer-title" @click.stop>
       <div class="drawer-header">
-        <div><span class="eyebrow">Registry</span><h3 id="model-drawer-title" x-text="editModel._existing ? 'Edit model' : 'Add model'"></h3></div>
-        <button type="button" class="icon-btn" @click="closeModelDrawer()" aria-label="Close"><span class="icon" x-html="icon('x')"></span></button>
+        <div><span class="eyebrow">Registry</span><h3 id="model-drawer-title" x-text="modelDrawerTitle"></h3></div>
+        <button type="button" class="icon-btn" @click="closeModelDrawer" aria-label="Close"><span class="icon" x-html="icons.x"></span></button>
       </div>
 
       <div class="drawer-section">
         <label>URL preset (optional)
-          <select @change="applyModelTemplate($event.target.value); $event.target.value=''">
+          <select @change="applyModelTemplateFromEvent">
             <option value="">— Choose preset —</option>
             <option value="lmstudio-docker">LM Studio (Docker)</option>
             <option value="lmstudio-native">LM Studio (native)</option>
@@ -953,24 +933,24 @@
             <option value="vllm-docker">vLLM (Docker)</option>
           </select>
         </label>
-        <label>Model name <input x-model="editModel.id" :disabled="!!editModel._existing" autocomplete="off" /></label>
+        <label>Model name <input x-model="mdl.editModel.id" :disabled="editingModel" autocomplete="off" /></label>
         <label>Model type
-          <select x-model="editModel.modelType">
+          <select x-model="mdl.editModel.modelType">
             <!-- An unrecognised stored type is offered verbatim, so saving preserves it rather than
                  silently coercing the model to text-generation. -->
-            <template x-if="isUnknownModelType(editModel.modelType)">
-              <option :value="editModel.modelType" x-text="editModel.modelType + ' (unrecognised)'"></option>
+            <template x-if="editModelTypeUnknown">
+              <option :value="editModel.modelType" x-text="editModelTypeUnknownLabel"></option>
             </template>
-            <template x-for="t in modelTypes()" :key="t.value">
+            <template x-for="t in modelTypeOptions" :key="t.value">
               <option :value="t.value" x-text="t.label"></option>
             </template>
           </select>
         </label>
-        <p class="hint">Decides which health check the Test button runs — <span x-text="modelTypes().find(t => t.value === editModel.modelType)?.testEndpoint || 'no automated test available'"></span>.</p>
-        <label>Upstream URL <input x-model="editModel.url" placeholder="https://openrouter.ai/api or http://host.docker.internal:1234" autocomplete="off" /></label>
+        <p class="hint">Decides which health check the Test button runs — <span x-text="modelTestEndpointHint"></span>.</p>
+        <label>Upstream URL <input x-model="mdl.editModel.url" placeholder="https://openrouter.ai/api or http://host.docker.internal:1234" autocomplete="off" /></label>
         <p class="hint">When the gateway runs in Docker, use <code>host.docker.internal</code> instead of <code>localhost</code> for local upstreams.</p>
         <label class="checkbox">
-          <input type="checkbox" x-model="editModel.publicAccess" />
+          <input type="checkbox" x-model="mdl.editModel.publicAccess" />
           Allow use without a 33pol API key (public access)
         </label>
         <p class="hint">Clients may send any placeholder in <code>Authorization: Bearer …</code>. Rate limits and quotas still apply. Use only for trusted or local upstreams.</p>
@@ -978,105 +958,105 @@
 
       <div class="drawer-section">
         <label for="model-upstream-api-key">
-          <span x-text="editModel._existing ? 'New API key (leave blank to keep current)' : 'API key (optional)'"></span>
-          <input id="model-upstream-api-key" :type="showModelApiKey ? 'text' : 'password'" x-model="editModel.apiKey"
+          <span x-text="modelApiKeyLabel"></span>
+          <input id="model-upstream-api-key" :type="modelApiKeyInputType" x-model="mdl.editModel.apiKey"
             autocomplete="new-password" placeholder="sk-or-… (OpenRouter) or sk-…" />
         </label>
-        <button type="button" class="action secondary sm" @click="showModelApiKey = !showModelApiKey">
-          <span class="icon" x-html="showModelApiKey ? icon('eye-off') : icon('eye')"></span>
-          <span x-text="showModelApiKey ? 'Hide' : 'Show'"></span>
+        <button type="button" class="action secondary sm" @click="toggleShowModelApiKey">
+          <span class="icon" x-html="modelApiKeyIcon"></span>
+          <span x-text="modelApiKeyToggleLabel"></span>
         </button>
-        <p class="hint" x-show="editModel._existing && editModel.hasUpstreamCredential && !(editModel.apiKey || '').trim()">Credential stored on the gateway. Enter a new key above to rotate.</p>
-        <label class="checkbox" x-show="editModel._existing && editModel.hasUpstreamCredential" style="margin-top: var(--space-3)">
-          <input type="checkbox" x-model="editModel.clearApiKey" /> Remove stored API key
+        <p class="hint" x-show="showStoredCredentialHint">Credential stored on the gateway. Enter a new key above to rotate.</p>
+        <label class="checkbox" x-show="showClearCredential" style="margin-top: var(--space-3)">
+          <input type="checkbox" x-model="mdl.editModel.clearApiKey" /> Remove stored API key
         </label>
       </div>
 
       <div class="drawer-section">
         <div class="grid">
           <label>Input price (per 1M tokens)
-            <input type="number" min="0" step="0.01" x-model="editModel.inputPricePerMillion" placeholder="e.g. 3.00" />
+            <input type="number" min="0" step="0.01" x-model="mdl.editModel.inputPricePerMillion" placeholder="e.g. 3.00" />
           </label>
           <label>Output price (per 1M tokens)
-            <input type="number" min="0" step="0.01" x-model="editModel.outputPricePerMillion" placeholder="e.g. 15.00" />
+            <input type="number" min="0" step="0.01" x-model="mdl.editModel.outputPricePerMillion" placeholder="e.g. 15.00" />
           </label>
         </div>
         <p class="hint">Used to cost usage on the Usage &amp; cost tab. Leave both blank to leave the model unpriced — its requests will record as zero cost.</p>
       </div>
 
-      <button type="button" class="action ghost" @click="showAdvancedModel = !showAdvancedModel" style="margin-bottom: var(--space-3)">
-        <span class="icon" x-html="showAdvancedModel ? icon('chevron-down') : icon('chevron-right')"></span>
-        <span x-text="showAdvancedModel ? 'Hide advanced' : 'Advanced options'"></span>
+      <button type="button" class="action ghost" @click="toggleAdvancedModel" style="margin-bottom: var(--space-3)">
+        <span class="icon" x-html="advancedModelIcon"></span>
+        <span x-text="advancedModelLabel"></span>
       </button>
       <div x-show="showAdvancedModel" class="drawer-section">
-        <label>Max context <input type="number" x-model.number="editModel.maxContextLength" min="1" /></label>
-        <label>Aliases (comma-separated) <input x-model="editModel.aliasesText" /></label>
+        <label>Max context <input type="number" x-model.number="mdl.editModel.maxContextLength" min="1" /></label>
+        <label>Aliases (comma-separated) <input x-model="mdl.editModel.aliasesText" /></label>
       </div>
 
-      <p class="warn-inline" x-show="urlLooksLocalhost()">localhost may fail from Docker — use host.docker.internal instead.</p>
+      <p class="warn-inline" x-show="urlLooksLocalhost">localhost may fail from Docker — use host.docker.internal instead.</p>
 
       <div class="drawer-footer">
         <p class="field-error" x-show="modelFieldError" x-text="modelFieldError"></p>
-        <button type="button" class="action" @click="saveModel()" :disabled="isLoading('routingModels')"
-          x-text="editModel._existing ? 'Save changes' : 'Add model'"></button>
+        <button type="button" class="action" @click="saveModel" :disabled="loadingModels"
+          x-text="modelSaveLabel"></button>
       </div>
     </div>
   </div>
 
   <!-- Key model access drawer -->
-  <div class="drawer-backdrop" x-show="keyAccessDrawerOpen" x-transition.opacity @click.self="closeKeyAccessDrawer()" role="presentation">
+  <div class="drawer-backdrop" x-show="keyAccessDrawerOpen" x-transition.opacity @click.self="closeKeyAccessDrawer" role="presentation">
     <div class="drawer" role="dialog" aria-modal="true" aria-labelledby="key-access-title" @click.stop>
       <div class="drawer-header">
         <div><span class="eyebrow">Access</span><h3 id="key-access-title">Model access</h3></div>
-        <button type="button" class="icon-btn" @click="closeKeyAccessDrawer()" aria-label="Close"><span class="icon" x-html="icon('x')"></span></button>
+        <button type="button" class="icon-btn" @click="closeKeyAccessDrawer" aria-label="Close"><span class="icon" x-html="icons.x"></span></button>
       </div>
-      <p class="hint" x-show="keyAccessEdit">Key <code x-text="keyAccessEdit?.keyPrefix"></code> — select the models this key may call. None selected = no access.</p>
+      <p class="hint" x-show="keyAccessEdit">Key <code x-text="keyAccessPrefix"></code> — select the models this key may call. None selected = no access.</p>
       <div class="grant-list">
-        <template x-for="m in models" :key="m.id">
+        <template x-for="m in keyAccessRows" :key="m.key">
           <label class="checkbox">
-            <input type="checkbox" :value="m.id" :checked="keyAccessSelected.includes(m.id)" @change="toggleKeyAccessModel(m.id)" />
+            <input type="checkbox" :value="m.id" :checked="m.checked" @change="m.toggle" />
             <span x-text="m.id"></span>
           </label>
         </template>
       </div>
       <div class="drawer-footer">
         <div class="modal-actions">
-          <button type="button" class="action secondary" @click="closeKeyAccessDrawer()">Cancel</button>
-          <button type="button" class="action" @click="saveKeyAccess()" :disabled="isLoading('keys')">Save access</button>
+          <button type="button" class="action secondary" @click="closeKeyAccessDrawer">Cancel</button>
+          <button type="button" class="action" @click="saveKeyAccess" :disabled="loadingKeys">Save access</button>
         </div>
       </div>
     </div>
   </div>
 
   <!-- Create key drawer -->
-  <div class="drawer-backdrop" x-show="keysDrawerOpen" x-transition.opacity @click.self="closeKeysDrawer()" role="presentation">
+  <div class="drawer-backdrop" x-show="keysDrawerOpen" x-transition.opacity @click.self="closeKeysDrawer" role="presentation">
     <div class="drawer" role="dialog" aria-modal="true" aria-labelledby="keys-drawer-title" @click.stop>
       <div class="drawer-header">
         <div><span class="eyebrow">Access</span><h3 id="keys-drawer-title">Create API key</h3></div>
-        <button type="button" class="icon-btn" @click="closeKeysDrawer()" :disabled="createdKey && !keysCreatedAck" aria-label="Close"><span class="icon" x-html="icon('x')"></span></button>
+        <button type="button" class="icon-btn" @click="closeKeysDrawer" :disabled="closeKeysDisabled" aria-label="Close"><span class="icon" x-html="icons.x"></span></button>
       </div>
-      <template x-if="!createdKey">
+      <template x-if="showCreateKeyForm">
         <div>
           <label>Role
-            <select x-model="newKey.role">
+            <select x-model="mdl.newKey.role">
               <option value="Inference">Inference</option>
               <option value="Admin">Admin</option>
             </select>
           </label>
-          <label>Label <input x-model="newKey.label" placeholder="e.g. prod-chatbot" /></label>
-          <label>Assignee <input x-model="newKey.assignee" placeholder="Person or team name" /></label>
-          <label>Cost center <input x-model="newKey.costCenter" placeholder="FinOps grouping (optional)" /></label>
-          <label>Description <textarea x-model="newKey.description" rows="2" placeholder="Optional notes"></textarea></label>
-          <button type="button" class="action" @click="createKey()" :disabled="isLoading('keys')" style="width:100%"><span class="icon" x-html="icon('plus')"></span> Create key</button>
+          <label>Label <input x-model="mdl.newKey.label" placeholder="e.g. prod-chatbot" /></label>
+          <label>Assignee <input x-model="mdl.newKey.assignee" placeholder="Person or team name" /></label>
+          <label>Cost center <input x-model="mdl.newKey.costCenter" placeholder="FinOps grouping (optional)" /></label>
+          <label>Description <textarea x-model="mdl.newKey.description" rows="2" placeholder="Optional notes"></textarea></label>
+          <button type="button" class="action" @click="createKey" :disabled="loadingKeys" style="width:100%"><span class="icon" x-html="icons.plus"></span> Create key</button>
         </div>
       </template>
       <template x-if="createdKey">
         <div>
           <p class="notice warn"><strong>Copy now — this secret is shown only once.</strong></p>
           <code class="secret-display" x-text="createdKey"></code>
-          <button type="button" class="action" @click="copyText(createdKey,'Secret copied.')" style="width:100%"><span class="icon" x-html="icon('copy')"></span> Copy secret</button>
+          <button type="button" class="action" @click="copyCreatedKey" style="width:100%"><span class="icon" x-html="icons.copy"></span> Copy secret</button>
           <label class="checkbox" style="margin-top: var(--space-4)">
-            <input type="checkbox" x-model="keysCreatedAck" /> I have saved this secret
+            <input type="checkbox" x-model="mdl.keysCreatedAck" /> I have saved this secret
           </label>
         </div>
       </template>
@@ -1084,83 +1064,83 @@
   </div>
 
   <!-- Key edit drawer -->
-  <div class="drawer-backdrop" x-show="keysEditDrawerOpen" x-transition.opacity @click.self="closeKeyEditDrawer()" role="presentation">
+  <div class="drawer-backdrop" x-show="keysEditDrawerOpen" x-transition.opacity @click.self="closeKeyEditDrawer" role="presentation">
     <div class="drawer" role="dialog" aria-modal="true" aria-labelledby="keys-edit-drawer-title" @click.stop>
       <div class="drawer-header">
         <div><span class="eyebrow">Access</span><h3 id="keys-edit-drawer-title">Edit API key</h3></div>
-        <button type="button" class="icon-btn" @click="closeKeyEditDrawer()" aria-label="Close"><span class="icon" x-html="icon('x')"></span></button>
+        <button type="button" class="icon-btn" @click="closeKeyEditDrawer" aria-label="Close"><span class="icon" x-html="icons.x"></span></button>
       </div>
       <p class="hint">Key <code x-text="keyEdit.keyPrefix"></code></p>
-      <label>Label <input x-model="keyEdit.label" placeholder="Short name" /></label>
-      <label>Assignee <input x-model="keyEdit.assignee" placeholder="Person or team name" /></label>
-      <label>Cost center <input x-model="keyEdit.costCenter" placeholder="FinOps grouping (optional)" /></label>
-      <label>Description <textarea x-model="keyEdit.description" rows="2" placeholder="Optional notes"></textarea></label>
+      <label>Label <input x-model="mdl.keyEdit.label" placeholder="Short name" /></label>
+      <label>Assignee <input x-model="mdl.keyEdit.assignee" placeholder="Person or team name" /></label>
+      <label>Cost center <input x-model="mdl.keyEdit.costCenter" placeholder="FinOps grouping (optional)" /></label>
+      <label>Description <textarea x-model="mdl.keyEdit.description" rows="2" placeholder="Optional notes"></textarea></label>
       <div class="drawer-footer">
         <div class="modal-actions">
-          <button type="button" class="action secondary" @click="closeKeyEditDrawer()">Cancel</button>
-          <button type="button" class="action" @click="saveKeyEdit()" :disabled="isLoading('keys')">Save changes</button>
+          <button type="button" class="action secondary" @click="closeKeyEditDrawer">Cancel</button>
+          <button type="button" class="action" @click="saveKeyEdit" :disabled="loadingKeys">Save changes</button>
         </div>
       </div>
     </div>
   </div>
 
   <!-- Model test dialog -->
-  <div class="modal-backdrop" x-show="modelTestDialog" @click.self="closeModelTestDialog()" x-transition.opacity role="presentation">
+  <div class="modal-backdrop" x-show="modelTest.open" @click.self="closeModelTestDialog" x-transition.opacity role="presentation">
     <div class="modal modal-test" role="dialog" aria-modal="true" aria-labelledby="model-test-title" @click.stop>
       <h3 id="model-test-title">Test model</h3>
-      <p class="muted">Model <code x-text="modelTestDialog?.modelId"></code> ·
-        <span class="tag" x-text="modelTypeLabel(resolveModelType((models || []).find(m => m.id === modelTestDialog?.modelId)))"></span>
+      <p class="muted">Model <code x-text="modelTest.modelId"></code> ·
+        <span class="tag" x-text="modelTest.typeLabel"></span>
       </p>
-      <p class="hint" x-text="modelTestHint(modelTestDialog?.modelId)"></p>
-      <p class="muted" x-show="modelTestDialog?.loading">Calling upstream…</p>
-      <div x-show="modelTestDialog?.result && !modelTestDialog?.loading">
-        <span class="test-result" :class="modelTestDialog?.result?.ok ? 'ok' : (modelTestDialog?.result?.supported === false ? 'warn' : 'bad')">
-          <span class="icon" x-html="icon(modelTestDialog?.result?.ok ? 'check-circle' : (modelTestDialog?.result?.supported === false ? 'alert-triangle' : 'x-circle'))"></span>
-          <span x-text="modelTestDialog?.result?.ok ? 'Success' : (modelTestDialog?.result?.supported === false ? 'Not available' : 'Failed')"></span>
-          <template x-if="modelTestDialog?.result?.endpoint"><span> · <code x-text="modelTestDialog.result.endpoint"></code></span></template>
-          <template x-if="modelTestDialog?.result?.latencyMs != null && modelTestDialog?.result?.supported !== false"><span> · <span x-text="modelTestDialog.result.latencyMs"></span> ms</span></template>
-          <template x-if="modelTestDialog?.result?.statusCode"><span> · HTTP <span x-text="modelTestDialog.result.statusCode"></span></span></template>
+      <p class="hint" x-text="modelTest.hint"></p>
+      <p class="muted" x-show="modelTest.loading">Calling upstream…</p>
+      <div x-show="modelTest.showResult">
+        <span class="test-result" :class="modelTest.resultClass">
+          <span class="icon" x-html="modelTest.resultIcon"></span>
+          <span x-text="modelTest.resultText"></span>
+          <template x-if="modelTest.hasEndpoint"><span> · <code x-text="modelTest.endpoint"></code></span></template>
+          <template x-if="modelTest.hasLatency"><span> · <span x-text="modelTest.latencyMs"></span> ms</span></template>
+          <template x-if="modelTest.hasStatusCode"><span> · HTTP <span x-text="modelTest.statusCode"></span></span></template>
         </span>
-        <p x-show="modelTestDialog?.result?.content" style="margin-bottom:0"><strong>Response</strong></p>
-        <pre class="model-test-content" x-show="modelTestDialog?.result?.content" x-text="modelTestDialog?.result?.content"></pre>
-        <p class="field-error" x-show="modelTestDialog?.result?.detail && !modelTestDialog?.result?.ok" x-text="modelTestDialog?.result?.detail"></p>
-        <p class="log-hint" x-show="modelTestDialog?.result?.hint && !modelTestDialog?.result?.ok">
-          <span class="icon" x-html="icon('lightbulb')"></span>
-          <span x-text="modelTestDialog?.result?.hint"></span>
+        <p x-show="modelTest.hasContent" style="margin-bottom:0"><strong>Response</strong></p>
+        <pre class="model-test-content" x-show="modelTest.hasContent" x-text="modelTest.content"></pre>
+        <p class="field-error" x-show="modelTest.showDetail" x-text="modelTest.detail"></p>
+        <p class="log-hint" x-show="modelTest.showHint">
+          <span class="icon" x-html="icons.lightbulb"></span>
+          <span x-text="modelTest.resultHint"></span>
         </p>
-        <p class="muted" x-show="!modelTestDialog?.result?.ok && modelTestDialog?.result?.supported !== false">
-          This failure was recorded in <a href="#logs" @click="closeModelTestDialog()">Logs</a> with the full upstream response.
+        <p class="muted" x-show="modelTest.showLogNote">
+          This failure was recorded in <a href="#logs" @click="closeModelTestDialog">Logs</a> with the full upstream response.
         </p>
       </div>
-      <p class="field-error" x-show="modelTestDialog?.error && !modelTestDialog?.loading" x-text="modelTestDialog?.error"></p>
+      <p class="field-error" x-show="modelTest.showError" x-text="modelTest.error"></p>
       <div class="modal-actions">
-        <button type="button" class="action secondary" @click="closeModelTestDialog()">Close</button>
-        <button type="button" class="action" @click="testModel(modelTestDialog?.modelId)" :disabled="modelTestDialog?.loading || !modelTestDialog?.modelId">Run again</button>
+        <button type="button" class="action secondary" @click="closeModelTestDialog">Close</button>
+        <button type="button" class="action" @click="rerunModelTest" :disabled="modelTest.rerunDisabled">Run again</button>
       </div>
     </div>
   </div>
 
   <!-- Confirm dialog -->
-  <div class="modal-backdrop" x-show="confirmDialog" @click.self="cancelConfirm()" x-transition.opacity role="presentation">
-    <div class="modal" role="alertdialog" :aria-labelledby="confirmDialog ? 'confirm-title' : null">
-      <h3 id="confirm-title" x-text="confirmDialog?.title"></h3>
-      <p class="muted" x-text="confirmDialog?.message"></p>
+  <div class="modal-backdrop" x-show="confirmView.open" @click.self="cancelConfirm" x-transition.opacity role="presentation">
+    <div class="modal" role="alertdialog" :aria-labelledby="confirmView.labelledBy">
+      <h3 id="confirm-title" x-text="confirmView.title"></h3>
+      <p class="muted" x-text="confirmView.message"></p>
       <div class="modal-actions">
-        <button type="button" class="action secondary" @click="cancelConfirm()">Cancel</button>
-        <button type="button" class="action" :class="{ danger: confirmDialog?.danger }" x-ref="confirmPrimary"
-          @click="confirmOk()" x-text="confirmDialog?.confirmLabel || 'Confirm'"></button>
+        <button type="button" class="action secondary" @click="cancelConfirm">Cancel</button>
+        <button type="button" class="action" :class="confirmView.confirmClass" x-ref="confirmPrimary"
+          @click="confirmOk" x-text="confirmView.confirmLabel"></button>
       </div>
     </div>
   </div>
 
   <!-- Revoke dialog -->
-  <div class="modal-backdrop" x-show="revokeConfirmId" @click.self="cancelRevoke()" x-transition.opacity role="presentation">
+  <div class="modal-backdrop" x-show="revokeConfirmId" @click.self="cancelRevoke" x-transition.opacity role="presentation">
     <div class="modal" role="alertdialog" aria-labelledby="revoke-title">
       <h3 id="revoke-title">Revoke API key?</h3>
       <p class="muted">This cannot be undone. Clients using this key will be rejected immediately.</p>
       <div class="modal-actions">
-        <button type="button" class="action secondary" @click="cancelRevoke()">Cancel</button>
-        <button type="button" class="action danger" @click="revokeKeyConfirmed()" :disabled="isLoading('keys')">Revoke key</button>
+        <button type="button" class="action secondary" @click="cancelRevoke">Cancel</button>
+        <button type="button" class="action danger" @click="revokeKeyConfirmed" :disabled="loadingKeys">Revoke key</button>
       </div>
     </div>
   </div>

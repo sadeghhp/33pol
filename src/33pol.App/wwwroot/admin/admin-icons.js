@@ -51,4 +51,9 @@
   window.AdminIcons = function (name) {
     return icons[name] || '';
   };
+
+  // The CSP-friendly Alpine build cannot evaluate `icon('copy')` in a template — only property
+  // paths — so the markup reaches the same SVGs through `icons.copy`. Hyphenated names still work:
+  // the evaluator splits the path on '.' and does a plain lookup, so `icons.bar-chart` resolves.
+  window.AdminIcons.map = icons;
 })();
