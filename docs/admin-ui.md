@@ -36,7 +36,9 @@ for `x-on`), and nothing else is parsed. So in `index.html`:
 - per-row values and actions are precomputed onto the row objects, so a template reaches
   `copyText(id)` as `@click="r.copyId"`;
 - `x-for` clones only the template's **first** element — a row plus its detail panel must share one
-  root (the requests and logs tables wrap each pair in its own `<tbody>`).
+  root (the requests and logs tables wrap each pair in its own `<tbody>`);
+- x-bind writes attributes and supports only the `.camel` modifier in 3.14.9, so a property with no
+  attribute behind it needs a directive — hence `x-indeterminate` for the select-all checkbox.
 
 `AdminAssetSecurityTests.AdminIndex_UsesOnlyExpressionsTheCspEvaluatorCanResolve` enforces this, so a
 directive that the evaluator could not resolve fails the build instead of the operator's browser.

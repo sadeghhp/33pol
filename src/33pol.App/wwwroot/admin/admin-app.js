@@ -2428,4 +2428,12 @@ function adminApp() {
 // x-data="adminApp" through Alpine's data registry, and it cannot evaluate the call x-data="adminApp()".
 document.addEventListener('alpine:init', () => {
   Alpine.data('adminApp', adminApp);
+
+  // `indeterminate` is a DOM property with no HTML attribute behind it, and x-bind in Alpine 3.14.9
+  // implements only the `.camel` modifier — `:indeterminate.prop` writes a dead attribute, leaving
+  // the select-all checkbox stuck between "all" and "none". This writes the property itself.
+  Alpine.directive('indeterminate', (el, { expression }, { effect, evaluateLater }) => {
+    const read = evaluateLater(expression);
+    effect(() => read(value => { el.indeterminate = !!value; }));
+  });
 });

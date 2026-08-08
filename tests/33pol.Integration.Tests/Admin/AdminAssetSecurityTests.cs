@@ -157,6 +157,57 @@ public sealed class AdminAssetSecurityTests
             "a zero-argument method or a {get,set} pair on adminApp; found: " + string.Join(" | ", offenders));
     }
 
+    /// <summary>
+    /// Shape is not enough: <c>x-text="totalErrorsTxt"</c> is a perfectly well-formed path that
+    /// resolves to nothing. Because the CSP evaluator fails silently — a warning in the operator's
+    /// console and an empty binding — a renamed getter would otherwise ship green. This checks that
+    /// the root of every bound path is either an x-for alias declared in the same markup or a member
+    /// declared on adminApp.
+    /// </summary>
+    [Fact]
+    public async Task AdminIndex_BindsOnlyToNamesDeclaredOnAdminApp()
+    {
+        using var factory = GatewayWebApplicationFactory.Create();
+        using var client = factory.CreateClient();
+
+        var html = Regex.Replace(await GetIndexAsync(client), "<!--.*?-->", string.Empty, RegexOptions.Singleline);
+        var app = await client.GetStringAsync("/admin/admin-app.js");
+
+        // Members of the object literal adminApp() returns: `foo:`, `foo()`, `get foo()`, `async foo()`.
+        var declared = Regex
+            .Matches(app, @"(?m)^\s{4}(?:async\s+|get\s+|set\s+)?(?<name>[A-Za-z_$][A-Za-z0-9_$]*)\s*[:(]")
+            .Select(m => m.Groups["name"].Value)
+            .ToHashSet(StringComparer.Ordinal);
+
+        // Loop aliases are scoped names, not members; x-data names the registered Alpine component.
+        var locals = Regex
+            .Matches(html, @"x-for=""\(?\s*(?<item>[A-Za-z_$][A-Za-z0-9_$]*)\s*(?:,\s*(?<index>[A-Za-z_$][A-Za-z0-9_$]*))?")
+            .SelectMany(m => new[] { m.Groups["item"].Value, m.Groups["index"].Value })
+            .Where(name => name.Length > 0)
+            .Concat(Regex.Matches(html, @"x-data=""(?<name>[A-Za-z_$][A-Za-z0-9_$]*)""").Select(m => m.Groups["name"].Value))
+            .ToHashSet(StringComparer.Ordinal);
+
+        var unresolved = Regex
+            .Matches(html, @"\s(?<name>(?:x-|@|:)[A-Za-z0-9_:.\-]*)=""(?<value>[^""]*)""")
+            .Where(m => !m.Groups["name"].Value.StartsWith("x-ref", StringComparison.Ordinal))
+            .Select(m => new
+            {
+                Directive = m.Groups["name"].Value,
+                // x-for's own `item in items` shape: only the collection is a path.
+                Root = Regex.Replace(m.Groups["value"].Value.Trim(), @"^.*\s(?:in|of)\s+", string.Empty)
+                    .Split('.')[0]
+            })
+            .Where(binding => binding.Root.Length > 0)
+            .Where(binding => !declared.Contains(binding.Root) && !locals.Contains(binding.Root))
+            .Select(binding => binding.Directive + " → " + binding.Root)
+            .Distinct()
+            .ToList();
+
+        unresolved.Should().BeEmpty(
+            "every bound path must start at an x-for alias or a member of adminApp, or the CSP " +
+            "evaluator resolves it to undefined at runtime; found: " + string.Join(" | ", unresolved));
+    }
+
     [Fact]
     public async Task AdminAssets_CarrySupportingSecurityHeaders()
     {

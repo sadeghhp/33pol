@@ -21,7 +21,7 @@
   <script defer src="admin-icons.js?v=9"></script>
   <script defer src="admin-errors.js?v=7"></script>
   <script defer src="admin-store.js?v=8"></script>
-  <script defer src="admin-app.js?v=21"></script>
+  <script defer src="admin-app.js?v=22"></script>
   <script defer src="vendor/alpine-csp-3.14.9.min.js"></script>
 </head>
 <body x-data="adminApp" x-cloak @keydown.window="onModalKeydown">
@@ -618,7 +618,7 @@
                   <th class="cell-select">
                     <input type="checkbox"
                       :checked="keysHeaderChecked"
-                      :indeterminate.prop="keysHeaderIndeterminate"
+                      x-indeterminate="keysHeaderIndeterminate"
                       @change="onSelectAllKeys"
                       aria-label="Select all visible active API keys" />
                   </th>
