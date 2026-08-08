@@ -42,7 +42,7 @@ Behind the proxy sits a **modular monolith**: hashed API keys and tenants, per-k
 | FinOps rollups, exports, budget webhooks | SSE streaming end-to-end |
 | Grafana dashboards and alert rules; optional `publicAccess` for local upstreams | Health probes for Kubernetes |
 
-> **Status:** Phases 1–5 are **code-complete**; GA sign-off is pending (staging perf, SDK smoke, Compose E2E, approvals). Operator config (`models.json`, `upstream-secrets.enc`, `.env`) is gitignored for public-repo hygiene — see [security.md](./docs/security.md). See [implementation plan](./docs/implementation-plan/README.md), [gap report](./docs/implementation-plan-gap-report.md), and [GA checklist](./docs/implementation-plan/GA-CHECKLIST.md).
+> **Status:** `v2.0.0` is tagged and released; see [CHANGELOG.md](./CHANGELOG.md) for what has landed since. Sustained-load validation against a production-like upstream has not been run — treat capacity numbers as unverified and see [perf/README.md](./perf/README.md). Operator config (`models.json`, `upstream-secrets.enc`, `.env`) is gitignored for public-repo hygiene — see [security.md](./docs/security.md).
 
 ---
 
@@ -67,7 +67,7 @@ Peers solve the same problem—**one OpenAI-shaped API in front of many backends
 | **FinOps** | Usage events, rollups, CSV/JSON export, webhooks | Strong in observability-first products; LiteLLM has spend controls |
 | **Deploy** | Compose profiles, Helm, installer script, k6 gates | Mature across ecosystems; Kong/Envoy win at large K8s mesh scale |
 
-**Not in scope for v2 GA** (by design): TLS termination at the gateway (use ingress), multi-URL load balancing per model, hosted SaaS control plane / Stripe, default prompt logging. See [executive proposal](./docs/implementation-plan/00-executive-proposal.md).
+**Not in scope for v2** (by design): TLS termination at the gateway (use ingress), multi-URL load balancing per model, hosted SaaS control plane / Stripe, default prompt logging, and horizontal scaling — the gateway is a single writer against one embedded SQLite file, so it scales vertically only ([integrations.md](./docs/integrations.md#kubernetes)).
 
 ---
 
@@ -153,7 +153,7 @@ Serilog → Routing → CORS → RequestId → Auth → Authorization
 | **Control** | `/admin/api/*`, `/admin` UI | Admin key only |
 | **Ops** | `/health/live`, `/health/ready`, `/metrics`, `/stats` | None (probes / scrape) |
 
-Deeper architecture: [docs/architecture.md](./docs/architecture.md) · [solution layout](./docs/implementation-plan/01-solution-architecture.md).
+Deeper architecture: [docs/architecture.md](./docs/architecture.md).
 
 ---
 
@@ -473,11 +473,13 @@ dotnet test tests/33pol.Conformance.Tests
 | Remote GPU / server deploy | [docs/deploy-remote-gpu.md](./docs/deploy-remote-gpu.md) |
 | LM Studio walkthrough | [docs/lm-studio-with-33pol.md](./docs/lm-studio-with-33pol.md) |
 | Error catalog | [docs/errors.md](./docs/errors.md) |
-| Implementation plan (phases 1–5) | [docs/implementation-plan/README.md](./docs/implementation-plan/README.md) |
-| GA sign-off checklist | [docs/ga-signoff.md](./docs/ga-signoff.md) · [GA-CHECKLIST.md](./docs/implementation-plan/GA-CHECKLIST.md) |
+| Observability & metric catalog | [docs/observability.md](./docs/observability.md) |
+| FinOps & billing | [docs/finops.md](./docs/finops.md) |
+| Operator console | [docs/operator-console.md](./docs/operator-console.md) |
+| Backup & restore | [docs/runbooks/backup-restore.md](./docs/runbooks/backup-restore.md) |
+| Incident runbooks | [docs/runbooks/](./docs/runbooks/) |
+| Performance & load testing | [perf/README.md](./perf/README.md) |
 | Releases (tags, GHCR, tarball) | [docs/release.md](./docs/release.md) · [CHANGELOG.md](./CHANGELOG.md) |
-| v1 behavior reference | [docs/old-version/](./docs/old-version/) |
-| Testing strategy | [docs/implementation-plan/02-testing-strategy.md](./docs/implementation-plan/02-testing-strategy.md) |
 
 ---
 
@@ -485,7 +487,7 @@ dotnet test tests/33pol.Conformance.Tests
 
 > **Open source — harden before production on the public internet**
 >
-> This repository is intended to be **public** for learning, contribution, and self-hosted deployments. It has **not** been fully validated for untrusted, internet-facing, or multi-tenant production workloads. GA sign-off items (staging performance, full E2E in Compose, SDK smoke runs, and formal approvals) may still be open — see [GA checklist](./docs/implementation-plan/GA-CHECKLIST.md).
+> This repository is intended to be **public** for learning, contribution, and self-hosted deployments. It has **not** been fully validated for untrusted, internet-facing, or multi-tenant production workloads. In particular, sustained-load and soak testing against a production-like upstream has not been run — see [perf/README.md](./perf/README.md) before making any capacity commitment.
 >
 > Before any production or customer-facing deployment: copy `models.json.example` and `upstream-secrets.enc.example`, rotate all secrets (never use dev defaults), terminate TLS at the edge, configure CORS for browser clients, and follow [security.md](./docs/security.md) (including the [going-public checklist](./docs/security.md#going-public-checklist)). **Do not** expose admin endpoints or bootstrap credentials to the public internet. Operator registry and encrypted upstream files must stay out of Git.
 
@@ -500,7 +502,7 @@ dotnet test tests/33pol.Conformance.Tests
 | **[Taiga](https://taiga.io/) + MCP** | Backlog, epics, user stories, tasks, and sprint status on project `sadeghhp-33pol` — work is planned and tracked in Taiga before and after each implementation step |
 | **[Cursor](https://cursor.com/)** | AI pair-programming in the IDE: architecture-aligned changes, unit tests per library, and docs/runbooks alongside code |
 
-The [implementation plan](./docs/implementation-plan/README.md) (phases 1–5) is the source of truth for scope; Taiga tasks map to those phases. Cursor agents use the Taiga MCP server to sync story/task state, comment with test results, and keep delivery aligned with the board — not ad-hoc markdown backlogs.
+Scope and backlog live in Taiga, not in markdown. Cursor agents use the Taiga MCP server to sync story/task state, comment with test results, and keep delivery aligned with the board — so this repository deliberately carries no plan, roadmap, or backlog files.
 
 ---
 
@@ -508,6 +510,6 @@ The [implementation plan](./docs/implementation-plan/README.md) (phases 1–5) i
 
 **33pol** — route every model through one gateway, with policy and visibility built in.
 
-[Report issues](https://github.com/sadeghhp/33pol/issues) · [Implementation plan](./docs/implementation-plan/README.md) · [Deploy guide](./deploy/README.md)
+[Report issues](https://github.com/sadeghhp/33pol/issues) · [Architecture](./docs/architecture.md) · [Deploy guide](./deploy/README.md)
 
 </div>

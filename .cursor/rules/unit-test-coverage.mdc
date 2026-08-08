@@ -27,7 +27,7 @@ If unsure, add a test.
 
 ## .NET conventions (this repo)
 
-Solution layout matches [01-solution-architecture.md](../../docs/implementation-plan/01-solution-architecture.md) and [02-testing-strategy.md](../../docs/implementation-plan/02-testing-strategy.md):
+Solution layout (see [docs/architecture.md](../../docs/architecture.md); the dependency rules are enforced by `tests/33pol.Architecture.Tests`):
 
 - **One test project per library:** `33pol.Core.Tests` → `33pol.Core`, `33pol.Registry.Tests` → `33pol.Registry`, etc.
 - **Cross-cutting:** `33pol.Integration.Tests` (HTTP surface), `33pol.Architecture.Tests` (NetArchTest)
@@ -36,8 +36,6 @@ Solution layout matches [01-solution-architecture.md](../../docs/implementation-
 - Name tests clearly: `MethodName_State_ExpectedResult`
 - Use Arrange / Act / Assert; one logical assertion focus per test when practical
 - Prefer testing public API; use `internal` + `InternalsVisibleTo` only when necessary
-
-Until the multi-project solution exists (Phase 1), a single `33pol.Tests` referencing `33pol.csproj` is acceptable; migrate to per-library projects when Phase 1 creates the solution structure.
 
 ## Coverage expectations
 

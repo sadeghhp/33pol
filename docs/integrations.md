@@ -131,7 +131,7 @@ BASE_URL=http://localhost:8080 MODEL=gpt-local k6 run perf/k6/scripts/smoke.js
 BASE_URL=http://localhost:8080 API_KEY=sk-admin k6 run perf/k6/scripts/inference-rps.js
 ```
 
-See [perf/README.md](../perf/README.md) and [implementation-plan/03-performance-and-load-testing.md](./implementation-plan/03-performance-and-load-testing.md).
+See [perf/README.md](../perf/README.md).
 
 ## Ingress and SSE (streaming)
 
@@ -185,4 +185,4 @@ export OPENAI_BASE_URL=http://localhost:8080/v1 OPENAI_API_KEY=sk-your-key MODEL
 python3 perf/scripts/sdk-smoke.py
 ```
 
-See [ga-signoff.md](./ga-signoff.md) for the full checklist.
+See [perf/README.md](../perf/README.md) for the full verification suite.

@@ -40,6 +40,7 @@ All notable changes to this project are documented here. Version tags follow [Se
 - **Webhook signature format.** `X-33pol-Signature` is now `t=<unix>,v1=<hmac-sha256 of "<unix>.<body>">` instead of a bare body HMAC, and `X-33pol-Timestamp` / `X-33pol-Event` are sent alongside. Receivers must be updated. The previous format signed only the body, so every delivery was replayable indefinitely.
 - **Clearing tenant model grants requires `allowAllModels: true`.** An empty tenant list removes the tenant ceiling (allowing every registered model) rather than revoking access; the confirmation flag makes that deliberate.
 - Client request headers are forwarded upstream from an allowlist (`Accept`, `User-Agent`, `OpenAI-Beta`, `OpenAI-Organization`, provider version headers). Previously none were forwarded at all.
+- `GET /` reports `documentation.readme` instead of `documentation.implementationPlan`, and `documentation.architecture` now points at `docs/architecture.md`. Both previous paths pointed at planning documents that have been removed.
 
 ### Added
 
@@ -64,4 +65,4 @@ All notable changes to this project are documented here. Version tags follow [Se
 
 ### Notes
 
-- GA sign-off: local Compose E2E and k6 complete; staging perf items tracked in [GA-CHECKLIST.md](docs/implementation-plan/GA-CHECKLIST.md).
+- Verified on local Docker Compose (E2E + k6). Sustained-load validation against a production-like upstream is still recommended before a capacity commitment — see [perf/README.md](perf/README.md).

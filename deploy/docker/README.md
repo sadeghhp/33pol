@@ -136,7 +136,7 @@ Full walkthrough (LM Studio setup, admin UI, inference keys, curl + Python, trou
 
 **[docs/lm-studio-with-33pol.md](../../docs/lm-studio-with-33pol.md)**
 
-**Operator console:** Disabled in the gateway container (`Gateway:OperatorConsole:Enabled=false`). Use HTTP `/admin` and Grafana. For a TTY-only local experiment, see [docs/implementation-plan/08-operator-console.md](../../docs/implementation-plan/08-operator-console.md).
+**Operator console:** Disabled in the gateway container (`Gateway:OperatorConsole:Enabled=false`). Use HTTP `/admin` and Grafana. For a TTY-only local experiment, see [docs/operator-console.md](../../docs/operator-console.md).
 
 ## Alternate path (this directory)
 

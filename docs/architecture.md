@@ -1,6 +1,6 @@
 # 33pol Gateway — Architecture
 
-High-level view of the modular monolith. Normative detail: [implementation-plan/01-solution-architecture.md](./implementation-plan/01-solution-architecture.md).
+High-level view of the modular monolith. The boundaries below are enforced by `tests/33pol.Architecture.Tests` (NetArchTest), not just documented.
 
 ## Overview
 

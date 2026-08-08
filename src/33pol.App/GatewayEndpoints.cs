@@ -16,8 +16,8 @@ internal static class GatewayEndpoints
             version,
             documentation = new
             {
-                implementationPlan = "docs/implementation-plan/README.md",
-                architecture = "docs/implementation-plan/01-solution-architecture.md",
+                readme = "README.md",
+                architecture = "docs/architecture.md",
             },
         });
     }

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# G-06 local substitute: metrics path (Prometheus + Grafana). Traces waived — see docs/ga-signoff-no-staging.md.
+# Local metrics-path check (Prometheus + Grafana). Trace export is not verified here. See perf/README.md.
 set -euo pipefail
 
 GATEWAY_PORT="${GATEWAY_PORT:-8080}"

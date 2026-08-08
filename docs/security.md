@@ -122,18 +122,18 @@ Admin mutations invoke `IAuditLogger` (structured logs). Durable audit retention
 
 CI runs `dotnet list package --vulnerable --include-transitive` on every PR/main build.
 
-Central pins (2026-05-26):
+`CentralPackageTransitivePinningEnabled` is on in `Directory.Packages.props`, so transitive packages can be pinned to patched versions without waiting for the parent to update. Current advisory-driven pins live there with the GHSA id in a comment beside each — read that file rather than a copy here, which drifts:
 
-| Package | Version | Reason |
-|---------|---------|--------|
-| `OpenTelemetry.Api` | 1.15.3 | GHSA-g94r-2vxg-569j |
-| `System.Security.Cryptography.Xml` | 10.0.8 | EF transitive XML crypto advisories |
-
-`CentralPackageTransitivePinningEnabled` is on in `Directory.Packages.props`.
+| Package | Reason |
+|---------|--------|
+| `OpenTelemetry.Api` | GHSA-g94r-2vxg-569j |
+| `System.Security.Cryptography.Xml` | EF transitive XML crypto advisories |
+| `SQLitePCLRaw.*` | GHSA-2m69-gcr7-jv3q (native SQLite library) |
+| `Microsoft.OpenApi` | GHSA-v5pm-xwqc-g5wc |
 
 ## Optional penetration test (external)
 
-Engage a third party before GA or on an annual cadence. Suggested scope:
+Engage a third party on an annual cadence, or before first exposing the gateway to untrusted traffic. Suggested scope:
 
 | In scope | Out of scope (unless agreed) |
 |----------|------------------------------|

@@ -26,9 +26,11 @@ All gateway errors use this JSON shape:
 |--------|------|
 | `X-Request-Id` | Every response (echoes client value when provided, otherwise `req_<guid>`) |
 | `X-33pol-Error-Code` | Error responses; mirrors `error.code` |
-| `Retry-After` | Phase 4: `429` responses when retry is meaningful |
+| `Retry-After` | `429` responses when retry timing is known |
 
-## Phase 3 codes (implemented)
+Every code below is implemented. `Phase` in `GatewayErrorDefinition` records which delivery phase introduced the code and is used by `GatewayErrorCatalog.IsPhase3`; it does not indicate readiness.
+
+## Phase 3 codes
 
 | HTTP | `type` | `code` |
 |------|--------|--------|
@@ -68,5 +70,3 @@ Responses include `Retry-After` when retry timing is known (RPM window reset).
 - Canonical definitions live in `GatewayErrorCatalog` (`33pol.Core`).
 - Responses are produced by `OpenAiErrorResponseWriter` and written through `IErrorResponseWriter`.
 - Golden JSON fixtures for every Phase 3 code are in `tests/33pol.Core.Tests/TestData/`.
-
-See also [06-sdk-error-catalog.md](implementation-plan/06-sdk-error-catalog.md) for planning context.

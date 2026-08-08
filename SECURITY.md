@@ -17,7 +17,7 @@ Full guidance: [docs/security.md](docs/security.md).
 
 ## Self-hosted deployment
 
-33pol is **open source** for inspection and self-hosting. Running a gateway on the public internet requires TLS, strong secrets, CORS configuration, network isolation for `/admin`, and your own security review. See the README disclaimer and [GA checklist](docs/implementation-plan/GA-CHECKLIST.md) for maturity notes.
+33pol is **open source** for inspection and self-hosting. Running a gateway on the public internet requires TLS, strong secrets, CORS configuration, network isolation for `/admin`, and your own security review. See the README disclaimer and [docs/security.md](docs/security.md) for maturity notes.
 
 ## Credential revocation and cache propagation
 

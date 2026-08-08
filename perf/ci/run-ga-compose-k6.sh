@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # G-01 local substitute when no staging URL: shortened k6 GA suite on Docker Compose.
-# Production staging thresholds are NOT represented — see docs/ga-signoff-no-staging.md.
+# Production-like thresholds are NOT represented — Compose uses a mock upstream. See perf/README.md.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"

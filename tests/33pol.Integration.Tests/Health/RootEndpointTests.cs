@@ -25,7 +25,8 @@ public sealed class RootEndpointTests : IClassFixture<WebApplicationFactory<Prog
         body.Version.Should().NotBeNullOrWhiteSpace();
         body.Version.Should().MatchRegex(@"^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$");
         body.Documentation.Should().NotBeNull();
-        body.Documentation!.ImplementationPlan.Should().Contain("implementation-plan");
+        body.Documentation!.Readme.Should().Be("README.md");
+        body.Documentation.Architecture.Should().Be("docs/architecture.md");
     }
 
     private sealed record RootResponse(
@@ -34,6 +35,6 @@ public sealed class RootEndpointTests : IClassFixture<WebApplicationFactory<Prog
         DocumentationLinks? Documentation);
 
     private sealed record DocumentationLinks(
-        string ImplementationPlan,
+        string Readme,
         string Architecture);
 }
