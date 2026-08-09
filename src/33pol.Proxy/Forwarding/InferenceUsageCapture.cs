@@ -13,6 +13,7 @@ public sealed class InferenceUsageCapture
     private readonly string _requestId;
     private readonly DateTimeOffset _startedUtc;
     private readonly TenantContext? _tenant;
+    private readonly string? _quotaPartition;
     private readonly long _requestBodyBytes;
     private int _enqueued;
 
@@ -23,7 +24,8 @@ public sealed class InferenceUsageCapture
         string requestId,
         DateTimeOffset startedUtc,
         TenantContext? tenant,
-        long requestBodyBytes = 0)
+        long requestBodyBytes = 0,
+        string? quotaPartition = null)
     {
         _usageRecorder = usageRecorder;
         _metrics = metrics;
@@ -31,6 +33,7 @@ public sealed class InferenceUsageCapture
         _requestId = requestId;
         _startedUtc = startedUtc;
         _tenant = tenant;
+        _quotaPartition = quotaPartition;
         _requestBodyBytes = requestBodyBytes;
     }
 
@@ -179,6 +182,8 @@ public sealed class InferenceUsageCapture
                 usage,
                 durationMs,
                 _tenant);
+
+        usageEvent = UsageEventFactory.WithQuotaPartition(usageEvent, _quotaPartition);
 
         if (_usageRecorder.Enqueue(usageEvent))
         {

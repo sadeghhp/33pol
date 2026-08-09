@@ -59,17 +59,29 @@ public sealed class ApiKeyAuthenticationHandler : AuthenticationHandler<Authenti
         var result = await _validator.ValidateAsync(apiKey, Context.RequestAborted).ConfigureAwait(false);
         if (!result.IsSuccess)
         {
-            // A credential was presented and it is not valid. That is an authentication failure even
-            // on the anonymous-capable routes: silently serving them as anonymous returned 200 to a
-            // caller whose key had been revoked or had expired, so clients and health checks had no
-            // way to detect that their credential had stopped working. Only the complete absence of
-            // a key (handled above) may fall through to anonymous access.
             if (!_authState.IsAuthenticationRequired)
             {
                 return AuthenticateResult.NoResult();
             }
 
-            var code = result.Failure switch
+            var failure = result.Failure ?? ApiKeyValidationFailure.Invalid;
+
+            // On the anonymous-capable routes an unrecognised key is treated as no key at all.
+            // OpenAI-compatible SDKs refuse to construct a client with an empty api_key, so nearly
+            // every caller of a public model sends a placeholder ("lm-studio", "not-needed", ...);
+            // rejecting those made publicAccess unusable from the very clients it exists to serve,
+            // and it costs nothing to ignore them because the route grants anonymous callers the
+            // same access anyway.
+            //
+            // A key the gateway does recognise is the opposite case and still fails loudly here:
+            // answering 200 to a revoked, expired, or deactivated-tenant key would leave its holder
+            // believing the credential still works, with no signal anywhere that it had stopped.
+            if ((isPublicInference || allowsAnonymousModelsListing) && !failure.IsRecognizedCredential())
+            {
+                return AuthenticateResult.NoResult();
+            }
+
+            var code = failure switch
             {
                 ApiKeyValidationFailure.Expired => "expired_api_key",
                 _ => "invalid_api_key",
@@ -91,6 +103,11 @@ public sealed class ApiKeyAuthenticationHandler : AuthenticationHandler<Authenti
             new(GatewayAuthClaims.Role, result.Role!.Value.ToString()),
         };
 
+        if (!string.IsNullOrWhiteSpace(result.TenantSlug))
+        {
+            claims.Add(new Claim(GatewayAuthClaims.TenantSlug, result.TenantSlug));
+        }
+
         var identity = new ClaimsIdentity(claims, GatewayAuthSchemes.ApiKey);
         var principal = new ClaimsPrincipal(identity);
         var ticket = new AuthenticationTicket(principal, GatewayAuthSchemes.ApiKey);
@@ -99,6 +116,7 @@ public sealed class ApiKeyAuthenticationHandler : AuthenticationHandler<Authenti
         {
             TenantId = result.TenantId!.Value.ToString(),
             ApiKeyId = result.ApiKeyId!.Value.ToString(),
+            TenantSlug = result.TenantSlug,
             PlanSlug = result.PlanSlug,
             CostCenter = result.CostCenter,
             Role = result.Role!.Value,
@@ -121,6 +139,17 @@ public sealed class ApiKeyAuthenticationHandler : AuthenticationHandler<Authenti
 
         await Context.WriteGatewayErrorAsync(
             _errors.Write(errorCode),
+            Context.RequestAborted).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Authenticated but not authorized (e.g. a tenant admin on an operator-only route). The default
+    /// forbid is an empty 403; clients of this gateway expect the OpenAI-shaped error body.
+    /// </summary>
+    protected override async Task HandleForbiddenAsync(AuthenticationProperties properties)
+    {
+        await Context.WriteGatewayErrorAsync(
+            _errors.Write(GatewayErrorCode.InsufficientScope),
             Context.RequestAborted).ConfigureAwait(false);
     }
 

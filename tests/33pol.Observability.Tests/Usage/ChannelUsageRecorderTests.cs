@@ -45,6 +45,90 @@ public sealed class ChannelUsageRecorderTests
         metrics.Received(1).RecordTokenUsage("gpt-4o", 10, 5);
     }
 
+    /// <summary>
+    /// Anonymous usage must be committed under the same per-address partition the quota admission
+    /// check reads. The old literal-"anonymous" fallback was a bucket no check consulted, so keyless
+    /// callers of public models were never held to the monthly token quota.
+    /// </summary>
+    [Fact]
+    public async Task Enqueue_AnonymousEventWithQuotaPartition_CommitsUnderThatPartition()
+    {
+        var quota = Substitute.For<IQuotaService>();
+        var persistence = Substitute.For<IUsagePersistenceHandler>();
+        var scope = Substitute.For<IServiceScope>();
+        var scopeProvider = Substitute.For<IServiceProvider>();
+        scope.ServiceProvider.Returns(scopeProvider);
+        scopeProvider.GetService(typeof(IUsagePersistenceHandler)).Returns(persistence);
+
+        var scopeFactory = Substitute.For<IServiceScopeFactory>();
+        scopeFactory.CreateAsyncScope().Returns(scope);
+
+        var recorder = new ChannelUsageRecorder(
+            quota,
+            scopeFactory,
+            Substitute.For<IGatewayMetricsCollector>(),
+            NullLogger<ChannelUsageRecorder>.Instance);
+
+        await recorder.StartAsync(CancellationToken.None);
+        recorder.Enqueue(new UsageEvent
+        {
+            RequestId = "req-anon",
+            TenantId = null,
+            QuotaPartition = "anon:203.0.113.10",
+            ModelId = "local-mock",
+            PromptTokens = 7,
+            CompletionTokens = 3,
+        });
+
+        await Task.Delay(200);
+        await recorder.StopAsync(CancellationToken.None);
+
+        quota.Received(1).CommitUsage(
+            "anon:203.0.113.10", "local-mock", 10, "req-anon", Arg.Any<DateTimeOffset?>());
+    }
+
+    /// <summary>
+    /// The batch persistence handler stops before this recorder does (reverse registration order),
+    /// so events the shutdown drain delivers land in a buffer with no flush loop. The recorder must
+    /// explicitly flush after draining, or the final partial batch is lost at process exit.
+    /// </summary>
+    [Fact]
+    public async Task StopAsync_AfterDraining_FlushesThePersistenceHandler()
+    {
+        var quota = Substitute.For<IQuotaService>();
+        var persistence = Substitute.For<IUsagePersistenceHandler>();
+        var scope = Substitute.For<IServiceScope>();
+        var scopeProvider = Substitute.For<IServiceProvider>();
+        scope.ServiceProvider.Returns(scopeProvider);
+        scopeProvider.GetService(typeof(IUsagePersistenceHandler)).Returns(persistence);
+
+        var scopeFactory = Substitute.For<IServiceScopeFactory>();
+        scopeFactory.CreateAsyncScope().Returns(scope);
+
+        var recorder = new ChannelUsageRecorder(
+            quota,
+            scopeFactory,
+            Substitute.For<IGatewayMetricsCollector>(),
+            NullLogger<ChannelUsageRecorder>.Instance);
+
+        await recorder.StartAsync(CancellationToken.None);
+        recorder.Enqueue(new UsageEvent
+        {
+            RequestId = "req-final",
+            ModelId = "gpt-4o",
+            PromptTokens = 1,
+            CompletionTokens = 1,
+        });
+
+        await recorder.StopAsync(CancellationToken.None);
+
+        Received.InOrder(() =>
+        {
+            persistence.PersistAsync(Arg.Is<UsageEvent>(e => e.RequestId == "req-final"), Arg.Any<CancellationToken>());
+            persistence.FlushPendingAsync(Arg.Any<CancellationToken>());
+        });
+    }
+
     [Fact]
     public async Task Enqueue_WhenSaturatedBeforeDraining_DropsNewestAndKeepsQueuedEvents()
     {

@@ -801,6 +801,60 @@ public sealed class ModelRouterMiddlewareTests
     }
 
     /// <summary>
+    /// A proxied 5xx is a backend failure even though forwarding itself succeeded. Counting it as a
+    /// breaker success meant a backend that degraded into fast 500s closed a half-open breaker on
+    /// its first probe and could never re-open it.
+    /// </summary>
+    [Fact]
+    public async Task InvokeAsync_Upstream5xx_CountsAsCircuitBreakerFailure()
+    {
+        await WithSingleModelRegistryAsync(async registry =>
+        {
+            var breakers = CreateBreakerRegistry(failureThreshold: 2);
+
+            RecentRequestEntry? recorded = null;
+            var recentRequestStore = Substitute.For<IRecentRequestStore>();
+            recentRequestStore.When(x => x.Record(Arg.Any<RecentRequestEntry>()))
+                .Do(call => recorded = call.Arg<RecentRequestEntry>());
+
+            var middleware = CreateMiddleware(
+                registry: registry,
+                forwarder: CreateForwarderProxyingStatus(StatusCodes.Status500InternalServerError),
+                recentRequestStore: recentRequestStore,
+                circuitBreakers: breakers);
+
+            await middleware.InvokeAsync(CreateContext(
+                HttpMethods.Post, "/v1/chat/completions", """{"model":"m1","stream":false}"""));
+            await middleware.InvokeAsync(CreateContext(
+                HttpMethods.Post, "/v1/chat/completions", """{"model":"m1","stream":false}"""));
+
+            breakers.GetBreaker("m1").State.Should().Be(CircuitState.Open);
+            recorded.Should().NotBeNull();
+        });
+    }
+
+    /// <summary>
+    /// A proxied 4xx means the backend answered and the request was wrong — not a health signal.
+    /// </summary>
+    [Fact]
+    public async Task InvokeAsync_Upstream4xx_DoesNotCountAsCircuitBreakerFailure()
+    {
+        await WithSingleModelRegistryAsync(async registry =>
+        {
+            var breakers = CreateBreakerRegistry(failureThreshold: 1);
+            var middleware = CreateMiddleware(
+                registry: registry,
+                forwarder: CreateForwarderProxyingStatus(StatusCodes.Status400BadRequest),
+                circuitBreakers: breakers);
+
+            await middleware.InvokeAsync(CreateContext(
+                HttpMethods.Post, "/v1/chat/completions", """{"model":"m1","stream":false}"""));
+
+            breakers.GetBreaker("m1").State.Should().Be(CircuitState.Closed);
+        });
+    }
+
+    /// <summary>
     /// A burst of client disconnects must not be able to take a healthy model offline.
     /// </summary>
     [Fact]
@@ -836,6 +890,29 @@ public sealed class ModelRouterMiddlewareTests
                 Arg.Any<InferenceForwardTimeouts>(),
                 Arg.Any<CancellationToken>())
             .Returns(error);
+        return forwarder;
+    }
+
+    /// <summary>
+    /// Mimics the real forwarder proxying an upstream response: the status code is written to the
+    /// response and the return value is None, because forwarding itself did not fail.
+    /// </summary>
+    private static IInferenceHttpForwarder CreateForwarderProxyingStatus(int statusCode)
+    {
+        var forwarder = Substitute.For<IInferenceHttpForwarder>();
+        forwarder.SendAsync(
+                Arg.Any<HttpContext>(),
+                Arg.Any<string>(),
+                Arg.Any<string?>(),
+                Arg.Any<StreamingHttpTransformer>(),
+                Arg.Any<bool>(),
+                Arg.Any<InferenceForwardTimeouts>(),
+                Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                call.Arg<HttpContext>().Response.StatusCode = statusCode;
+                return ForwarderError.None;
+            });
         return forwarder;
     }
 

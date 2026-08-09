@@ -35,6 +35,18 @@ public sealed class UsageEvent
 
     public string? ApiKeyId { get; init; }
 
+    /// <summary>
+    /// The key this request's quota was checked under — the tenant id for authenticated traffic,
+    /// the per-address anonymous partition (<c>anon:&lt;ip&gt;</c>) for keyless traffic.
+    /// </summary>
+    /// <remarks>
+    /// Usage must be committed back to the same partition the admission check reads, or the check
+    /// never sees it. Anonymous usage used to commit under a literal <c>"anonymous"</c> key while
+    /// the check read the per-address partition, so keyless callers of public models were never
+    /// held to the monthly token quota at all.
+    /// </remarks>
+    public string? QuotaPartition { get; init; }
+
     public required string ModelId { get; init; }
 
     public long PromptTokens { get; init; }

@@ -12,7 +12,7 @@ public static class MaintenanceAdminEndpoints
     public static IEndpointRouteBuilder MapMaintenanceAdminEndpoints(this IEndpointRouteBuilder endpoints)
     {
         endpoints.MapPost("/admin/api/maintenance/backup", CreateBackupAsync)
-            .RequireAuthorization(GatewayAuthPolicies.Admin);
+            .RequireAuthorization(GatewayAuthPolicies.Operator);
         return endpoints;
     }
 

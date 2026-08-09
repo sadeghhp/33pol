@@ -27,20 +27,49 @@ public sealed class PublicModelInferenceTests
     }
 
     /// <summary>
-    /// A key that was presented and rejected is an authentication failure, even on a public model.
+    /// A key the gateway never issued is treated as no key at all on a public model.
     /// </summary>
     /// <remarks>
-    /// Serving these anonymously answered 200 to a caller whose key had been revoked or had expired,
-    /// so clients, CI checks and SDKs had no way to discover that their credential had stopped
-    /// working — the failure looked exactly like success. Omitting the key entirely still works;
-    /// that is the case <c>publicAccess</c> exists for.
+    /// This is the normal case, not an edge case: OpenAI-compatible SDKs refuse to construct a
+    /// client with an empty api_key, so virtually every caller of a public model sends a
+    /// placeholder. Rejecting them left <c>publicAccess</c> reachable only by bare curl.
     /// </remarks>
-    [Fact]
-    public async Task PublicModel_GarbageApiKey_ReturnsUnauthorized()
+    [Theory]
+    [InlineData("lm-studio")]
+    [InlineData("not-needed")]
+    [InlineData("sk-not-a-real-key")]
+    public async Task PublicModel_PlaceholderApiKey_AllowsInference(string placeholder)
     {
         await using var factory = CreateFactoryWithPublicModel();
         var client = factory.CreateClient();
-        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", "sk-not-a-real-key");
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", placeholder);
+
+        using var body = ChatBody(ModelAlias);
+        var response = await client.PostAsync("/v1/chat/completions", body);
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+    }
+
+    /// <summary>
+    /// A key the gateway <em>did</em> issue and has since revoked still fails on a public model.
+    /// </summary>
+    /// <remarks>
+    /// Serving it anonymously answered 200 to a caller whose credential had been withdrawn, so
+    /// clients, CI checks and SDKs had no way to discover that it had stopped working — the failure
+    /// looked exactly like success. This is the case the placeholder allowance must not swallow.
+    /// </remarks>
+    [Fact]
+    public async Task PublicModel_RevokedApiKey_ReturnsUnauthorized()
+    {
+        await using var factory = CreateFactoryWithPublicModel();
+        var adminClient = CreateAuthenticatedClient(factory, AdminKey);
+        var (secret, keyId) = await CreateInferenceKeyAsync(adminClient);
+
+        var revokeResponse = await adminClient.PostAsync($"/admin/api/keys/{keyId}/revoke", content: null);
+        revokeResponse.EnsureSuccessStatusCode();
+
+        var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", secret);
 
         using var body = ChatBody(ModelAlias);
         var response = await client.PostAsync("/v1/chat/completions", body);
@@ -65,10 +94,7 @@ public sealed class PublicModelInferenceTests
     {
         await using var factory = CreateFactoryWithPublicModel();
         var adminClient = CreateAuthenticatedClient(factory, AdminKey);
-        var createResponse = await adminClient.PostAsJsonAsync("/admin/api/keys", new { role = "Inference" });
-        createResponse.EnsureSuccessStatusCode();
-        using var created = JsonDocument.Parse(await createResponse.Content.ReadAsStringAsync());
-        var secret = created.RootElement.GetProperty("secret").GetString()!;
+        var (secret, _) = await CreateInferenceKeyAsync(adminClient);
 
         var inferenceClient = factory.CreateClient();
         inferenceClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", secret);
@@ -94,6 +120,54 @@ public sealed class PublicModelInferenceTests
             .ToList();
 
         ids.Should().ContainSingle().Which.Should().Be(ModelId);
+    }
+
+    /// <summary>
+    /// Model discovery has to work for the same placeholder-key clients that inference serves,
+    /// otherwise an SDK configured with a dummy key cannot find the models it is allowed to call.
+    /// </summary>
+    [Fact]
+    public async Task GetModels_PlaceholderApiKey_ReturnsOnlyPublicModels()
+    {
+        await using var factory = CreateFactoryWithPublicModel();
+        var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", "lm-studio");
+
+        var response = await client.GetAsync("/v1/models");
+        response.EnsureSuccessStatusCode();
+
+        using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var ids = doc.RootElement.GetProperty("data").EnumerateArray()
+            .Select(e => e.GetProperty("id").GetString())
+            .ToList();
+
+        ids.Should().ContainSingle().Which.Should().Be(ModelId);
+    }
+
+    [Fact]
+    public async Task GetModels_RevokedApiKey_ReturnsUnauthorized()
+    {
+        await using var factory = CreateFactoryWithPublicModel();
+        var adminClient = CreateAuthenticatedClient(factory, AdminKey);
+        var (secret, keyId) = await CreateInferenceKeyAsync(adminClient);
+        (await adminClient.PostAsync($"/admin/api/keys/{keyId}/revoke", content: null)).EnsureSuccessStatusCode();
+
+        var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", secret);
+
+        var response = await client.GetAsync("/v1/models");
+
+        response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+    }
+
+    private static async Task<(string Secret, string KeyId)> CreateInferenceKeyAsync(HttpClient adminClient)
+    {
+        var createResponse = await adminClient.PostAsJsonAsync("/admin/api/keys", new { role = "Inference" });
+        createResponse.EnsureSuccessStatusCode();
+        using var created = JsonDocument.Parse(await createResponse.Content.ReadAsStringAsync());
+        return (
+            created.RootElement.GetProperty("secret").GetString()!,
+            created.RootElement.GetProperty("id").GetString()!);
     }
 
     private static WebApplicationFactory<Program> CreateFactoryWithPublicModel()

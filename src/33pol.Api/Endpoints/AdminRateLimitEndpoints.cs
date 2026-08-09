@@ -14,7 +14,7 @@ public static class AdminRateLimitEndpoints
     public static IEndpointRouteBuilder MapAdminRateLimitEndpoints(this IEndpointRouteBuilder endpoints)
     {
         var group = endpoints.MapGroup("/admin/api/rate-limits")
-            .RequireAuthorization(GatewayAuthPolicies.Admin);
+            .RequireAuthorization(GatewayAuthPolicies.Operator);
 
         group.MapGet("/", GetAsync);
         group.MapPut("/", PutAsync);

@@ -93,6 +93,21 @@ public sealed class ChannelUsageRecorder : IUsageRecorder, IHostedService
             }
         }
 
+        // The batch persistence handler has already been stopped by now (hosted services stop in
+        // reverse registration order), so the events the drain above just delivered are sitting in
+        // its buffer with no flush loop left. Flushing here — after the drain, from the drain's own
+        // consumer — is what actually gets the final partial batch to disk.
+        try
+        {
+            await using var scope = _scopeFactory.CreateAsyncScope();
+            var persistence = scope.ServiceProvider.GetRequiredService<IUsagePersistenceHandler>();
+            await persistence.FlushPendingAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogError(ex, "Failed to flush pending usage events during shutdown");
+        }
+
         _stopping.Dispose();
     }
 
@@ -105,7 +120,13 @@ public sealed class ChannelUsageRecorder : IUsageRecorder, IHostedService
             try
             {
                 var totalTokens = usage.PromptTokens + usage.CompletionTokens;
-                var partition = usage.TenantId ?? "anonymous";
+
+                // Commit to the partition the admission check reads: the stamped partition when the
+                // router provided one, else the tenant id (identical for authenticated traffic).
+                // The old literal-"anonymous" fallback was a bucket no check ever consulted, which
+                // exempted keyless callers of public models from the monthly quota entirely; it
+                // remains only as the last resort for events with no partition information at all.
+                var partition = usage.QuotaPartition ?? usage.TenantId ?? "anonymous";
                 _quotaService.CommitUsage(
                     partition, usage.ModelId, totalTokens, usage.RequestId, usage.TimestampUtc);
 

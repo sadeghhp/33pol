@@ -6,6 +6,8 @@ public sealed class TenantContext
 
     public required string ApiKeyId { get; init; }
 
+    public string? TenantSlug { get; init; }
+
     public string? PlanSlug { get; init; }
 
     public string? CostCenter { get; init; }

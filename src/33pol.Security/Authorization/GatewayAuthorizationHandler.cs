@@ -4,6 +4,7 @@ using Pol33.Core.Abstractions;
 using Pol33.Core.Identity;
 using Pol33.Core.Security;
 using Pol33.Security.Authentication;
+using Pol33.Security.Configuration;
 
 namespace Pol33.Security.Authorization;
 
@@ -15,8 +16,15 @@ public sealed class GatewayAuthorizationRequirement(string policyName) : IAuthor
 public sealed class GatewayAuthorizationHandler : AuthorizationHandler<GatewayAuthorizationRequirement>
 {
     private readonly IGatewayAuthenticationState _authState;
+    private readonly OperatorTenantConfiguration _operatorTenant;
 
-    public GatewayAuthorizationHandler(IGatewayAuthenticationState authState) => _authState = authState;
+    public GatewayAuthorizationHandler(
+        IGatewayAuthenticationState authState,
+        OperatorTenantConfiguration operatorTenant)
+    {
+        _authState = authState;
+        _operatorTenant = operatorTenant;
+    }
 
     protected override Task HandleRequirementAsync(
         AuthorizationHandlerContext context,
@@ -52,6 +60,13 @@ public sealed class GatewayAuthorizationHandler : AuthorizationHandler<GatewayAu
         var allowed = requirement.PolicyName switch
         {
             GatewayAuthPolicies.Admin => role is ApiKeyRole.Admin or ApiKeyRole.Both,
+            // Role alone is per-tenant; the gateway-wide control plane additionally requires the key
+            // to belong to the operator tenant. Without the second check, any tenant's admin could
+            // rewrite model routes, upstream secrets, global rate limits, and read every tenant's
+            // recent requests.
+            GatewayAuthPolicies.Operator => (role is ApiKeyRole.Admin or ApiKeyRole.Both) &&
+                _operatorTenant.IsOperatorTenant(
+                    context.User.FindFirst(GatewayAuthClaims.TenantSlug)?.Value),
             GatewayAuthPolicies.Inference => role is ApiKeyRole.Inference or ApiKeyRole.Both,
             _ => false,
         };

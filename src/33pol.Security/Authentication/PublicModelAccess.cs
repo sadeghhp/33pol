@@ -7,12 +7,15 @@ namespace Pol33.Security.Authentication;
 public static class PublicModelAccess
 {
     /// <summary>
-    /// True when a credential was presented on this request and rejected.
+    /// True when a credential the gateway recognises was presented on this request and rejected.
     /// </summary>
     /// <remarks>
-    /// The anonymous paths below exist for callers with <em>no</em> credential. A caller who
-    /// presents a revoked or expired key must get the authentication error, not a silent downgrade
-    /// to anonymous access that answers 200 and hides the fact that their key stopped working.
+    /// The anonymous paths below exist for callers with no usable credential. A caller who presents
+    /// a revoked or expired key — one that matched a stored record — must get the authentication
+    /// error, not a silent downgrade to anonymous access that answers 200 and hides the fact that
+    /// their key stopped working. A key that matches nothing is not flagged here: it is a
+    /// placeholder, indistinguishable in effect from sending no key, and authentication lets it
+    /// through as anonymous rather than refusing a request the route would have served regardless.
     /// </remarks>
     public static bool HasRejectedCredential(HttpContext context) =>
         context.Items.ContainsKey(GatewayAuthContextItems.AuthFailureCode);

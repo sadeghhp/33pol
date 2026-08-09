@@ -18,7 +18,7 @@ public static class GatewayOperationsEndpoints
         // the same data the console gates behind an Admin key at /admin/api/summary. Probes that
         // only need up/down use /health, /health/live and /health/ready, which stay anonymous.
         endpoints.MapGet("/stats", GetStats)
-            .RequireAuthorization(GatewayAuthPolicies.Admin);
+            .RequireAuthorization(GatewayAuthPolicies.Operator);
 
         return endpoints;
     }

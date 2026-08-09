@@ -112,6 +112,7 @@ public static class UsageEventFactory
             RequestId = usageEvent.RequestId,
             TenantId = usageEvent.TenantId ?? tenant?.TenantId,
             ApiKeyId = usageEvent.ApiKeyId ?? tenant?.ApiKeyId,
+            QuotaPartition = usageEvent.QuotaPartition,
             ModelId = usageEvent.ModelId,
             PromptTokens = usageEvent.PromptTokens,
             CompletionTokens = usageEvent.CompletionTokens,
@@ -121,4 +122,27 @@ public static class UsageEventFactory
             CostCenter = usageEvent.CostCenter ?? tenant?.CostCenter,
             TimestampUtc = usageEvent.TimestampUtc,
         };
+
+    /// <summary>
+    /// Stamps the partition key the request's quota admission check ran under, so the commit lands
+    /// where the next check will look.
+    /// </summary>
+    public static UsageEvent WithQuotaPartition(UsageEvent usageEvent, string? quotaPartition) =>
+        string.IsNullOrWhiteSpace(quotaPartition)
+            ? usageEvent
+            : new()
+            {
+                RequestId = usageEvent.RequestId,
+                TenantId = usageEvent.TenantId,
+                ApiKeyId = usageEvent.ApiKeyId,
+                QuotaPartition = quotaPartition,
+                ModelId = usageEvent.ModelId,
+                PromptTokens = usageEvent.PromptTokens,
+                CompletionTokens = usageEvent.CompletionTokens,
+                TotalTokens = usageEvent.TotalTokens,
+                TokenSource = usageEvent.TokenSource,
+                DurationMs = usageEvent.DurationMs,
+                CostCenter = usageEvent.CostCenter,
+                TimestampUtc = usageEvent.TimestampUtc,
+            };
 }

@@ -14,7 +14,7 @@ public static class AdminProviderEndpoints
     public static IEndpointRouteBuilder MapAdminProviderEndpoints(this IEndpointRouteBuilder endpoints)
     {
         var group = endpoints.MapGroup("/admin/api/providers")
-            .RequireAuthorization(GatewayAuthPolicies.Admin);
+            .RequireAuthorization(GatewayAuthPolicies.Operator);
 
         group.MapGet("/catalog", ListProviders);
         // Provider model discovery is POST-only so env var names never appear in URLs or access logs.

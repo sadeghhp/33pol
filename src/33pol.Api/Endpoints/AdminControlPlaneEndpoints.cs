@@ -16,7 +16,7 @@ public static class AdminControlPlaneEndpoints
     public static IEndpointRouteBuilder MapAdminControlPlaneEndpoints(this IEndpointRouteBuilder endpoints)
     {
         var group = endpoints.MapGroup("/admin/api")
-            .RequireAuthorization(GatewayAuthPolicies.Admin);
+            .RequireAuthorization(GatewayAuthPolicies.Operator);
 
         group.MapGet("/summary", GetSummary);
         group.MapGet("/backends", ListBackends);

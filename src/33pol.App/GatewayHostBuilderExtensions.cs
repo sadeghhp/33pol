@@ -1,3 +1,5 @@
+using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.Extensions.Options;
 using OpenTelemetry.Metrics;
 using Pol33.Api.DependencyInjection;
 using Pol33.Api.Endpoints;
@@ -33,6 +35,11 @@ public static class GatewayHostBuilderExtensions
 
     public static WebApplication ConfigureGatewayPipeline(this WebApplication app)
     {
+        // First in the pipeline: everything downstream — request logging, the audit trail, and above
+        // all the anonymous rate-limit partition — reads the remote address, and each would otherwise
+        // record the proxy instead of the caller.
+        app.UseGatewayForwardedHeaders();
+
         app.UseSerilogRequestLogging(options =>
         {
             options.EnrichDiagnosticContext = (diagnosticContext, httpContext) =>
@@ -95,5 +102,66 @@ public static class GatewayHostBuilderExtensions
         }
 
         return app;
+    }
+
+    /// <summary>
+    /// Honours <c>X-Forwarded-For</c> / <c>X-Forwarded-Proto</c> from the proxies the operator has
+    /// declared trustworthy, so the address the gateway partitions anonymous limits by is the
+    /// caller's rather than the ingress's.
+    /// </summary>
+    private static void UseGatewayForwardedHeaders(this WebApplication app)
+    {
+        var options = app.Services
+            .GetRequiredService<IOptions<GatewayOptions>>()
+            .Value
+            .ForwardedHeaders;
+
+        if (!options.Enabled)
+        {
+            return;
+        }
+
+        const ForwardedHeaders headers = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+        var forwarded = new ForwardedHeadersOptions
+        {
+            ForwardedHeaders = headers,
+            ForwardLimit = options.ForwardLimit,
+        };
+
+        if (options.TrustAllProxies)
+        {
+            // Both collections default to loopback, and the middleware treats a non-empty collection
+            // as an allow-list. Emptying them is what makes it accept the header from any peer.
+            forwarded.KnownProxies.Clear();
+            forwarded.KnownIPNetworks.Clear();
+            app.Logger.LogWarning(
+                "Forwarded headers are trusted from ANY peer (Gateway:ForwardedHeaders:TrustAllProxies). "
+                + "Anything that can reach this port can choose the address its anonymous rate limits and "
+                + "quotas are counted against. Restrict the port to your proxy, or name the proxy in "
+                + "Gateway:ForwardedHeaders:KnownProxies/KnownNetworks instead.");
+        }
+        else
+        {
+            foreach (var proxy in options.GetKnownProxies())
+            {
+                forwarded.KnownProxies.Add(proxy);
+            }
+
+            foreach (var network in options.GetKnownNetworks())
+            {
+                forwarded.KnownIPNetworks.Add(network);
+            }
+
+            if (options.HasNoExplicitTrustAnchors)
+            {
+                app.Logger.LogWarning(
+                    "Gateway:ForwardedHeaders:Enabled is true but no KnownProxies or KnownNetworks are "
+                    + "configured, so only a proxy on loopback is trusted. A proxy on any other host — an "
+                    + "ingress or a sidecar — will have its headers ignored and every anonymous caller will "
+                    + "still share one rate-limit partition.");
+            }
+        }
+
+        app.UseForwardedHeaders(forwarded);
     }
 }

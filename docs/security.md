@@ -5,8 +5,9 @@
 | Surface | Credential | Notes |
 |---------|------------|-------|
 | Inference (`/v1/*` POST) | Inference API key | Required when keys configured in DB/bootstrap, except models with `publicAccess: true` |
-| Inference (`GET /v1/models*`) | Optional | Unauthenticated callers see only `publicAccess` models; authenticated callers see public + granted models |
-| Admin (`/admin/api/*`) | Admin API key | Separate role; never expose in browser URLs |
+| Inference (`GET /v1/models*`) | Optional | Callers with no key — or an unrecognised placeholder one — see only `publicAccess` models; authenticated callers see public + granted models. A revoked or expired key is still `401` |
+| Admin, per-tenant (`/admin/api/keys*`, `model-grants`, `usage`) | Admin API key | Scoped to the caller's own tenant |
+| Admin, gateway-wide (models, providers, CORS, rate limits, config, backup, `/stats`, requests/logs) | **Operator-tenant** Admin API key | Admin role alone is per-tenant; these surfaces additionally require the key to belong to the operator tenant (`Gateway:Security:OperatorTenantSlug`, defaulting to the bootstrap tenant). Never expose keys in browser URLs |
 | Health / metrics | None | `/health/live`, `/health/ready`, `/metrics` public for probes |
 
 Keys are stored **hashed** (HMAC + pepper). Plaintext secrets are shown only once at creation.
@@ -92,12 +93,29 @@ The static admin UI (`/admin`) stores the API key in **localStorage**. Treat the
 
 Operators may mark individual registry models with `"publicAccess": true` (admin UI: **Allow use without 33pol API key**). For those models only:
 
-- Clients may call inference with **no** API key or any placeholder `Authorization: Bearer` value.
+- Clients may call inference with **no** API key, or with any placeholder `Authorization: Bearer` value the gateway does not recognise (`lm-studio`, `not-needed`, …). This matters in practice: OpenAI-compatible SDKs refuse to construct a client with an empty `api_key`, so most callers of a public model send a dummy one.
+- A key the gateway **does** recognise but will not honour — revoked, expired, or belonging to a deactivated tenant — is still rejected with `401`, on public models and on `GET /v1/models` alike. Serving those anonymously would answer `200` to a caller whose credential had been withdrawn, leaving no signal anywhere that it had stopped working.
 - A **valid** inference key still works and attributes usage to the tenant (rate limits, quotas, budgets).
 - Model grants are **not** enforced for public models.
-- Anonymous callers use the same `anonymous` rate-limit and quota partition as other unauthenticated traffic.
+- Anonymous callers are partitioned for rate limits and quotas by client IP, not pooled into one bucket. Behind a proxy this requires `Gateway:ForwardedHeaders` (below) — without it every anonymous caller shares the proxy's address and one client can exhaust the limit for all of them.
 
 **Operational guidance:** Use public access only for local or internal upstreams (e.g. LM Studio). Do not mark paid cloud models public without network isolation and strict default/anonymous rate limits.
+
+## Client IP behind a proxy (`Gateway:ForwardedHeaders`)
+
+Anonymous rate limits, quotas and stream slots are counted per client address. Behind an ingress, a load balancer, or docker's userland proxy, every request arrives from the proxy, so all anonymous traffic collapses into a single partition unless the gateway is told to read `X-Forwarded-For`.
+
+This is **off by default and never inferred**. The header is written by whoever sent the request, so trusting it from an untrusted peer is worse than ignoring it — a caller could put a fresh fake address on every request and mint unlimited partitions, bypassing anonymous rate limiting entirely rather than merely sharing it.
+
+| Setting | Default | Notes |
+|---------|---------|-------|
+| `Gateway:ForwardedHeaders:Enabled` | `false` | Honours `X-Forwarded-For` and `X-Forwarded-Proto` from trusted peers. |
+| `Gateway:ForwardedHeaders:KnownProxies` | `[]` | Proxy IP addresses to trust. Loopback is always trusted, which covers a reverse proxy on the same host. |
+| `Gateway:ForwardedHeaders:KnownNetworks` | `[]` | Proxy networks in CIDR form, e.g. `10.0.0.0/8`. Host bits are masked off. |
+| `Gateway:ForwardedHeaders:ForwardLimit` | `1` | Number of trusted proxies in front of the gateway. Do not set it higher than the real chain — each hop consumes one entry from the right, so an inflated limit lets the client's own spoofed entries be read as the origin. |
+| `Gateway:ForwardedHeaders:TrustAllProxies` | `false` | Trusts any peer. Only safe when nothing but the proxy can reach the gateway's port. Logs a warning at startup. |
+
+Enabling it without naming a proxy trusts loopback only, so an ingress on another host is still ignored; startup logs a warning when that combination is configured. Invalid addresses or CIDR entries fail startup rather than being skipped silently.
 
 ## Audit
 

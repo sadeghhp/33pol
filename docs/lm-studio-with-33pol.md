@@ -146,6 +146,8 @@ Then in the admin UI **Dashboard** → **Reload config file**.
 
 For clients that always send a dummy API key, enable **Allow use without 33pol API key** when adding/editing the model in the admin UI (sets `"publicAccess": true` in `models.json`). Inference to that model then accepts any placeholder bearer token or no key at all; rate limits still apply.
 
+A key 33pol *issued* and has since revoked or expired is still rejected, so this is not a way to keep a retired key working. If you run the gateway behind a reverse proxy, also set `Gateway:ForwardedHeaders` (see [security.md](security.md)) — otherwise every keyless caller shares one rate-limit bucket.
+
 ## Step 4 — Create an inference API key
 
 The bootstrap admin key (`sk-33pol-dev-admin-key`) works for **`/admin` only**. OpenAI endpoints under **`/v1/*`** need an **Inference** (or **Both**) key unless the target model has `publicAccess: true`.

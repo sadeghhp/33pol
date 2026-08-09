@@ -38,6 +38,15 @@ public sealed class GatewaySecurityOptions
     public bool AllowAnonymous { get; set; }
 
     /// <summary>
+    /// Slug of the tenant whose Admin keys may operate the gateway-wide control plane (model
+    /// registry, upstream credentials, providers, CORS, rate limits, config reload, backups, and
+    /// the cross-tenant request/log feeds). Defaults to the bootstrap tenant
+    /// (<c>Gateway:Bootstrap:TenantSlug</c>, ultimately <c>default</c>), so single-tenant
+    /// deployments need not set it. See <see cref="OperatorTenantConfiguration"/>.
+    /// </summary>
+    public string? OperatorTenantSlug { get; set; }
+
+    /// <summary>
     /// Append-only JSON Lines trail of admin mutations, written by <c>FileAuditLogger</c>. Lives
     /// beside <c>models.json</c> and the upstream secrets so one writable volume covers all of the
     /// gateway's durable state.

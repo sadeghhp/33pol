@@ -57,6 +57,8 @@ public static class GatewayOptionsValidation
             errors.Add($"{nameof(GatewayOptions.Resilience)}.{nameof(GatewayResilienceOptions.CircuitBreakerBreakDurationSeconds)} must be at least 1 second.");
         }
 
+        errors.AddRange(options.ForwardedHeaders.Validate());
+
         return errors;
     }
 

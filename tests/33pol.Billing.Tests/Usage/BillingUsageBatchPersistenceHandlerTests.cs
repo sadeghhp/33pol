@@ -103,6 +103,38 @@ public sealed class BillingUsageBatchPersistenceHandlerTests
         await billingEvents.Received(1).TryAppendAsync(Arg.Any<BillingEventRecord>(), Arg.Any<CancellationToken>());
     }
 
+    /// <summary>
+    /// Reproduces the real shutdown order: hosted services stop in reverse registration order, so
+    /// this handler's StopAsync runs <em>before</em> the usage recorder drains its channel into
+    /// PersistAsync. Events delivered after StopAsync used to sit in the buffer with no flush loop
+    /// and were lost at process exit; FlushPendingAsync is the recorder's hook to write them.
+    /// </summary>
+    [Fact]
+    public async Task FlushPendingAsync_AfterStop_PersistsEventsDeliveredByTheShutdownDrain()
+    {
+        var billingEvents = Substitute.For<IBillingEventRepository>();
+        billingEvents.TryAppendAsync(Arg.Any<BillingEventRecord>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+
+        var rollups = Substitute.For<IDailyUsageRollupRepository>();
+        rollups.GetRollupsAsync(Arg.Any<DateOnly?>(), Arg.Any<DateOnly?>(), Arg.Any<Guid?>(), Arg.Any<CancellationToken>())
+            .Returns(Array.Empty<DailyUsageRollupRecord>());
+
+        var handler = CreateHandler(billingEvents, rollups, batchSize: 100, flushIntervalMs: 60_000);
+
+        await handler.StartAsync(CancellationToken.None);
+        await handler.StopAsync(CancellationToken.None);
+
+        // The recorder's drain delivers the last accepted events after the handler has stopped.
+        await handler.PersistAsync(CreateEvent("req-late-1"));
+        await handler.PersistAsync(CreateEvent("req-late-2"));
+        await billingEvents.DidNotReceive().TryAppendAsync(Arg.Any<BillingEventRecord>(), Arg.Any<CancellationToken>());
+
+        await handler.FlushPendingAsync();
+
+        await billingEvents.Received(2).TryAppendAsync(Arg.Any<BillingEventRecord>(), Arg.Any<CancellationToken>());
+    }
+
     [Fact]
     public async Task FlushLoop_FlushesAfterInterval()
     {

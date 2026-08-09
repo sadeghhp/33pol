@@ -48,6 +48,59 @@ public sealed class AdminModelProvisioningCompensationTests
         (await secretStore.ExistsAsync("m1")).Should().BeFalse("the orphaned secret must be rolled back");
     }
 
+    /// <summary>
+    /// The secret store is keyed by model id, so a rejected duplicate add has just overwritten the
+    /// <em>existing</em> model's live credential. Rollback must restore it, not delete it — deletion
+    /// left the established model failing every request with "upstream auth token not configured".
+    /// </summary>
+    [Fact]
+    public async Task AddAsync_DuplicateId_RestoresTheExistingModelsSecret()
+    {
+        var commands = Substitute.For<IControlPlaneCommands>();
+        commands.AddModelAsync(Arg.Any<ModelConfig>(), Arg.Any<CancellationToken>())
+            .Returns(RegistryMutationResult.Fail("Model 'm1' already exists."));
+
+        var secretStore = new FaultInjectingSecretStore();
+        await secretStore.PutAsync("m1", "sk-existing-live-credential");
+
+        var service = CreateService(commands, secretStore);
+
+        var result = await service.AddAsync(NewRequest("m1", apiKey: "sk-from-duplicate-add"));
+
+        result.Success.Should().BeFalse();
+        secretStore.TryGet("m1", out var secret).Should().BeTrue();
+        secret.Should().Be("sk-existing-live-credential", "a rejected add must leave the store as it found it");
+    }
+
+    /// <summary>
+    /// The clearApiKey variant of the same collision: the delete has already happened by the time
+    /// the add is rejected, so rollback must put the prior credential back.
+    /// </summary>
+    [Fact]
+    public async Task AddAsync_DuplicateIdWithClearApiKey_RestoresTheExistingModelsSecret()
+    {
+        var commands = Substitute.For<IControlPlaneCommands>();
+        commands.AddModelAsync(Arg.Any<ModelConfig>(), Arg.Any<CancellationToken>())
+            .Returns(RegistryMutationResult.Fail("Model 'm1' already exists."));
+
+        var secretStore = new FaultInjectingSecretStore();
+        await secretStore.PutAsync("m1", "sk-existing-live-credential");
+
+        var service = CreateService(commands, secretStore);
+
+        var request = new AdminModelWriteRequest
+        {
+            Model = new ModelConfig { Id = "m1", Url = "http://upstream:8000" },
+            ClearApiKey = true,
+        };
+
+        var result = await service.AddAsync(request);
+
+        result.Success.Should().BeFalse();
+        secretStore.TryGet("m1", out var secret).Should().BeTrue();
+        secret.Should().Be("sk-existing-live-credential");
+    }
+
     [Fact]
     public async Task AddAsync_WhenRollbackAlsoFails_IsAudited()
     {

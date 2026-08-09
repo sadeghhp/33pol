@@ -58,6 +58,18 @@ public sealed class BillingUsageBatchPersistenceHandler(
             await _flushLoop.ConfigureAwait(false);
         }
 
+        await FlushPendingAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <remarks>
+    /// Called both from <see cref="StopAsync"/> and by the usage recorder after its shutdown drain.
+    /// This instance stops before the recorder does (hosted services stop in reverse registration
+    /// order), so the recorder's final events arrive with the flush loop already gone — this method
+    /// is the only thing that still writes them. Draining under the gate keeps the two callers from
+    /// flushing the same events twice.
+    /// </remarks>
+    public async ValueTask FlushPendingAsync(CancellationToken cancellationToken = default)
+    {
         List<UsageEvent> remaining;
         lock (_gate)
         {

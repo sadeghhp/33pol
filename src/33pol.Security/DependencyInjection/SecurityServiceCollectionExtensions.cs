@@ -27,6 +27,20 @@ public static class SecurityServiceCollectionExtensions
         services.AddSingleton<GatewayAuthenticationState>();
         services.AddSingleton<IGatewayAuthenticationState>(sp => sp.GetRequiredService<GatewayAuthenticationState>());
 
+        // Resolution order documented on OperatorTenantConfiguration: explicit security setting,
+        // else the bootstrap tenant slug, else "default". Read as raw keys because the bootstrap
+        // section belongs to Persistence and this module must not depend on its options type.
+        var operatorTenantSlug = configuration[$"{GatewaySecurityOptions.SectionName}:OperatorTenantSlug"];
+        if (string.IsNullOrWhiteSpace(operatorTenantSlug))
+        {
+            operatorTenantSlug = configuration["Gateway:Bootstrap:TenantSlug"];
+        }
+
+        services.AddSingleton(new OperatorTenantConfiguration(
+            string.IsNullOrWhiteSpace(operatorTenantSlug)
+                ? OperatorTenantConfiguration.FallbackTenantSlug
+                : operatorTenantSlug.Trim()));
+
         services.AddSingleton<IAuthorizationHandler, GatewayAuthorizationHandler>();
         services.AddAuthorization(options =>
         {
@@ -35,6 +49,9 @@ public static class SecurityServiceCollectionExtensions
 
             options.AddPolicy(GatewayAuthPolicies.Admin, policy =>
                 policy.AddRequirements(new GatewayAuthorizationRequirement(GatewayAuthPolicies.Admin)));
+
+            options.AddPolicy(GatewayAuthPolicies.Operator, policy =>
+                policy.AddRequirements(new GatewayAuthorizationRequirement(GatewayAuthPolicies.Operator)));
         });
 
         services

@@ -79,7 +79,11 @@ public sealed class ApiKeyValidator : IApiKeyValidator
         var tenant = await _tenants.GetByIdAsync(record.TenantId, cancellationToken).ConfigureAwait(false);
         if (tenant is null || !tenant.IsActive)
         {
-            return ApiKeyValidationResult.Fail(ApiKeyValidationFailure.Invalid);
+            // Reported distinctly from Invalid: the hash matched a real key, so this is a credential
+            // that stopped working rather than one the gateway never issued. Anonymous-capable routes
+            // rely on that difference to decide what may be ignored. A missing tenant row is an
+            // orphaned key and is treated the same way — unusable, and its holder should be told.
+            return ApiKeyValidationResult.Fail(ApiKeyValidationFailure.TenantInactive);
         }
 
         var effectiveCostCenter = string.IsNullOrWhiteSpace(record.CostCenter)

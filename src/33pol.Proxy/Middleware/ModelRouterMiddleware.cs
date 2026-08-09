@@ -260,6 +260,8 @@ public sealed class ModelRouterMiddleware
             // the whole prompt regardless of how the response ended.
             var requestBodyBytes = context.Request.Body.CanSeek ? context.Request.Body.Length : 0L;
 
+            // The same partition key the quota middleware checked this request under. Committing the
+            // usage anywhere else means the next check never sees it.
             var usageCapture = new InferenceUsageCapture(
                 _usageRecorder,
                 _metricsCollector,
@@ -267,7 +269,8 @@ public sealed class ModelRouterMiddleware
                 requestId,
                 started,
                 usageTenant,
-                requestBodyBytes);
+                requestBodyBytes,
+                quotaPartition: ratePartitionKey);
 
             var upstreamBearerToken = _upstreamBearerTokenResolver.ResolveBearerToken(modelConfig.UpstreamAuth);
             if (modelConfig.UpstreamAuth is not null && string.IsNullOrWhiteSpace(upstreamBearerToken))
@@ -341,6 +344,22 @@ public sealed class ModelRouterMiddleware
                 // whether an event was actually enqueued. If it was not (unparseable or absent usage)
                 // nothing downstream will settle the reservation, so the finally must release it.
                 settledByUsage = usageCapture.HasEnqueuedUsage;
+
+                // "Forwarded" is not "succeeded". The forwarder reports None for any proxied status
+                // code, and a backend that degrades into fast 5xx responses is exactly as unhealthy
+                // as one that times out — counting those as breaker successes closed a half-open
+                // breaker on the first 500 and kept it closed forever, while metrics and the recent
+                // requests feed reported the failure as success. 4xx stays a success: the backend
+                // answered; the request was wrong.
+                if (context.Response.StatusCode >= StatusCodes.Status500InternalServerError)
+                {
+                    circuitLease.RecordFailure();
+                    inferenceScope.SetOutcome(false, "upstream_5xx");
+                    _metricsCollector.RecordForwardAttempt(modelConfig.Id, "upstream_5xx");
+                    RecordRecentRequest(context, modelConfig.Id, started, requestInfo.Stream, success: false);
+                    return;
+                }
+
                 circuitLease.RecordSuccess();
                 inferenceScope.SetOutcome(true);
                 _metricsCollector.RecordForwardAttempt(modelConfig.Id, "success");

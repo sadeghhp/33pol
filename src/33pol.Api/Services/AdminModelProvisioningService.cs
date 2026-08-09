@@ -40,8 +40,15 @@ public sealed class AdminModelProvisioningService(
 
         // Secret first, model second. A model registered with a secretRef whose secret does not
         // exist is silently broken — every inference request fails with "upstream auth token not
-        // configured" and nothing surfaces the cause. Writing the secret first means the only
-        // failure mode is a harmless orphaned secret, and even that is compensated below.
+        // configured" and nothing surfaces the cause.
+        //
+        // The store is keyed by model id, and the id may already belong to a registered model —
+        // that is exactly the case AddModelAsync rejects with 409 below. So the secret write here
+        // may be overwriting (or, with clearApiKey, deleting) a live credential, not creating a
+        // fresh one. Snapshot the prior value first: a rejected add must put the store back exactly
+        // as it was, where deleting "the" secret destroyed the existing model's credential.
+        var hadPriorSecret = secretStore.TryGet(prep.Model!.Id, out var priorSecret);
+
         if (!await TryApplySecretAsync(prep, cancellationToken).ConfigureAwait(false))
         {
             return RegistryMutationResult.Fail(
@@ -51,7 +58,8 @@ public sealed class AdminModelProvisioningService(
         var result = await commands.AddModelAsync(prep.Model!, cancellationToken).ConfigureAwait(false);
         if (!result.Success)
         {
-            await CompensateSecretAsync(prep, cancellationToken).ConfigureAwait(false);
+            await RestoreSecretAfterFailedAddAsync(prep, hadPriorSecret, priorSecret, cancellationToken)
+                .ConfigureAwait(false);
             return result;
         }
 
@@ -477,23 +485,44 @@ public sealed class AdminModelProvisioningService(
     }
 
     /// <summary>
-    /// Undoes a secret written ahead of a model create that then failed, so a rejected create leaves
-    /// no orphaned credential behind. A compensation failure is audited: at that point the secret
-    /// exists with no model referencing it, which is inert but worth surfacing.
+    /// Puts the secret store back the way it was before a model create that was then rejected.
     /// </summary>
-    private async Task CompensateSecretAsync(PrepResult prep, CancellationToken cancellationToken)
+    /// <remarks>
+    /// Restores, not deletes: when the rejected id belongs to an existing model (the 409 duplicate
+    /// case), the secret this create overwrote or cleared was that model's <em>live credential</em>,
+    /// and deleting it broke every subsequent request to the model with "upstream auth token not
+    /// configured". Only when nothing was stored under the id before does rollback mean removal.
+    /// A restore failure is audited: at that point the store disagrees with the registry, which is
+    /// worth surfacing rather than inert.
+    /// </remarks>
+    private async Task RestoreSecretAfterFailedAddAsync(
+        PrepResult prep,
+        bool hadPriorSecret,
+        string? priorSecret,
+        CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(prep.SecretToStore) || string.IsNullOrWhiteSpace(prep.Model?.Id))
+        var touchedStore = prep.ClearSecret || !string.IsNullOrWhiteSpace(prep.SecretToStore);
+        if (!touchedStore || string.IsNullOrWhiteSpace(prep.Model?.Id))
         {
             return;
         }
 
         try
         {
-            await secretStore.DeleteAsync(prep.Model.Id, cancellationToken).ConfigureAwait(false);
-            audit.LogAdminAction(
-                "upstream_secret.rolled_back",
-                new AuditLogEntry(null, null, new { modelId = prep.Model.Id }));
+            if (hadPriorSecret && !string.IsNullOrEmpty(priorSecret))
+            {
+                await secretStore.PutAsync(prep.Model.Id, priorSecret, cancellationToken).ConfigureAwait(false);
+                audit.LogAdminAction(
+                    "upstream_secret.restored",
+                    new AuditLogEntry(null, null, new { modelId = prep.Model.Id }));
+            }
+            else if (!prep.ClearSecret)
+            {
+                await secretStore.DeleteAsync(prep.Model.Id, cancellationToken).ConfigureAwait(false);
+                audit.LogAdminAction(
+                    "upstream_secret.rolled_back",
+                    new AuditLogEntry(null, null, new { modelId = prep.Model.Id }));
+            }
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {

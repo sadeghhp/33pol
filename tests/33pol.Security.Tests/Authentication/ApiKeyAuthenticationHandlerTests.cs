@@ -34,32 +34,116 @@ public sealed class ApiKeyAuthenticationHandlerTests
     }
 
     /// <summary>
-    /// A key that was presented and rejected is an authentication failure, even on a public model.
+    /// A key matching no stored record is treated as no key at all on a public model.
     /// </summary>
     /// <remarks>
-    /// Falling through to anonymous access here answered 200 to a caller whose key had been revoked
-    /// or had expired, so clients, CI checks and SDKs had no way to discover that their credential
-    /// had stopped working. Only the complete absence of a key may use the anonymous path.
+    /// OpenAI-compatible SDKs refuse to construct a client with an empty api_key, so callers of a
+    /// public model send a placeholder ("lm-studio", "not-needed", ...). Rejecting those made
+    /// publicAccess unreachable from the SDKs it exists to serve, and it buys nothing: the route
+    /// already serves callers who send no credential at all.
     /// </remarks>
     [Fact]
-    public async Task HandleAuthenticateAsync_PublicInferenceInvalidKey_Fails()
+    public async Task HandleAuthenticateAsync_PublicInferenceUnrecognizedKey_ReturnsNoResult()
     {
-        var validator = Substitute.For<IApiKeyValidator>();
-        validator.ValidateAsync("sk-garbage", Arg.Any<CancellationToken>())
-            .Returns(ApiKeyValidationResult.Fail(ApiKeyValidationFailure.Invalid));
-
-        var handler = CreateHandler(out var authState, out _, validator);
+        var handler = CreateHandler(out var authState, out _, FailingValidator(ApiKeyValidationFailure.Invalid));
         authState.IsAuthenticationRequired = true;
 
-        var context = new DefaultHttpContext();
-        context.Request.Path = "/v1/chat/completions";
-        context.Items[PublicModelAccessKeys.IsPublicInference] = true;
-        context.Request.Headers.Authorization = "Bearer sk-garbage";
+        var context = PublicInferenceContext("Bearer lm-studio");
+
+        await handler.InitializeAsync(new AuthenticationScheme(GatewayAuthSchemes.ApiKey, null, typeof(ApiKeyAuthenticationHandler)), context);
+        var result = await handler.AuthenticateAsync();
+
+        result.None.Should().BeTrue();
+        PublicModelAccess.HasRejectedCredential(context).Should().BeFalse();
+    }
+
+    /// <summary>
+    /// A key the gateway recognises but will not honour still fails, even on a public model.
+    /// </summary>
+    /// <remarks>
+    /// Falling through to anonymous access here answered 200 to a caller whose key had been revoked,
+    /// had expired, or whose tenant had been deactivated, so clients, CI checks and SDKs had no way
+    /// to discover that their credential had stopped working.
+    /// </remarks>
+    [Theory]
+    [InlineData(ApiKeyValidationFailure.Revoked, "invalid_api_key")]
+    [InlineData(ApiKeyValidationFailure.Expired, "expired_api_key")]
+    [InlineData(ApiKeyValidationFailure.TenantInactive, "invalid_api_key")]
+    public async Task HandleAuthenticateAsync_PublicInferenceRecognizedButUnusableKey_Fails(
+        ApiKeyValidationFailure failure,
+        string expectedCode)
+    {
+        var handler = CreateHandler(out var authState, out _, FailingValidator(failure));
+        authState.IsAuthenticationRequired = true;
+
+        var context = PublicInferenceContext("Bearer sk-33pol-real-but-dead");
 
         await handler.InitializeAsync(new AuthenticationScheme(GatewayAuthSchemes.ApiKey, null, typeof(ApiKeyAuthenticationHandler)), context);
         var result = await handler.AuthenticateAsync();
 
         result.None.Should().BeFalse();
+        result.Succeeded.Should().BeFalse();
+        PublicModelAccess.HasRejectedCredential(context).Should().BeTrue();
+        context.Items[GatewayAuthContextItems.AuthFailureCode].Should().Be(expectedCode);
+    }
+
+    /// <summary>
+    /// The models listing is anonymous-capable too, so a placeholder key must not hide it: an SDK
+    /// configured with a dummy key has to be able to discover which models are public.
+    /// </summary>
+    [Fact]
+    public async Task HandleAuthenticateAsync_ModelsListingUnrecognizedKey_ReturnsNoResult()
+    {
+        var handler = CreateHandler(out var authState, out _, FailingValidator(ApiKeyValidationFailure.Invalid));
+        authState.IsAuthenticationRequired = true;
+
+        var context = new DefaultHttpContext();
+        context.Request.Method = HttpMethods.Get;
+        context.Request.Path = "/v1/models";
+        context.Request.Headers.Authorization = "Bearer not-needed";
+
+        await handler.InitializeAsync(new AuthenticationScheme(GatewayAuthSchemes.ApiKey, null, typeof(ApiKeyAuthenticationHandler)), context);
+        var result = await handler.AuthenticateAsync();
+
+        result.None.Should().BeTrue();
+        PublicModelAccess.HasRejectedCredential(context).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task HandleAuthenticateAsync_ModelsListingRevokedKey_Fails()
+    {
+        var handler = CreateHandler(out var authState, out _, FailingValidator(ApiKeyValidationFailure.Revoked));
+        authState.IsAuthenticationRequired = true;
+
+        var context = new DefaultHttpContext();
+        context.Request.Method = HttpMethods.Get;
+        context.Request.Path = "/v1/models";
+        context.Request.Headers.Authorization = "Bearer sk-33pol-revoked";
+
+        await handler.InitializeAsync(new AuthenticationScheme(GatewayAuthSchemes.ApiKey, null, typeof(ApiKeyAuthenticationHandler)), context);
+        var result = await handler.AuthenticateAsync();
+
+        result.Succeeded.Should().BeFalse();
+        PublicModelAccess.HasRejectedCredential(context).Should().BeTrue();
+    }
+
+    /// <summary>
+    /// The placeholder allowance is scoped to routes that serve anonymous callers. On a private
+    /// model an unrecognised key is still an authentication failure.
+    /// </summary>
+    [Fact]
+    public async Task HandleAuthenticateAsync_PrivateModelUnrecognizedKey_Fails()
+    {
+        var handler = CreateHandler(out var authState, out _, FailingValidator(ApiKeyValidationFailure.Invalid));
+        authState.IsAuthenticationRequired = true;
+
+        var context = new DefaultHttpContext();
+        context.Request.Path = "/v1/chat/completions";
+        context.Request.Headers.Authorization = "Bearer lm-studio";
+
+        await handler.InitializeAsync(new AuthenticationScheme(GatewayAuthSchemes.ApiKey, null, typeof(ApiKeyAuthenticationHandler)), context);
+        var result = await handler.AuthenticateAsync();
+
         result.Succeeded.Should().BeFalse();
         PublicModelAccess.HasRejectedCredential(context).Should().BeTrue();
     }
@@ -114,6 +198,28 @@ public sealed class ApiKeyAuthenticationHandlerTests
         var result = await handler.AuthenticateAsync();
 
         result.None.Should().BeTrue();
+    }
+
+    private static IApiKeyValidator FailingValidator(ApiKeyValidationFailure failure)
+    {
+        var validator = Substitute.For<IApiKeyValidator>();
+        validator.ValidateAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(ApiKeyValidationResult.Fail(failure));
+        return validator;
+    }
+
+    private static DefaultHttpContext PublicInferenceContext(string? authorization)
+    {
+        var context = new DefaultHttpContext();
+        context.Request.Method = HttpMethods.Post;
+        context.Request.Path = "/v1/chat/completions";
+        context.Items[PublicModelAccessKeys.IsPublicInference] = true;
+        if (authorization is not null)
+        {
+            context.Request.Headers.Authorization = authorization;
+        }
+
+        return context;
     }
 
     private static ApiKeyAuthenticationHandler CreateHandler(

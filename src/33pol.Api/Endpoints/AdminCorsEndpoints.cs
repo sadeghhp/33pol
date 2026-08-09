@@ -13,7 +13,7 @@ public static class AdminCorsEndpoints
     public static IEndpointRouteBuilder MapAdminCorsEndpoints(this IEndpointRouteBuilder endpoints)
     {
         var group = endpoints.MapGroup("/admin/api/cors")
-            .RequireAuthorization(GatewayAuthPolicies.Admin);
+            .RequireAuthorization(GatewayAuthPolicies.Operator);
 
         group.MapGet("/", GetAsync);
         group.MapPut("/", PutAsync);
