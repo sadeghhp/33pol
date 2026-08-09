@@ -855,6 +855,198 @@ public sealed class ModelRouterMiddlewareTests
     }
 
     /// <summary>
+    /// The breaker and the dashboard ask different questions of the same 4xx. Conflating them meant
+    /// a model rejecting every call with 400 reported "0 errors, 0.00% error rate" on the console
+    /// beside a live feed full of red rows.
+    /// </summary>
+    [Fact]
+    public async Task InvokeAsync_Upstream4xx_IsCountedAsAnErrorOnTheDashboard()
+    {
+        await WithSingleModelRegistryAsync(async registry =>
+        {
+            var scope = Substitute.For<IInferenceRequestScope>();
+            var tracker = CreateTrackerReturning(scope);
+            var recent = Substitute.For<IRecentRequestStore>();
+
+            var middleware = CreateMiddleware(
+                registry: registry,
+                forwarder: CreateForwarderProxyingStatus(StatusCodes.Status400BadRequest),
+                requestTracker: tracker,
+                recentRequestStore: recent);
+
+            await middleware.InvokeAsync(CreateContext(
+                HttpMethods.Post, "/v1/chat/completions", """{"model":"m1","stream":false}"""));
+
+            scope.Received(1).SetOutcome(false, "upstream_4xx");
+            recent.Received(1).Record(Arg.Is<RecentRequestEntry>(e => e.StatusCode == 400));
+        });
+    }
+
+    [Fact]
+    public async Task InvokeAsync_Upstream2xx_IsCountedAsSuccess()
+    {
+        await WithSingleModelRegistryAsync(async registry =>
+        {
+            var scope = Substitute.For<IInferenceRequestScope>();
+            var middleware = CreateMiddleware(
+                registry: registry,
+                forwarder: CreateForwarderProxyingStatus(StatusCodes.Status200OK),
+                requestTracker: CreateTrackerReturning(scope));
+
+            await middleware.InvokeAsync(CreateContext(
+                HttpMethods.Post, "/v1/chat/completions", """{"model":"m1","stream":false}"""));
+
+            scope.Received(1).SetOutcome(true, null);
+        });
+    }
+
+    /// <summary>
+    /// Admission rejections answer the client with an error, so they have to reach the console's
+    /// counters and live feed. Reporting them to Prometheus alone is what let a saturated gateway
+    /// render as calm and error-free while it turned every request away.
+    /// </summary>
+    [Fact]
+    public async Task InvokeAsync_UnhealthyBackend_RecordsRejectionForTheDashboard()
+    {
+        var registry = CreateSingleModelRegistry();
+        var health = Substitute.For<IBackendHealthStore>();
+        health.IsBackendHealthy(Arg.Any<string>()).Returns(false);
+
+        var tracker = CreateTrackerReturning(Substitute.For<IInferenceRequestScope>());
+        var recent = Substitute.For<IRecentRequestStore>();
+        var middleware = CreateMiddleware(
+            registry: registry, healthStore: health, requestTracker: tracker, recentRequestStore: recent);
+
+        await middleware.InvokeAsync(CreateContext(
+            HttpMethods.Post, "/v1/chat/completions", """{"model":"m1"}"""));
+
+        tracker.Received(1).RecordRejectedRequest("m1", "backend_unhealthy");
+        recent.Received(1).Record(Arg.Is<RecentRequestEntry>(e =>
+            e.ModelId == "m1" && e.StatusCode >= 400 && !e.IsInFlight));
+    }
+
+    [Fact]
+    public async Task InvokeAsync_CircuitOpen_RecordsRejectionForTheDashboard()
+    {
+        var registry = CreateSingleModelRegistry();
+        var breakers = CreateBreakerRegistry(failureThreshold: 1);
+
+        // Trip it: one 5xx forward is enough at a threshold of one.
+        var tripped = CreateMiddleware(
+            registry: registry,
+            forwarder: CreateForwarderProxyingStatus(StatusCodes.Status500InternalServerError),
+            circuitBreakers: breakers);
+        await tripped.InvokeAsync(CreateContext(
+            HttpMethods.Post, "/v1/chat/completions", """{"model":"m1"}"""));
+        breakers.GetBreaker("m1").State.Should().Be(CircuitState.Open);
+
+        var tracker = CreateTrackerReturning(Substitute.For<IInferenceRequestScope>());
+        var recent = Substitute.For<IRecentRequestStore>();
+        var middleware = CreateMiddleware(
+            registry: registry, circuitBreakers: breakers, requestTracker: tracker, recentRequestStore: recent);
+
+        await middleware.InvokeAsync(CreateContext(
+            HttpMethods.Post, "/v1/chat/completions", """{"model":"m1"}"""));
+
+        tracker.Received(1).RecordRejectedRequest("m1", "circuit_open");
+        recent.Received(1).Record(Arg.Any<RecentRequestEntry>());
+    }
+
+    [Fact]
+    public async Task InvokeAsync_BulkheadSaturated_RecordsRejectionForTheDashboard()
+    {
+        var registry = CreateSingleModelRegistry();
+        var bulkhead = new BulkheadRegistry(
+            Options.Create(new GatewayOptions
+            {
+                Resilience = new GatewayResilienceOptions { MaxConcurrentForwardsPerModel = 1 },
+            }),
+            Substitute.For<IGatewayMetricsCollector>());
+        var held = await bulkhead.TryAcquireAsync("m1", CancellationToken.None);
+
+        try
+        {
+            var tracker = CreateTrackerReturning(Substitute.For<IInferenceRequestScope>());
+            var recent = Substitute.For<IRecentRequestStore>();
+            var middleware = CreateMiddleware(
+                registry: registry, bulkhead: bulkhead, requestTracker: tracker, recentRequestStore: recent);
+
+            await middleware.InvokeAsync(CreateContext(
+                HttpMethods.Post, "/v1/chat/completions", """{"model":"m1"}"""));
+
+            tracker.Received(1).RecordRejectedRequest("m1", "bulkhead_full");
+            recent.Received(1).Record(Arg.Is<RecentRequestEntry>(e => e.StatusCode == 429));
+        }
+        finally
+        {
+            held?.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// The request has to be on the feed while it is running, not only once it has finished — that
+    /// is the whole point of the in-flight entry.
+    /// </summary>
+    [Fact]
+    public async Task InvokeAsync_WhileForwarding_PublishesAnInFlightEntryThenRetiresIt()
+    {
+        await WithSingleModelRegistryAsync(async registry =>
+        {
+            var recent = Substitute.For<IRecentRequestStore>();
+            RecentRequestEntry? published = null;
+            var publishedDuringForward = false;
+            recent.When(r => r.BeginInFlight(Arg.Any<RecentRequestEntry>()))
+                .Do(call => published = call.Arg<RecentRequestEntry>());
+
+            var forwarder = Substitute.For<IInferenceHttpForwarder>();
+            forwarder.SendAsync(
+                    Arg.Any<HttpContext>(), Arg.Any<string>(), Arg.Any<string?>(),
+                    Arg.Any<StreamingHttpTransformer>(), Arg.Any<bool>(),
+                    Arg.Any<InferenceForwardTimeouts>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    // Observed from inside the forward: the entry must already be visible here.
+                    publishedDuringForward = published is not null;
+                    call.Arg<HttpContext>().Response.StatusCode = StatusCodes.Status200OK;
+                    return ForwarderError.None;
+                });
+
+            var middleware = CreateMiddleware(
+                registry: registry, forwarder: forwarder, recentRequestStore: recent);
+
+            await middleware.InvokeAsync(CreateContext(
+                HttpMethods.Post, "/v1/chat/completions", """{"model":"m1","stream":false}"""));
+
+            publishedDuringForward.Should().BeTrue();
+            published!.IsInFlight.Should().BeTrue();
+            published.ModelId.Should().Be("m1");
+            published.StatusCode.Should().Be(0);
+
+            recent.Received(1).Record(Arg.Is<RecentRequestEntry>(e => !e.IsInFlight));
+            recent.Received(1).CompleteInFlight(published.RequestId);
+        });
+    }
+
+    private static IRequestTracker CreateTrackerReturning(IInferenceRequestScope scope)
+    {
+        var tracker = Substitute.For<IRequestTracker>();
+        tracker.BeginInferenceRequest(Arg.Any<string>(), Arg.Any<bool>()).Returns(scope);
+        return tracker;
+    }
+
+    private static IModelRegistry CreateSingleModelRegistry()
+    {
+        var registry = Substitute.For<IModelRegistry>();
+        registry.TryGetModel("m1", out Arg.Any<ModelConfig?>())
+            .Returns(call =>
+            {
+                call[1] = new ModelConfig { Id = "m1", Url = "http://backend:8000" };
+                return true;
+            });
+        return registry;
+    }
+
+    /// <summary>
     /// A burst of client disconnects must not be able to take a healthy model offline.
     /// </summary>
     [Fact]
@@ -984,9 +1176,16 @@ public sealed class ModelRouterMiddlewareTests
         authState ??= CreateOpenAuthState();
 
         errorWriter ??= new OpenAiErrorResponseWriter();
-        requestTracker ??= Substitute.For<IRequestTracker>();
-        requestTracker.BeginInferenceRequest(Arg.Any<string>(), Arg.Any<bool>())
-            .Returns(_ => Substitute.For<IInferenceRequestScope>());
+        if (requestTracker is null)
+        {
+            // Only the default gets the throwaway-scope stub: re-stubbing a caller-supplied tracker
+            // would silently discard the scope a test set up to assert its outcome on.
+            var defaultTracker = Substitute.For<IRequestTracker>();
+            defaultTracker.BeginInferenceRequest(Arg.Any<string>(), Arg.Any<bool>())
+                .Returns(_ => Substitute.For<IInferenceRequestScope>());
+            requestTracker = defaultTracker;
+        }
+
         recentRequestStore ??= Substitute.For<IRecentRequestStore>();
         var usageRecorder = Substitute.For<IUsageRecorder>();
         var metricsCollector = Substitute.For<IGatewayMetricsCollector>();

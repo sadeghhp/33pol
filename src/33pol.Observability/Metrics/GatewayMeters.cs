@@ -23,6 +23,10 @@ public static class GatewayMeters
     public static readonly UpDownCounter<long> ActiveStreams =
         Meter.CreateUpDownCounter<long>("gateway_active_streams");
 
+    /// <summary>Inference requests being forwarded right now — streaming and non-streaming alike.</summary>
+    public static readonly UpDownCounter<long> ActiveRequests =
+        Meter.CreateUpDownCounter<long>("gateway_active_requests");
+
     public static readonly Counter<long> RateLimitRejections =
         Meter.CreateCounter<long>("gateway_rate_limit_rejections_total");
 

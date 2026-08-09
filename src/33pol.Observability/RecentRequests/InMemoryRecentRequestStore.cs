@@ -8,5 +8,9 @@ public sealed class InMemoryRecentRequestStore(GatewayRuntimeState runtimeState)
 {
     public void Record(RecentRequestEntry entry) => runtimeState.EnqueueRecent(entry);
 
+    public void BeginInFlight(RecentRequestEntry entry) => runtimeState.BeginInFlight(entry);
+
+    public void CompleteInFlight(string requestId) => runtimeState.CompleteInFlight(requestId);
+
     public IReadOnlyList<RecentRequestEntry> GetRecent(int limit) => runtimeState.GetRecent(limit);
 }

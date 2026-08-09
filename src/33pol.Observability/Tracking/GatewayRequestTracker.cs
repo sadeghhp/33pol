@@ -8,13 +8,28 @@ public sealed class GatewayRequestTracker(GatewayRuntimeState runtimeState) : IR
 {
     public IInferenceRequestScope BeginInferenceRequest(string modelId, bool isStreaming)
     {
-        runtimeState.RecordRequestStart(isStreaming);
+        runtimeState.RecordRequestStart(modelId, isStreaming);
+        GatewayMeters.ActiveRequests.Add(1, new KeyValuePair<string, object?>("model", modelId));
         if (isStreaming)
         {
             GatewayMeters.ActiveStreams.Add(1, new KeyValuePair<string, object?>("model", modelId));
         }
 
         return new InferenceScope(runtimeState, modelId, isStreaming);
+    }
+
+    public void RecordRejectedRequest(string modelId, string errorCode)
+    {
+        runtimeState.RecordRequestRejected(modelId);
+
+        GatewayMeters.InferenceRequests.Add(
+            1,
+            new KeyValuePair<string, object?>("model", modelId),
+            new KeyValuePair<string, object?>("status", "error"));
+        GatewayMeters.InferenceErrors.Add(
+            1,
+            new KeyValuePair<string, object?>("model", modelId),
+            new KeyValuePair<string, object?>("code", errorCode));
     }
 
     private sealed class InferenceScope : IInferenceRequestScope
@@ -70,6 +85,8 @@ public sealed class GatewayRequestTracker(GatewayRuntimeState runtimeState) : IR
             GatewayMeters.InferenceDuration.Record(
                 elapsed.TotalSeconds,
                 new KeyValuePair<string, object?>("model", _modelId));
+
+            GatewayMeters.ActiveRequests.Add(-1, new KeyValuePair<string, object?>("model", _modelId));
 
             if (_isStreaming)
             {

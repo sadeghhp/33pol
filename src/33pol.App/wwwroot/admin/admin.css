@@ -806,6 +806,32 @@ code.inp-hint { font-family: var(--font-mono); font-size: 0.95em; padding: 0.05r
 .mini-stat .ms-value { font-weight: var(--fw-semi); font-variant-numeric: tabular-nums; color: var(--text-primary); }
 .mini-stat.warn .ms-value { color: var(--warn); }
 
+/* Per-model breakdown of what is being inferred right now. Present only while work is in flight,
+   so it reads as a transient live state rather than another permanent stat row. */
+.running-now {
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+.running-now-label {
+  display: inline-flex; align-items: center; gap: 0.4rem;
+  color: var(--live-text);
+  font-family: var(--font-mono); font-size: var(--text-2xs);
+  text-transform: uppercase; letter-spacing: 0.06em;
+}
+.running-chip {
+  display: inline-flex; align-items: baseline; gap: 0.45rem;
+  max-width: 100%;
+  padding: 0.35rem 0.65rem;
+  border: 1px solid var(--live-border); border-radius: var(--r-md);
+  background: var(--live-soft); font-size: var(--text-xs);
+}
+.running-chip-model {
+  font-family: var(--font-mono);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  max-width: 22ch;
+}
+.running-chip-count { color: var(--live-text); font-weight: var(--fw-semi); font-variant-numeric: tabular-nums; }
+
 /* ================================================================
    12. CHARTS (hand-rolled)
    ================================================================ */
@@ -926,6 +952,13 @@ th.cell-actions .row-actions, td.cell-actions .row-actions { justify-content: fl
 tr.row-error td { color: var(--error-text); }
 tr.row-warn td { color: var(--warn); }
 tr.row-error td.num, tr.row-warn td.num { color: inherit; }
+
+/* A request still being forwarded. Tinted rather than coloured like an error: nothing has gone
+   wrong, the upstream simply has not answered yet. */
+tr.row-live td { color: var(--live-text); background: var(--live-soft); }
+tr.row-live td.num { color: inherit; }
+tr.row-live .pulse-dot { display: inline-block; margin-right: 0.35rem; vertical-align: middle; }
+td.live { color: var(--live-text); font-family: var(--font-mono); }
 
 .sort-icon { display: inline-flex; vertical-align: middle; margin-left: 3px; transition: transform var(--dur-fast); color: var(--accent); }
 .sort-icon.icon-flip { transform: rotate(180deg); }

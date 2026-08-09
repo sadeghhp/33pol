@@ -397,6 +397,7 @@ function adminApp() {
     },
 
     requestRowClass(r) {
+      if (r?.isInFlight) return 'row-live';
       const statusClass = this.requestStatusClass(r?.statusCode);
       if (r?.errorCode) return statusClass || 'row-error';
       return statusClass;
@@ -432,7 +433,15 @@ function adminApp() {
       // Poll on every tab so the live-vitals bar stays current wherever you are.
       this.poll = setInterval(() => {
         if (document.hidden) return;
+        // A rejected key does not recover by being retried: the connection watchdog re-checks it on
+        // its own schedule, and polling on regardless meant a stale tab sent a 401 every 2s forever,
+        // filling the gateway's admin audit trail.
+        if (this.connectionStatus === 'fail') return;
         this.loadSummary(true);
+        // The live tail is only rendered on Overview, but it has to actually be live there — it used
+        // to refresh solely on tab activation, so a request that arrived while you were watching the
+        // page never appeared until you clicked Refresh.
+        if (this.tab === 'dashboard') this.loadRequests(true);
         if (this._pollTick % 5 === 0) this.loadHealth();
         // Every 5th tick (10s) — the log buffer does not move fast enough to justify 2s polling,
         // and only while the tab is actually on screen.
@@ -449,7 +458,8 @@ function adminApp() {
         requests: Number(s.totalInferenceRequests ?? 0),
         errors: Number(s.totalErrors ?? 0),
         latency: Number(s.averageLatencyMs ?? 0),
-        streams: Number(s.activeStreams ?? 0)
+        streams: Number(s.activeStreams ?? 0),
+        inflight: Number(s.activeRequests ?? 0)
       };
       const h = this.vitalsHistory;
       const last = h[h.length - 1];
@@ -470,8 +480,9 @@ function adminApp() {
         }
         return out;
       }
-      const key = metric === 'latency' ? 'latency' : 'streams';
-      return h.map(s => s[key]);
+      // Gauges (latency, in-flight) are plotted as-is; only the cumulative counters above become rates.
+      const key = metric === 'latency' ? 'latency' : (metric === 'streams' ? 'streams' : 'inflight');
+      return h.map(s => Number(s[key] ?? 0));
     },
 
     hasSpark(metric) {
@@ -1420,10 +1431,16 @@ function adminApp() {
       });
     },
 
-    async loadRequests() {
-      await this.runApi('overview', 'Loading requests…', async () => {
+    /** @param quiet true for the 2s poll tick, which must not flash the loading state or raise a banner. */
+    async loadRequests(quiet) {
+      const fetchRequests = async () => {
         this.requests = (await this.apiJson('/admin/api/requests?limit=25')) ?? [];
-      });
+      };
+      if (quiet) {
+        try { await fetchRequests(); } catch { /* a transient blip is already reported by the summary poll */ }
+        return;
+      }
+      await this.runApi('overview', 'Loading requests…', fetchRequests);
     },
 
     async applyUsageRange() {
@@ -1950,6 +1967,38 @@ function adminApp() {
     get activeStreamsCount() { return Number(this.summary?.activeStreams ?? 0); },
     get hasActiveStreams() { return !!this.summary && this.activeStreamsCount > 0; },
     get noActiveStreams() { return this.activeStreamsCount === 0; },
+
+    // In-flight: every inference being forwarded right now, streaming or not. Active streams is the
+    // streaming subset, so a non-streaming completion in progress moves this and not that — which is
+    // exactly the state the console used to render as an idle gateway.
+    get activeRequestsCount() { return Number(this.summary?.activeRequests ?? 0); },
+    get activeRequestsText() { return this.formatNum(this.activeRequestsCount); },
+    get hasActiveRequests() { return !!this.summary && this.activeRequestsCount > 0; },
+    get noActiveRequests() { return this.activeRequestsCount === 0; },
+    get inFlightFootText() {
+      if (this.activeStreamsCount > 0) {
+        return this.activeStreamsCount + ' streaming · ' +
+          (this.activeRequestsCount - this.activeStreamsCount) + ' buffered';
+      }
+      return this.activeRequestsCount === 1 ? 'inference running' : 'inferences running';
+    },
+
+    /** One chip per model with work in progress, so an operator can see *what* is running. */
+    get activeModelChips() {
+      const map = this.summary?.activeRequestsPerModel;
+      if (!map || typeof map !== 'object') return [];
+      return Object.entries(map)
+        .map(([modelId, count]) => ({ modelId, count: Number(count) }))
+        .filter(row => row.count > 0)
+        .sort((a, b) => b.count - a.count || (a.modelId < b.modelId ? -1 : 1))
+        .map(row => ({
+          key: row.modelId,
+          modelId: row.modelId,
+          countText: '×' + this.formatNum(row.count)
+        }));
+    },
+
+    get hasActiveModelChips() { return this.activeModelChips.length > 0; },
     get totalErrorsCount() { return Number(this.summary?.totalErrors ?? 0); },
     get hasErrors() { return !!this.summary && this.totalErrorsCount > 0; },
 
@@ -1985,7 +2034,8 @@ function adminApp() {
         throughput: one('throughput'),
         errorRate: one('errorRate'),
         latency: one('latency'),
-        streams: one('streams')
+        streams: one('streams'),
+        inflight: one('inflight')
       };
     },
 
@@ -2037,6 +2087,9 @@ function adminApp() {
       return this.sortedRequests().map(r => {
         const expanded = this.isRequestExpanded(r.requestId);
         const duration = r.durationMs;
+        // An in-flight row has no status yet and its duration is the elapsed time so far, restamped
+        // by the gateway on every read — so the timer visibly advances between polls.
+        const inFlight = !!r.isInFlight;
         return {
           key: r.requestId,
           requestId: r.requestId ?? '—',
@@ -2045,17 +2098,21 @@ function adminApp() {
           method: r.method ?? '—',
           path: r.path ?? '',
           modelId: r.modelId ?? '—',
-          statusCode: r.statusCode ?? '—',
-          errorText: r.errorCode ?? '—',
-          errorClass: r.errorCode ? 'error' : '',
+          inFlight,
+          settled: !inFlight,
+          statusCode: inFlight ? '···' : (r.statusCode ?? '—'),
+          errorText: inFlight ? 'running' : (r.errorCode ?? '—'),
+          errorClass: inFlight ? 'live' : (r.errorCode ? 'error' : ''),
           durationText: typeof duration?.toFixed === 'function' ? duration.toFixed(0) : (duration ?? '—'),
           rowClass: this.requestRowClass(r),
           expanded,
           ariaExpanded: expanded ? 'true' : 'false',
           ariaLabel: 'Request ' + this.shortRequestId(r.requestId) +
+            (inFlight ? ', in progress' : '') +
             (r.errorCode ? ', error ' + r.errorCode : ''),
           tenant: r.tenantId ?? '—',
           streaming: r.isStreaming ? 'Yes' : 'No',
+          statusDetail: inFlight ? 'In progress' : String(r.statusCode ?? '—'),
           toggle: () => this.toggleRequestDetails(r.requestId),
           copyId: () => this.copyText(r.requestId, 'Request ID copied.')
         };

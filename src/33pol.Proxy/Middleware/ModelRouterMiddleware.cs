@@ -163,12 +163,14 @@ public sealed class ModelRouterMiddleware
 
         if (!_healthStore.IsBackendHealthy(modelConfig.Id))
         {
-            _metricsCollector.RecordForwardAttempt(modelConfig.Id, "backend_unhealthy");
-            await context.WriteGatewayErrorAsync(
+            await RejectAtAdmissionAsync(
+                context,
+                modelConfig.Id,
+                requestInfo.Stream,
                 _errors.Write(
                     GatewayErrorCode.BackendUnhealthy,
                     message: $"Backend for model '{modelConfig.Id}' is unhealthy."),
-                context.RequestAborted).ConfigureAwait(false);
+                outcome: "backend_unhealthy").ConfigureAwait(false);
             return;
         }
 
@@ -178,10 +180,12 @@ public sealed class ModelRouterMiddleware
                 "Rejected request for model {ModelId}: circuit breaker is {CircuitState}",
                 modelConfig.Id,
                 ModelCircuitBreakerRegistry.ToStateLabel(_circuitBreakers.GetBreaker(modelConfig.Id).State));
-            _metricsCollector.RecordForwardAttempt(modelConfig.Id, "circuit_open");
-            await context.WriteGatewayErrorAsync(
+            await RejectAtAdmissionAsync(
+                context,
+                modelConfig.Id,
+                requestInfo.Stream,
                 _errors.Write(GatewayErrorCode.CircuitOpen),
-                context.RequestAborted).ConfigureAwait(false);
+                outcome: "circuit_open").ConfigureAwait(false);
             return;
         }
 
@@ -198,12 +202,14 @@ public sealed class ModelRouterMiddleware
             // Reported as a concurrency limit (429 + Retry-After), not as UpstreamError. A 502
             // backend_error told clients the model itself had failed, so OpenAI-compatible routers
             // marked it down and failed over — when the correct signal is simply "retry shortly".
-            _metricsCollector.RecordForwardAttempt(modelConfig.Id, "bulkhead_full");
-            await context.WriteGatewayErrorAsync(
+            await RejectAtAdmissionAsync(
+                context,
+                modelConfig.Id,
+                requestInfo.Stream,
                 _errors.Write(
                     GatewayErrorCode.ConcurrencyLimitExceeded,
                     message: "Too many concurrent requests for this model. Retry shortly."),
-                context.RequestAborted,
+                outcome: "bulkhead_full",
                 retryAfterSeconds: 1).ConfigureAwait(false);
             return;
         }
@@ -227,11 +233,17 @@ public sealed class ModelRouterMiddleware
                 var streamAcquire = _rateLimitStore.TryAcquireStreamSlot(ratePartitionKey, ratePolicy);
                 if (!streamAcquire.IsAcquired)
                 {
-                    // Client-tier concurrency limit, not a backend signal.
-                    await context.WriteGatewayErrorAsync(
+                    // Client-tier concurrency limit, not a backend signal. It is governed by the
+                    // rate-limit master switch, so it is counted as a rate-limit rejection too —
+                    // otherwise the console's "Rate-limited" stat silently omitted stream caps.
+                    _metricsCollector.RecordRateLimitRejection("stream_concurrency");
+                    await RejectAtAdmissionAsync(
+                        context,
+                        modelConfig.Id,
+                        requestInfo.Stream,
                         _errors.Write(GatewayErrorCode.ConcurrencyLimitExceeded),
-                        context.RequestAborted,
-                        streamAcquire.RetryAfterSeconds).ConfigureAwait(false);
+                        outcome: "stream_concurrency",
+                        retryAfterSeconds: streamAcquire.RetryAfterSeconds).ConfigureAwait(false);
                     return;
                 }
 
@@ -248,6 +260,11 @@ public sealed class ModelRouterMiddleware
             using var inferenceScope = _requestTracker.BeginInferenceRequest(modelConfig.Id, requestInfo.Stream);
 
             var requestId = ResolveRequestId(context);
+
+            // Published before the forward, not after it: this is what puts a running inference on
+            // the dashboard while it runs instead of only once it has already finished.
+            using var inFlightLease = PublishInFlight(context, requestId, modelConfig.Id, started, requestInfo.Stream);
+
             TenantContext? usageTenant = null;
             if (context.Items.TryGetValue(TenantContextKeys.HttpContextItemKey, out var usageTenantValue) &&
                 usageTenantValue is TenantContext tenantContextForUsage)
@@ -349,8 +366,7 @@ public sealed class ModelRouterMiddleware
                 // code, and a backend that degrades into fast 5xx responses is exactly as unhealthy
                 // as one that times out — counting those as breaker successes closed a half-open
                 // breaker on the first 500 and kept it closed forever, while metrics and the recent
-                // requests feed reported the failure as success. 4xx stays a success: the backend
-                // answered; the request was wrong.
+                // requests feed reported the failure as success.
                 if (context.Response.StatusCode >= StatusCodes.Status500InternalServerError)
                 {
                     circuitLease.RecordFailure();
@@ -360,10 +376,25 @@ public sealed class ModelRouterMiddleware
                     return;
                 }
 
+                // A proxied 4xx splits the two questions the outcome used to answer at once. The
+                // backend answered, so it stays healthy as far as the breaker is concerned — but the
+                // client got an error, so it counts as one on the dashboard. Conflating them meant a
+                // model rejecting every call with 400 reported "0 errors, 0.00% error rate" beside a
+                // feed full of red rows.
+                var clientError = context.Response.StatusCode >= StatusCodes.Status400BadRequest;
                 circuitLease.RecordSuccess();
-                inferenceScope.SetOutcome(true);
-                _metricsCollector.RecordForwardAttempt(modelConfig.Id, "success");
-                RecordRecentRequest(context, modelConfig.Id, started, requestInfo.Stream, success: true);
+                if (clientError)
+                {
+                    inferenceScope.SetOutcome(false, "upstream_4xx");
+                    _metricsCollector.RecordForwardAttempt(modelConfig.Id, "upstream_4xx");
+                }
+                else
+                {
+                    inferenceScope.SetOutcome(true);
+                    _metricsCollector.RecordForwardAttempt(modelConfig.Id, "success");
+                }
+
+                RecordRecentRequest(context, modelConfig.Id, started, requestInfo.Stream, success: !clientError);
                 return;
             }
 
@@ -445,6 +476,89 @@ public sealed class ModelRouterMiddleware
         }
     }
 
+    /// <summary>
+    /// Answers a request the gateway refused before forwarding, and records it everywhere the
+    /// console reads from: the request and error totals, the per-model error breakdown, and the
+    /// live feed.
+    /// </summary>
+    /// <remarks>
+    /// These four paths (unhealthy backend, open circuit, full bulkhead, exhausted stream slot)
+    /// previously reported only to Prometheus, so a saturated gateway rejecting every call still
+    /// rendered as "0 errors, 0.00% error rate" on the dashboard. The recording happens after the
+    /// response is written so the feed row carries the real status code and error header.
+    /// </remarks>
+    private async Task RejectAtAdmissionAsync(
+        HttpContext context,
+        string modelId,
+        bool isStreaming,
+        WrittenErrorResponse error,
+        string outcome,
+        int? retryAfterSeconds = null)
+    {
+        var started = DateTimeOffset.UtcNow;
+        _metricsCollector.RecordForwardAttempt(modelId, outcome);
+
+        await context.WriteGatewayErrorAsync(error, context.RequestAborted, retryAfterSeconds)
+            .ConfigureAwait(false);
+
+        _requestTracker.RecordRejectedRequest(modelId, outcome);
+        RecordRecentRequest(context, modelId, started, isStreaming, success: false);
+    }
+
+    /// <summary>
+    /// Publishes the request to the live feed the moment forwarding begins, and retires the entry on
+    /// every exit path. Until the upstream answers the row carries status 0 and a duration that
+    /// grows with each dashboard poll.
+    /// </summary>
+    private IDisposable PublishInFlight(
+        HttpContext context,
+        string requestId,
+        string modelId,
+        DateTimeOffset started,
+        bool isStreaming)
+    {
+        _recentRequestStore.BeginInFlight(new RecentRequestEntry
+        {
+            RequestId = requestId,
+            Method = context.Request.Method,
+            Path = context.Request.Path.Value ?? string.Empty,
+            ModelId = modelId,
+            TenantId = ResolveTenantId(context),
+            StatusCode = 0,
+            DurationMs = 0,
+            IsStreaming = isStreaming,
+            ErrorCode = null,
+            TimestampUtc = started,
+            IsInFlight = true,
+        });
+
+        return new InFlightRequestLease(_recentRequestStore, requestId);
+    }
+
+    /// <remarks>
+    /// A completed entry for the same request id supersedes the in-flight one inside the store, so
+    /// this lease is the guarantee for the paths that never record a completion — a thrown exception
+    /// above all. Releasing an id the store no longer holds is a no-op.
+    /// </remarks>
+    private sealed class InFlightRequestLease(IRecentRequestStore store, string requestId) : IDisposable
+    {
+        private int _disposed;
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) == 0)
+            {
+                store.CompleteInFlight(requestId);
+            }
+        }
+    }
+
+    private static string? ResolveTenantId(HttpContext context) =>
+        context.Items.TryGetValue(TenantContextKeys.HttpContextItemKey, out var tenantValue) &&
+        tenantValue is TenantContext tenant
+            ? tenant.TenantId
+            : null;
+
     private void RecordRecentRequest(
         HttpContext context,
         string modelId,
@@ -453,16 +567,19 @@ public sealed class ModelRouterMiddleware
         bool success)
     {
         var requestId = ResolveRequestId(context);
-
-        string? tenantId = null;
-        if (context.Items.TryGetValue(TenantContextKeys.HttpContextItemKey, out var tenantValue) &&
-            tenantValue is TenantContext tenant)
-        {
-            tenantId = tenant.TenantId;
-        }
+        var tenantId = ResolveTenantId(context);
 
         var durationMs = (DateTimeOffset.UtcNow - started).TotalMilliseconds;
-        var statusCode = context.Response.HasStarted ? context.Response.StatusCode : (success ? 200 : 502);
+
+        // Prefer whatever status the gateway actually set — an admission rejection has already
+        // written its 429 or 503 even though the body may not have flushed yet, and keying off
+        // HasStarted alone reported every one of them to the console as a generic 502.
+        var statusCode = context.Response.StatusCode;
+        if (!success && !context.Response.HasStarted && statusCode < StatusCodes.Status400BadRequest)
+        {
+            statusCode = StatusCodes.Status502BadGateway;
+        }
+
         var errorCode = ResolveErrorCode(context);
 
         _recentRequestStore.Record(new RecentRequestEntry

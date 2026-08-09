@@ -58,7 +58,7 @@ directive that the evaluator could not resolve fails the build instead of the op
 
 | Section | Hash | Content |
 |---------|------|---------|
-| Overview | `#/dashboard` | Metrics (2s poll while active + visible), health chips, recent requests |
+| Overview | `#/dashboard` | Metrics (2s poll while visible), health chips, in-flight requests, recent requests |
 | Usage | `#/usage` | Date presets, cost center / API key filters, rollups, enriched billing events, forecast, export |
 | Routing | `#/routing` | **Models** (registry, quick-add drawer) and **Backends** (health table) |
 | API keys | `#/keys` | List (assignee, MTD usage, last used), create/edit metadata, per-key model access, revoke, view usage |
@@ -84,9 +84,39 @@ directive that the evaluator could not resolve fails the build instead of the op
 | Request correlation | **Request ID** column (copy button; click row for full ID, tenant, streaming flag) |
 | Filter failures | **Errors only** checkbox on Recent requests |
 
-Overview **polls every 2s** while the tab is visible (summary metrics, errors-by-model, and recent requests).
+Overview **polls every 2s** while the tab is visible — summary metrics, errors-by-model, and recent
+requests. Polling pauses while the key is rejected (`connectionStatus === 'fail'`), so a stale tab
+does not retry a 401 forever.
 
-**Limitation:** Recent requests only include inference routes that reached the forward path (success or upstream failure). Pre-forward rejects (e.g. `model_not_found`, unhealthy backend, circuit open) and middleware-only failures (rate limit, quota, invalid API key before routing) do **not** appear in the ring buffer — use aggregate metrics, **Errors by model**, Grafana, or structured logs with `X-Request-Id`.
+### In-flight requests
+
+Requests appear on the console as soon as forwarding starts, not only once they finish:
+
+| Data | Where shown |
+|------|-------------|
+| Requests being forwarded right now | **In flight** metric card and the top-bar `in flight` chip (`summary.activeRequests`) |
+| Streaming subset | Card sub-line and the `streams` chip (`summary.activeStreams`) |
+| What is running, per model | **Running now** chips under the vitals (`summary.activeRequestsPerModel`) |
+| The individual calls | **Recent requests** — in-flight rows are tinted, show `···` for status and a live-growing duration |
+
+`activeStreams` is the streaming subset of `activeRequests`, so a non-streaming completion or
+embedding in progress moves the latter only. In-flight entries live in memory, are ordered ahead of
+completed ones, and are never written to the durable stats snapshot.
+
+**Counted populations:** Overview counters are **gateway-wide across all tenants** (the endpoints
+require the `Operator` policy); **Usage & cost** is scoped to the caller's tenant and derived from
+persisted billing events. On a multi-tenant gateway the two request totals legitimately differ, and
+both pages say so.
+
+**Error accounting:** a proxied upstream 4xx counts as an error on the dashboard (the client got an
+error) but *not* as a circuit-breaker failure (the backend answered). Requests rejected at admission
+— unhealthy backend, open circuit, full bulkhead, exhausted stream slot — count toward requests,
+errors and **Errors by model**, and appear in the feed. They contribute no latency, since admission
+takes microseconds and would drag the mean toward zero.
+
+**Limitation:** middleware-only failures that never reach the router (rate limit, quota, invalid API
+key, `model_not_found`) still do **not** appear in the ring buffer — use the **Rate-limited** and
+**Quota-blocked** stats, Grafana, or structured logs with `X-Request-Id`.
 
 If the gateway error body was not written (e.g. forward failed after the upstream response already started), **Error** may be empty even when **Status** is 4xx/5xx.
 

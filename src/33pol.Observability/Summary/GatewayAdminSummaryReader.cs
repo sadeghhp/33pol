@@ -20,6 +20,8 @@ public sealed class GatewayAdminSummaryReader(GatewayRuntimeState runtimeState) 
             TotalErrors = errors,
             AverageLatencyMs = avgMs,
             ActiveStreams = activeStreams,
+            ActiveRequests = runtimeState.GetActiveRequests(),
+            ActiveRequestsPerModel = runtimeState.GetActiveRequestsPerModel(),
             RateLimitRejections = rateLimit,
             QuotaRejections = quota,
             RequestsPerModel = runtimeState.GetRequestsPerModel(),

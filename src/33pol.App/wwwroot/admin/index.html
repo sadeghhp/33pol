@@ -17,11 +17,11 @@
        is that no expression below may contain an operator, a ternary or a call with arguments:
        every value comes from a getter, a zero-argument method, or a {get,set} pair on adminApp. -->
   <link rel="stylesheet" href="vendor/fonts.css?v=1" />
-  <link rel="stylesheet" href="admin.css?v=12" />
+  <link rel="stylesheet" href="admin.css?v=13" />
   <script defer src="admin-icons.js?v=9"></script>
   <script defer src="admin-errors.js?v=7"></script>
   <script defer src="admin-store.js?v=8"></script>
-  <script defer src="admin-app.js?v=23"></script>
+  <script defer src="admin-app.js?v=24"></script>
   <script defer src="vendor/alpine-csp-3.14.9.min.js"></script>
 </head>
 <body x-data="adminApp" x-cloak @keydown.window="onModalKeydown">
@@ -105,6 +105,10 @@
             <span class="vc-label">Ready</span>
             <span class="vc-value" x-text="healthReadyText"></span>
           </span>
+          <span class="vital-chip is-live" x-show="hasActiveRequests">
+            <span class="pulse-dot live"></span>
+            <span class="vc-value" x-text="activeRequestsText"></span> <span class="vc-label">in flight</span>
+          </span>
           <span class="vital-chip is-live" x-show="hasActiveStreams">
             <span class="pulse-dot live"></span>
             <span class="vc-value" x-text="activeStreamsCount"></span> <span class="vc-label">streams</span>
@@ -161,6 +165,10 @@
             <div class="titles">
               <span class="eyebrow">Telemetry</span>
               <h2>Overview</h2>
+              <!-- These counters are gateway-wide (every tenant), while Usage & cost is scoped to the
+                   operator tenant. On a multi-tenant gateway the two request totals legitimately
+                   differ, so both pages say which population they count. -->
+              <p class="page-sub">Gateway-wide across all tenants — for per-tenant spend see <strong>Usage &amp; cost</strong>.</p>
               <p class="page-sub" x-show="summaryUpdatedAt">Updated <span x-text="summaryAgeText"></span> · live, refreshing every 2s</p>
             </div>
             <button type="button" class="action secondary" @click="loadOverviewData" :disabled="loadingOverview" title="Refresh">
@@ -215,20 +223,36 @@
               </div>
             </article>
 
+            <!-- In flight, not "active streams": streaming was the only thing counted here, so a
+                 non-streaming completion or embedding that was actively running showed as 0 and the
+                 gateway looked idle for the whole call. Streams are now the sub-metric. -->
             <article class="vital accent-live">
-              <div class="vital-head"><span class="vital-label">Active streams</span><span class="icon" x-html="icons.radio"></span></div>
-              <strong class="vital-value" x-text="activeStreamsCount"></strong>
+              <div class="vital-head"><span class="vital-label">In flight</span><span class="icon" x-html="icons.radio"></span></div>
+              <strong class="vital-value" x-text="activeRequestsText"></strong>
               <div class="vital-foot">
-                <span class="vital-trend up" x-show="hasActiveStreams"><span class="pulse-dot live"></span> streaming now</span>
-                <span x-show="noActiveStreams">idle</span>
+                <span class="vital-trend up" x-show="hasActiveRequests">
+                  <span class="pulse-dot live"></span> <span x-text="inFlightFootText"></span>
+                </span>
+                <span x-show="noActiveRequests">idle</span>
               </div>
-              <div class="vital-spark" x-show="spark.streams.has" aria-hidden="true">
+              <div class="vital-spark" x-show="spark.inflight.has" aria-hidden="true">
                 <svg viewBox="0 0 100 100" preserveAspectRatio="none">
-                  <path class="spark-fill" :d="spark.streams.fill"></path>
-                  <polyline class="spark-line" :points="spark.streams.line"></polyline>
+                  <path class="spark-fill" :d="spark.inflight.fill"></path>
+                  <polyline class="spark-line" :points="spark.inflight.line"></polyline>
                 </svg>
               </div>
             </article>
+          </div>
+
+          <!-- What is running right now, per model. -->
+          <div class="running-now" x-show="hasActiveModelChips" role="status">
+            <span class="running-now-label"><span class="pulse-dot live"></span> Running now</span>
+            <template x-for="m in activeModelChips" :key="m.key">
+              <span class="running-chip">
+                <span class="running-chip-model" x-text="m.modelId" :title="m.modelId"></span>
+                <span class="running-chip-count" x-text="m.countText"></span>
+              </span>
+            </template>
           </div>
 
           <!-- Secondary stats -->
@@ -319,7 +343,10 @@
                     <td><span class="tag" x-text="r.method"></span></td>
                     <td class="col-truncate" x-text="r.path" :title="r.path"></td>
                     <td class="col-truncate" x-text="r.modelId" :title="r.modelId"></td>
-                    <td class="num" x-text="r.statusCode"></td>
+                    <td class="num">
+                      <span class="pulse-dot live" x-show="r.inFlight" aria-hidden="true"></span>
+                      <span x-text="r.statusCode"></span>
+                    </td>
                     <td class="col-truncate" :class="r.errorClass" x-text="r.errorText" :title="r.errorText"></td>
                     <td class="num" x-text="r.durationText"></td>
                   </tr>
@@ -327,6 +354,7 @@
                     <td colspan="8">
                       <dl class="request-detail-list">
                         <div><dt>Request ID</dt><dd><code x-text="r.requestId"></code></dd></div>
+                        <div><dt>Status</dt><dd x-text="r.statusDetail"></dd></div>
                         <div><dt>Error code</dt><dd x-text="r.errorText"></dd></div>
                         <div><dt>Tenant</dt><dd x-text="r.tenant"></dd></div>
                         <div><dt>Streaming</dt><dd x-text="r.streaming"></dd></div>
@@ -349,7 +377,11 @@
         <!-- ============================ USAGE ============================ -->
         <section x-show="isUsage" role="tabpanel" aria-labelledby="tab-usage" id="panel-usage">
           <div class="page-header">
-            <div class="titles"><span class="eyebrow">Billing</span><h2>Usage &amp; cost</h2></div>
+            <div class="titles">
+              <span class="eyebrow">Billing</span><h2>Usage &amp; cost</h2>
+              <p class="page-sub">Scoped to your tenant, and billed from persisted usage events —
+                so these totals will not match the gateway-wide request counts on <strong>Overview</strong>.</p>
+            </div>
           </div>
 
           <div class="chip-row">
