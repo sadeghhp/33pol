@@ -70,3 +70,10 @@ Responses include `Retry-After` when retry timing is known (RPM window reset).
 - Canonical definitions live in `GatewayErrorCatalog` (`33pol.Core`).
 - Responses are produced by `OpenAiErrorResponseWriter` and written through `IErrorResponseWriter`.
 - Golden JSON fixtures for every Phase 3 code are in `tests/33pol.Core.Tests/TestData/`.
+- `GatewayExceptionHandlingMiddleware` is the pipeline's terminal handler, so a failure no other
+  middleware catches still produces one of these bodies rather than a bare status line from the
+  server. It maps a server-side payload-too-large rejection to `request_too_large` and anything else
+  unhandled to `upstream_error`. This is what makes an oversized body answer the same way whether the
+  client declared a `Content-Length` (caught up front) or streamed it chunked (caught mid-read).
+- Once the response has started nothing can be rewritten, so a mid-response failure aborts the
+  connection instead of appending a second, contradictory status.

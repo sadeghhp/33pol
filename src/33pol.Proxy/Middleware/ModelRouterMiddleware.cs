@@ -96,18 +96,38 @@ public sealed class ModelRouterMiddleware
 
         context.Request.EnableBuffering();
 
+        // PublicModelDetectionMiddleware has already parsed this body. Reusing its result is what
+        // keeps the most expensive step on the inference path to one pass; the fallback covers
+        // pipelines (and tests) where that middleware did not run.
         InferenceRequestInfo requestInfo;
-        try
+        if (InferenceRequestParseCache.TryGet(context, out var cachedInfo))
         {
-            requestInfo = await InferenceRequestParser.ParseAsync(context.Request.Body, context.RequestAborted)
-                .ConfigureAwait(false);
+            if (cachedInfo is null)
+            {
+                await context.WriteGatewayErrorAsync(
+                    _errors.Write(GatewayErrorCode.InvalidJson),
+                    context.RequestAborted).ConfigureAwait(false);
+                return;
+            }
+
+            requestInfo = cachedInfo.Value;
         }
-        catch (JsonException)
+        else
         {
-            await context.WriteGatewayErrorAsync(
-                _errors.Write(GatewayErrorCode.InvalidJson),
-                context.RequestAborted).ConfigureAwait(false);
-            return;
+            try
+            {
+                context.Request.Body.Position = 0;
+                requestInfo = await InferenceRequestParser.ParseAsync(context.Request.Body, context.RequestAborted)
+                    .ConfigureAwait(false);
+                InferenceRequestParseCache.SetParsed(context, requestInfo);
+            }
+            catch (JsonException)
+            {
+                await context.WriteGatewayErrorAsync(
+                    _errors.Write(GatewayErrorCode.InvalidJson),
+                    context.RequestAborted).ConfigureAwait(false);
+                return;
+            }
         }
 
         if (string.IsNullOrWhiteSpace(requestInfo.Model))
@@ -310,11 +330,15 @@ public sealed class ModelRouterMiddleware
             // Reserve the estimated max cost against hard-stop budgets before forwarding, so concurrent
             // requests (whose actual cost is unknown until the response returns) cannot collectively
             // overshoot a hard cap.
+            // The prompt side is reserved too: for long-context traffic the input is the dominant
+            // cost, and pricing only max_tokens let concurrent large-prompt requests overshoot a hard
+            // cap by orders of magnitude while each reserved a few thousand output tokens.
             var budgetReservation = await _budgetEnforcement.TryReserveAsync(
                 usageTenant?.TenantId,
                 requestId,
                 modelConfig.Id,
                 requestInfo.MaxTokens,
+                requestBodyBytes,
                 context.RequestAborted).ConfigureAwait(false);
             if (!budgetReservation.IsAllowed)
             {
@@ -340,19 +364,27 @@ public sealed class ModelRouterMiddleware
                 modelConfig.Id,
                 usageCapture,
                 stripClientAuthHeaders: true,
-                upstreamBearerToken: upstreamBearerToken);
+                upstreamBearerToken: upstreamBearerToken,
+                // Where the client's model value sits in the body. Lets an alias be swapped for the
+                // canonical id by splicing bytes rather than rebuilding the document.
+                modelValueRange: requestInfo.ModelValueRange);
 
-            // The forwarder owns both deadlines (header timeout vs stream-idle timeout) and reports
+            // The forwarder owns both deadlines (header timeout vs response-idle timeout) and reports
             // which one fired through its return value, so RequestAborted is left as the client's
             // own token. Overwriting it with a total-duration deadline is what used to truncate
             // healthy long streams and attribute the truncation to the backend.
+            //
+            // The header deadline is widened in proportion to the prompt actually being forwarded: a
+            // fixed one made a large-context request time out purely because the backend was still
+            // reading its prompt, and the breaker then counted that against a backend that was
+            // working correctly.
             var error = await _forwarder.SendAsync(
                 context,
                 modelConfig.Url,
                 upstreamBearerToken,
                 transformer,
                 requestInfo.Stream,
-                _forwardTimeouts,
+                _forwardTimeouts.ForRequestBody(requestBodyBytes),
                 context.RequestAborted).ConfigureAwait(false);
 
             if (error == ForwarderError.None)
@@ -419,15 +451,28 @@ public sealed class ModelRouterMiddleware
 
             if (error == ForwarderError.ResponseBodyDestination)
             {
-                // The upstream stalled after the response had already started. The backend proved it
-                // was reachable and producing, so this is not evidence of ill health — abandon the
+                // The upstream answered and then stalled while sending the body. The backend proved
+                // it was reachable and producing, so this is not evidence of ill health — abandon the
                 // probe (via lease dispose) rather than counting a failure.
                 _logger.LogWarning(
-                    "Stream for model {ModelId} stalled past the idle timeout after {ElapsedMs}ms",
+                    "Response body for model {ModelId} stalled past the idle timeout after {ElapsedMs}ms",
                     modelConfig.Id,
                     (DateTimeOffset.UtcNow - started).TotalMilliseconds);
                 inferenceScope.SetOutcome(false, "stream_idle_timeout");
                 _metricsCollector.RecordForwardAttempt(modelConfig.Id, "stream_idle_timeout");
+
+                // A streaming response has already flushed its first bytes, but a non-streaming one
+                // can stall before a single byte is written. Without this the client received the
+                // upstream's status code and an empty body rather than an error it can act on.
+                if (!context.Response.HasStarted)
+                {
+                    await context.WriteGatewayErrorAsync(
+                        _errors.Write(
+                            GatewayErrorCode.UpstreamError,
+                            message: "Backend stopped sending the response body."),
+                        CancellationToken.None).ConfigureAwait(false);
+                }
+
                 RecordRecentRequest(context, modelConfig.Id, started, requestInfo.Stream, success: false);
                 return;
             }

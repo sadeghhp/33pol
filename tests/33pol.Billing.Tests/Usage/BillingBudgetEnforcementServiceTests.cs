@@ -117,15 +117,15 @@ public sealed class BillingBudgetEnforcementServiceTests
         var service = BillingBudgetEnforcementServiceTestsHelper.CreateService(budgets, rollups, ledger, rateCards);
 
         // Each reservation estimates 4096 / 1e6 * 20000 = ~81.9 => two cannot both fit under 100.
-        var first = await service.TryReserveAsync(tenantId.ToString(), "req-1", "gpt-4o", null);
-        var second = await service.TryReserveAsync(tenantId.ToString(), "req-2", "gpt-4o", null);
+        var first = await service.TryReserveAsync(tenantId.ToString(), "req-1", "gpt-4o", null, requestBodyBytes: 0);
+        var second = await service.TryReserveAsync(tenantId.ToString(), "req-2", "gpt-4o", null, requestBodyBytes: 0);
 
         first.IsAllowed.Should().BeTrue();
         second.IsAllowed.Should().BeFalse();
 
         // Releasing the first frees headroom for a subsequent request.
         service.ReleaseReservation("req-1");
-        var third = await service.TryReserveAsync(tenantId.ToString(), "req-3", "gpt-4o", null);
+        var third = await service.TryReserveAsync(tenantId.ToString(), "req-3", "gpt-4o", null, requestBodyBytes: 0);
         third.IsAllowed.Should().BeTrue();
     }
 
@@ -149,7 +149,7 @@ public sealed class BillingBudgetEnforcementServiceTests
         var service = BillingBudgetEnforcementServiceTestsHelper.CreateService(
             budgets, rollups, new BudgetReservationLedger(TimeSpan.FromMinutes(2)), rateCards);
 
-        (await service.TryReserveAsync(tenantId.ToString(), "req-1", "unpriced", 4096)).IsAllowed.Should().BeTrue();
+        (await service.TryReserveAsync(tenantId.ToString(), "req-1", "unpriced", 4096, requestBodyBytes: 0)).IsAllowed.Should().BeTrue();
     }
 
     [Fact]

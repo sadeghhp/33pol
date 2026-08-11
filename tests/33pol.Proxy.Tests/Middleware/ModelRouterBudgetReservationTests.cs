@@ -120,7 +120,7 @@ public sealed class ModelRouterBudgetReservationTests
 
         string? reservedRequestId = null;
         budget.TryReserveAsync(
-                Arg.Any<string?>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<long?>(), Arg.Any<CancellationToken>())
+                Arg.Any<string?>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<long?>(), Arg.Any<long>(), Arg.Any<CancellationToken>())
             .Returns(callInfo =>
             {
                 reservedRequestId = callInfo.ArgAt<string>(1);
@@ -164,7 +164,7 @@ public sealed class ModelRouterBudgetReservationTests
         budget.CheckBeforeForwardAsync(Arg.Any<string?>(), Arg.Any<CancellationToken>())
             .Returns(BudgetCheckResult.Allowed);
         budget.TryReserveAsync(
-                Arg.Any<string?>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<long?>(), Arg.Any<CancellationToken>())
+                Arg.Any<string?>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<long?>(), Arg.Any<long>(), Arg.Any<CancellationToken>())
             .Returns(BudgetCheckResult.HardExceeded("monthly"));
 
         var forwarder = CreateForwarderReturning(ForwarderError.None);
@@ -187,7 +187,7 @@ public sealed class ModelRouterBudgetReservationTests
         budget.CheckBeforeForwardAsync(Arg.Any<string?>(), Arg.Any<CancellationToken>())
             .Returns(BudgetCheckResult.Allowed);
         budget.TryReserveAsync(
-                Arg.Any<string?>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<long?>(), Arg.Any<CancellationToken>())
+                Arg.Any<string?>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<long?>(), Arg.Any<long>(), Arg.Any<CancellationToken>())
             .Returns(BudgetCheckResult.Allowed);
         return budget;
     }

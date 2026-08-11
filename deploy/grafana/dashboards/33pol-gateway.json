@@ -15,11 +15,25 @@
       }
     ]
   },
+  "description": "Operator view: RED, streaming and policy, the usage/billing pipeline, and backend health. Metric definitions live in GatewayMeters (33pol.Observability); see docs/observability.md.",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
   "id": null,
-  "links": [],
+  "links": [
+    {
+      "asDropdown": false,
+      "icon": "external link",
+      "includeVars": true,
+      "keepTime": true,
+      "tags": [],
+      "targetBlank": false,
+      "title": "Traffic & tokens",
+      "tooltip": "",
+      "type": "link",
+      "url": "/d/33pol-gateway-traffic"
+    }
+  ],
   "panels": [
     {
       "id": 100,
@@ -92,7 +106,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(rate(gateway_inference_requests_total{model=~\"$model\"}[5m]))",
+          "expr": "sum(rate(gateway_inference_requests_total{model=~\"$model\"}[$__rate_interval]))",
           "refId": "A",
           "legendFormat": ""
         }
@@ -160,7 +174,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(rate(gateway_inference_errors_total{model=~\"$model\"}[5m])) / clamp_min(sum(rate(gateway_inference_requests_total{model=~\"$model\"}[5m])), 1)",
+          "expr": "sum(rate(gateway_inference_errors_total{model=~\"$model\"}[$__rate_interval])) / clamp_min(sum(rate(gateway_inference_requests_total{model=~\"$model\"}[$__rate_interval])), 1)",
           "refId": "A",
           "legendFormat": ""
         }
@@ -224,7 +238,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "histogram_quantile(0.99, sum(rate(gateway_inference_duration_seconds_bucket{model=~\"$model\"}[5m])) by (le))",
+          "expr": "histogram_quantile(0.99, sum(rate(gateway_inference_duration_seconds_bucket{model=~\"$model\"}[$__rate_interval])) by (le))",
           "refId": "A",
           "legendFormat": ""
         }
@@ -233,7 +247,7 @@
     {
       "id": 4,
       "type": "stat",
-      "title": "Active streams",
+      "title": "Time to first token p95",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -243,6 +257,136 @@
         "w": 6,
         "x": 18,
         "y": 1
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "pluginVersion": "11.3.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum(rate(gateway_time_to_first_token_seconds_bucket{model=~\"$model\"}[$__rate_interval])) by (le))",
+          "refId": "A",
+          "legendFormat": ""
+        }
+      ],
+      "description": "Latency until the upstream's first byte. This is what the forward timeout budgets, and it grows with prompt size — see Gateway:Resilience:ForwardTimeoutSecondsPerRequestMegabyte."
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "In-flight requests",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 5
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "pluginVersion": "11.3.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(gateway_active_requests{model=~\"$model\"})",
+          "refId": "A",
+          "legendFormat": ""
+        }
+      ],
+      "description": "Inference requests being forwarded right now, streaming and non-streaming alike."
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "Active streams",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 5
       },
       "fieldConfig": {
         "defaults": {
@@ -295,15 +439,145 @@
       ]
     },
     {
+      "id": 7,
+      "type": "stat",
+      "title": "Healthy backends",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 5
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "pluginVersion": "11.3.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(gateway_backend_health{model=~\"$model\"})",
+          "refId": "A",
+          "legendFormat": ""
+        }
+      ],
+      "description": "Zero fires GatewayNoHealthyBackends — see docs/runbooks/all-backends-down.md."
+    },
+    {
+      "id": 8,
+      "type": "stat",
+      "title": "Billing discrepancies",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 5
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "pluginVersion": "11.3.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "gateway_billing_reconciliation_discrepancies",
+          "refId": "A",
+          "legendFormat": ""
+        }
+      ],
+      "description": "Rollup buckets disagreeing with the billing events behind them as of the last sweep. Any non-zero value is an incident (GatewayBillingReconciliationDrift)."
+    },
+    {
       "id": 101,
       "type": "row",
-      "title": "RED \u2014 rate, errors, duration",
+      "title": "RED — rate, errors, duration",
       "collapsed": false,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 5
+        "y": 9
       },
       "panels": []
     },
@@ -319,7 +593,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 6
+        "y": 10
       },
       "fieldConfig": {
         "defaults": {
@@ -368,7 +642,7 @@
             "uid": "prometheus"
           },
           "refId": "A",
-          "expr": "sum by (model, status) (rate(gateway_inference_requests_total{model=~\"$model\"}[5m]))",
+          "expr": "sum by (model, status) (rate(gateway_inference_requests_total{model=~\"$model\"}[$__rate_interval]))",
           "legendFormat": "{{model}} {{status}}"
         }
       ]
@@ -385,7 +659,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 6
+        "y": 10
       },
       "fieldConfig": {
         "defaults": {
@@ -434,24 +708,25 @@
             "uid": "prometheus"
           },
           "refId": "A",
-          "expr": "sum by (model, code) (rate(gateway_inference_errors_total{model=~\"$model\"}[5m]))",
+          "expr": "sum by (model, code) (rate(gateway_inference_errors_total{model=~\"$model\"}[$__rate_interval]))",
           "legendFormat": "{{model}} {{code}}"
         }
-      ]
+      ],
+      "description": "`code` is the error-catalog code. `upstream_error` and `request_too_large` also arrive here from GatewayExceptionHandlingMiddleware, the pipeline's terminal handler."
     },
     {
       "id": 12,
       "type": "timeseries",
-      "title": "Latency percentiles",
+      "title": "Request duration percentiles",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
       "gridPos": {
         "h": 8,
-        "w": 24,
+        "w": 12,
         "x": 0,
-        "y": 14
+        "y": 18
       },
       "fieldConfig": {
         "defaults": {
@@ -500,7 +775,7 @@
             "uid": "prometheus"
           },
           "refId": "A",
-          "expr": "histogram_quantile(0.50, sum(rate(gateway_inference_duration_seconds_bucket{model=~\"$model\"}[5m])) by (le, model))",
+          "expr": "histogram_quantile(0.50, sum(rate(gateway_inference_duration_seconds_bucket{model=~\"$model\"}[$__rate_interval])) by (le, model))",
           "legendFormat": "p50 {{model}}"
         },
         {
@@ -509,7 +784,7 @@
             "uid": "prometheus"
           },
           "refId": "B",
-          "expr": "histogram_quantile(0.95, sum(rate(gateway_inference_duration_seconds_bucket{model=~\"$model\"}[5m])) by (le, model))",
+          "expr": "histogram_quantile(0.95, sum(rate(gateway_inference_duration_seconds_bucket{model=~\"$model\"}[$__rate_interval])) by (le, model))",
           "legendFormat": "p95 {{model}}"
         },
         {
@@ -518,10 +793,95 @@
             "uid": "prometheus"
           },
           "refId": "C",
-          "expr": "histogram_quantile(0.99, sum(rate(gateway_inference_duration_seconds_bucket{model=~\"$model\"}[5m])) by (le, model))",
+          "expr": "histogram_quantile(0.99, sum(rate(gateway_inference_duration_seconds_bucket{model=~\"$model\"}[$__rate_interval])) by (le, model))",
           "legendFormat": "p99 {{model}}"
         }
       ]
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "Time to first token percentiles",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 18
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisPlacement": "auto",
+            "drawStyle": "line",
+            "fillOpacity": 12,
+            "gradientMode": "none",
+            "lineInterpolation": "smooth",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            }
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "11.3.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "A",
+          "expr": "histogram_quantile(0.50, sum(rate(gateway_time_to_first_token_seconds_bucket{model=~\"$model\"}[$__rate_interval])) by (le, model))",
+          "legendFormat": "p50 {{model}}"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum(rate(gateway_time_to_first_token_seconds_bucket{model=~\"$model\"}[$__rate_interval])) by (le, model))",
+          "legendFormat": "p95 {{model}}"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "C",
+          "expr": "histogram_quantile(0.99, sum(rate(gateway_time_to_first_token_seconds_bucket{model=~\"$model\"}[$__rate_interval])) by (le, model))",
+          "legendFormat": "p99 {{model}}"
+        }
+      ],
+      "description": "A p99 climbing toward the forward timeout is the shape that precedes upstream_timeout outcomes and, with them, an opening circuit breaker."
     },
     {
       "id": 102,
@@ -532,7 +892,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 22
+        "y": 26
       },
       "panels": []
     },
@@ -546,9 +906,9 @@
       },
       "gridPos": {
         "h": 7,
-        "w": 8,
+        "w": 6,
         "x": 0,
-        "y": 23
+        "y": 27
       },
       "fieldConfig": {
         "defaults": {
@@ -605,16 +965,16 @@
     {
       "id": 21,
       "type": "timeseries",
-      "title": "Rate limit rejections / s",
+      "title": "Timeouts / s",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
       "gridPos": {
         "h": 7,
-        "w": 8,
-        "x": 8,
-        "y": 23
+        "w": 6,
+        "x": 6,
+        "y": 27
       },
       "fieldConfig": {
         "defaults": {
@@ -663,13 +1023,89 @@
             "uid": "prometheus"
           },
           "refId": "A",
-          "expr": "sum by (reason) (rate(gateway_rate_limit_rejections_total[5m]))",
+          "expr": "sum(rate(gateway_forward_attempts_total{model=~\"$model\", outcome=\"upstream_timeout\"}[$__rate_interval]))",
+          "legendFormat": "upstream_timeout (breaker-counting)"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "B",
+          "expr": "sum(rate(gateway_forward_attempts_total{model=~\"$model\", outcome=\"stream_idle_timeout\"}[$__rate_interval]))",
+          "legendFormat": "stream_idle_timeout (not counted)"
+        }
+      ],
+      "description": "upstream_timeout means headers never arrived, so the backend never answered — it counts against the circuit breaker. stream_idle_timeout means it answered and then went quiet mid-response, which is not held against it."
+    },
+    {
+      "id": 22,
+      "type": "timeseries",
+      "title": "Rate limit rejections / s",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 6,
+        "x": 12,
+        "y": 27
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisPlacement": "auto",
+            "drawStyle": "line",
+            "fillOpacity": 12,
+            "gradientMode": "none",
+            "lineInterpolation": "smooth",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            }
+          },
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "11.3.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "A",
+          "expr": "sum by (reason) (rate(gateway_rate_limit_rejections_total[$__rate_interval]))",
           "legendFormat": "{{reason}}"
         }
       ]
     },
     {
-      "id": 22,
+      "id": 23,
       "type": "timeseries",
       "title": "Quota rejections / s",
       "datasource": {
@@ -678,9 +1114,9 @@
       },
       "gridPos": {
         "h": 7,
-        "w": 8,
-        "x": 16,
-        "y": 23
+        "w": 6,
+        "x": 18,
+        "y": 27
       },
       "fieldConfig": {
         "defaults": {
@@ -729,7 +1165,7 @@
             "uid": "prometheus"
           },
           "refId": "A",
-          "expr": "sum(rate(gateway_quota_rejections_total[5m]))",
+          "expr": "sum(rate(gateway_quota_rejections_total[$__rate_interval]))",
           "legendFormat": "quota"
         }
       ]
@@ -743,7 +1179,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 30
+        "y": 34
       },
       "panels": []
     },
@@ -759,7 +1195,7 @@
         "h": 7,
         "w": 12,
         "x": 0,
-        "y": 31
+        "y": 35
       },
       "fieldConfig": {
         "defaults": {
@@ -808,7 +1244,7 @@
             "uid": "prometheus"
           },
           "refId": "A",
-          "expr": "sum by (model, direction) (rate(gateway_tokens_total{model=~\"$model\"}[5m]))",
+          "expr": "sum by (model, direction) (rate(gateway_tokens_total{model=~\"$model\"}[$__rate_interval]))",
           "legendFormat": "{{model}} {{direction}}"
         }
       ]
@@ -825,7 +1261,7 @@
         "h": 7,
         "w": 6,
         "x": 12,
-        "y": 31
+        "y": 35
       },
       "fieldConfig": {
         "defaults": {
@@ -877,7 +1313,8 @@
           "expr": "gateway_usage_writer_queue_depth",
           "legendFormat": "queue"
         }
-      ]
+      ],
+      "description": "A depth that climbs and does not drain is the precursor to drops — see docs/runbooks/writer-backlog.md."
     },
     {
       "id": 32,
@@ -891,7 +1328,7 @@
         "h": 7,
         "w": 6,
         "x": 18,
-        "y": 31
+        "y": 35
       },
       "fieldConfig": {
         "defaults": {
@@ -943,7 +1380,8 @@
           "expr": "increase(gateway_usage_writer_dropped_total[5m])",
           "legendFormat": "drops"
         }
-      ]
+      ],
+      "description": "Every drop is usage that was never billed."
     },
     {
       "id": 33,
@@ -954,10 +1392,10 @@
         "uid": "prometheus"
       },
       "gridPos": {
-        "h": 6,
-        "w": 24,
+        "h": 7,
+        "w": 8,
         "x": 0,
-        "y": 38
+        "y": 42
       },
       "fieldConfig": {
         "defaults": {
@@ -1006,37 +1444,100 @@
             "uid": "prometheus"
           },
           "refId": "A",
-          "expr": "sum by (model) (rate(gateway_usage_parse_failures_total{model=~\"$model\"}[5m]))",
+          "expr": "sum by (model) (rate(gateway_usage_parse_failures_total{model=~\"$model\"}[$__rate_interval]))",
           "legendFormat": "{{model}}"
         }
       ]
     },
     {
-      "id": 104,
-      "type": "row",
-      "title": "Backends",
-      "collapsed": false,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 44
-      },
-      "panels": []
-    },
-    {
-      "id": 40,
+      "id": 34,
       "type": "timeseries",
-      "title": "Backend health (1 = healthy)",
+      "title": "Approximated usage / s",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
       "gridPos": {
         "h": 7,
-        "w": 24,
-        "x": 0,
-        "y": 45
+        "w": 8,
+        "x": 8,
+        "y": 42
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisPlacement": "auto",
+            "drawStyle": "line",
+            "fillOpacity": 12,
+            "gradientMode": "none",
+            "lineInterpolation": "smooth",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            }
+          },
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "11.3.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "A",
+          "expr": "sum by (model) (rate(gateway_usage_unsplit_total{model=~\"$model\"}[$__rate_interval]))",
+          "legendFormat": "unsplit {{model}}"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "B",
+          "expr": "sum by (model) (rate(gateway_usage_estimated_total{model=~\"$model\"}[$__rate_interval]))",
+          "legendFormat": "estimated {{model}}"
+        }
+      ],
+      "description": "unsplit: the upstream reported only a combined token total, so cost was priced at the dearer rate. estimated: billed from a streamed-frame estimate rather than authoritative usage — a rise concentrated on one tenant can mean deliberate disconnect-before-completion."
+    },
+    {
+      "id": 35,
+      "type": "timeseries",
+      "title": "Billing reconciliation",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 16,
+        "y": 42
       },
       "fieldConfig": {
         "defaults": {
@@ -1085,7 +1586,175 @@
             "uid": "prometheus"
           },
           "refId": "A",
+          "expr": "gateway_billing_reconciliation_discrepancies",
+          "legendFormat": "discrepancy buckets"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "B",
+          "expr": "gateway_billing_reconciliation_cost_drift",
+          "legendFormat": "absolute cost drift"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "C",
+          "expr": "increase(gateway_billing_reconciliation_runs_total[3h])",
+          "legendFormat": "sweeps (3h)"
+        }
+      ],
+      "description": "Drift is the only signal that billing numbers have gone wrong — every other symptom looks like normal operation. A flat sweep count means the job that checks it has stopped running."
+    },
+    {
+      "id": 104,
+      "type": "row",
+      "title": "Backends",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 49
+      },
+      "panels": []
+    },
+    {
+      "id": 40,
+      "type": "timeseries",
+      "title": "Backend health (1 = healthy)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 50
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisPlacement": "auto",
+            "drawStyle": "line",
+            "fillOpacity": 12,
+            "gradientMode": "none",
+            "lineInterpolation": "smooth",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            }
+          },
+          "unit": "short",
+          "min": 0,
+          "max": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "11.3.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "A",
           "expr": "gateway_backend_health{model=~\"$model\"}",
+          "legendFormat": "{{model}}"
+        }
+      ]
+    },
+    {
+      "id": 41,
+      "type": "timeseries",
+      "title": "Circuit breaker state (0=closed, 1=half_open, 2=open)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 50
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisPlacement": "auto",
+            "drawStyle": "line",
+            "fillOpacity": 12,
+            "gradientMode": "none",
+            "lineInterpolation": "smooth",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            }
+          },
+          "unit": "short",
+          "min": 0,
+          "max": 2
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "11.3.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "A",
+          "expr": "gateway_circuit_breaker_state{model=~\"$model\"}",
           "legendFormat": "{{model}}"
         }
       ]
@@ -1137,5 +1806,6 @@
   "timezone": "browser",
   "title": "33pol Gateway",
   "uid": "33pol-gateway",
-  "version": 2
+  "version": 3,
+  "weekStart": ""
 }

@@ -19,6 +19,7 @@ public sealed class NoOpBudgetEnforcementService : IBudgetEnforcementService
         string requestId,
         string canonicalModelId,
         long? requestedMaxTokens,
+        long requestBodyBytes,
         CancellationToken cancellationToken = default) =>
         ValueTask.FromResult(BudgetCheckResult.Allowed);
 

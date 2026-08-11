@@ -337,6 +337,89 @@ public sealed class InferenceHttpForwarderTests
         error.Should().Be(ForwarderError.ResponseBodyDestination);
     }
 
+    /// <summary>
+    /// A non-streaming response that stalls mid-transfer is reported as ResponseBodyDestination, the
+    /// same as a stalled stream — not as a header timeout.
+    /// </summary>
+    /// <remarks>
+    /// The defect this covers: non-streaming responses were fetched with ResponseContentRead, so the
+    /// whole body was buffered inside SendAsync and its transfer was charged against the header
+    /// deadline. A breach there is recorded as backend ill health and counts toward the circuit
+    /// breaker, so a backend that was answering — just slowly, as a large-context request makes it —
+    /// was taken out of service for every caller.
+    /// </remarks>
+    [Fact]
+    public async Task SendAsync_NonStreaming_StalledUpstream_ReturnsResponseBodyDestination()
+    {
+        var handler = new SlowDripUpstreamHandler(
+            chunks: 2,
+            interChunkDelay: TimeSpan.FromMilliseconds(20),
+            stallAfterChunks: 1,
+            contentType: "application/json");
+
+        var forwarder = new InferenceHttpForwarder(
+            new SingleHandlerClientFactory(handler),
+            NoOpGatewayMetricsCollector.Instance,
+            NullLogger<InferenceHttpForwarder>.Instance);
+
+        var context = CreatePostContext("""{"model":"gpt","stream":false}""");
+        var transformer = new StreamingHttpTransformer(false, "gpt", "gpt");
+
+        var timeouts = new InferenceForwardTimeouts(
+            HeaderTimeout: TimeSpan.FromSeconds(5),
+            StreamIdleTimeout: TimeSpan.FromMilliseconds(200));
+
+        var error = await forwarder.SendAsync(
+            context,
+            "http://backend:8000",
+            null,
+            transformer,
+            isStreaming: false,
+            timeouts,
+            CancellationToken.None);
+
+        error.Should().Be(ForwarderError.ResponseBodyDestination);
+    }
+
+    /// <summary>
+    /// A non-streaming response whose transfer outlives the header deadline still completes: only the
+    /// gap between chunks is bounded once the upstream has answered.
+    /// </summary>
+    [Fact]
+    public async Task SendAsync_NonStreaming_SlowBodyOutlivesHeaderTimeout()
+    {
+        var handler = new SlowDripUpstreamHandler(
+            chunks: 6,
+            interChunkDelay: TimeSpan.FromMilliseconds(120),
+            contentType: "application/json");
+
+        var forwarder = new InferenceHttpForwarder(
+            new SingleHandlerClientFactory(handler),
+            NoOpGatewayMetricsCollector.Instance,
+            NullLogger<InferenceHttpForwarder>.Instance);
+
+        var context = CreatePostContext("""{"model":"gpt","stream":false}""");
+        var transformer = new StreamingHttpTransformer(false, "gpt", "gpt");
+
+        var timeouts = new InferenceForwardTimeouts(
+            HeaderTimeout: TimeSpan.FromMilliseconds(200),
+            StreamIdleTimeout: TimeSpan.FromSeconds(2));
+
+        var error = await forwarder.SendAsync(
+            context,
+            "http://backend:8000",
+            null,
+            transformer,
+            isStreaming: false,
+            timeouts,
+            CancellationToken.None);
+
+        error.Should().Be(ForwarderError.None);
+        context.Response.Body.Position = 0;
+        var body = await new StreamReader(context.Response.Body).ReadToEndAsync();
+        body.Should().Contain("chunk-5");
+    }
+
     /// <summary>A header timeout is distinct from both cancellation and a stream stall.</summary>
     [Fact]
     public async Task SendAsync_HeaderTimeout_ReturnsRequestTimedOut()
@@ -640,7 +723,8 @@ public sealed class InferenceHttpForwarderTests
     private sealed class SlowDripUpstreamHandler(
         int chunks,
         TimeSpan interChunkDelay,
-        int? stallAfterChunks = null) : HttpMessageHandler
+        int? stallAfterChunks = null,
+        string contentType = "text/event-stream") : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
@@ -649,7 +733,7 @@ public sealed class InferenceHttpForwarderTests
             {
                 Content = new StreamContent(new SlowDripStream(chunks, interChunkDelay, stallAfterChunks))
                 {
-                    Headers = { ContentType = new MediaTypeHeaderValue("text/event-stream") },
+                    Headers = { ContentType = new MediaTypeHeaderValue(contentType) },
                 },
             });
 

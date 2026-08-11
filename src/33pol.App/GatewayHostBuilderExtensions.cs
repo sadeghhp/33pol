@@ -50,6 +50,11 @@ public static class GatewayHostBuilderExtensions
             };
         });
 
+        // Inside request logging so Serilog records the status this handler settled on rather than
+        // the exception, and outside everything else so no unhandled failure can reach Kestrel and be
+        // answered with a bare status line instead of the documented error body.
+        app.UseGatewayExceptionHandling();
+
         app.UseRouting();
         app.UseCors();
         app.UseGatewayRequestId();

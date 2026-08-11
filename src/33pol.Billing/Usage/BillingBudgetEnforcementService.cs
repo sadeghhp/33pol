@@ -5,6 +5,7 @@ using Pol33.Core.Abstractions;
 using Pol33.Core.Billing;
 using Pol33.Core.Configuration;
 using Pol33.Core.Models;
+using Pol33.Core.Usage;
 
 namespace Pol33.Billing.Usage;
 
@@ -60,6 +61,7 @@ public sealed class BillingBudgetEnforcementService(
         string requestId,
         string canonicalModelId,
         long? requestedMaxTokens,
+        long requestBodyBytes,
         CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(requestId) || !Guid.TryParse(tenantId, out var parsedTenantId))
@@ -108,7 +110,12 @@ public sealed class BillingBudgetEnforcementService(
             return BudgetCheckResult.HardExceeded(tightestBudgetName);
         }
 
-        var estimate = await EstimateMaxCostAsync(scope, canonicalModelId, requestedMaxTokens, cancellationToken)
+        var estimate = await EstimateMaxCostAsync(
+                scope,
+                canonicalModelId,
+                requestedMaxTokens,
+                requestBodyBytes,
+                cancellationToken)
             .ConfigureAwait(false);
 
         return reservationLedger.TryReserve(requestId, parsedTenantId, estimate, headroom)
@@ -164,10 +171,24 @@ public sealed class BillingBudgetEnforcementService(
         return spend;
     }
 
+    /// <summary>
+    /// Conservative upper bound on what the request can cost: the prompt priced at the input rate,
+    /// plus the output ceiling priced at the higher of the two rates.
+    /// </summary>
+    /// <remarks>
+    /// The prompt term is what makes a hard stop hold for long-context traffic. Pricing only
+    /// <paramref name="requestedMaxTokens"/> meant the input — the dominant cost of a
+    /// retrieval-augmented or long-context call — was reserved as zero, so concurrent large-prompt
+    /// requests could each reserve a few thousand output tokens while collectively incurring millions
+    /// of input tokens against a cap the ledger believed was untouched. The prompt estimate is
+    /// derived from the body actually being forwarded, and the actual (usually lower) cost replaces
+    /// the whole reservation once the request is persisted.
+    /// </remarks>
     private async Task<decimal> EstimateMaxCostAsync(
         AsyncServiceScope scope,
         string canonicalModelId,
         long? requestedMaxTokens,
+        long requestBodyBytes,
         CancellationToken cancellationToken)
     {
         var rateCards = scope.ServiceProvider.GetService<IRateCardRepository>();
@@ -184,13 +205,19 @@ public sealed class BillingBudgetEnforcementService(
             return 0m;
         }
 
-        var maxTokens = requestedMaxTokens is > 0
+        var maxOutputTokens = requestedMaxTokens is > 0
             ? requestedMaxTokens.Value
             : billingOptions.Value.BudgetReservationDefaultMaxTokens;
 
-        // Conservative upper bound: price the estimated token ceiling at the higher of the input/output
-        // rate. Actual (usually lower) cost replaces the reservation once the request is persisted.
-        var pricePerMillion = Math.Max(rateCard.InputPricePerMillionTokens, rateCard.OutputPricePerMillionTokens);
-        return decimal.Round(maxTokens / 1_000_000m * pricePerMillion, 6);
+        // The output split is unknown until the response returns, so it is priced at the dearer rate.
+        var outputPricePerMillion = Math.Max(
+            rateCard.InputPricePerMillionTokens,
+            rateCard.OutputPricePerMillionTokens);
+
+        var promptTokens = UsageEventFactory.EstimatePromptTokens(requestBodyBytes);
+        var estimate = (promptTokens / 1_000_000m * rateCard.InputPricePerMillionTokens)
+            + (maxOutputTokens / 1_000_000m * outputPricePerMillion);
+
+        return decimal.Round(estimate, 6);
     }
 }

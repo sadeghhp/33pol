@@ -3,7 +3,10 @@
     "list": [
       {
         "builtIn": 1,
-        "datasource": { "type": "grafana", "uid": "-- Grafana --" },
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
         "enable": true,
         "hide": true,
         "iconColor": "rgba(0, 211, 255, 1)",
@@ -12,32 +15,101 @@
       }
     ]
   },
+  "description": "Routing, forward outcomes, resilience policy, and token flow. Companion to the operator dashboard.",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
   "id": null,
-  "links": [],
+  "links": [
+    {
+      "asDropdown": false,
+      "icon": "external link",
+      "includeVars": true,
+      "keepTime": true,
+      "tags": [],
+      "targetBlank": false,
+      "title": "Operator (RED)",
+      "tooltip": "",
+      "type": "link",
+      "url": "/d/33pol-gateway"
+    }
+  ],
   "panels": [
     {
       "id": 100,
       "type": "row",
       "title": "Traffic & routing",
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
       "panels": []
     },
     {
       "id": 1,
       "type": "timeseries",
       "title": "Inference route / s",
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 1 },
-      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
-      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true } },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 1
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisPlacement": "auto",
+            "drawStyle": "line",
+            "fillOpacity": 12,
+            "gradientMode": "none",
+            "lineInterpolation": "smooth",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            }
+          },
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "11.3.0",
       "targets": [
         {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
           "refId": "A",
-          "expr": "sum by (route, stream) (rate(gateway_inference_route_total{model=~\"$model\"}[5m]))",
+          "expr": "sum by (route, stream) (rate(gateway_inference_route_total{model=~\"$model\"}[$__rate_interval]))",
           "legendFormat": "{{route}} stream={{stream}}"
         }
       ]
@@ -46,54 +118,364 @@
       "id": 2,
       "type": "timeseries",
       "title": "Forward outcomes / s",
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 1 },
-      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
-      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true } },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 1
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisPlacement": "auto",
+            "drawStyle": "line",
+            "fillOpacity": 12,
+            "gradientMode": "none",
+            "lineInterpolation": "smooth",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            }
+          },
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "11.3.0",
       "targets": [
         {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
           "refId": "A",
-          "expr": "sum by (model, outcome) (rate(gateway_forward_attempts_total{model=~\"$model\"}[5m]))",
+          "expr": "sum by (model, outcome) (rate(gateway_forward_attempts_total{model=~\"$model\"}[$__rate_interval]))",
           "legendFormat": "{{model}} {{outcome}}"
         }
       ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Forward outcome mix",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisPlacement": "auto",
+            "drawStyle": "line",
+            "fillOpacity": 60,
+            "gradientMode": "none",
+            "lineInterpolation": "smooth",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "percent"
+            }
+          },
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "11.3.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "A",
+          "expr": "sum by (outcome) (rate(gateway_forward_attempts_total{model=~\"$model\"}[$__rate_interval]))",
+          "legendFormat": "{{outcome}}"
+        }
+      ],
+      "description": "The same outcomes as a share of all forwards, so a shift in the failure mix is visible even when overall traffic moves."
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Timeouts & cancellations / s",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisPlacement": "auto",
+            "drawStyle": "line",
+            "fillOpacity": 12,
+            "gradientMode": "none",
+            "lineInterpolation": "smooth",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            }
+          },
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "11.3.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "A",
+          "expr": "sum by (model) (rate(gateway_forward_attempts_total{model=~\"$model\", outcome=\"upstream_timeout\"}[$__rate_interval]))",
+          "legendFormat": "upstream_timeout {{model}}"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "B",
+          "expr": "sum by (model) (rate(gateway_forward_attempts_total{model=~\"$model\", outcome=\"stream_idle_timeout\"}[$__rate_interval]))",
+          "legendFormat": "stream_idle_timeout {{model}}"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "C",
+          "expr": "sum by (model) (rate(gateway_forward_attempts_total{model=~\"$model\", outcome=\"client_canceled\"}[$__rate_interval]))",
+          "legendFormat": "client_canceled {{model}}"
+        }
+      ],
+      "description": "upstream_timeout is the only one of the three the circuit breaker counts: headers never arrived, so the backend never answered. Its allowance widens with prompt size, so a long-context workload should not show up here just for being large. stream_idle_timeout and client_canceled both mean the upstream did answer."
     },
     {
       "id": 102,
       "type": "row",
       "title": "Policy & resilience",
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 8 },
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 15
+      },
       "panels": []
     },
     {
       "id": 20,
       "type": "timeseries",
       "title": "Circuit breaker state",
-      "description": "0=closed, 1=half_open, 2=open",
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 7, "w": 8, "x": 0, "y": 9 },
-      "fieldConfig": { "defaults": { "unit": "short", "min": 0, "max": 2 }, "overrides": [] },
-      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true } },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 0,
+        "y": 16
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisPlacement": "auto",
+            "drawStyle": "line",
+            "fillOpacity": 12,
+            "gradientMode": "none",
+            "lineInterpolation": "smooth",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            }
+          },
+          "unit": "short",
+          "min": 0,
+          "max": 2
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "11.3.0",
       "targets": [
         {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
           "refId": "A",
           "expr": "gateway_circuit_breaker_state{model=~\"$model\"}",
           "legendFormat": "{{model}}"
         }
-      ]
+      ],
+      "description": "0=closed, 1=half_open, 2=open"
     },
     {
       "id": 21,
       "type": "timeseries",
       "title": "Circuit transitions / s",
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 7, "w": 8, "x": 8, "y": 9 },
-      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 8,
+        "y": 16
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisPlacement": "auto",
+            "drawStyle": "line",
+            "fillOpacity": 12,
+            "gradientMode": "none",
+            "lineInterpolation": "smooth",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            }
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "11.3.0",
       "targets": [
         {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
           "refId": "A",
-          "expr": "sum by (model, to_state) (rate(gateway_circuit_breaker_transitions_total{model=~\"$model\"}[5m]))",
+          "expr": "sum by (model, to_state) (rate(gateway_circuit_breaker_transitions_total{model=~\"$model\"}[$__rate_interval]))",
           "legendFormat": "{{model}} → {{to_state}}"
         }
       ]
@@ -102,16 +484,71 @@
       "id": 22,
       "type": "timeseries",
       "title": "Bulkhead rejections & inflight",
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 7, "w": 8, "x": 16, "y": 9 },
-      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 16,
+        "y": 16
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisPlacement": "auto",
+            "drawStyle": "line",
+            "fillOpacity": 12,
+            "gradientMode": "none",
+            "lineInterpolation": "smooth",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            }
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "11.3.0",
       "targets": [
         {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
           "refId": "A",
-          "expr": "sum by (model) (rate(gateway_bulkhead_rejections_total{model=~\"$model\"}[5m]))",
+          "expr": "sum by (model) (rate(gateway_bulkhead_rejections_total{model=~\"$model\"}[$__rate_interval]))",
           "legendFormat": "reject {{model}}"
         },
         {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
           "refId": "B",
           "expr": "sum by (model) (gateway_bulkhead_inflight{model=~\"$model\"})",
           "legendFormat": "inflight {{model}}"
@@ -122,65 +559,336 @@
       "id": 23,
       "type": "timeseries",
       "title": "Model resolve / s",
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 16 },
-      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 0,
+        "y": 23
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisPlacement": "auto",
+            "drawStyle": "line",
+            "fillOpacity": 12,
+            "gradientMode": "none",
+            "lineInterpolation": "smooth",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            }
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "11.3.0",
       "targets": [
         {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
           "refId": "A",
-          "expr": "sum by (result) (rate(gateway_model_resolve_total[5m]))",
+          "expr": "sum by (result) (rate(gateway_model_resolve_total[$__rate_interval]))",
           "legendFormat": "{{result}}"
         }
       ]
+    },
+    {
+      "id": 24,
+      "type": "timeseries",
+      "title": "In-flight requests vs active streams",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 12,
+        "y": 23
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisPlacement": "auto",
+            "drawStyle": "line",
+            "fillOpacity": 12,
+            "gradientMode": "none",
+            "lineInterpolation": "smooth",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            }
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "11.3.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "A",
+          "expr": "sum by (model) (gateway_active_requests{model=~\"$model\"})",
+          "legendFormat": "in-flight {{model}}"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "B",
+          "expr": "sum by (model) (gateway_active_streams{model=~\"$model\"})",
+          "legendFormat": "streaming {{model}}"
+        }
+      ],
+      "description": "The gap between the two lines is the non-streaming forwards in flight."
     },
     {
       "id": 101,
       "type": "row",
       "title": "Tokens",
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 22 },
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 29
+      },
       "panels": []
     },
     {
       "id": 10,
       "type": "timeseries",
       "title": "Tokens / s (input vs output)",
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 23 },
-      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
-      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true } },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 30
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisPlacement": "auto",
+            "drawStyle": "line",
+            "fillOpacity": 12,
+            "gradientMode": "none",
+            "lineInterpolation": "smooth",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            }
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "11.3.0",
       "targets": [
         {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
           "refId": "A",
-          "expr": "sum by (model, direction) (rate(gateway_tokens_total{model=~\"$model\", direction=~\"input|output\"}[5m]))",
+          "expr": "sum by (model, direction) (rate(gateway_tokens_total{model=~\"$model\", direction=~\"input|output\"}[$__rate_interval]))",
           "legendFormat": "{{model}} {{direction}}"
         }
       ]
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Total tokens / s by model",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 30
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisPlacement": "auto",
+            "drawStyle": "line",
+            "fillOpacity": 12,
+            "gradientMode": "none",
+            "lineInterpolation": "smooth",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            }
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "11.3.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "A",
+          "expr": "sum by (model) (rate(gateway_tokens_total{model=~\"$model\", direction=\"total\"}[$__rate_interval]))",
+          "legendFormat": "{{model}}"
+        }
+      ],
+      "description": "Billed token throughput per model. The share of it that was approximated rather than read verbatim from the upstream is on the operator dashboard under FinOps."
     }
   ],
   "refresh": "10s",
   "schemaVersion": 39,
-  "style": "dark",
-  "tags": ["33pol", "traffic"],
+  "tags": [
+    "33pol",
+    "traffic"
+  ],
   "templating": {
     "list": [
       {
-        "name": "model",
-        "type": "query",
-        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
         "definition": "label_values(gateway_inference_requests_total, model)",
-        "query": { "query": "label_values(gateway_inference_requests_total, model)", "refId": "PrometheusVariableQueryEditor-VariableQuery" },
+        "hide": 0,
         "includeAll": true,
+        "label": "Model",
         "multi": true,
-        "current": { "selected": true, "text": "All", "value": "$__all" }
+        "name": "model",
+        "options": [],
+        "query": {
+          "query": "label_values(gateway_inference_requests_total, model)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+        },
+        "refresh": 2,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
       }
     ]
   },
-  "time": { "from": "now-30m", "to": "now" },
+  "time": {
+    "from": "now-30m",
+    "to": "now"
+  },
   "timepicker": {},
   "timezone": "",
   "title": "33pol Gateway — Traffic & tokens",
   "uid": "33pol-gateway-traffic",
-  "version": 1,
+  "version": 2,
   "weekStart": ""
 }

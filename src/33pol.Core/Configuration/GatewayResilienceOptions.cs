@@ -5,25 +5,49 @@ public sealed class GatewayResilienceOptions
     public const string SectionName = "Resilience";
 
     /// <summary>
-    /// How long the gateway waits for the upstream to return response <em>headers</em>. A breach is
-    /// a genuine backend-health signal and counts toward the circuit breaker.
+    /// Base allowance for the upstream to return response <em>headers</em>. A breach means the
+    /// backend never answered at all, which is a genuine health signal and counts toward the circuit
+    /// breaker.
     ///
-    /// For non-streaming requests the whole response arrives with the headers, so this remains the
-    /// total request budget. For streaming requests the body is governed by
-    /// <see cref="StreamIdleTimeoutSeconds"/> instead: applying a total-duration cap to a stream
+    /// The response body is governed by <see cref="StreamIdleTimeoutSeconds"/> in both streaming and
+    /// non-streaming mode, and the allowance itself is widened per
+    /// <see cref="ForwardTimeoutSecondsPerRequestMegabyte"/>. Applying a single total-duration cap
     /// truncated long-but-healthy generations and recorded them as backend failures, which opened
     /// the breaker on models that were working correctly.
     /// </summary>
     public int ForwardTimeoutSeconds { get; set; } = 300;
 
     /// <summary>
-    /// Maximum gap between two chunks of a streaming response body before the gateway gives up.
-    /// The clock resets on every chunk forwarded to the client, so a stream of any total duration
-    /// survives as long as the upstream keeps producing.
+    /// Extra header allowance granted per megabyte of request body actually forwarded.
+    /// </summary>
+    /// <remarks>
+    /// <para>Time to first response byte scales with the prompt, because the backend must read and
+    /// pre-fill the whole context before it can answer. A fixed allowance therefore expires on
+    /// long-context requests purely because they are long, and the breaker counted each expiry
+    /// against a backend that was working correctly — enough concurrent large-context requests took
+    /// the model out of service for every caller.</para>
     ///
-    /// A breach means the upstream stalled mid-stream, which says nothing conclusive about backend
-    /// health (the response already started), so it abandons the circuit-breaker probe rather than
-    /// recording a failure.
+    /// <para>At the default, the 25 MB body cap buys 25 further minutes on top of
+    /// <see cref="ForwardTimeoutSeconds"/>, while a small request is unaffected. Set to 0 to restore
+    /// a flat allowance.</para>
+    /// </remarks>
+    public int ForwardTimeoutSecondsPerRequestMegabyte { get; set; } = 60;
+
+    /// <summary>
+    /// Ceiling on the scaled header allowance, so an oversized body can never grant an effectively
+    /// unbounded deadline.
+    /// </summary>
+    public int MaxForwardTimeoutSeconds { get; set; } = 3600;
+
+    /// <summary>
+    /// Maximum gap between two chunks of a response body before the gateway gives up. The clock
+    /// resets on every chunk forwarded to the client, so a response of any total duration survives as
+    /// long as the upstream keeps producing.
+    ///
+    /// A breach means the upstream stalled after it had already answered, which says nothing
+    /// conclusive about backend health, so it abandons the circuit-breaker probe rather than
+    /// recording a failure. Applies to non-streaming responses too: transferring a large body is not
+    /// evidence of ill health either.
     /// </summary>
     public int StreamIdleTimeoutSeconds { get; set; } = 120;
 

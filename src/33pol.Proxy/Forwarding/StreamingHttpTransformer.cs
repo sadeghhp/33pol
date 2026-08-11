@@ -1,8 +1,8 @@
-using System.Net;
 using Microsoft.AspNetCore.Http;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using Pol33.Proxy.Parsing;
 using Pol33.Proxy.Routing;
 using Yarp.ReverseProxy.Forwarder;
 
@@ -16,14 +16,22 @@ public sealed class StreamingHttpTransformer : HttpTransformer
     private readonly InferenceUsageCapture? _usageCapture;
     private readonly bool _stripClientAuthHeaders;
     private readonly string? _upstreamBearerToken;
+    private readonly JsonValueRange? _modelValueRange;
 
+    /// <param name="modelValueRange">
+    /// Where the client's <c>model</c> value sits in the buffered request body, as reported by
+    /// <see cref="InferenceRequestParser"/>. Supplying it lets an alias be rewritten by splicing
+    /// bytes; when it is absent the transformer recovers it with one more streaming scan rather than
+    /// falling back to materialising the body.
+    /// </param>
     public StreamingHttpTransformer(
         bool isStreaming,
         string? clientModelName,
         string canonicalModelId,
         InferenceUsageCapture? usageCapture = null,
         bool stripClientAuthHeaders = true,
-        string? upstreamBearerToken = null)
+        string? upstreamBearerToken = null,
+        JsonValueRange? modelValueRange = null)
     {
         _isStreaming = isStreaming;
         _clientModelName = clientModelName;
@@ -31,6 +39,7 @@ public sealed class StreamingHttpTransformer : HttpTransformer
         _usageCapture = usageCapture;
         _stripClientAuthHeaders = stripClientAuthHeaders;
         _upstreamBearerToken = upstreamBearerToken;
+        _modelValueRange = modelValueRange;
     }
 
     public override async ValueTask TransformRequestAsync(
@@ -58,18 +67,56 @@ public sealed class StreamingHttpTransformer : HttpTransformer
             proxyRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _upstreamBearerToken);
         }
 
-        if (_clientModelName is not null &&
-            !string.Equals(_clientModelName, _canonicalModelId, StringComparison.OrdinalIgnoreCase) &&
-            httpContext.Request.Body.CanSeek)
+        if (_clientModelName is null ||
+            string.Equals(_clientModelName, _canonicalModelId, StringComparison.OrdinalIgnoreCase) ||
+            !httpContext.Request.Body.CanSeek)
         {
-            httpContext.Request.Body.Position = 0;
-            using var reader = new StreamReader(httpContext.Request.Body, Encoding.UTF8, leaveOpen: true);
-            var body = await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
-            httpContext.Request.Body.Position = 0;
+            return;
+        }
 
-            var rewritten = RewriteModelProperty(body, _canonicalModelId);
-            proxyRequest.Content = new StringContent(rewritten, Encoding.UTF8, "application/json");
-            proxyRequest.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
+        var modelValueRange = _modelValueRange
+            ?? await LocateModelValueAsync(httpContext.Request.Body, cancellationToken).ConfigureAwait(false);
+        if (modelValueRange is null)
+        {
+            // Nothing to splice — forward the body untouched rather than guess at its shape.
+            return;
+        }
+
+        var rewritten = ModelRewritingHttpContent.TryCreate(
+            httpContext.Request.Body,
+            modelValueRange.Value,
+            _canonicalModelId,
+            proxyRequest.Content?.Headers.ContentType);
+        if (rewritten is not null)
+        {
+            proxyRequest.Content = rewritten;
+        }
+    }
+
+    /// <summary>
+    /// Re-derives the <c>model</c> value's byte range for callers that constructed the transformer
+    /// without one. Costs one more bounded streaming scan — never a copy of the body.
+    /// </summary>
+    private static async Task<JsonValueRange?> LocateModelValueAsync(
+        Stream body,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            body.Position = 0;
+            var info = await InferenceRequestParser.ParseAsync(body, cancellationToken).ConfigureAwait(false);
+            return info.ModelValueRange;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+        finally
+        {
+            if (body.CanSeek)
+            {
+                body.Position = 0;
+            }
         }
     }
 
@@ -171,28 +218,4 @@ public sealed class StreamingHttpTransformer : HttpTransformer
         }
     }
 
-    public static string RewriteModelProperty(string json, string canonicalModelId)
-    {
-        using var document = JsonDocument.Parse(json);
-        using var stream = new MemoryStream();
-        using (var writer = new Utf8JsonWriter(stream))
-        {
-            writer.WriteStartObject();
-            foreach (var property in document.RootElement.EnumerateObject())
-            {
-                if (string.Equals(property.Name, "model", StringComparison.Ordinal))
-                {
-                    writer.WriteString("model", canonicalModelId);
-                }
-                else
-                {
-                    property.WriteTo(writer);
-                }
-            }
-
-            writer.WriteEndObject();
-        }
-
-        return Encoding.UTF8.GetString(stream.ToArray());
-    }
 }

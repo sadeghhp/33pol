@@ -1232,7 +1232,7 @@ public sealed class ModelRouterMiddlewareTests
         enforcement.CheckBeforeForwardAsync(Arg.Any<string?>(), Arg.Any<CancellationToken>())
             .Returns(BudgetCheckResult.Allowed);
         enforcement.TryReserveAsync(
-                Arg.Any<string?>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<long?>(), Arg.Any<CancellationToken>())
+                Arg.Any<string?>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<long?>(), Arg.Any<long>(), Arg.Any<CancellationToken>())
             .Returns(BudgetCheckResult.Allowed);
         return enforcement;
     }

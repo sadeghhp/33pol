@@ -27,6 +27,9 @@ public static class ProxyServiceCollectionExtensions
         return services;
     }
 
+    public static IApplicationBuilder UseGatewayExceptionHandling(this IApplicationBuilder app) =>
+        app.UseMiddleware<GatewayExceptionHandlingMiddleware>();
+
     public static IApplicationBuilder UsePublicModelDetection(this IApplicationBuilder app) =>
         app.UseMiddleware<PublicModelDetectionMiddleware>();
 

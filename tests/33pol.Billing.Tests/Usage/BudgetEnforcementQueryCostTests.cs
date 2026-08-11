@@ -37,7 +37,7 @@ public sealed class BudgetEnforcementQueryCostTests
 
         var service = BillingBudgetEnforcementServiceTestsHelper.CreateService(budgets, rollups);
 
-        var result = await service.TryReserveAsync(tenantId.ToString(), "req-1", "gpt-4o", 100);
+        var result = await service.TryReserveAsync(tenantId.ToString(), "req-1", "gpt-4o", 100, requestBodyBytes: 0);
 
         result.IsAllowed.Should().BeTrue();
         await budgets.Received(1).GetByTenantAsync(tenantId, Arg.Any<CancellationToken>());
@@ -62,7 +62,7 @@ public sealed class BudgetEnforcementQueryCostTests
 
         var service = BillingBudgetEnforcementServiceTestsHelper.CreateService(budgets, rollups);
 
-        (await service.TryReserveAsync(tenantId.ToString(), "req-1", "gpt-4o", 100)).IsAllowed.Should().BeTrue();
+        (await service.TryReserveAsync(tenantId.ToString(), "req-1", "gpt-4o", 100, requestBodyBytes: 0)).IsAllowed.Should().BeTrue();
 
         await rollups.DidNotReceive().GetRollupsAsync(
             Arg.Any<DateOnly?>(), Arg.Any<DateOnly?>(), Arg.Any<Guid?>(), Arg.Any<CancellationToken>());
@@ -90,7 +90,7 @@ public sealed class BudgetEnforcementQueryCostTests
         // No IRateCardRepository registered => estimate is 0 (cannot price).
         var service = BillingBudgetEnforcementServiceTestsHelper.CreateService(budgets, rollups);
 
-        var result = await service.TryReserveAsync(tenantId.ToString(), "req-1", "unpriced", 100);
+        var result = await service.TryReserveAsync(tenantId.ToString(), "req-1", "unpriced", 100, requestBodyBytes: 0);
 
         result.IsAllowed.Should().BeFalse();
         result.BudgetName.Should().Be("Monthly");
@@ -112,7 +112,7 @@ public sealed class BudgetEnforcementQueryCostTests
 
         var service = BillingBudgetEnforcementServiceTestsHelper.CreateService(budgets, rollups);
 
-        (await service.TryReserveAsync(tenantId.ToString(), "req-1", "gpt-4o", 100)).IsAllowed.Should().BeFalse();
+        (await service.TryReserveAsync(tenantId.ToString(), "req-1", "gpt-4o", 100, requestBodyBytes: 0)).IsAllowed.Should().BeFalse();
     }
 
     /// <summary>
@@ -152,7 +152,7 @@ public sealed class BudgetEnforcementQueryCostTests
         // 1,000,000 tokens at the conservative 40/M rate reserves 40 per request against a limit of
         // 100, so at most two can be in flight at once.
         var results = await Task.WhenAll(Enumerable.Range(0, 8).Select(i =>
-            service.TryReserveAsync(tenantId.ToString(), $"req-{i}", "gpt-4o", 1_000_000).AsTask()));
+            service.TryReserveAsync(tenantId.ToString(), $"req-{i}", "gpt-4o", 1_000_000, requestBodyBytes: 0).AsTask()));
 
         results.Count(r => r.IsAllowed).Should().Be(2);
         ledger.GetOutstanding(tenantId).Should().BeLessThanOrEqualTo(100m);

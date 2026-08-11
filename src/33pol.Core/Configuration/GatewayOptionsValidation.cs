@@ -32,6 +32,16 @@ public static class GatewayOptionsValidation
             errors.Add($"{nameof(GatewayOptions.Resilience)}.{nameof(GatewayResilienceOptions.StreamIdleTimeoutSeconds)} must be at least 1 second.");
         }
 
+        if (options.Resilience.ForwardTimeoutSecondsPerRequestMegabyte < 0)
+        {
+            errors.Add($"{nameof(GatewayOptions.Resilience)}.{nameof(GatewayResilienceOptions.ForwardTimeoutSecondsPerRequestMegabyte)} cannot be negative.");
+        }
+
+        if (options.Resilience.MaxForwardTimeoutSeconds < options.Resilience.ForwardTimeoutSeconds)
+        {
+            errors.Add($"{nameof(GatewayOptions.Resilience)}.{nameof(GatewayResilienceOptions.MaxForwardTimeoutSeconds)} must be at least {nameof(GatewayResilienceOptions.ForwardTimeoutSeconds)}.");
+        }
+
         if (options.Resilience.MaxRequestBodyBytes < 1)
         {
             errors.Add($"{nameof(GatewayOptions.Resilience)}.{nameof(GatewayResilienceOptions.MaxRequestBodyBytes)} must be at least 1 byte.");

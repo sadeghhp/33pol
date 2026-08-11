@@ -88,14 +88,14 @@ public sealed class InferenceHttpForwarder(
 
         var client = httpClientFactory.CreateClient(HttpClientName);
 
-        var completionOption = isStreaming
-            ? HttpCompletionOption.ResponseHeadersRead
-            : HttpCompletionOption.ResponseContentRead;
+        // ResponseHeadersRead in both modes. Buffering a non-streaming response held the whole body
+        // in memory before a single byte could be forwarded, and — because the buffering happened
+        // inside SendAsync — it charged the transfer of a large body against the header deadline,
+        // where a breach is recorded as backend ill health.
+        const HttpCompletionOption completionOption = HttpCompletionOption.ResponseHeadersRead;
 
-        // Header phase. Only this stretch carries the total-duration deadline: for a streaming
-        // response SendAsync returns as soon as headers arrive, so the deadline never reaches the
-        // body. For a non-streaming response the body arrives with the headers, which keeps the
-        // previous end-to-end semantics for that case.
+        // Header phase. Only this stretch carries the header deadline; for both modes SendAsync
+        // returns as soon as headers arrive, so it never reaches the body.
         using var headerCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         headerCts.CancelAfter(timeouts.HeaderTimeout);
 
@@ -156,42 +156,42 @@ public sealed class InferenceHttpForwarder(
                 {
                     ApplyStreamingResponseHeaders(context);
                     await context.Response.StartAsync(cancellationToken).ConfigureAwait(false);
-
-                    // Body phase. The idle deadline is rearmed after every chunk that reaches the
-                    // client, so a stream of any total duration survives while the upstream keeps
-                    // producing. Only a genuine stall trips it.
-                    using var idleCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                    idleCts.CancelAfter(timeouts.StreamIdleTimeout);
-
-                    await using var upstreamBody = await responseMessage.Content
-                        .ReadAsStreamAsync(idleCts.Token)
-                        .ConfigureAwait(false);
-
-                    try
-                    {
-                        await CopyStreamWithFlushAsync(
-                                upstreamBody,
-                                context.Response.Body,
-                                onFirstByteWritten: () => RecordTimeToFirstTokenIfNeeded(context),
-                                onChunkForwarded: () => idleCts.CancelAfter(timeouts.StreamIdleTimeout),
-                                idleCts.Token)
-                            .ConfigureAwait(false);
-                    }
-                    catch (OperationCanceledException) when (idleCts.IsCancellationRequested &&
-                                                            !cancellationToken.IsCancellationRequested)
-                    {
-                        logger.LogWarning(
-                            "Upstream stalled for more than {StreamIdleTimeoutSeconds}s mid-stream for {Uri}",
-                            timeouts.StreamIdleTimeout.TotalSeconds,
-                            requestMessage.RequestUri);
-                        return ForwarderError.ResponseBodyDestination;
-                    }
                 }
-                else
+
+                // Body phase, for streaming and non-streaming alike. The idle deadline is rearmed
+                // after every chunk that reaches the client, so a response of any total duration
+                // survives while the upstream keeps producing. Only a genuine stall trips it, and a
+                // stall is inconclusive about backend health because the backend already answered.
+                using var idleCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                idleCts.CancelAfter(timeouts.StreamIdleTimeout);
+
+                await using var upstreamBody = await responseMessage.Content
+                    .ReadAsStreamAsync(idleCts.Token)
+                    .ConfigureAwait(false);
+
+                try
                 {
-                    await responseMessage.Content
-                        .CopyToAsync(context.Response.Body, cancellationToken)
+                    await CopyStreamWithFlushAsync(
+                            upstreamBody,
+                            context.Response.Body,
+                            // Time to first token is a streaming notion; a buffered response has no
+                            // meaningful first-token moment to report.
+                            onFirstByteWritten: isStreaming
+                                ? () => RecordTimeToFirstTokenIfNeeded(context)
+                                : null,
+                            onChunkForwarded: () => idleCts.CancelAfter(timeouts.StreamIdleTimeout),
+                            flushEachChunk: isStreaming,
+                            idleCts.Token)
                         .ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (idleCts.IsCancellationRequested &&
+                                                        !cancellationToken.IsCancellationRequested)
+                {
+                    logger.LogWarning(
+                        "Upstream stalled for more than {StreamIdleTimeoutSeconds}s while sending the response body for {Uri}",
+                        timeouts.StreamIdleTimeout.TotalSeconds,
+                        requestMessage.RequestUri);
+                    return ForwarderError.ResponseBodyDestination;
                 }
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -289,11 +289,16 @@ public sealed class InferenceHttpForwarder(
         metricsCollector.RecordTimeToFirstToken(modelId, elapsedSeconds);
     }
 
+    /// <param name="flushEachChunk">
+    /// Streaming responses must reach the client chunk by chunk. A buffered response has no such
+    /// requirement, so it is left to the server's own flushing rather than paying a flush per read.
+    /// </param>
     private static async Task CopyStreamWithFlushAsync(
         Stream source,
         Stream destination,
         Action? onFirstByteWritten,
         Action? onChunkForwarded,
+        bool flushEachChunk,
         CancellationToken cancellationToken)
     {
         var buffer = ArrayPool<byte>.Shared.Rent(16 * 1024);
@@ -306,10 +311,13 @@ public sealed class InferenceHttpForwarder(
                        .ConfigureAwait(false)) > 0)
             {
                 await destination.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
-                await destination.FlushAsync(cancellationToken).ConfigureAwait(false);
+                if (flushEachChunk)
+                {
+                    await destination.FlushAsync(cancellationToken).ConfigureAwait(false);
+                }
 
                 // Rearm only once the bytes are actually with the client: progress, not mere
-                // upstream activity, is what proves the stream is alive.
+                // upstream activity, is what proves the response is alive.
                 onChunkForwarded?.Invoke();
 
                 if (!firstByteWritten)

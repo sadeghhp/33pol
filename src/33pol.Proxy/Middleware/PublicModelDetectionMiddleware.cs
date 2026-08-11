@@ -27,13 +27,20 @@ public sealed class PublicModelDetectionMiddleware
         }
 
         context.Request.EnableBuffering();
-        var originalPosition = context.Request.Body.Position;
+
+        // Parse from the start of the body unconditionally: the byte offsets the parser reports are
+        // relative to where it began reading, and every consumer of them seeks back to 0.
+        context.Request.Body.Position = 0;
 
         try
         {
             var requestInfo = await InferenceRequestParser
                 .ParseAsync(context.Request.Body, context.RequestAborted)
                 .ConfigureAwait(false);
+
+            // Published for the router, which needs the same three scalars and must not pay for a
+            // second parse of the same body.
+            InferenceRequestParseCache.SetParsed(context, requestInfo);
 
             if (!string.IsNullOrWhiteSpace(requestInfo.Model) &&
                 _registry.TryGetModel(requestInfo.Model, out var modelConfig) &&
@@ -46,11 +53,18 @@ public sealed class PublicModelDetectionMiddleware
         }
         catch (JsonException)
         {
-            // Leave items unset; auth and router enforce keys / return invalid JSON.
+            // Leave items unset; auth and router enforce keys / return invalid JSON. Recording the
+            // failure keeps the router from re-parsing a body already known to be malformed.
+            InferenceRequestParseCache.SetInvalidJson(context);
         }
         finally
         {
-            context.Request.Body.Position = originalPosition;
+            // Guarded so a failure that aborted the body read (an oversized payload, above all)
+            // propagates to the exception middleware instead of being masked by a seek that throws.
+            if (context.Request.Body.CanSeek)
+            {
+                context.Request.Body.Position = 0;
+            }
         }
 
         await _next(context).ConfigureAwait(false);

@@ -44,6 +44,34 @@ public sealed class InferenceProxyEndpointTests
         handler.LastRequestBody.Should().NotContain("gpt-local");
     }
 
+    /// <summary>
+    /// The alias rewrite splices the model token out of the buffered body, so a large prompt must
+    /// reach the upstream byte for byte rather than being rebuilt.
+    /// </summary>
+    /// <remarks>
+    /// The rewrite this replaced read the body into a string, re-parsed it into a JsonDocument, wrote
+    /// it back through a growing MemoryStream, copied that with ToArray, decoded it and re-encoded it
+    /// — roughly thirteen times the body size in Large Object Heap allocations per aliased request,
+    /// plus a UTF-16 round trip that silently rewrote anything that was not well-formed UTF-8.
+    /// </remarks>
+    [Fact]
+    public async Task PostChatCompletions_LargeAliasedBody_ReachesUpstreamIntact()
+    {
+        var handler = new MockUpstreamHandler();
+        using var factory = GatewayWebApplicationFactory.Create(handler);
+        using var client = factory.CreateClient();
+
+        var prompt = string.Concat(Enumerable.Repeat(@"héllo ✓ {}[]\"" ", 60_000));
+        var request = $$"""{"model":"gpt-local","stream":false,"messages":[{"role":"user","content":"{{prompt}}"}]}""";
+
+        var response = await client.PostAsync("/v1/chat/completions", JsonBody(request));
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        handler.LastRequestBody.Should().Be(
+            request.Replace("\"gpt-local\"", "\"local-mock\"", StringComparison.Ordinal),
+            "only the model token may differ from what the client sent");
+    }
+
     [Fact]
     public async Task PostChatCompletions_Stream_SetsSseResponseHeaders()
     {

@@ -45,14 +45,14 @@ public static class ServiceCollectionExtensions
         services.AddGatewayApi();
         services.AddGatewayProxy();
         services.AddHttpClient(UpstreamHttpClientNames.Inference)
-            .ConfigureHttpClient((sp, client) =>
+            .ConfigureHttpClient(client =>
             {
-                var forwardTimeoutSeconds = sp
-                    .GetRequiredService<IOptions<GatewayOptions>>()
-                    .Value
-                    .Resilience
-                    .ForwardTimeoutSeconds;
-                client.Timeout = TimeSpan.FromSeconds(forwardTimeoutSeconds);
+                // Deadlines are owned per request by InferenceHttpForwarder, which splits them into a
+                // header phase and an idle-rearmed body phase and reports which one fired. A client
+                // timeout here is a second, hidden deadline over the whole exchange: it would cap the
+                // header allowance the forwarder widens for large-context requests, re-imposing the
+                // very ceiling that made a working backend look dead to the circuit breaker.
+                client.Timeout = Timeout.InfiniteTimeSpan;
             });
 
         if (configuration.GetValue<bool>("Gateway:OperatorConsole:Enabled"))
