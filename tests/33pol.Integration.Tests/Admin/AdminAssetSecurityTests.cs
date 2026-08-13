@@ -254,6 +254,29 @@ public sealed class AdminAssetSecurityTests
     }
 
     /// <summary>
+    /// The Message column truncates, so the expanded panel is the only place the full text can be
+    /// read. For a startup or configuration failure that text is the entire finding — including the
+    /// remediation step — and it used to survive only in a <c>title</c> tooltip, which is invisible
+    /// on touch. It must be rendered as content.
+    /// </summary>
+    [Fact]
+    public async Task AdminIndex_RendersTheUntruncatedErrorMessageInTheDetailPanel()
+    {
+        using var factory = GatewayWebApplicationFactory.Create();
+        using var client = factory.CreateClient();
+
+        var html = await GetIndexAsync(client);
+
+        html.Should().Contain("class=\"error-detail-message\" x-text=\"r.message\"");
+        html.Should().Contain("x-show=\"r.notRequestScoped\"");
+
+        var css = await client.GetStringAsync("/admin/admin.css");
+        css.Should().Contain(".error-detail-message");
+        // Clipping the one field the panel exists to show would defeat the point.
+        css.Should().NotContain(".error-detail-message { text-overflow");
+    }
+
+    /// <summary>
     /// Every local asset is served no-store but still carries a version query, because browsers
     /// that already cached an older build are the ones this has to reach.
     /// </summary>

@@ -68,6 +68,12 @@ public sealed class AdminErrorEndpointTests
         group.GetProperty("fingerprint").GetString().Should().NotBeNullOrWhiteSpace();
         group.GetProperty("lastRequestId").GetString().Should().NotBeNullOrWhiteSpace();
         group.GetProperty("hint").GetString().Should().NotBeNullOrWhiteSpace();
+
+        // Source and Category are fingerprint components, so a group cannot mix them. They are what
+        // tells the detail panel whether blank request fields mean "not captured" or "never had a
+        // request" — a startup failure and a dropped proxy field look identical without them.
+        group.GetProperty("source").GetString().Should().Be(GatewayErrorSourceNames.Proxy);
+        group.GetProperty("category").GetString().Should().Be("ModelRouterMiddleware");
     }
 
     [Fact]

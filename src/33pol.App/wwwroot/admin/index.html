@@ -17,11 +17,11 @@
        is that no expression below may contain an operator, a ternary or a call with arguments:
        every value comes from a getter, a zero-argument method, or a {get,set} pair on adminApp. -->
   <link rel="stylesheet" href="vendor/fonts.css?v=1" />
-  <link rel="stylesheet" href="admin.css?v=15" />
+  <link rel="stylesheet" href="admin.css?v=16" />
   <script defer src="admin-icons.js?v=10"></script>
   <script defer src="admin-errors.js?v=7"></script>
   <script defer src="admin-store.js?v=9"></script>
-  <script defer src="admin-app.js?v=26"></script>
+  <script defer src="admin-app.js?v=27"></script>
   <script defer src="vendor/alpine-csp-3.14.9.min.js"></script>
 </head>
 <body x-data="adminApp" x-cloak @keydown.window="onModalKeydown">
@@ -960,17 +960,29 @@
                   </tr>
                   <tr x-show="r.expanded" class="request-detail-row">
                     <td colspan="8">
+                      <!-- The Message column truncates, and for a startup or configuration failure
+                           the message is the whole finding — including how to fix it. Render it in
+                           full here rather than leaving it to a title tooltip nobody can tap. -->
+                      <p class="error-detail-message" x-text="r.message"></p>
                       <p class="log-hint" x-show="r.hasHint">
                         <span class="icon" x-html="icons.lightbulb"></span>
                         <span x-text="r.hint"></span>
                       </p>
+                      <p class="hint" x-show="r.notRequestScoped">
+                        Reported outside a request, so there is no model, status or request ID to show.
+                      </p>
                       <dl class="request-detail-list">
-                        <div><dt>Exception</dt><dd x-text="r.exceptionType"></dd></div>
-                        <div><dt>Endpoint</dt><dd><code x-text="r.endpointText"></code></dd></div>
-                        <div><dt>Upstream</dt><dd><code x-text="r.upstreamTarget"></code></dd></div>
+                        <div x-show="r.hasSource"><dt>Source</dt><dd x-text="r.sourceText"></dd></div>
+                        <div x-show="r.hasCategory"><dt>Reported by</dt><dd><code x-text="r.category"></code></dd></div>
+                        <div x-show="r.hasException"><dt>Exception</dt><dd x-text="r.exceptionType"></dd></div>
+                        <div x-show="r.hasModel"><dt>Model</dt><dd><code x-text="r.modelId"></code></dd></div>
+                        <div x-show="r.hasStatus"><dt>Status</dt><dd x-text="r.statusText"></dd></div>
+                        <div x-show="r.hasErrorCode"><dt>Code</dt><dd><code x-text="r.errorCode"></code></dd></div>
+                        <div x-show="r.hasEndpoint"><dt>Endpoint</dt><dd><code x-text="r.endpointText"></code></dd></div>
+                        <div x-show="r.hasUpstream"><dt>Upstream</dt><dd><code x-text="r.upstreamTarget"></code></dd></div>
                         <div><dt>First seen</dt><dd x-text="r.firstSeen"></dd></div>
                         <div><dt>Occurrences</dt><dd x-text="r.countText"></dd></div>
-                        <div><dt>Latest request</dt><dd><code x-text="r.requestId"></code></dd></div>
+                        <div x-show="r.hasRequestId"><dt>Latest request</dt><dd><code x-text="r.requestId"></code></dd></div>
                       </dl>
 
                       <div class="row-actions" @click.stop>

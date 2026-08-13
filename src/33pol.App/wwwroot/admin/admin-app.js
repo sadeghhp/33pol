@@ -995,12 +995,29 @@ function adminApp() {
     },
 
     /** Plain-text form of a group, so an operator can paste one into a bug report or chat. */
+    /**
+     * Turns the wire value of an error's source into something an operator reads rather than
+     * decodes. Unknown values pass through: a source added server-side should still show up.
+     */
+    errorSourceLabel(source) {
+      if (!source) return '—';
+      const labels = {
+        proxy: 'Inference request',
+        exception: 'Unhandled exception',
+        log: 'Application log',
+        modeltest: 'Model test'
+      };
+      return labels[String(source).toLowerCase()] || source;
+    },
+
     formatErrorForCopy(group) {
       if (!group) return '';
       const lines = [
         `[${group.level}] ${group.message}`,
         `Occurrences: ${group.count} (first ${this.formatTime(group.firstSeenUtc)}, last ${this.formatTime(group.lastSeenUtc)})`
       ];
+      if (group.source) lines.push(`Source: ${this.errorSourceLabel(group.source)}`);
+      if (group.category) lines.push(`Category: ${group.category}`);
       if (group.exceptionType) lines.push(`Exception: ${group.exceptionType}`);
       if (group.statusCode) lines.push(`Status: ${group.statusCode}`);
       if (group.errorCode) lines.push(`Code: ${group.errorCode}`);
@@ -2843,6 +2860,19 @@ function adminApp() {
           statusText: g.statusCode ? String(g.statusCode) : '—',
           endpointText: endpoint || '—',
           upstreamTarget: g.upstreamTarget || '—',
+          hasException: !!g.exceptionType,
+          hasEndpoint: !!endpoint,
+          hasUpstream: !!g.upstreamTarget,
+          hasStatus: !!g.statusCode,
+          hasErrorCode: !!g.errorCode,
+          sourceText: this.errorSourceLabel(g.source),
+          hasSource: !!g.source,
+          category: g.category || '—',
+          hasCategory: !!g.category,
+          // A startup or background failure has no request behind it, so a detail panel of six
+          // em-dashes is not "missing data" — it is the wrong panel. Say which it is instead.
+          isRequestScoped: !!(g.modelId || endpoint || g.statusCode || g.lastRequestId),
+          notRequestScoped: !(g.modelId || endpoint || g.statusCode || g.lastRequestId),
           hint: g.hint || '',
           hasHint: !!g.hint,
           rowClass: this.logRowClass(g),

@@ -35,6 +35,20 @@ public sealed class AdminErrorGroupDto
 
     public string? LastRequestId { get; init; }
 
+    /// <summary>
+    /// Which subsystem captured this: <c>proxy</c>, <c>exception</c>, <c>log</c> or <c>modeltest</c>.
+    /// </summary>
+    /// <remarks>
+    /// Taken from the sample rather than aggregated because <c>Source:Category</c> is a fingerprint
+    /// component — every occurrence in a group necessarily shares both. Worth surfacing: it is what
+    /// tells an operator whether the blank model/status/endpoint columns mean "not captured" or
+    /// "this failure never belonged to a request in the first place".
+    /// </remarks>
+    public string? Source { get; init; }
+
+    /// <summary>The logger category or middleware that reported it.</summary>
+    public string? Category { get; init; }
+
     /// <summary>Stack trace of the most recent occurrence, so the row expands without a second fetch.</summary>
     public string? StackTrace { get; init; }
 
@@ -57,6 +71,8 @@ public sealed class AdminErrorGroupDto
         UpstreamTarget = group.UpstreamTarget,
         Hint = group.Hint,
         LastRequestId = group.LastRequestId,
+        Source = group.Sample?.Source,
+        Category = group.Sample?.Category,
         StackTrace = group.Sample?.StackTrace,
         UpstreamBodySnippet = group.Sample?.UpstreamBodySnippet,
     };
