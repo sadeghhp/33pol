@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging.Abstractions;
+using Pol33.Core.Abstractions;
 using Pol33.Core.Errors;
 using Pol33.Proxy.Middleware;
 
@@ -89,7 +90,11 @@ public sealed class GatewayExceptionHandlingMiddlewareTests
     }
 
     private static GatewayExceptionHandlingMiddleware CreateMiddleware(RequestDelegate next) =>
-        new(next, new OpenAiErrorResponseWriter(), NullLogger<GatewayExceptionHandlingMiddleware>.Instance);
+        new(
+            next,
+            new OpenAiErrorResponseWriter(),
+            Substitute.For<IGatewayErrorRecorder>(),
+            NullLogger<GatewayExceptionHandlingMiddleware>.Instance);
 
     private static DefaultHttpContext CreateContext()
     {

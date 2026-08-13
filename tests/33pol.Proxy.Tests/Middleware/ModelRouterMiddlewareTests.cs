@@ -1155,7 +1155,8 @@ public sealed class ModelRouterMiddlewareTests
         IUpstreamBearerTokenResolver? upstreamTokenResolver = null,
         GatewayOptions? gatewayOptions = null,
         IBudgetEnforcementService? budgetEnforcement = null,
-        ModelCircuitBreakerRegistry? circuitBreakers = null)
+        ModelCircuitBreakerRegistry? circuitBreakers = null,
+        IGatewayErrorRecorder? errorRecorder = null)
     {
         next ??= _ => Task.CompletedTask;
         registry ??= Substitute.For<IModelRegistry>();
@@ -1223,6 +1224,7 @@ public sealed class ModelRouterMiddlewareTests
             gatewayOptionsWrapper,
             upstreamTokenResolver ?? Substitute.For<IUpstreamBearerTokenResolver>(),
             budgetEnforcement ?? CreateAllowAllBudgetEnforcement(),
+            errorRecorder ?? Substitute.For<IGatewayErrorRecorder>(),
             NullLogger<ModelRouterMiddleware>.Instance);
     }
 

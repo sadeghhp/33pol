@@ -428,7 +428,12 @@ public sealed class AdminModelTestServiceTests
             string? search = null) =>
             _entries;
 
-        public void Clear() => _entries.Clear();
+        public int Clear()
+        {
+            var removed = _entries.Count;
+            _entries.Clear();
+            return removed;
+        }
     }
 
     private static ModelConfig CreateModel(string id, string url, string? secretRef = null)

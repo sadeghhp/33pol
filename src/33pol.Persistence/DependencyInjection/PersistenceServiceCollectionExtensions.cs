@@ -58,6 +58,7 @@ public static class PersistenceServiceCollectionExtensions
         services.AddScoped<BudgetRepository>();
         services.AddScoped<IBudgetRepository, CachingBudgetRepository>();
         services.AddScoped<IGatewayStatsSnapshotStore, GatewayStatsSnapshotStore>();
+        services.AddScoped<IGatewayErrorArchive, GatewayErrorRepository>();
         services.AddScoped<IQuotaUsageSnapshotStore, QuotaUsageSnapshotStore>();
         services.AddScoped<IGatewayConfigStore, GatewayConfigStore>();
         services.AddScoped<ICorsSettingsRepository, CorsSettingsRepository>();

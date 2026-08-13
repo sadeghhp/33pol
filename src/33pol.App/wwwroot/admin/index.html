@@ -17,11 +17,11 @@
        is that no expression below may contain an operator, a ternary or a call with arguments:
        every value comes from a getter, a zero-argument method, or a {get,set} pair on adminApp. -->
   <link rel="stylesheet" href="vendor/fonts.css?v=1" />
-  <link rel="stylesheet" href="admin.css?v=13" />
-  <script defer src="admin-icons.js?v=9"></script>
+  <link rel="stylesheet" href="admin.css?v=14" />
+  <script defer src="admin-icons.js?v=10"></script>
   <script defer src="admin-errors.js?v=7"></script>
-  <script defer src="admin-store.js?v=8"></script>
-  <script defer src="admin-app.js?v=24"></script>
+  <script defer src="admin-store.js?v=9"></script>
+  <script defer src="admin-app.js?v=25"></script>
   <script defer src="vendor/alpine-csp-3.14.9.min.js"></script>
 </head>
 <body x-data="adminApp" x-cloak @keydown.window="onModalKeydown">
@@ -113,9 +113,10 @@
             <span class="pulse-dot live"></span>
             <span class="vc-value" x-text="activeStreamsCount"></span> <span class="vc-label">streams</span>
           </span>
-          <span class="vital-chip is-fail" x-show="hasErrors">
+          <button type="button" class="vital-chip is-fail is-actionable" x-show="hasErrors"
+            @click="openErrorsAll" title="Open the Errors tab">
             <span class="vc-value" x-text="totalErrorsText"></span> <span class="vc-label">errors</span>
-          </span>
+          </button>
         </div>
 
         <div class="topbar-right">
@@ -199,10 +200,15 @@
               </div>
             </article>
 
-            <article class="vital" :class="errorsVitalClass">
+            <article class="vital is-actionable" role="button" tabindex="0"
+              :class="errorsVitalClass"
+              aria-label="Open the Errors tab"
+              @click="openErrorsAll"
+              @keydown.enter.prevent="openErrorsAll"
+              @keydown.space.prevent="openErrorsAll">
               <div class="vital-head"><span class="vital-label">Errors</span><span class="icon" x-html="icons.alert-circle"></span></div>
               <strong class="vital-value" x-text="totalErrorsText"></strong>
-              <div class="vital-foot"><span x-text="errorRateText"></span></div>
+              <div class="vital-foot"><span x-text="errorRateText"></span> · view details</div>
               <div class="vital-spark" x-show="spark.errorRate.has" aria-hidden="true">
                 <svg viewBox="0 0 100 100" preserveAspectRatio="none">
                   <path class="spark-fill" :d="spark.errorRate.fill"></path>
@@ -281,13 +287,22 @@
             <div class="card">
               <span class="eyebrow">Reliability</span>
               <h3>Errors by model</h3>
+              <div class="card-head-actions">
+                <button type="button" class="action secondary" @click="openErrorsAll">
+                  <span class="icon" x-html="icons.bug"></span> View all
+                </button>
+                <button type="button" class="action danger" @click="confirmClearErrors" :disabled="clearErrorsDisabled">
+                  <span class="icon" x-html="icons.trash"></span> Clear errors
+                </button>
+              </div>
               <div class="hbars" x-show="hasErrorModelBars">
                 <template x-for="row in errorModelBars" :key="row.key">
-                  <div class="hbar is-error">
+                  <button type="button" class="hbar is-error is-clickable" @click="row.open"
+                    :aria-label="row.modelId">
                     <span class="hbar-label" x-text="row.modelId" :title="row.modelId"></span>
                     <span class="hbar-track"><span class="hbar-fill" :style="row.style"></span></span>
                     <span class="hbar-value" x-text="row.countText"></span>
-                  </div>
+                  </button>
                 </template>
               </div>
               <p class="hint healthy" x-show="noErrorModelBars">No errors — every model is clean.</p>
@@ -740,18 +755,20 @@
             <div class="titles">
               <span class="eyebrow">Diagnostics</span><h2>Logs</h2>
               <p class="page-sub">Warnings and errors raised by the gateway, newest first — upstream failures,
-                rejected requests, model tests. Held in memory only; restarting the gateway clears them.</p>
+                rejected requests, model tests. Held in memory only; restarting the gateway clears them.
+                For grouped, durable failures that survive a restart, see the Errors tab.</p>
+              <p class="page-sub" x-text="logsLevelHint"></p>
             </div>
           </div>
 
           <div class="toolbar">
             <label class="filter-field">
               <span class="icon" x-html="icons.search"></span>
-              <input x-model="mdl.logsSearch" @input.debounce.400ms="refreshLogs"
+              <input x-model="mdl.logsSearch" @input.debounce.400ms="applyLogFilters"
                 placeholder="model id, request id, message, code…" aria-label="Search logs" />
             </label>
-            <select class="inline-select" x-model="mdl.logsLevel" @change="refreshLogs" aria-label="Minimum severity">
-              <option value="all">All severities</option>
+            <select class="inline-select" x-model="mdl.logsLevel" @change="applyLogFilters" aria-label="Minimum severity">
+              <option value="all">All captured (warning+)</option>
               <option value="warning">Warning and above</option>
               <option value="error">Errors only</option>
             </select>
@@ -767,9 +784,11 @@
             </button>
           </div>
 
+          <p class="notice error" x-show="showLogsLoadError" x-text="logsLoadError"></p>
+
           <p class="hint" x-show="logsTruncated">
-            Showing the newest <span x-text="logsPageSize"></span> matching entries. The gateway keeps at
-            most <span x-text="logsCapacity"></span> in memory — narrow the search to see older ones.
+            <span x-text="logsTruncatedText"></span>
+            The gateway keeps at most <span x-text="logsCapacity"></span> in memory — narrow the search to see older ones.
           </p>
 
           <div class="table-wrap">
@@ -834,6 +853,192 @@
           <div class="empty-state" x-show="logsEmpty">
             <span class="empty-state-icon icon" x-html="icons.file-text"></span>
             <p x-text="logsEmptyText"></p>
+          </div>
+        </section>
+
+        <!-- ============================ ERRORS ============================ -->
+        <section x-show="isErrors" role="tabpanel" aria-labelledby="tab-errors" id="panel-errors">
+          <div class="page-header">
+            <div class="titles">
+              <span class="eyebrow">Reliability</span><h2>Errors</h2>
+              <p class="page-sub" x-text="errorsStorageNote"></p>
+              <p class="page-sub" x-show="hasErrorGroups" x-text="errorsSummaryText"></p>
+            </div>
+          </div>
+
+          <div class="chip-row">
+            <template x-for="c in errorsRangeChips" :key="c.key">
+              <button type="button" class="preset" :class="c.cls" @click="c.select" x-text="c.label"></button>
+            </template>
+          </div>
+
+          <div class="toolbar">
+            <label class="filter-field">
+              <span class="icon" x-html="icons.search"></span>
+              <input x-model="mdl.errorsSearch" @input.debounce.400ms="applyErrorFilters"
+                placeholder="message, exception, model, request id…" aria-label="Search errors" />
+            </label>
+            <select class="inline-select" x-model="mdl.errorsModel" @change="applyErrorFilters" aria-label="Model">
+              <option value="">All models</option>
+              <template x-for="o in errorModelOptions" :key="o.key">
+                <option :value="o.value" x-text="o.label"></option>
+              </template>
+            </select>
+            <select class="inline-select" x-model="mdl.errorsStatus" @change="applyErrorFilters" aria-label="Status code">
+              <option value="">All statuses</option>
+              <template x-for="o in errorStatusOptions" :key="o.key">
+                <option :value="o.value" x-text="o.label"></option>
+              </template>
+            </select>
+            <select class="inline-select" x-model="mdl.errorsCode" @change="applyErrorFilters" aria-label="Error code">
+              <option value="">All codes</option>
+              <template x-for="o in errorCodeOptions" :key="o.key">
+                <option :value="o.value" x-text="o.label"></option>
+              </template>
+            </select>
+            <select class="inline-select" x-model="mdl.errorsLevel" @change="applyErrorFilters" aria-label="Minimum severity">
+              <option value="all">All severities</option>
+              <option value="warning">Warning and above</option>
+              <option value="error">Errors only</option>
+              <option value="critical">Critical only</option>
+            </select>
+            <label class="checkbox field-inline">
+              <input type="checkbox" x-model="mdl.errorsAutoRefresh" @change="syncPoll" /> Auto-refresh
+            </label>
+            <span class="spacer"></span>
+            <button type="button" class="action secondary" @click="clearErrorFilters" x-show="errorsFilterActive">
+              <span class="icon" x-html="icons.filter"></span> Clear filters
+            </button>
+            <button type="button" class="action secondary" @click="downloadErrorsJson" :disabled="loadingErrors">
+              <span class="icon" x-html="icons.download"></span> JSON
+            </button>
+            <button type="button" class="action secondary" @click="downloadErrorsCsv" :disabled="loadingErrors">
+              <span class="icon" x-html="icons.download"></span> CSV
+            </button>
+            <button type="button" class="action secondary" @click="refreshErrors" :disabled="loadingErrors">
+              <span class="icon" x-html="icons.refresh"></span> Refresh
+            </button>
+            <button type="button" class="action danger" @click="confirmClearErrors" :disabled="clearErrorsDisabled">
+              <span class="icon" x-html="icons.trash"></span> Clear all
+            </button>
+          </div>
+
+          <p class="notice error" x-show="showErrorsLoadError" x-text="errorsLoadError"></p>
+
+          <div class="table-wrap">
+            <table class="t-errors" x-show="hasErrorGroups">
+              <colgroup>
+                <col style="width:13%" /><col style="width:9%" /><col style="width:8%" />
+                <col style="width:28%" /><col style="width:14%" /><col style="width:7%" />
+                <col style="width:11%" /><col style="width:10%" />
+              </colgroup>
+              <thead>
+                <tr>
+                  <th>Last seen</th><th>Severity</th><th>Count</th><th>Message</th>
+                  <th>Model</th><th>Status</th><th>Code</th><th>Endpoint</th>
+                </tr>
+              </thead>
+              <!-- One tbody per group — see the note on the requests table. -->
+              <template x-for="r in errorRows" :key="r.key">
+                <tbody>
+                  <tr class="request-row" role="button" tabindex="0"
+                    :class="r.rowClass"
+                    :aria-expanded="r.ariaExpanded"
+                    :aria-label="r.ariaLabel"
+                    @click="r.toggle"
+                    @keydown.enter.prevent="r.toggle"
+                    @keydown.space.prevent="r.toggle">
+                    <td x-text="r.lastSeen"></td>
+                    <td><span class="tag" :class="r.levelClass" x-text="r.level"></span></td>
+                    <td><span class="err-count" x-text="r.countText"
+                      title="Occurrences of this same failure in the selected window"></span></td>
+                    <td class="col-truncate" x-text="r.message" :title="r.message"></td>
+                    <td class="col-truncate" x-text="r.modelId" :title="r.modelId"></td>
+                    <td x-text="r.statusText"></td>
+                    <td class="col-truncate" x-text="r.errorCode" :title="r.errorCode"></td>
+                    <td class="col-truncate" x-text="r.endpointText" :title="r.endpointText"></td>
+                  </tr>
+                  <tr x-show="r.expanded" class="request-detail-row">
+                    <td colspan="8">
+                      <p class="log-hint" x-show="r.hasHint">
+                        <span class="icon" x-html="icons.lightbulb"></span>
+                        <span x-text="r.hint"></span>
+                      </p>
+                      <dl class="request-detail-list">
+                        <div><dt>Exception</dt><dd x-text="r.exceptionType"></dd></div>
+                        <div><dt>Endpoint</dt><dd><code x-text="r.endpointText"></code></dd></div>
+                        <div><dt>Upstream</dt><dd><code x-text="r.upstreamTarget"></code></dd></div>
+                        <div><dt>First seen</dt><dd x-text="r.firstSeen"></dd></div>
+                        <div><dt>Occurrences</dt><dd x-text="r.countText"></dd></div>
+                        <div><dt>Latest request</dt><dd><code x-text="r.requestId"></code></dd></div>
+                      </dl>
+
+                      <div class="row-actions" @click.stop>
+                        <button type="button" class="action secondary" @click="r.openRequest" x-show="r.hasRequestId">
+                          <span class="icon" x-html="icons.activity"></span> View in Recent requests
+                        </button>
+                        <button type="button" class="action secondary" @click="r.copyRequestId" x-show="r.hasRequestId">
+                          <span class="icon" x-html="icons.copy"></span> Copy request ID
+                        </button>
+                        <button type="button" class="action secondary" @click="r.filterModel" x-show="r.hasModel">
+                          <span class="icon" x-html="icons.filter"></span> Only this model
+                        </button>
+                        <button type="button" class="action secondary" @click="r.copy">
+                          <span class="icon" x-html="icons.copy"></span> Copy entry
+                        </button>
+                      </div>
+
+                      <p x-show="r.hasStackTrace" style="margin-bottom:0"><strong>Stack trace</strong></p>
+                      <pre class="model-test-content stack-trace" x-show="r.hasStackTrace" x-text="r.stackTrace"></pre>
+
+                      <p x-show="r.hasBodySnippet" style="margin-bottom:0"><strong>Upstream response (redacted)</strong></p>
+                      <pre class="model-test-content" x-show="r.hasBodySnippet" x-text="r.bodySnippet"></pre>
+
+                      <p class="hint" x-show="r.occurrencesLoading">Loading recent occurrences…</p>
+                      <table class="occurrence-table" x-show="r.hasOccurrences">
+                        <thead>
+                          <tr><th>Time</th><th>Request ID</th><th>Status</th><th>Duration</th><th>Tenant</th><th></th></tr>
+                        </thead>
+                        <tbody>
+                          <template x-for="o in r.occurrences" :key="o.key">
+                            <tr>
+                              <td x-text="o.time"></td>
+                              <td><code x-text="o.requestId"></code></td>
+                              <td x-text="o.statusText"></td>
+                              <td x-text="o.durationText"></td>
+                              <td class="col-truncate" x-text="o.tenant" :title="o.tenant"></td>
+                              <td>
+                                <button type="button" class="icon-btn" @click.stop="o.copyId" aria-label="Copy request ID">
+                                  <span class="icon" x-html="icons.copy"></span>
+                                </button>
+                              </td>
+                            </tr>
+                          </template>
+                        </tbody>
+                      </table>
+                    </td>
+                  </tr>
+                </tbody>
+              </template>
+            </table>
+            <table x-show="errorsSkeleton">
+              <tbody><tr class="skeleton-row"><td colspan="8"></td></tr><tr class="skeleton-row"><td colspan="8"></td></tr><tr class="skeleton-row"><td colspan="8"></td></tr></tbody>
+            </table>
+          </div>
+
+          <div class="pager" x-show="showErrorsPager">
+            <button type="button" class="action secondary" @click="errorsPrevPage" :disabled="errorsPrevDisabled">
+              <span class="icon" x-html="icons.arrow-left"></span> Previous
+            </button>
+            <span x-text="errorsPageText"></span>
+            <button type="button" class="action secondary" @click="errorsNextPage" :disabled="errorsNextDisabled">
+              Next <span class="icon" x-html="icons.arrow-right"></span>
+            </button>
+          </div>
+
+          <div class="empty-state" x-show="errorsEmpty">
+            <span class="empty-state-icon icon" x-html="icons.bug"></span>
+            <p x-text="errorsEmptyText"></p>
           </div>
         </section>
 

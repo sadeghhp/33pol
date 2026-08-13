@@ -179,6 +179,137 @@ public sealed class GatewayRuntimeStateTests
         runtime.Export().Recent.Should().BeEmpty();
     }
 
+    [Fact]
+    public void ResetErrors_ZeroesErrorCountersAndDropsFailedFeedRows()
+    {
+        var runtime = new GatewayRuntimeState();
+        runtime.RecordRequestComplete("m1", success: true, durationMs: 100, wasStreaming: false);
+        runtime.RecordRequestComplete("m1", success: false, durationMs: 200, wasStreaming: false);
+        runtime.EnqueueRecent(Completed("ok", statusCode: 200, errorCode: null));
+        runtime.EnqueueRecent(Completed("bad", statusCode: 502, errorCode: "upstream_error"));
+
+        var (clearedTotal, removedRows) = runtime.ResetErrors();
+
+        clearedTotal.Should().Be(1);
+        removedRows.Should().Be(1);
+        runtime.GetStats().Errors.Should().Be(0);
+        runtime.GetErrorsPerModel().Should().BeEmpty();
+        runtime.GetRecent(50).Select(r => r.RequestId).Should().Equal("ok");
+    }
+
+    /// <summary>
+    /// Clearing errors must not silently rewrite the throughput and latency history alongside them.
+    /// </summary>
+    [Fact]
+    public void ResetErrors_LeavesRequestAndLatencyCountersUntouched()
+    {
+        var runtime = new GatewayRuntimeState();
+        var startedAt = runtime.StartedUtc;
+        runtime.RecordRequestComplete("m1", success: true, durationMs: 100, wasStreaming: false);
+        runtime.RecordRequestComplete("m1", success: false, durationMs: 300, wasStreaming: false);
+        runtime.BeginInFlight(InFlight("running", startedSecondsAgo: 1));
+
+        runtime.ResetErrors();
+
+        var stats = runtime.GetStats();
+        stats.Total.Should().Be(2);
+        stats.AvgMs.Should().Be(200);
+        runtime.GetRequestsPerModel()["m1"].Should().Be(2);
+        runtime.StartedUtc.Should().Be(startedAt);
+        runtime.GetRecent(50).Should().Contain(r => r.RequestId == "running");
+    }
+
+    [Fact]
+    public void ResetErrors_PreservesFeedOrdering()
+    {
+        var runtime = new GatewayRuntimeState();
+        runtime.EnqueueRecent(Completed("first", statusCode: 200, errorCode: null));
+        runtime.EnqueueRecent(Completed("bad", statusCode: 500, errorCode: "upstream_error"));
+        runtime.EnqueueRecent(Completed("second", statusCode: 200, errorCode: null));
+
+        runtime.ResetErrors();
+
+        // GetRecent reads newest-first, so the surviving rows must come back in reverse insertion order.
+        runtime.GetRecent(50).Select(r => r.RequestId).Should().Equal("second", "first");
+    }
+
+    [Fact]
+    public void ResetAll_ZeroesEveryLifetimeCounterAndEmptiesTheFeed()
+    {
+        var runtime = new GatewayRuntimeState();
+        runtime.RecordRequestComplete("m1", success: true, durationMs: 100, wasStreaming: false);
+        runtime.RecordRequestComplete("m1", success: false, durationMs: 300, wasStreaming: false);
+        runtime.RecordRateLimitRejection();
+        runtime.RecordQuotaRejection();
+        runtime.EnqueueRecent(Completed("ok", statusCode: 200, errorCode: null));
+
+        runtime.ResetAll();
+
+        var stats = runtime.GetStats();
+        stats.Total.Should().Be(0);
+        stats.Errors.Should().Be(0);
+        stats.AvgMs.Should().Be(0);
+        stats.RateLimit.Should().Be(0);
+        stats.Quota.Should().Be(0);
+        runtime.GetRequestsPerModel().Should().BeEmpty();
+        runtime.GetErrorsPerModel().Should().BeEmpty();
+        runtime.GetRecent(50).Should().BeEmpty();
+    }
+
+    /// <summary>
+    /// Active counts describe work in flight, not history. Zeroing them would leave the gauges
+    /// permanently negative once those requests completed and decremented past zero.
+    /// </summary>
+    [Fact]
+    public void ResetAll_LeavesLiveActivityAndUptimeAlone()
+    {
+        var runtime = new GatewayRuntimeState();
+        var startedAt = runtime.StartedUtc;
+        runtime.RecordRequestStart("m1", isStreaming: true);
+        runtime.BeginInFlight(InFlight("running", startedSecondsAgo: 1));
+
+        runtime.ResetAll();
+
+        runtime.GetActiveRequests().Should().Be(1);
+        runtime.GetStats().ActiveStreams.Should().Be(1);
+        runtime.StartedUtc.Should().Be(startedAt);
+        runtime.GetRecent(50).Should().Contain(r => r.RequestId == "running");
+    }
+
+    /// <summary>
+    /// The export is what gets persisted, so an emptied runtime must produce an empty snapshot —
+    /// otherwise a clear is undone by the next periodic flush.
+    /// </summary>
+    [Fact]
+    public void ResetAll_ProducesAnEmptyExport()
+    {
+        var runtime = new GatewayRuntimeState();
+        runtime.RecordRequestComplete("m1", success: false, durationMs: 300, wasStreaming: false);
+        runtime.EnqueueRecent(Completed("ok", statusCode: 200, errorCode: null));
+
+        runtime.ResetAll();
+
+        var snapshot = runtime.Export();
+        snapshot.TotalRequests.Should().Be(0);
+        snapshot.TotalErrors.Should().Be(0);
+        snapshot.TotalLatencyMs.Should().Be(0);
+        snapshot.RequestsPerModel.Should().BeEmpty();
+        snapshot.ErrorsPerModel.Should().BeEmpty();
+        snapshot.Recent.Should().BeEmpty();
+    }
+
+    private static RecentRequestEntry Completed(string requestId, int statusCode, string? errorCode) => new()
+    {
+        RequestId = requestId,
+        Method = "POST",
+        Path = "/v1/chat/completions",
+        ModelId = "m1",
+        StatusCode = statusCode,
+        ErrorCode = errorCode,
+        DurationMs = 10,
+        TimestampUtc = DateTimeOffset.UtcNow,
+    };
+
     private static RecentRequestEntry InFlight(string requestId, int startedSecondsAgo) => new()
     {
         RequestId = requestId,

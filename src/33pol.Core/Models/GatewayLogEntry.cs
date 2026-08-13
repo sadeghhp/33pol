@@ -5,7 +5,11 @@ namespace Pol33.Core.Models;
 /// records that a request happened; a log entry records what went wrong and — where the gateway
 /// can tell — what to do about it.
 /// </summary>
-public sealed class GatewayLogEntry
+/// <remarks>
+/// A record so the store can produce an updated copy on coalesce instead of mutating an instance a
+/// reader may already be serializing.
+/// </remarks>
+public sealed record GatewayLogEntry
 {
     public required string Id { get; init; }
 
@@ -39,8 +43,14 @@ public sealed class GatewayLogEntry
     /// How many times this identical event has fired. The store coalesces repeats within a short
     /// window so one misconfigured upstream cannot evict every other diagnostic from the buffer.
     /// </summary>
-    public int Repeats { get; set; } = 1;
+    /// <remarks>
+    /// Init-only, along with <see cref="LastTimestampUtc"/>, so the store replaces an entry on
+    /// coalesce rather than mutating it. Both were settable, and the store updated them after
+    /// handing the entry to a reader — a reader serializing a multi-word
+    /// <see cref="DateTimeOffset"/> outside the lock could observe it half-written.
+    /// </remarks>
+    public int Repeats { get; init; } = 1;
 
     /// <summary>Timestamp of the most recent occurrence; equals <see cref="TimestampUtc"/> until a repeat lands.</summary>
-    public DateTimeOffset LastTimestampUtc { get; set; }
+    public DateTimeOffset LastTimestampUtc { get; init; }
 }

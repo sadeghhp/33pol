@@ -51,6 +51,8 @@ public sealed class GatewayDbContext : DbContext
 
     public DbSet<QuotaSettingsEntity> QuotaSettings => Set<QuotaSettingsEntity>();
 
+    public DbSet<GatewayErrorEntity> GatewayErrors => Set<GatewayErrorEntity>();
+
     /// <summary>
     /// Stores every <see cref="DateTimeOffset"/> as its UTC tick count (INTEGER) rather than the EF SQLite
     /// default (TEXT). SQLite refuses <c>ORDER BY</c> on DateTimeOffset TEXT columns (it threw 500s on the

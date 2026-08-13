@@ -29,6 +29,7 @@ internal sealed class GatewayStatsSnapshotService(
     IServiceScopeFactory scopeFactory,
     GatewayRuntimeState runtimeState,
     IQuotaUsageSnapshotSource quotaUsageSource,
+    GatewayStatsFlushCoordinator flushCoordinator,
     IOptions<GatewayStatsPersistenceOptions> options,
     ILogger<GatewayStatsSnapshotService> logger) : IHostedService
 {
@@ -70,6 +71,7 @@ internal sealed class GatewayStatsSnapshotService(
     {
         try
         {
+            using var _ = await flushCoordinator.AcquireAsync(cancellationToken).ConfigureAwait(false);
             await using var scope = scopeFactory.CreateAsyncScope();
             var statsStore = scope.ServiceProvider.GetRequiredService<IGatewayStatsSnapshotStore>();
             var quotaStore = scope.ServiceProvider.GetRequiredService<IQuotaUsageSnapshotStore>();
@@ -113,6 +115,9 @@ internal sealed class GatewayStatsSnapshotService(
     {
         try
         {
+            // Held across export-then-save: a clear that lands between the two would otherwise be
+            // undone by this very write.
+            using var _ = await flushCoordinator.AcquireAsync(cancellationToken).ConfigureAwait(false);
             await using var scope = scopeFactory.CreateAsyncScope();
             var statsStore = scope.ServiceProvider.GetRequiredService<IGatewayStatsSnapshotStore>();
             var quotaStore = scope.ServiceProvider.GetRequiredService<IQuotaUsageSnapshotStore>();

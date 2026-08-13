@@ -1,7 +1,10 @@
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
 using Pol33.Core.Abstractions;
+using Pol33.Core.Diagnostics;
 using Pol33.Core.Errors;
+using Pol33.Core.Models;
+using Pol33.Core.Security;
 using Pol33.Proxy.Errors;
 
 namespace Pol33.Proxy.Middleware;
@@ -28,6 +31,7 @@ namespace Pol33.Proxy.Middleware;
 public sealed class GatewayExceptionHandlingMiddleware(
     RequestDelegate next,
     IErrorResponseWriter errors,
+    IGatewayErrorRecorder errorRecorder,
     ILogger<GatewayExceptionHandlingMiddleware> logger)
 {
     public async Task InvokeAsync(HttpContext context)
@@ -48,6 +52,7 @@ public sealed class GatewayExceptionHandlingMiddleware(
                 context.Request.Path,
                 ex.Message);
 
+            RecordError(context, ex, GatewayLogLevel.Warning, code.ToString(), StatusCodeFor(code));
             await WriteAsync(context, code).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
@@ -66,8 +71,80 @@ public sealed class GatewayExceptionHandlingMiddleware(
                 context.Request.Method,
                 context.Request.Path);
 
+            RecordError(
+                context,
+                ex,
+                GatewayLogLevel.Error,
+                GatewayErrorCode.UpstreamError.ToString(),
+                StatusCodes.Status502BadGateway);
             await WriteAsync(context, GatewayErrorCode.UpstreamError).ConfigureAwait(false);
         }
+    }
+
+    /// <summary>
+    /// Publishes an unhandled failure to the error store. This is the capture point for everything
+    /// off the inference path — admin routes, model listings, health — which the proxy's own
+    /// recording never sees.
+    /// </summary>
+    private void RecordError(
+        HttpContext context,
+        Exception exception,
+        GatewayLogLevel level,
+        string eventCode,
+        int statusCode)
+    {
+        // The inference path records its own failures with the model, upstream and outcome
+        // attached. Recording again here would add a second, thinner row for the same fault.
+        if (context.Items.ContainsKey(GatewayErrorContextKeys.ErrorCaptured))
+        {
+            return;
+        }
+
+        errorRecorder.Record(new GatewayErrorRecord
+        {
+            Id = $"err_{Guid.NewGuid():N}",
+            Fingerprint = string.Empty,
+            OccurredAt = DateTimeOffset.UtcNow,
+            Level = level.ToString(),
+            Source = GatewayErrorSourceNames.Exception,
+            Category = nameof(GatewayExceptionHandlingMiddleware),
+            EventCode = eventCode,
+            Message = exception.Message,
+            ExceptionType = exception.GetType().FullName,
+            StackTrace = exception.ToString(),
+            Method = context.Request.Method,
+            Path = context.Request.Path.Value,
+            RouteKind = ClassifyRouteKind(context.Request.Path),
+            StatusCode = statusCode,
+            TenantId = context.User.FindFirst(GatewayAuthClaims.TenantId)?.Value,
+            ApiKeyId = context.User.FindFirst(GatewayAuthClaims.ApiKeyId)?.Value,
+            RequestId = context.Items.TryGetValue(RequestIdKeys.HttpContextItemKey, out var id)
+                ? id?.ToString()
+                : null,
+            Hint = GatewayLogHints.ForException(exception),
+        });
+
+        context.Items[GatewayErrorContextKeys.ErrorCaptured] = true;
+    }
+
+    private static int StatusCodeFor(GatewayErrorCode code) =>
+        code == GatewayErrorCode.RequestTooLarge
+            ? StatusCodes.Status413PayloadTooLarge
+            : StatusCodes.Status400BadRequest;
+
+    /// <summary>
+    /// Coarse route classification for fingerprinting. Raw paths carry tenant- and model-specific
+    /// segments that would split one fault into a group per caller.
+    /// </summary>
+    private static string ClassifyRouteKind(PathString path)
+    {
+        var value = path.Value ?? string.Empty;
+        if (value.StartsWith("/admin", StringComparison.OrdinalIgnoreCase))
+        {
+            return "admin";
+        }
+
+        return value.StartsWith("/v1", StringComparison.OrdinalIgnoreCase) ? "inference" : "other";
     }
 
     private async Task WriteAsync(HttpContext context, GatewayErrorCode code)

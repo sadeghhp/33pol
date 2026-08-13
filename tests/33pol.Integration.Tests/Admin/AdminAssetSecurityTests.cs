@@ -208,6 +208,77 @@ public sealed class AdminAssetSecurityTests
             "evaluator resolves it to undefined at runtime; found: " + string.Join(" | ", unresolved));
     }
 
+    /// <summary>
+    /// Alpine's <c>x-for</c> clones only the first element of its template. A row plus its
+    /// expandable detail row is two <c>&lt;tr&gt;</c>, so the pair has to be wrapped in its own
+    /// <c>&lt;tbody&gt;</c> or every detail row silently disappears.
+    /// </summary>
+    /// <remarks>
+    /// This was a comment on three tables. Making it a test means the next expandable table cannot
+    /// get it wrong without failing here first.
+    /// </remarks>
+    [Fact]
+    public async Task AdminIndex_WrapsMultiRowLoopTemplatesInTheirOwnTbody()
+    {
+        using var factory = GatewayWebApplicationFactory.Create();
+        using var client = factory.CreateClient();
+
+        var html = Regex.Replace(await GetIndexAsync(client), "<!--.*?-->", string.Empty, RegexOptions.Singleline);
+
+        var offenders = Regex
+            .Matches(html, @"<template\s+x-for=""(?<expr>[^""]*)""[^>]*>(?<body>.*?)</template>", RegexOptions.Singleline)
+            .Where(m => Regex.Matches(m.Groups["body"].Value, "<tr[\\s>]").Count > 1)
+            .Where(m => !Regex.IsMatch(m.Groups["body"].Value.TrimStart(), @"^<tbody[\s>]"))
+            .Select(m => m.Groups["expr"].Value)
+            .Distinct()
+            .ToList();
+
+        offenders.Should().BeEmpty(
+            "an x-for template holding more than one <tr> must open with <tbody>, or Alpine clones "
+            + "only the first row and the detail row never renders; found: " + string.Join(" | ", offenders));
+    }
+
+    [Fact]
+    public async Task AdminIndex_DeclaresTheErrorsPanel()
+    {
+        using var factory = GatewayWebApplicationFactory.Create();
+        using var client = factory.CreateClient();
+
+        var html = await GetIndexAsync(client);
+
+        html.Should().Contain("id=\"panel-errors\"");
+        html.Should().Contain("x-show=\"isErrors\"");
+        html.Should().Contain("aria-labelledby=\"tab-errors\"");
+        html.Should().Contain("x-for=\"r in errorRows\"");
+        html.Should().Contain("@click=\"confirmClearErrors\"");
+    }
+
+    /// <summary>
+    /// Every local asset is served no-store but still carries a version query, because browsers
+    /// that already cached an older build are the ones this has to reach.
+    /// </summary>
+    [Fact]
+    public async Task AdminIndex_CacheBustsEveryLocalAsset()
+    {
+        using var factory = GatewayWebApplicationFactory.Create();
+        using var client = factory.CreateClient();
+
+        var html = await GetIndexAsync(client);
+
+        var unversioned = Regex
+            .Matches(html, @"(?:src|href)=""(?<url>(?!https?:|//)[^""]+\.(?:js|css))""")
+            .Select(m => m.Groups["url"].Value)
+            .Where(url => !Regex.IsMatch(url, @"\?v=\d+$"))
+            // Vendored libraries carry their version in the filename, so a new build is a new URL.
+            .Where(url => !Regex.IsMatch(url, @"-\d+\.\d+\.\d+(\.min)?\.(js|css)$"))
+            .Distinct()
+            .ToList();
+
+        unversioned.Should().BeEmpty(
+            "a local asset without ?v=N is served from a stale browser cache after a deploy; found: "
+            + string.Join(" | ", unversioned));
+    }
+
     [Fact]
     public async Task AdminAssets_CarrySupportingSecurityHeaders()
     {

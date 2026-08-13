@@ -122,6 +122,79 @@ public sealed class GatewayRuntimeState
         }
     }
 
+    /// <summary>
+    /// Zeroes the error counters and drops failed rows from the recent-request feed, so an operator
+    /// who has fixed a problem can watch for its recurrence against a clean baseline.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately narrow. Total requests, accumulated latency, per-model request counts, live
+    /// activity and uptime are all left alone — clearing errors must not silently rewrite the
+    /// throughput and latency history alongside them. The visible consequence is that the error rate
+    /// reads 0% against a non-zero request total until new traffic arrives, which is exactly what
+    /// "the errors were cleared" should look like.
+    /// </remarks>
+    /// <returns>How many rows were removed from the recent-request feed.</returns>
+    public (long TotalErrorsCleared, int RecentRowsRemoved) ResetErrors()
+    {
+        lock (_statsSync)
+        {
+            var clearedTotal = _totalErrors;
+            _totalErrors = 0;
+            _errorsPerModel.Clear();
+
+            // Drain and re-enqueue rather than filter in place: ConcurrentQueue has no removal, and
+            // the feed's ordering is load-bearing for the dashboard's newest-first read.
+            var kept = new List<RecentRequestEntry>(_recentRequests.Count);
+            var removed = 0;
+            while (_recentRequests.TryDequeue(out var entry))
+            {
+                if (entry.StatusCode < 400 && entry.ErrorCode is null)
+                {
+                    kept.Add(entry);
+                }
+                else
+                {
+                    removed++;
+                }
+            }
+
+            foreach (var entry in kept)
+            {
+                _recentRequests.Enqueue(entry);
+            }
+
+            return (clearedTotal, removed);
+        }
+    }
+
+    /// <summary>
+    /// Zeroes every process-lifetime counter and empties the recent-request feed — the operator's
+    /// "start the dashboard over" action, as opposed to <see cref="ResetErrors"/>.
+    /// </summary>
+    /// <remarks>
+    /// Live state is deliberately untouched: active requests and streams describe work currently in
+    /// flight, and zeroing them would leave the gauges permanently wrong once those requests
+    /// completed and decremented past zero. <see cref="StartedUtc"/> stays too — uptime belongs to
+    /// the process, not to the counters.
+    /// </remarks>
+    public void ResetAll()
+    {
+        lock (_statsSync)
+        {
+            _totalRequests = 0;
+            _totalErrors = 0;
+            _totalLatencyMs = 0;
+            Interlocked.Exchange(ref _rateLimitRejections, 0);
+            Interlocked.Exchange(ref _quotaRejections, 0);
+            _requestsPerModel.Clear();
+            _errorsPerModel.Clear();
+
+            while (_recentRequests.TryDequeue(out _))
+            {
+            }
+        }
+    }
+
     public void RecordRateLimitRejection() => Interlocked.Increment(ref _rateLimitRejections);
 
     public void RecordQuotaRejection() => Interlocked.Increment(ref _quotaRejections);

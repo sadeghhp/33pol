@@ -52,7 +52,7 @@ directive that the evaluator could not resolve fails the build instead of the op
 3. After connect, the header shows key prefix + **Connected** / **Invalid key**. Use **Change key** or **Sign out** as needed.
 4. The key is persisted in **`localStorage`** under `33pol-admin-key`.
 
-**Navigation:** Sidebar sections use URL hash (`#/dashboard`, `#/usage`, `#/routing`, `#/keys`, `#/settings`) and `sessionStorage` for the last tab. Legacy hashes `#/models` and `#/backends` redirect to **Routing** (Models / Backends sub-tabs).
+**Navigation:** Sidebar sections use URL hash (`#/dashboard`, `#/usage`, `#/routing`, `#/keys`, `#/logs`, `#/errors`, `#/settings`) and `sessionStorage` for the last tab. Legacy hashes `#/models` and `#/backends` redirect to **Routing** (Models / Backends sub-tabs). The Errors tab also accepts filters in the hash — `#/errors?model=gpt-4o&status=502&code=upstream_error&range=24h` — which is how the Overview tile and the errors-by-model bars deep-link into it.
 
 ## Information architecture
 
@@ -62,7 +62,36 @@ directive that the evaluator could not resolve fails the build instead of the op
 | Usage | `#/usage` | Date presets, cost center / API key filters, rollups, enriched billing events, forecast, export |
 | Routing | `#/routing` | **Models** (registry, quick-add drawer) and **Backends** (health table) |
 | API keys | `#/keys` | List (assignee, MTD usage, last used), create/edit metadata, per-key model access, revoke, view usage |
+| Logs | `#/logs` | In-memory diagnostic tail (warning and above), severity and search filters, expandable detail with hint and request ID, clear buffer |
+| Errors | `#/errors` | Persisted, grouped failures: time-range presets, model / status / code facets, occurrence drill-down with stack trace, request-ID cross-link, JSON+CSV export, clear all |
 | Settings | `#/settings` | Config status, rate limits (default + plans), tenant model allowlist, observability links |
+
+### Logs vs Errors
+
+Two panes, deliberately different, and the distinction is what keeps either useful:
+
+| | Logs | Errors |
+|---|---|---|
+| Holds | Every `ILogger` warning and above | Failures only, grouped by fingerprint |
+| Survives restart | No — a bounded in-process ring | Yes, when a database is configured |
+| Shape | Flat, newest first | One row per distinct fault, with occurrence count and first/last seen |
+| Clearing | `DELETE /admin/api/logs` empties the ring | `DELETE /admin/api/errors?confirm=true` also zeroes the error counters and rewrites the persisted snapshot |
+
+Neither touches the durable logs written by the gateway's configured log providers.
+
+Two consequences worth knowing before they read as bugs:
+
+- **The Errors tab can show fewer errors than the Overview counter.** Client disconnects
+  (`client_canceled`) are counted as errors by the aggregate counter but deliberately not recorded:
+  the caller walked away, and filling the error store with disconnects buries the real faults.
+- **Clearing errors leaves total requests and average latency alone.** The error rate therefore
+  reads 0% against a non-zero request total until new traffic arrives. Clearing errors must not
+  silently rewrite the throughput history alongside them; `scope=all` is the explicit opt-in that
+  resets the whole counter snapshot.
+
+**Polling:** the Overview vitals poll every 2s. Logs and Errors quiet-poll every 10s, only while
+their tab is on screen and auto-refresh is on. All polling stops when the tab is hidden or the key
+has been rejected.
 
 ## Errors and feedback
 
@@ -115,8 +144,10 @@ errors and **Errors by model**, and appear in the feed. They contribute no laten
 takes microseconds and would drag the mean toward zero.
 
 **Limitation:** middleware-only failures that never reach the router (rate limit, quota, invalid API
-key, `model_not_found`) still do **not** appear in the ring buffer — use the **Rate-limited** and
-**Quota-blocked** stats, Grafana, or structured logs with `X-Request-Id`.
+key, `model_not_found`) still do **not** appear in the recent-requests ring buffer — use the
+**Errors** tab, the **Rate-limited** and **Quota-blocked** stats, Grafana, or structured logs with
+`X-Request-Id`. Unhandled exceptions on any route, including admin routes, are captured by the
+terminal handler and do reach the Errors tab with their stack trace.
 
 If the gateway error body was not written (e.g. forward failed after the upstream response already started), **Error** may be empty even when **Status** is 4xx/5xx.
 
@@ -132,6 +163,8 @@ GET requests retry once on network failure. Usage export uses `downloadBlob` wit
 | Routing — Backends | `GET /admin/api/backends` |
 | API keys | `GET/POST /admin/api/keys`, `PATCH …/keys/{id}`, `GET …/keys/{id}/usage`, `POST …/revoke`, `GET/PUT …/keys/{id}/model-grants` |
 | Tenant model access | `GET/PUT /admin/api/tenant/model-grants` (optional ceiling; empty = all registry models) |
+| Logs | `GET /admin/api/logs?limit=&level=&search=` (response carries `count`, `total`, `capacity`), `DELETE /admin/api/logs` (audited) |
+| Errors | `GET /admin/api/errors/groups`, `GET /admin/api/errors` (occurrences; `?fingerprint=`, `?requestId=`), `GET /admin/api/errors/{id}`, `GET /admin/api/errors/facets`, `GET /admin/api/errors/export?format=json\|csv`, `DELETE /admin/api/errors?confirm=true[&scope=all]` (audited) |
 
 **Per-key model access:** Inference keys start with **no models** allowed. Open **Models** on a key, check the registry models it may call, and save. `GET /v1/models` and inference only expose models in that allowlist (intersected with tenant policy when the tenant is restricted).
 
@@ -139,6 +172,12 @@ GET requests retry once on network failure. Usage export uses `downloadBlob` wit
 
 **Usage filters:** Usage tab supports **Cost center** and **API key** filters on rollups (cost center) and billing events (both). Use **Usage** on a key row to jump here filtered to that key.
 | Settings | `GET /admin/api/config/status`, `POST /admin/api/config/reload`, `GET/PUT /admin/api/rate-limits` |
+
+**Errors query parameters** (shared by groups, occurrences and export): `from`, `to` (ISO-8601),
+`level`, `modelId`, `status`, `code`, `tenantId`, `requestId`, `fingerprint`, `search`,
+`sort=lastSeen|firstSeen|count`, `limit` (max 200; 10,000 for export), `offset` (max 10,000).
+Both list responses report `total` as the count matched **before** paging, plus `source`
+(`database` or `memory`) and `persisted`, so the console can say when errors are in-memory only.
 
 Rate limit changes are written to `appsettings.json` and applied via configuration reload (see [rate-limit-admin.md](./runbooks/rate-limit-admin.md)).
 
@@ -194,7 +233,7 @@ Rotating **KeyPepper** invalidates stored upstream secrets — re-enter API keys
 | 400 on save with `envVar` in JSON | Secret pasted as env var name | Use quick-add **API key** field, or a valid name like `OPENROUTER_API_KEY` in the model route's `envVar` |
 | Upstream 401 | Missing or wrong stored key | Edit model → set new API key; verify `hasUpstreamCredential` on GET |
 | Test fails on an embedding model | Model type left as text generation, so the probe hit `/v1/chat/completions` | Edit model → set **Model type** to *Embedding* |
-| Stale UI after upgrade | Cached admin assets | Hard refresh; assets use `?v=5` |
+| Stale UI after upgrade | Cached admin assets | Hard refresh; every local asset carries `?v=N`, enforced by `AdminAssetSecurityTests.AdminIndex_CacheBustsEveryLocalAsset` |
 | Docker local LLM fails | Used `localhost` in URL | Use `http://host.docker.internal:<port>` |
 
 ## Security audit (strict)
@@ -242,6 +281,16 @@ When the gateway runs in Docker, upstream URLs must use `http://host.docker.inte
 - [ ] **Backends:** unhealthy first; **Edit model** jumps to Models
 - [ ] **API keys:** create drawer → copy → acknowledge saved; revoke modal
 - [ ] **Settings:** config status; reload with confirm
+- [ ] **Logs:** typing in search neither flashes the skeleton nor raises the global banner; the
+      truncation hint reads "Showing N of M matching entries"; Request ID is populated
+- [ ] **Errors:** repeated failures collapse into one row with an occurrence count and first/last seen
+- [ ] **Errors:** range chips and the model / status / code facets filter; **Clear filters** resets them
+- [ ] **Errors:** expanding a row shows the hint, endpoint, upstream, stack trace and recent occurrences
+- [ ] **Errors:** **View in Recent requests** lands on the matching row, or toasts when it has aged out
+- [ ] **Errors:** JSON and CSV export download
+- [ ] Overview **Errors** tile and each errors-by-model bar deep-link into `#/errors` pre-filtered
+- [ ] **Clear errors** (Overview or Errors tab) zeroes the tile, the by-model bars and the tab, with
+      no phantom spike on the error-rate sparkline, and the counts stay zero after a gateway restart
 - [ ] Sign out clears session; Escape closes drawer/modal
 
 ## Deferred (post-GA)

@@ -114,20 +114,35 @@ public static class AdminControlPlaneEndpoints
         string? search)
     {
         var take = limit is > 0 and <= 500 ? limit.Value : 100;
-        var entries = logs.GetRecent(take, GatewayLogLevels.ParseFilter(level), search);
+
+        // Fetch the whole matching set and slice, so the response can report how much the limit hid.
+        // The buffer is bounded at a few hundred entries, so this is one cheap pass.
+        var matched = logs.GetRecent(logs.Capacity, GatewayLogLevels.ParseFilter(level), search);
+        var entries = matched.Count <= take ? matched : matched.Take(take).ToList();
 
         return Results.Json(new AdminLogListResponse
         {
             Entries = [.. entries.Select(AdminLogEntryDto.From)],
             Count = entries.Count,
+            Total = matched.Count,
             Capacity = logs.Capacity,
         });
     }
 
-    private static IResult ClearLogs(IGatewayLogStore logs)
+    private static IResult ClearLogs(HttpContext httpContext, IGatewayLogStore logs, IAuditLogger audit)
     {
-        logs.Clear();
-        return Results.Json(new { success = true, message = "Log buffer cleared." });
+        var cleared = logs.Clear();
+
+        // Wiping the diagnostic buffer is a mutation an operator can perform mid-incident; it needs
+        // to leave a trace like every other admin mutation does.
+        audit.LogAdminAction(
+            "logs.clear",
+            new AuditLogEntry(
+                httpContext.User.FindFirst(GatewayAuthClaims.TenantId)?.Value,
+                httpContext.User.FindFirst(GatewayAuthClaims.ApiKeyId)?.Value,
+                new { entriesCleared = cleared }));
+
+        return Results.Json(new { success = true, message = "Log buffer cleared.", entriesCleared = cleared });
     }
 
     private static async Task<IResult> TestModel(

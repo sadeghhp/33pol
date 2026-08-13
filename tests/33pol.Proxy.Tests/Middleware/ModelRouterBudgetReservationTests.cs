@@ -327,6 +327,7 @@ public sealed class ModelRouterBudgetReservationTests
             options,
             Substitute.For<IUpstreamBearerTokenResolver>(),
             budgetEnforcement,
+            Substitute.For<IGatewayErrorRecorder>(),
             NullLogger<ModelRouterMiddleware>.Instance);
     }
 }

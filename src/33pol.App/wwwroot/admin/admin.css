@@ -888,6 +888,7 @@ table { width: 100%; border-collapse: collapse; font-size: var(--text-sm); table
 .t-backends      { min-width: 46rem; }
 .t-keys          { min-width: 70rem; }
 .t-logs          { min-width: 46rem; }
+.t-errors        { min-width: 62rem; }
 
 thead th {
   position: sticky; top: 0; z-index: 1;
@@ -992,6 +993,37 @@ tr.request-detail-row td { background: var(--bg-inset); padding-top: 0.75rem; }
 }
 .log-hint .icon { flex: none; color: var(--accent); margin-top: 1px; }
 #panel-logs .row-actions { margin-top: var(--space-3); }
+
+/* Errors */
+#panel-errors .row-actions { margin-top: var(--space-3); flex-wrap: wrap; }
+.err-count { font-family: var(--font-mono); font-variant-numeric: tabular-nums; color: var(--error-text); font-weight: var(--fw-medium); }
+
+/* The trace can be hundreds of lines; cap it so the row below stays reachable. */
+.stack-trace { max-height: 22rem; overflow: auto; }
+
+.occurrence-table { width: 100%; margin-top: var(--space-4); font-size: var(--text-xs); border-top: 1px solid var(--border); }
+.occurrence-table thead th { position: static; background: transparent; padding-top: var(--space-3); }
+.occurrence-table td { padding: 0.35rem 0.6rem; }
+
+.pager { display: flex; align-items: center; justify-content: flex-end; gap: var(--space-3); margin-top: var(--space-4); font-size: var(--text-xs); color: var(--text-tertiary); }
+
+.card-head-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-bottom: var(--space-3); }
+
+/* A bar that navigates has to be a button for keyboard and screen-reader users, but the layout is
+   a grid — so the button chrome is reset rather than the markup being reshaped around it. */
+.hbar.is-clickable {
+  appearance: none; border: 0; padding: 0; width: 100%;
+  background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer;
+}
+.hbar.is-clickable:hover .hbar-label { color: var(--text-primary); }
+.hbar.is-clickable:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--bg-surface), 0 0 0 4px var(--accent); border-radius: var(--r-sm); }
+
+.vital.is-actionable { cursor: pointer; }
+.vital.is-actionable:hover { border-color: var(--text-tertiary); }
+.vital.is-actionable:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--bg-surface), 0 0 0 4px var(--accent); }
+
+.vital-chip.is-actionable { appearance: none; font: inherit; cursor: pointer; }
+.vital-chip.is-actionable:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--bg-base), 0 0 0 4px var(--accent); }
 
 /* Skeleton */
 .skeleton-row td {

@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Pol33.Core.Abstractions;
 using Pol33.Core.Configuration;
+using Pol33.Core.Diagnostics;
 using Pol33.Core.Forwarding;
 using Pol33.Core.Errors;
 using Pol33.Core.Models;
@@ -41,6 +42,7 @@ public sealed class ModelRouterMiddleware
     private readonly InferenceForwardTimeouts _forwardTimeouts;
     private readonly IUpstreamBearerTokenResolver _upstreamBearerTokenResolver;
     private readonly IBudgetEnforcementService _budgetEnforcement;
+    private readonly IGatewayErrorRecorder _errorRecorder;
     private readonly ILogger<ModelRouterMiddleware> _logger;
 
     public ModelRouterMiddleware(
@@ -62,6 +64,7 @@ public sealed class ModelRouterMiddleware
         IOptions<GatewayOptions> options,
         IUpstreamBearerTokenResolver upstreamBearerTokenResolver,
         IBudgetEnforcementService budgetEnforcement,
+        IGatewayErrorRecorder errorRecorder,
         ILogger<ModelRouterMiddleware> logger)
     {
         _next = next;
@@ -82,6 +85,7 @@ public sealed class ModelRouterMiddleware
         _forwardTimeouts = InferenceForwardTimeouts.FromResilience(options.Value.Resilience);
         _upstreamBearerTokenResolver = upstreamBearerTokenResolver;
         _budgetEnforcement = budgetEnforcement;
+        _errorRecorder = errorRecorder;
         _logger = logger;
     }
 
@@ -324,6 +328,14 @@ public sealed class ModelRouterMiddleware
                         GatewayErrorCode.UpstreamError,
                         message: "Upstream auth token not configured for this model."),
                     context.RequestAborted).ConfigureAwait(false);
+                RecordRecentRequest(
+                    context,
+                    modelConfig.Id,
+                    started,
+                    requestInfo.Stream,
+                    success: false,
+                    outcome: "upstream_auth_missing",
+                    upstreamUrl: modelConfig.Url);
                 return;
             }
 
@@ -404,7 +416,14 @@ public sealed class ModelRouterMiddleware
                     circuitLease.RecordFailure();
                     inferenceScope.SetOutcome(false, "upstream_5xx");
                     _metricsCollector.RecordForwardAttempt(modelConfig.Id, "upstream_5xx");
-                    RecordRecentRequest(context, modelConfig.Id, started, requestInfo.Stream, success: false);
+                    RecordRecentRequest(
+                        context,
+                        modelConfig.Id,
+                        started,
+                        requestInfo.Stream,
+                        success: false,
+                        outcome: "upstream_5xx",
+                        upstreamUrl: modelConfig.Url);
                     return;
                 }
 
@@ -426,7 +445,14 @@ public sealed class ModelRouterMiddleware
                     _metricsCollector.RecordForwardAttempt(modelConfig.Id, "success");
                 }
 
-                RecordRecentRequest(context, modelConfig.Id, started, requestInfo.Stream, success: !clientError);
+                RecordRecentRequest(
+                    context,
+                    modelConfig.Id,
+                    started,
+                    requestInfo.Stream,
+                    success: !clientError,
+                    outcome: clientError ? "upstream_4xx" : "success",
+                    upstreamUrl: modelConfig.Url);
                 return;
             }
 
@@ -445,7 +471,14 @@ public sealed class ModelRouterMiddleware
                         CancellationToken.None).ConfigureAwait(false);
                 }
 
-                RecordRecentRequest(context, modelConfig.Id, started, requestInfo.Stream, success: false);
+                RecordRecentRequest(
+                    context,
+                    modelConfig.Id,
+                    started,
+                    requestInfo.Stream,
+                    success: false,
+                    outcome: "upstream_timeout",
+                    upstreamUrl: modelConfig.Url);
                 return;
             }
 
@@ -473,7 +506,14 @@ public sealed class ModelRouterMiddleware
                         CancellationToken.None).ConfigureAwait(false);
                 }
 
-                RecordRecentRequest(context, modelConfig.Id, started, requestInfo.Stream, success: false);
+                RecordRecentRequest(
+                    context,
+                    modelConfig.Id,
+                    started,
+                    requestInfo.Stream,
+                    success: false,
+                    outcome: "stream_idle_timeout",
+                    upstreamUrl: modelConfig.Url);
                 return;
             }
 
@@ -484,7 +524,14 @@ public sealed class ModelRouterMiddleware
                 // Leaving the lease unrecorded abandons the probe on dispose.
                 inferenceScope.SetOutcome(false, "client_canceled");
                 _metricsCollector.RecordForwardAttempt(modelConfig.Id, "client_canceled");
-                RecordRecentRequest(context, modelConfig.Id, started, requestInfo.Stream, success: false);
+                RecordRecentRequest(
+                    context,
+                    modelConfig.Id,
+                    started,
+                    requestInfo.Stream,
+                    success: false,
+                    outcome: "client_canceled",
+                    upstreamUrl: modelConfig.Url);
                 return;
             }
 
@@ -499,7 +546,14 @@ public sealed class ModelRouterMiddleware
                     CancellationToken.None).ConfigureAwait(false);
             }
 
-            RecordRecentRequest(context, modelConfig.Id, started, requestInfo.Stream, success: false);
+            RecordRecentRequest(
+                context,
+                modelConfig.Id,
+                started,
+                requestInfo.Stream,
+                success: false,
+                outcome: "upstream_error",
+                upstreamUrl: modelConfig.Url);
             }
             finally
             {
@@ -547,7 +601,7 @@ public sealed class ModelRouterMiddleware
             .ConfigureAwait(false);
 
         _requestTracker.RecordRejectedRequest(modelId, outcome);
-        RecordRecentRequest(context, modelId, started, isStreaming, success: false);
+        RecordRecentRequest(context, modelId, started, isStreaming, success: false, outcome: outcome);
     }
 
     /// <summary>
@@ -604,12 +658,20 @@ public sealed class ModelRouterMiddleware
             ? tenant.TenantId
             : null;
 
+    /// <param name="outcome">
+    /// How the request ended, e.g. <c>upstream_5xx</c>. Already computed at every call site for the
+    /// metrics counter; passing it here is what lets the Errors tab group by failure shape rather
+    /// than by status code alone.
+    /// </param>
+    /// <param name="upstreamUrl">The model's configured base URL, sanitized before it is stored.</param>
     private void RecordRecentRequest(
         HttpContext context,
         string modelId,
         DateTimeOffset started,
         bool isStreaming,
-        bool success)
+        bool success,
+        string? outcome = null,
+        string? upstreamUrl = null)
     {
         var requestId = ResolveRequestId(context);
         var tenantId = ResolveTenantId(context);
@@ -640,7 +702,110 @@ public sealed class ModelRouterMiddleware
             ErrorCode = errorCode,
             TimestampUtc = DateTimeOffset.UtcNow,
         });
+
+        if (!success)
+        {
+            RecordInferenceError(
+                context,
+                modelId,
+                requestId,
+                tenantId,
+                statusCode,
+                durationMs,
+                errorCode,
+                outcome,
+                upstreamUrl);
+        }
     }
+
+    /// <summary>
+    /// Publishes a failed inference to the durable error store, with the model, upstream, outcome
+    /// and remediation hint the Errors tab needs to make it actionable.
+    /// </summary>
+    /// <remarks>
+    /// A client hang-up is skipped: the caller walked away, the gateway and the backend both did
+    /// their jobs, and filling the error store with disconnects buries the faults an operator is
+    /// looking for. The aggregate error counter still counts them, so the Errors tab can legitimately
+    /// show fewer errors than the Overview tile.
+    /// </remarks>
+    private void RecordInferenceError(
+        HttpContext context,
+        string modelId,
+        string requestId,
+        string? tenantId,
+        int statusCode,
+        double durationMs,
+        string? errorCode,
+        string? outcome,
+        string? upstreamUrl)
+    {
+        if (string.Equals(outcome, "client_canceled", StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var path = context.Request.Path;
+
+        _errorRecorder.Record(new GatewayErrorRecord
+        {
+            Id = $"err_{Guid.NewGuid():N}",
+            Fingerprint = string.Empty,
+            OccurredAt = DateTimeOffset.UtcNow,
+            Level = ClassifyErrorLevel(statusCode, outcome).ToString(),
+            Source = GatewayErrorSourceNames.Proxy,
+            Category = nameof(ModelRouterMiddleware),
+            EventCode = errorCode ?? outcome,
+            Message = BuildErrorMessage(modelId, statusCode, outcome),
+            Method = context.Request.Method,
+            Path = path.Value,
+            RouteKind = ClassifyRoute(path),
+            StatusCode = statusCode,
+            ModelId = modelId,
+            UpstreamTarget = upstreamUrl,
+            Outcome = outcome,
+            TenantId = tenantId,
+            ApiKeyId = ResolveApiKeyId(context),
+            RequestId = requestId,
+            DurationMs = durationMs,
+            UpstreamBodySnippet = context.Items.TryGetValue(
+                GatewayErrorContextKeys.UpstreamBodySnippet,
+                out var snippet)
+                ? snippet as string
+                : null,
+            Hint = GatewayLogHints.ForUpstreamStatus(statusCode, upstreamUrl, path.Value, modelId),
+        });
+
+        // Tells the terminal exception handler this failure is already accounted for.
+        context.Items[GatewayErrorContextKeys.ErrorCaptured] = true;
+    }
+
+    private static GatewayLogLevel ClassifyErrorLevel(int statusCode, string? outcome) => outcome switch
+    {
+        // A permanently misconfigured upstream will never recover on its own, unlike a backend
+        // having a bad minute — it needs an operator, so it is ranked above an ordinary 5xx.
+        "upstream_auth_missing" => GatewayLogLevel.Critical,
+        "upstream_4xx" or "budget_exceeded" or "backend_unhealthy" or "circuit_open"
+            or "bulkhead_full" or "stream_concurrency" => GatewayLogLevel.Warning,
+        _ => statusCode >= StatusCodes.Status500InternalServerError
+            ? GatewayLogLevel.Error
+            : GatewayLogLevel.Warning,
+    };
+
+    private static string BuildErrorMessage(string modelId, int statusCode, string? outcome) => outcome switch
+    {
+        "upstream_timeout" => $"Upstream timed out for model '{modelId}'.",
+        "stream_idle_timeout" => $"Upstream stopped sending the response body for model '{modelId}'.",
+        "backend_unhealthy" => $"Rejected: no healthy backend for model '{modelId}'.",
+        "circuit_open" => $"Rejected: circuit breaker open for model '{modelId}'.",
+        "bulkhead_full" => $"Rejected: concurrency limit reached for model '{modelId}'.",
+        "stream_concurrency" => $"Rejected: streaming concurrency limit reached for model '{modelId}'.",
+        "budget_exceeded" => $"Rejected: budget exhausted for model '{modelId}'.",
+        "upstream_auth_missing" => $"Upstream auth token not configured for model '{modelId}'.",
+        _ => $"Upstream returned {statusCode} for model '{modelId}'.",
+    };
+
+    private static string? ResolveApiKeyId(HttpContext context) =>
+        context.User.FindFirst(GatewayAuthClaims.ApiKeyId)?.Value;
 
     private static string? ResolveErrorCode(HttpContext context)
     {

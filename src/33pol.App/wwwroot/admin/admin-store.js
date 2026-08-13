@@ -7,6 +7,7 @@ document.addEventListener('alpine:init', () => {
     keys: false,
     settings: false,
     logs: false,
+    errors: false,
     auth: false
   });
 

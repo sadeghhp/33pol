@@ -15,8 +15,17 @@ public static class GatewayHostBuilderExtensions
 {
     public static WebApplicationBuilder ConfigureGatewayHost(this WebApplicationBuilder builder)
     {
-        builder.Host.UseSerilog((context, services, configuration) =>
-            configuration.ReadFrom.Configuration(context.Configuration));
+        // writeToProviders is load-bearing, not a preference. Without it Serilog swaps in a logger
+        // factory whose AddProvider is a no-op, so the admin log sink registered in the container is
+        // constructed and then never called — which is why the admin Logs tab showed nothing but the
+        // handful of entries written to the store directly.
+        // Serilog owns console output. Clearing the default providers first stops writeToProviders
+        // below from also feeding the built-in console logger, which would print every line twice.
+        builder.Logging.ClearProviders();
+
+        builder.Host.UseSerilog(
+            (context, services, configuration) => configuration.ReadFrom.Configuration(context.Configuration),
+            writeToProviders: true);
 
         builder.WebHost.ConfigureKestrel((context, options) =>
         {
@@ -78,6 +87,7 @@ public static class GatewayHostBuilderExtensions
         app.MapAdminKeyEndpoints();
         app.MapAdminModelGrantEndpoints();
         app.MapAdminControlPlaneEndpoints();
+        app.MapAdminErrorEndpoints();
         app.MapAdminProviderEndpoints();
         app.MapAdminUsageEndpoints();
         app.MapMaintenanceAdminEndpoints();

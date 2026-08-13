@@ -7,7 +7,16 @@
  * reaches copyText(id) without writing an argument. See the "CSP view layer" section below.
  */
 function adminApp() {
-  const TABS = ['dashboard', 'usage', 'routing', 'keys', 'logs', 'settings'];
+  const TABS = ['dashboard', 'usage', 'routing', 'keys', 'logs', 'errors', 'settings'];
+
+  /** Time-range presets for the Errors tab, in hours. `all` drops the lower bound entirely. */
+  const ERROR_RANGES = [
+    ['1h', 'Last hour', 1],
+    ['24h', 'Last 24h', 24],
+    ['7d', 'Last 7 days', 168],
+    ['30d', 'Last 30 days', 720],
+    ['all', 'All time', 0]
+  ];
   const LEGACY = {
     backends: { tab: 'routing', routingSubTab: 'backends' },
     models: { tab: 'routing', routingSubTab: 'models' }
@@ -77,7 +86,29 @@ function adminApp() {
     logsCapacity: 0,
     logsPageSize: 200,
     logsAutoRefresh: false,
+    logsTotal: 0,
+    logsLoadError: '',
     expandedLogId: null,
+    // Named errorGroups, not errors: `error`/`errorTitle`/`errorDetail` are already the global
+    // banner's getters, and a near-miss name is exactly the silent-binding failure the CSP asset
+    // test exists to catch.
+    errorGroups: [],
+    errorGroupsTotal: 0,
+    errorOccurrenceTotal: 0,
+    errorsPersisted: true,
+    errorsFacets: null,
+    errorsRange: '24h',
+    errorsModel: '',
+    errorsStatus: '',
+    errorsCode: '',
+    errorsLevel: 'all',
+    errorsSearch: '',
+    errorsPageSize: 50,
+    errorsOffset: 0,
+    errorsAutoRefresh: true,
+    errorsLoadError: '',
+    expandedErrorKey: null,
+    errorOccurrences: {},
     configStatus: null,
     rateLimits: null,
     rateLimitPlanRows: [],
@@ -155,15 +186,21 @@ function adminApp() {
     },
 
     resolveHash(hash) {
-      const h = (hash || '').replace(/^#\/?/, '');
+      const raw = (hash || '').replace(/^#\/?/, '');
+      // Split the query off before matching, so a deep link like #/errors?model=gpt-4o still
+      // resolves to the errors tab rather than falling through to the saved tab.
+      const q = raw.indexOf('?');
+      const h = q >= 0 ? raw.slice(0, q) : raw;
+      const params = q >= 0 ? new URLSearchParams(raw.slice(q + 1)) : null;
       if (LEGACY[h]) return LEGACY[h];
-      if (TABS.includes(h)) return { tab: h };
+      if (TABS.includes(h)) return { tab: h, params };
       return null;
     },
 
     restoreTab() {
       const resolved = this.resolveHash(location.hash);
       if (resolved) {
+        this.applyErrorHashParams(resolved.params);
         this.applyTab(resolved.tab, resolved.routingSubTab, false);
         return;
       }
@@ -178,8 +215,20 @@ function adminApp() {
       const resolved = this.resolveHash(location.hash);
       if (!resolved) return;
       if (resolved.tab !== this.tab || (resolved.routingSubTab && resolved.routingSubTab !== this.routingSubTab)) {
+        this.applyErrorHashParams(resolved.params);
         this.applyTab(resolved.tab, resolved.routingSubTab, false);
       }
+    },
+
+    /** Applies #/errors?model=&status=&code=&range= before the tab loads, so it fetches once. */
+    applyErrorHashParams(params) {
+      if (!params) return;
+      this.errorsModel = params.get('model') || '';
+      this.errorsStatus = params.get('status') || '';
+      this.errorsCode = params.get('code') || '';
+      const range = params.get('range');
+      if (range && ERROR_RANGES.some(([key]) => key === range)) this.errorsRange = range;
+      this.errorsOffset = 0;
     },
 
     applyTab(name, routingSubTab, updateHash) {
@@ -446,6 +495,9 @@ function adminApp() {
         // Every 5th tick (10s) — the log buffer does not move fast enough to justify 2s polling,
         // and only while the tab is actually on screen.
         if (this.logsAutoRefresh && this.tab === 'logs' && this._pollTick % 5 === 0) this.loadLogs(true);
+        // Same cadence for errors. Facets are not polled — they move slowly, and they are refreshed
+        // on tab activation and after a clear.
+        if (this.errorsAutoRefresh && this.tab === 'errors' && this._pollTick % 5 === 0) this.loadErrors(true);
         this._pollTick++;
       }, 2000);
     },
@@ -629,6 +681,12 @@ function adminApp() {
       this.requests = [];
       this.logs = [];
       this.expandedLogId = null;
+      this.errorGroups = [];
+      this.errorGroupsTotal = 0;
+      this.errorOccurrenceTotal = 0;
+      this.errorOccurrences = {};
+      this.errorsFacets = null;
+      this.expandedErrorKey = null;
       this.createdKey = '';
       this.modelDrawerOpen = false;
       this.keysDrawerOpen = false;
@@ -649,6 +707,7 @@ function adminApp() {
       }
       if (name === 'keys') this.loadKeys();
       if (name === 'logs') this.loadLogs();
+      if (name === 'errors') { this.loadErrorFacets(); this.loadErrors(); }
       if (name === 'settings') this.loadSettings();
     },
 
@@ -660,18 +719,37 @@ function adminApp() {
       return '?' + params.toString();
     },
 
-    /** @param quiet true for the auto-refresh tick, which must not flash the loading state. */
+    /** @param quiet true for the auto-refresh tick and filter changes, which must not flash loading. */
     async loadLogs(quiet) {
-      const fetchLogs = async () => {
+      const fetchLogs = () => this._sequenced('_logsSeq', async () => {
         const body = await this.apiJson('/admin/api/logs' + this.logsQuery());
         this.logs = body?.entries ?? [];
+        this.logsTotal = Number(body?.total ?? body?.entries?.length ?? 0);
         this.logsCapacity = Number(body?.capacity ?? 0);
-      };
+        this.logsLoadError = '';
+      });
       if (quiet) {
-        try { await fetchLogs(); } catch { /* the poll must not raise a banner on a transient blip */ }
+        // The quiet path must not raise the global banner, but silently leaving stale rows on
+        // screen is its own trap — an operator watching an incident cannot tell a calm gateway
+        // from a console that stopped refreshing. The failure lands in the panel instead.
+        try {
+          await fetchLogs();
+        } catch (e) {
+          this.logsLoadError = this.describeLoadFailure(e);
+        }
         return;
       }
       await this.runApi('logs', 'Loading logs…', fetchLogs);
+    },
+
+    /**
+     * Filter changes reload quietly and never raise the global banner. Bound to the loud path, the
+     * 400ms search debounce flipped the section into its loading state on every keystroke and could
+     * throw a banner mid-word.
+     */
+    applyLogFilters() {
+      this.expandedLogId = null;
+      return this.loadLogs(true);
     },
 
     confirmClearLogs() {
@@ -688,6 +766,7 @@ function adminApp() {
       await this.runApi('logs', 'Clearing…', async () => {
         await this.apiJson('/admin/api/logs', { method: 'DELETE' });
         this.logs = [];
+        this.logsTotal = 0;
         this.expandedLogId = null;
         this.toast('Log buffer cleared.');
       });
@@ -726,6 +805,260 @@ function adminApp() {
       if (entry.hint) lines.push(`Hint: ${entry.hint}`);
       if (entry.detail) lines.push('', entry.detail);
       return lines.join('\n');
+    },
+
+    // ---- errors ----
+
+    /**
+     * Turns a failed background refresh into one sentence for the panel's own notice, reusing the
+     * same classifier the global banner uses so the wording does not diverge between the two.
+     */
+    describeLoadFailure(error) {
+      // The store classifies before it throws, so title/detail are already operator-readable.
+      const detail = error?.title || error?.message || 'the request failed';
+      return `Could not refresh — ${detail} Showing the last successful result.`;
+    },
+
+    /**
+     * Guards against an out-of-order response overwriting a newer one. Typing "gpt" then "gpt-4o"
+     * fires two requests, and without this the slower first can land last and repaint the table
+     * with results for a query the operator has already moved past.
+     */
+    _sequenced(key, run) {
+      const seq = (this[key] = (this[key] || 0) + 1);
+      return run().then(result => (seq === this[key] ? result : undefined));
+    },
+
+    errorsRangeFrom() {
+      const preset = ERROR_RANGES.find(([key]) => key === this.errorsRange);
+      const hours = preset ? preset[2] : 24;
+      if (!hours) return '';
+      return new Date(Date.now() - hours * 3600 * 1000).toISOString();
+    },
+
+    errorsQuery(extra) {
+      const params = new URLSearchParams({
+        limit: String(this.errorsPageSize),
+        offset: String(this.errorsOffset)
+      });
+      const from = this.errorsRangeFrom();
+      if (from) params.set('from', from);
+      if (this.errorsModel) params.set('modelId', this.errorsModel);
+      if (this.errorsStatus) params.set('status', this.errorsStatus);
+      if (this.errorsCode) params.set('code', this.errorsCode);
+      if (this.errorsLevel && this.errorsLevel !== 'all') params.set('level', this.errorsLevel);
+      const search = (this.errorsSearch || '').trim();
+      if (search) params.set('search', search);
+      if (extra) Object.entries(extra).forEach(([k, v]) => params.set(k, v));
+      return '?' + params.toString();
+    },
+
+    /** @param quiet true for the auto-refresh tick and for filter changes, which must stay silent. */
+    async loadErrors(quiet) {
+      const fetchErrors = () => this._sequenced('_errorsSeq', async () => {
+        const body = await this.apiJson('/admin/api/errors/groups' + this.errorsQuery());
+        this.errorGroups = body?.groups ?? [];
+        this.errorGroupsTotal = Number(body?.total ?? 0);
+        this.errorOccurrenceTotal = Number(body?.occurrenceTotal ?? 0);
+        this.errorsPersisted = body?.persisted !== false;
+        this.errorsLoadError = '';
+      });
+
+      if (quiet) {
+        // See loadLogs: quiet means "no global banner", not "fail invisibly".
+        try {
+          await fetchErrors();
+        } catch (e) {
+          this.errorsLoadError = this.describeLoadFailure(e);
+        }
+        return;
+      }
+      await this.runApi('errors', 'Loading errors…', fetchErrors);
+    },
+
+    /** The template's refresh trigger passes a DOM event; loadErrors' first argument means "quiet". */
+    refreshErrors() { return this.loadErrors(); },
+
+    /**
+     * Filter changes reload quietly and reset paging. Loud reloads here would flash the skeleton on
+     * every keystroke and let a mid-typing failure raise the global banner.
+     */
+    applyErrorFilters() {
+      this.errorsOffset = 0;
+      this.expandedErrorKey = null;
+      return this.loadErrors(true);
+    },
+
+    async loadErrorFacets() {
+      try {
+        const params = new URLSearchParams();
+        const from = this.errorsRangeFrom();
+        if (from) params.set('from', from);
+        const query = params.toString();
+        this.errorsFacets = await this.apiJson('/admin/api/errors/facets' + (query ? '?' + query : ''));
+      } catch {
+        // Facets are a convenience; the free-text search still works without them.
+        this.errorsFacets = null;
+      }
+    },
+
+    async loadErrorOccurrences(fingerprint) {
+      if (!fingerprint) return;
+      try {
+        await this._sequenced('_errorsOccSeq', async () => {
+          const body = await this.apiJson(
+            '/admin/api/errors' + this.errorsQuery({ fingerprint, limit: '20', offset: '0' })
+          );
+          this.errorOccurrences = { ...this.errorOccurrences, [fingerprint]: body?.occurrences ?? [] };
+        });
+      } catch {
+        this.errorOccurrences = { ...this.errorOccurrences, [fingerprint]: [] };
+      }
+    },
+
+    toggleErrorDetails(fingerprint) {
+      if (this.expandedErrorKey === fingerprint) {
+        this.expandedErrorKey = null;
+        return;
+      }
+      this.expandedErrorKey = fingerprint;
+      // Fetched on first expand only: pulling occurrences for every row would multiply the cost of
+      // the list by its page size for detail nobody has asked to see.
+      if (!this.errorOccurrences[fingerprint]) this.loadErrorOccurrences(fingerprint);
+    },
+
+    isErrorExpanded(fingerprint) {
+      return this.expandedErrorKey === fingerprint;
+    },
+
+    setErrorsRange(range) {
+      this.errorsRange = range;
+      this.errorsOffset = 0;
+      this.loadErrorFacets();
+      return this.loadErrors(true);
+    },
+
+    clearErrorFilters() {
+      this.errorsModel = '';
+      this.errorsStatus = '';
+      this.errorsCode = '';
+      this.errorsLevel = 'all';
+      this.errorsSearch = '';
+      this.errorsRange = '24h';
+      this.errorsOffset = 0;
+      this.loadErrorFacets();
+      return this.loadErrors(true);
+    },
+
+    errorsPrevPage() {
+      this.errorsOffset = Math.max(0, this.errorsOffset - this.errorsPageSize);
+      return this.loadErrors();
+    },
+
+    errorsNextPage() {
+      this.errorsOffset += this.errorsPageSize;
+      return this.loadErrors();
+    },
+
+    /** Deep-links into the Errors tab, unfiltered. */
+    openErrorsAll() {
+      this.errorsModel = '';
+      this.errorsStatus = '';
+      this.errorsCode = '';
+      this.errorsOffset = 0;
+      this.setTab('errors');
+    },
+
+    openErrorsForModel(modelId) {
+      this.errorsModel = modelId || '';
+      this.errorsStatus = '';
+      this.errorsCode = '';
+      this.errorsOffset = 0;
+      this.setTab('errors');
+    },
+
+    /** Jumps from an error to the request that produced it, on the Overview live tail. */
+    openRequestFromError(requestId) {
+      if (!requestId) return;
+      this.requestsErrorsOnly = true;
+      this.expandedRequestId = requestId;
+      this.setTab('dashboard');
+      this.loadRequests().then(() => {
+        const found = (this.requests || []).some(r => r.requestId === requestId);
+        if (!found) {
+          // The feed is a bounded ring; an error older than ~500 requests has outlived its row.
+          this.toast('That request is no longer in the live buffer.', 'error');
+        }
+      });
+    },
+
+    /** Plain-text form of a group, so an operator can paste one into a bug report or chat. */
+    formatErrorForCopy(group) {
+      if (!group) return '';
+      const lines = [
+        `[${group.level}] ${group.message}`,
+        `Occurrences: ${group.count} (first ${this.formatTime(group.firstSeenUtc)}, last ${this.formatTime(group.lastSeenUtc)})`
+      ];
+      if (group.exceptionType) lines.push(`Exception: ${group.exceptionType}`);
+      if (group.statusCode) lines.push(`Status: ${group.statusCode}`);
+      if (group.errorCode) lines.push(`Code: ${group.errorCode}`);
+      if (group.modelId) lines.push(`Model: ${group.modelId}`);
+      if (group.endpointPath) lines.push(`Endpoint: ${group.endpointMethod || ''} ${group.endpointPath}`.trim());
+      if (group.upstreamTarget) lines.push(`Upstream: ${group.upstreamTarget}`);
+      if (group.lastRequestId) lines.push(`Request: ${group.lastRequestId}`);
+      if (group.hint) lines.push(`Hint: ${group.hint}`);
+      if (group.upstreamBodySnippet) lines.push('', 'Upstream response:', group.upstreamBodySnippet);
+      if (group.stackTrace) lines.push('', group.stackTrace);
+      return lines.join('\n');
+    },
+
+    async downloadErrorsExport(format) {
+      await this.runApi('errors', 'Preparing export…', async () => {
+        const ext = format === 'csv' ? 'csv' : 'json';
+        await this.store.downloadBlob(
+          '/admin/api/errors/export' + this.errorsQuery({ format, limit: '5000', offset: '0' }),
+          'errors-export.' + ext
+        );
+        this.toast('Export downloaded.');
+      });
+    },
+
+    downloadErrorsJson() { return this.downloadErrorsExport('json'); },
+    downloadErrorsCsv() { return this.downloadErrorsExport('csv'); },
+
+    confirmClearErrors() {
+      this.openConfirm({
+        title: 'Clear all recorded errors?',
+        message: 'Deletes every stored error record and resets the gateway error counters, including '
+          + 'the persisted snapshot, so a restart will not bring them back. This cannot be undone — '
+          + 'durable logs written by the gateway\'s configured log providers are unaffected.',
+        confirmLabel: 'Clear errors',
+        danger: true,
+        onConfirm: () => this.clearErrors()
+      });
+    },
+
+    async clearErrors() {
+      await this.runApi('errors', 'Clearing…', async () => {
+        await this.apiJson('/admin/api/errors?confirm=true', { method: 'DELETE' });
+        this.errorGroups = [];
+        this.errorGroupsTotal = 0;
+        this.errorOccurrenceTotal = 0;
+        this.errorOccurrences = {};
+        this.expandedErrorKey = null;
+        this.errorsOffset = 0;
+
+        // vitalsHistory holds cumulative counters and the sparkline differentiates them. Leaving the
+        // old samples would make the next delta a large negative — clamped to zero, then painting a
+        // phantom spike the moment the first new error arrives.
+        this.vitalsHistory = this.vitalsHistory.map(sample => ({ ...sample, errors: 0 }));
+
+        // Refreshes the topbar chip, the Errors vital, the error rate and the errors-by-model bars.
+        // `requests` is deliberately left alone: the live tail is a separate buffer.
+        await this.loadSummary();
+        await this.loadErrorFacets();
+        this.toast('All recorded errors cleared.');
+      });
     },
 
     async loadSettings() {
@@ -1787,6 +2120,12 @@ function adminApp() {
         logsSearch: b('logsSearch'),
         logsLevel: b('logsLevel'),
         logsAutoRefresh: b('logsAutoRefresh'),
+        errorsSearch: b('errorsSearch'),
+        errorsModel: b('errorsModel'),
+        errorsStatus: b('errorsStatus'),
+        errorsCode: b('errorsCode'),
+        errorsLevel: b('errorsLevel'),
+        errorsAutoRefresh: b('errorsAutoRefresh'),
         // Unchecking the restriction drops the selection, so saving cannot resurrect a stale list.
         tenantGrantRestricted: {
           get() { return self.tenantGrantRestricted; },
@@ -1881,6 +2220,7 @@ function adminApp() {
         ['routing', 'Routing', 'git-branch'],
         ['keys', 'API keys', 'key'],
         ['logs', 'Logs', 'file-text'],
+        ['errors', 'Errors', 'bug'],
         ['settings', 'Settings', 'settings']
       ];
       return defs.map(([id, label, iconName]) => ({
@@ -2039,19 +2379,21 @@ function adminApp() {
       };
     },
 
-    modelBars(rows) {
+    /** @param open optional per-row action; the error bars use it to deep-link into the Errors tab. */
+    modelBars(rows, open) {
       return rows.map(row => ({
         key: row.modelId,
         modelId: row.modelId,
         countText: this.formatNum(row.count),
-        style: 'width:' + this.barWidth(row.count, rows)
+        style: 'width:' + this.barWidth(row.count, rows),
+        open: open ? () => open(row.modelId) : () => {}
       }));
     },
 
     get requestModelBars() { return this.modelBars(this.requestsByModelRows()); },
     get hasRequestModelBars() { return this.requestModelBars.length > 0; },
     get noRequestModelBars() { return this.requestModelBars.length === 0; },
-    get errorModelBars() { return this.modelBars(this.errorsByModelRows()); },
+    get errorModelBars() { return this.modelBars(this.errorsByModelRows(), id => this.openErrorsForModel(id)); },
     get hasErrorModelBars() { return this.errorModelBars.length > 0; },
     get noErrorModelBars() { return this.errorModelBars.length === 0; },
 
@@ -2336,7 +2678,13 @@ function adminApp() {
     refreshLogs() { return this.loadLogs(); },
 
     get clearLogsDisabled() { return this.isLoading('logs') || !this.logs.length; },
-    get logsTruncated() { return this.logs.length >= this.logsPageSize; },
+    // Compares against the matched total, not the page size. The old check fired whenever a page
+    // happened to be exactly full, warning about hidden entries that did not exist.
+    get logsTruncated() { return this.logsTotal > this.logs.length; },
+    get logsTruncatedText() {
+      return `Showing ${this.formatNum(this.logs.length)} of ${this.formatNum(this.logsTotal)} matching entries.`;
+    },
+    get showLogsLoadError() { return !!this.logsLoadError; },
     get logsSkeleton() { return this.isLoading('logs') && !this.logs.length; },
     get hasLogs() { return this.logs.length > 0; },
     get logsEmpty() { return !this.isLoading('logs') && !this.logs.length; },
@@ -2344,6 +2692,10 @@ function adminApp() {
       return this.logsSearch || this.logsLevel !== 'all'
         ? 'No log entries match this filter.'
         : 'No warnings or errors recorded since the gateway started.';
+    },
+    /** The sink floors at Warning, so "all" and "warning and above" are the same set. Say so. */
+    get logsLevelHint() {
+      return 'The gateway mirrors warnings and above into this buffer; info-level logs go only to the configured log providers.';
     },
 
     get logRows() {
@@ -2373,6 +2725,132 @@ function adminApp() {
           hasDetail: !!l.detail,
           toggle: () => this.toggleLogDetails(l.id),
           copy: () => this.copyText(this.formatLogForCopy(l), 'Log entry copied.')
+        };
+      });
+    },
+
+    // ---- errors ----
+
+    get isErrors() { return this.tab === 'errors'; },
+    get loadingErrors() { return this.isLoading('errors'); },
+    get errorsSkeleton() { return this.isLoading('errors') && !this.errorGroups.length; },
+    get hasErrorGroups() { return this.errorGroups.length > 0; },
+    get errorsEmpty() { return !this.isLoading('errors') && !this.errorGroups.length; },
+    get showErrorsLoadError() { return !!this.errorsLoadError; },
+    get clearErrorsDisabled() { return this.isLoading('errors') || !this.errorGroupsTotal; },
+
+    get errorsFilterActive() {
+      return !!(this.errorsModel || this.errorsStatus || this.errorsCode
+        || this.errorsSearch || this.errorsLevel !== 'all');
+    },
+
+    get errorsEmptyText() {
+      if (this.errorsFilterActive) return 'No errors match these filters.';
+      return this.errorsRange === 'all'
+        ? 'No errors recorded — the gateway is clean.'
+        : 'No errors recorded in this window. Widen the time range to look further back.';
+    },
+
+    get errorsSummaryText() {
+      if (!this.errorGroupsTotal) return '';
+      const groups = this.formatNum(this.errorGroupsTotal);
+      const occurrences = this.formatNum(this.errorOccurrenceTotal);
+      const range = (ERROR_RANGES.find(([key]) => key === this.errorsRange) || [, 'Last 24h'])[1];
+      return `${occurrences} occurrences across ${groups} error groups · ${String(range).toLowerCase()}`;
+    },
+
+    /**
+     * Errors are grouped and durable; the Logs tab is a volatile tail. Saying so on the page is
+     * what stops an operator reading the two differing counts as a bug.
+     */
+    get errorsStorageNote() {
+      return this.errorsPersisted
+        ? 'Stored in the database and kept across restarts. Client disconnects are excluded, so this can read lower than the Overview error counter.'
+        : 'No database configured, so these are held in memory only and will be lost on restart.';
+    },
+
+    get showErrorsPager() { return this.errorGroupsTotal > this.errorsPageSize; },
+    get errorsPrevDisabled() { return this.errorsOffset <= 0 || this.isLoading('errors'); },
+    get errorsNextDisabled() {
+      return this.errorsOffset + this.errorsPageSize >= this.errorGroupsTotal || this.isLoading('errors');
+    },
+    get errorsPageText() {
+      const first = this.errorGroupsTotal ? this.errorsOffset + 1 : 0;
+      const last = Math.min(this.errorsOffset + this.errorsPageSize, this.errorGroupsTotal);
+      return `${first}–${last} of ${this.formatNum(this.errorGroupsTotal)}`;
+    },
+
+    get errorsRangeChips() {
+      return ERROR_RANGES.map(([key, label]) => ({
+        key,
+        label,
+        cls: this.errorsRange === key ? 'active' : '',
+        select: () => this.setErrorsRange(key)
+      }));
+    },
+
+    get errorModelOptions() { return this.facetOptions(this.errorsFacets?.models); },
+    get errorStatusOptions() { return this.facetOptions(this.errorsFacets?.statusCodes); },
+    get errorCodeOptions() { return this.facetOptions(this.errorsFacets?.errorCodes); },
+
+    /** Values come from the server's facets, so the UI can never offer a filter that matches nothing. */
+    facetOptions(values) {
+      return (values || []).map(f => ({
+        key: f.value,
+        value: f.value,
+        label: f.value + ' (' + this.formatNum(f.count) + ')'
+      }));
+    },
+
+    get errorRows() {
+      return (this.errorGroups || []).map(g => {
+        const expanded = this.isErrorExpanded(g.fingerprint);
+        const occurrences = this.errorOccurrences[g.fingerprint];
+        const endpoint = [g.endpointMethod, g.endpointPath].filter(Boolean).join(' ');
+        return {
+          key: g.fingerprint,
+          lastSeen: this.formatTime(g.lastSeenUtc),
+          firstSeen: this.formatTime(g.firstSeenUtc),
+          level: g.level,
+          levelClass: this.logLevelClass(g.level),
+          countText: '×' + this.formatNum(g.count),
+          message: g.message,
+          exceptionType: g.exceptionType || '—',
+          modelId: g.modelId || '—',
+          hasModel: !!g.modelId,
+          errorCode: g.errorCode || '—',
+          statusText: g.statusCode ? String(g.statusCode) : '—',
+          endpointText: endpoint || '—',
+          upstreamTarget: g.upstreamTarget || '—',
+          hint: g.hint || '',
+          hasHint: !!g.hint,
+          rowClass: this.logRowClass(g),
+          expanded,
+          ariaExpanded: expanded ? 'true' : 'false',
+          ariaLabel: g.level + ': ' + g.message + ', ' + g.count + ' occurrences',
+          requestId: g.lastRequestId || '—',
+          hasRequestId: !!g.lastRequestId,
+          stackTrace: g.stackTrace || '',
+          hasStackTrace: !!g.stackTrace,
+          bodySnippet: g.upstreamBodySnippet || '',
+          hasBodySnippet: !!g.upstreamBodySnippet,
+          occurrencesLoading: expanded && !occurrences,
+          hasOccurrences: !!(occurrences && occurrences.length),
+          occurrences: (occurrences || []).map(o => ({
+            key: o.id,
+            time: this.formatTime(o.timestampUtc),
+            requestId: o.requestId || '—',
+            statusText: o.statusCode ? String(o.statusCode) : '—',
+            durationText: o.durationMs == null ? '—' : this.formatNum(Math.round(o.durationMs)) + ' ms',
+            tenant: o.tenantId || '—',
+            source: o.source,
+            copyId: () => this.copyText(o.requestId, 'Request ID copied.')
+          })),
+          toggle: () => this.toggleErrorDetails(g.fingerprint),
+          copy: () => this.copyText(this.formatErrorForCopy(g), 'Error copied.'),
+          copyRequestId: () => this.copyText(g.lastRequestId, 'Request ID copied.'),
+          openRequest: () => this.openRequestFromError(g.lastRequestId),
+          filterModel: () => this.openErrorsForModel(g.modelId)
         };
       });
     },

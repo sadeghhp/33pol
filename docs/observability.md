@@ -58,6 +58,31 @@ Canonical definitions live in `GatewayMeters` (`33pol.Observability`) — that f
 
 ASP.NET Core and Kestrel runtime metrics are exported alongside these by the OTel instrumentation — do not duplicate them with custom RED series.
 
+### .NET runtime
+
+Exported by `OpenTelemetry.Instrumentation.Runtime` (see `GatewayOpenTelemetryExtensions`). Names follow the current OTel semantic conventions (`dotnet_*`), **not** the legacy `process_runtime_dotnet_*` ones — dashboards or alerts copied from older examples will silently match nothing.
+
+| Metric | Type | Labels | Read it for |
+|--------|------|--------|-------------|
+| `dotnet_process_memory_working_set_bytes` | Gauge | — | Resident memory, against the container limit |
+| `dotnet_gc_heap_total_allocated_bytes_total` | Counter | — | Allocation rate; divide by request rate to get bytes allocated per request |
+| `dotnet_gc_last_collection_heap_size_bytes` | Gauge | `gc_heap_generation` (`gen0`/`gen1`/`gen2`/`loh`/`poh`) | Where memory actually sits |
+| `dotnet_gc_last_collection_heap_fragmentation_size_bytes` | Gauge | `gc_heap_generation` | LOH fragmentation from large short-lived buffers |
+| `dotnet_gc_last_collection_memory_committed_size_bytes` | Gauge | — | Committed vs resident divergence |
+| `dotnet_gc_collections_total` | Counter | `gc_heap_generation` | Gen2 rate — the expensive collections |
+| `dotnet_gc_pause_time_seconds_total` | Counter | — | The link between memory pressure and tail latency |
+| `dotnet_thread_pool_queue_length_total`, `dotnet_thread_pool_thread_count_total` | Counter | — | Saturation before it becomes a stall |
+| `dotnet_monitor_lock_contentions_total` | Counter | — | Lock contention under concurrency |
+
+**Why this is not optional here.** The gateway buffers, scans and forwards whole request bodies, so heap pressure — not request rate — is what decides whether the process stays inside its memory limit. None of the RED series above move when that goes wrong; the first visible symptom is an OOMKill with no preceding signal.
+
+Two of these carry most of the weight for long-context traffic:
+
+- **`gc_heap_generation="loh"`** — every buffer above 85 KB lands on the Large Object Heap, which is the regime a multi-megabyte body operates in. Total heap size alone hides it.
+- **`dotnet_gc_heap_total_allocated_bytes_total`** divided by request rate gives bytes allocated per request. Compare that against mean request body size: the ratio should stay near flat as bodies grow. A ratio that scales with body size means something on the request path is copying it.
+
+`RuntimeMetricsIntegrationTests` pins these names, so an instrumentation removal or a package rename fails the build rather than blanking a dashboard.
+
 ## Dashboards
 
 Docker Compose auto-provisions dashboards under the Grafana folder **33pol**:
@@ -98,8 +123,21 @@ Sample OpenTelemetry Collector config: [deploy/otel-collector/config.yaml](../de
 | `GET /admin/api/summary` | Operational snapshot |
 | `GET /admin/api/backends` | Registry + health |
 | `GET /admin/api/requests?limit=` | Recent requests ring buffer |
+| `GET /admin/api/logs?limit=&level=&search=` | In-memory diagnostic tail (warning and above) |
+| `DELETE /admin/api/logs` | Empty the diagnostic tail (audited) |
+| `GET /admin/api/errors/groups` | Persisted failures grouped by fingerprint, with occurrence counts |
+| `GET /admin/api/errors` | Individual occurrences; filter by `fingerprint` or `requestId` |
+| `GET /admin/api/errors/{id}` | One occurrence in full, including its stack trace |
+| `GET /admin/api/errors/facets` | Filter values present in the window, with counts |
+| `GET /admin/api/errors/export?format=json\|csv` | Bulk export of the filtered set |
+| `DELETE /admin/api/errors?confirm=true` | Clear records, error counters and the persisted snapshot (audited) |
 
 All require admin API key scope.
+
+**Error tracking** is configured under `Gateway:ErrorTracking` — hot-buffer capacity, tracked
+fingerprints, batch-writer size and interval, and retention (`RetentionDays`, `MaxRows`). It
+degrades to in-memory-only when no database is configured; the list responses report `persisted:
+false` in that case. See `docs/admin-ui.md` for the Logs-versus-Errors split.
 
 ## Correlation
 

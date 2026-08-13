@@ -151,6 +151,64 @@ public sealed class InMemoryGatewayLogStoreTests
             ModelId = modelId,
         };
 
+    [Fact]
+    public void Record_CoalescesInterleavedRepeats()
+    {
+        // Two upstreams failing alternately never coalesced under tail-only matching, and between
+        // them evicted every other diagnostic — the exact outcome coalescing exists to prevent.
+        var store = new InMemoryGatewayLogStore(500, TimeProvider.System);
+
+        store.Record(Entry("model-a failed", modelId: "a"));
+        store.Record(Entry("model-b failed", modelId: "b"));
+        store.Record(Entry("model-a failed", modelId: "a"));
+        store.Record(Entry("model-b failed", modelId: "b"));
+
+        var entries = store.GetRecent(50);
+
+        entries.Should().HaveCount(2);
+        entries.Should().OnlyContain(e => e.Repeats == 2);
+    }
+
+    [Fact]
+    public void GetRecent_ReturnsEntriesUnaffectedByLaterRepeats()
+    {
+        // Entries used to be mutated in place after being handed to a reader, so a caller
+        // serializing one outside the lock could observe a half-written timestamp.
+        var store = new InMemoryGatewayLogStore(500, TimeProvider.System);
+        store.Record(Entry("upstream failed"));
+
+        var snapshot = store.GetRecent(10);
+        var repeatsWhenRead = snapshot[0].Repeats;
+
+        store.Record(Entry("upstream failed"));
+
+        snapshot[0].Repeats.Should().Be(repeatsWhenRead);
+        store.GetRecent(10)[0].Repeats.Should().Be(2);
+    }
+
+    [Fact]
+    public void Clear_ReturnsTheNumberRemoved()
+    {
+        var store = new InMemoryGatewayLogStore(500, TimeProvider.System);
+        store.Record(Entry("one"));
+        store.Record(Entry("two"));
+
+        store.Clear().Should().Be(2);
+        store.GetRecent(10).Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Record_AfterClear_StartsANewCoalesceGroup()
+    {
+        var store = new InMemoryGatewayLogStore(500, TimeProvider.System);
+        store.Record(Entry("upstream failed"));
+        store.Clear();
+
+        store.Record(Entry("upstream failed"));
+
+        store.GetRecent(10)[0].Repeats.Should().Be(1);
+    }
+
     private sealed class FakeTimeProvider(DateTimeOffset start) : TimeProvider
     {
         private DateTimeOffset _now = start;

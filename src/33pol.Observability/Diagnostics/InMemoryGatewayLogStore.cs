@@ -19,6 +19,13 @@ public sealed class InMemoryGatewayLogStore : IGatewayLogStore
 
     private readonly object _sync = new();
     private readonly LinkedList<GatewayLogEntry> _entries = new();
+
+    /// <summary>
+    /// Identity → node, so a repeat folds into its own earlier entry rather than only into the
+    /// newest one. With tail-only matching, two upstreams failing alternately never coalesced and
+    /// between them evicted every other diagnostic — the exact outcome coalescing exists to prevent.
+    /// </summary>
+    private readonly Dictionary<string, LinkedListNode<GatewayLogEntry>> _byIdentity = new(StringComparer.Ordinal);
     private readonly int _capacity;
     private readonly TimeProvider _timeProvider;
 
@@ -46,22 +53,43 @@ public sealed class InMemoryGatewayLogStore : IGatewayLogStore
 
         var stamped = Normalize(entry);
 
+        var identity = IdentityOf(stamped);
+
         lock (_sync)
         {
-            var newest = _entries.Last?.Value;
-            if (newest is not null &&
-                IsSameEvent(newest, stamped) &&
-                stamped.TimestampUtc - newest.LastTimestampUtc <= CoalesceWindow)
+            if (_byIdentity.TryGetValue(identity, out var node) &&
+                stamped.TimestampUtc - node.Value.LastTimestampUtc <= CoalesceWindow)
             {
-                newest.Repeats++;
-                newest.LastTimestampUtc = stamped.TimestampUtc;
+                // Replace rather than mutate: readers hold references to these entries and
+                // serialize them outside the lock.
+                node.Value = node.Value with
+                {
+                    Repeats = node.Value.Repeats + 1,
+                    LastTimestampUtc = stamped.TimestampUtc,
+                };
                 return;
             }
 
-            _entries.AddLast(stamped);
+            if (node is not null)
+            {
+                // Outside the window — the old entry stays as history and this identity now points
+                // at the new one.
+                _byIdentity.Remove(identity);
+            }
+
+            var added = _entries.AddLast(stamped);
+            _byIdentity[identity] = added;
+
             while (_entries.Count > _capacity)
             {
+                var evicted = _entries.First!;
                 _entries.RemoveFirst();
+
+                var evictedIdentity = IdentityOf(evicted.Value);
+                if (_byIdentity.TryGetValue(evictedIdentity, out var tracked) && tracked == evicted)
+                {
+                    _byIdentity.Remove(evictedIdentity);
+                }
             }
         }
     }
@@ -97,11 +125,14 @@ public sealed class InMemoryGatewayLogStore : IGatewayLogStore
         }
     }
 
-    public void Clear()
+    public int Clear()
     {
         lock (_sync)
         {
+            var removed = _entries.Count;
             _entries.Clear();
+            _byIdentity.Clear();
+            return removed;
         }
     }
 
@@ -128,12 +159,14 @@ public sealed class InMemoryGatewayLogStore : IGatewayLogStore
         };
     }
 
-    private static bool IsSameEvent(GatewayLogEntry a, GatewayLogEntry b) =>
-        string.Equals(a.Level, b.Level, StringComparison.OrdinalIgnoreCase) &&
-        string.Equals(a.Category, b.Category, StringComparison.Ordinal) &&
-        string.Equals(a.EventCode, b.EventCode, StringComparison.Ordinal) &&
-        string.Equals(a.Message, b.Message, StringComparison.Ordinal) &&
-        string.Equals(a.ModelId, b.ModelId, StringComparison.OrdinalIgnoreCase);
+    /// <summary>The five fields that make two entries "the same event" for coalescing purposes.</summary>
+    private static string IdentityOf(GatewayLogEntry entry) => string.Join(
+        '\u001f',
+        entry.Level.ToLowerInvariant(),
+        entry.Category,
+        entry.EventCode ?? string.Empty,
+        entry.Message,
+        entry.ModelId?.ToLowerInvariant() ?? string.Empty);
 
     private static bool Matches(GatewayLogEntry entry, string needle) =>
         Contains(entry.Message, needle) ||

@@ -1,5 +1,7 @@
 using Microsoft.Extensions.Logging;
 using Pol33.Core.Abstractions;
+using Pol33.Core.Configuration;
+using Pol33.Core.Diagnostics;
 using Pol33.Core.Models;
 using Pol33.Observability.Diagnostics;
 
@@ -101,13 +103,120 @@ public sealed class GatewayLogSinkProviderTests
     }
 
     [Fact]
-    public void BeginScope_ReturnsNull()
+    public void BeginScope_ReturnsDisposableScope()
     {
         var store = new RecordingLogStore();
         using var provider = new GatewayLogSinkProvider(() => store);
         var logger = provider.CreateLogger("Cat");
 
-        logger.BeginScope("state").Should().BeNull();
+        // Previously null, which is why the Logs tab's Request ID column was permanently empty:
+        // without a scope stack the sink has no way to learn which request a log belongs to.
+        logger.BeginScope("state").Should().NotBeNull();
+    }
+
+    [Fact]
+    public void Log_TakesRequestIdFromAnEnclosingScope()
+    {
+        var store = new RecordingLogStore();
+        using var provider = new GatewayLogSinkProvider(() => store);
+        var logger = provider.CreateLogger("Cat");
+
+        using (logger.BeginScope(new Dictionary<string, object?>
+        {
+            [GatewayLogScopeKeys.RequestId] = "req_abc",
+        }))
+        {
+            logger.LogWarning("something went wrong");
+        }
+
+        store.Entries.Should().ContainSingle()
+            .Which.RequestId.Should().Be("req_abc");
+    }
+
+    [Fact]
+    public void Log_TakesModelIdFromStructuredState()
+    {
+        var store = new RecordingLogStore();
+        using var provider = new GatewayLogSinkProvider(() => store);
+        var logger = provider.CreateLogger("Cat");
+
+        // Structured properties on the log statement itself count, so existing call sites that
+        // already write {ModelId} are picked up with no change.
+        logger.LogWarning("upstream failed for {ModelId}", "gpt-4o");
+
+        store.Entries.Should().ContainSingle()
+            .Which.ModelId.Should().Be("gpt-4o");
+    }
+
+    [Fact]
+    public void Log_LeavesScopeStackUnchangedAfterDispose()
+    {
+        var store = new RecordingLogStore();
+        using var provider = new GatewayLogSinkProvider(() => store);
+        var logger = provider.CreateLogger("Cat");
+
+        using (logger.BeginScope(new Dictionary<string, object?>
+        {
+            [GatewayLogScopeKeys.RequestId] = "req_outer",
+        }))
+        {
+            using (logger.BeginScope(new Dictionary<string, object?>
+            {
+                [GatewayLogScopeKeys.RequestId] = "req_inner",
+            }))
+            {
+                logger.LogWarning("inner");
+            }
+
+            logger.LogWarning("outer");
+        }
+
+        store.Entries.Select(e => e.RequestId).Should().Equal("req_inner", "req_outer");
+    }
+
+    [Fact]
+    public void Log_AtErrorAndAbove_AlsoRecordsAnErrorRecord()
+    {
+        var store = new RecordingLogStore();
+        var errors = new RecordingErrorRecorder();
+        using var provider = new GatewayLogSinkProvider(
+            () => store,
+            () => errors,
+            new GatewayErrorTrackingOptions());
+        var logger = provider.CreateLogger("Cat");
+
+        logger.LogWarning("a warning");
+        logger.LogError(new InvalidOperationException("boom"), "an error");
+
+        // A warning is a diagnostic; only an error is an error.
+        errors.Records.Should().ContainSingle();
+        errors.Records[0].Message.Should().Be("an error");
+        errors.Records[0].ExceptionType.Should().Be(typeof(InvalidOperationException).FullName);
+        errors.Records[0].Source.Should().Be(GatewayErrorSourceNames.Log);
+    }
+
+    [Fact]
+    public void Log_IgnoresDeniedCategories()
+    {
+        var store = new RecordingLogStore();
+        using var provider = new GatewayLogSinkProvider(
+            () => store,
+            null,
+            new GatewayErrorTrackingOptions { IgnoredCategories = ["Microsoft.AspNetCore.Server.Kestrel"] });
+
+        // Kestrel logs a warning for every client that drops a connection. Left in, those alone
+        // would evict every real diagnostic from a 500-entry ring.
+        provider.CreateLogger("Microsoft.AspNetCore.Server.Kestrel.Connections")
+            .LogWarning("connection reset");
+
+        store.Entries.Should().BeEmpty();
+    }
+
+    private sealed class RecordingErrorRecorder : IGatewayErrorRecorder
+    {
+        public List<GatewayErrorRecord> Records { get; } = [];
+
+        public void Record(GatewayErrorRecord record) => Records.Add(record);
     }
 
     [Fact]
@@ -135,6 +244,11 @@ public sealed class GatewayLogSinkProviderTests
             GatewayLogLevel? minimumLevel = null,
             string? search = null) => Entries.Take(limit).ToList();
 
-        public void Clear() => Entries.Clear();
+        public int Clear()
+        {
+            var removed = Entries.Count;
+            Entries.Clear();
+            return removed;
+        }
     }
 }

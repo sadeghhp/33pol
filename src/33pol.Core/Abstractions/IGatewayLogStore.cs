@@ -18,5 +18,6 @@ public interface IGatewayLogStore
     /// <param name="search">Case-insensitive substring matched against message, detail, category, model and code.</param>
     IReadOnlyList<GatewayLogEntry> GetRecent(int limit, GatewayLogLevel? minimumLevel = null, string? search = null);
 
-    void Clear();
+    /// <summary>Empties the buffer. Returns how many entries were removed, for the audit record.</summary>
+    int Clear();
 }

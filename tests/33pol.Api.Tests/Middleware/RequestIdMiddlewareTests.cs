@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Logging.Abstractions;
 using Pol33.Api.Middleware;
 using Pol33.Core.Errors;
 
@@ -17,7 +18,7 @@ public sealed class RequestIdMiddlewareTests
             return Task.CompletedTask;
         };
 
-        var sut = new RequestIdMiddleware(next);
+        var sut = new RequestIdMiddleware(next, NullLogger<RequestIdMiddleware>.Instance);
         await sut.InvokeAsync(context);
 
         context.Items[RequestIdKeys.HttpContextItemKey].Should().BeOfType<string>();
@@ -35,7 +36,7 @@ public sealed class RequestIdMiddlewareTests
         context.Response.Body = new MemoryStream();
         RequestDelegate next = _ => Task.CompletedTask;
 
-        var sut = new RequestIdMiddleware(next);
+        var sut = new RequestIdMiddleware(next, NullLogger<RequestIdMiddleware>.Instance);
         await sut.InvokeAsync(context);
 
         var internalId = (string)context.Items[RequestIdKeys.HttpContextItemKey]!;
@@ -52,7 +53,7 @@ public sealed class RequestIdMiddlewareTests
         context.Response.Body = new MemoryStream();
         RequestDelegate next = _ => Task.CompletedTask;
 
-        var sut = new RequestIdMiddleware(next);
+        var sut = new RequestIdMiddleware(next, NullLogger<RequestIdMiddleware>.Instance);
         await sut.InvokeAsync(context);
 
         var internalId = (string)context.Items[RequestIdKeys.HttpContextItemKey]!;
@@ -71,7 +72,7 @@ public sealed class RequestIdMiddlewareTests
             return Task.CompletedTask;
         };
 
-        var sut = new RequestIdMiddleware(next);
+        var sut = new RequestIdMiddleware(next, NullLogger<RequestIdMiddleware>.Instance);
         await sut.InvokeAsync(context);
 
         context.Response.Headers[GatewayHeaders.RequestId].ToString().Should().StartWith("req_");
