@@ -21,7 +21,7 @@
   <script defer src="admin-icons.js?v=10"></script>
   <script defer src="admin-errors.js?v=7"></script>
   <script defer src="admin-store.js?v=9"></script>
-  <script defer src="admin-app.js?v=27"></script>
+  <script defer src="admin-app.js?v=28"></script>
   <script defer src="vendor/alpine-csp-3.14.9.min.js"></script>
 </head>
 <body x-data="adminApp" x-cloak @keydown.window="onModalKeydown">
@@ -863,6 +863,9 @@
               <span class="eyebrow">Reliability</span><h2>Errors</h2>
               <p class="page-sub" x-text="errorsStorageNote"></p>
               <p class="page-sub" x-show="hasErrorGroups" x-text="errorsSummaryText"></p>
+              <!-- The counter and this grid measure different things. When they disagree, say why
+                   here rather than letting it read as data going missing. -->
+              <p class="page-sub" x-show="showErrorsCounterMismatch" x-text="errorsCounterMismatchText"></p>
             </div>
           </div>
 

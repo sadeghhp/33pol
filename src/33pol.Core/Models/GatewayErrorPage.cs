@@ -36,6 +36,17 @@ public sealed record GatewayErrorGroupPage
     /// <summary>Total occurrences across all matching groups, for the "N occurrences in M groups" header.</summary>
     public long OccurrenceTotal { get; init; }
 
+    /// <summary>
+    /// Occurrences held by the store with <em>no</em> filter and <em>no</em> time window applied.
+    /// </summary>
+    /// <remarks>
+    /// The whole point is the empty grid. An operator looking at "3 errors" in the topbar and no rows
+    /// cannot tell whether the filter is hiding them, the window is too narrow, or nothing was ever
+    /// captured — and those need three different responses. With this number the console states which
+    /// it is instead of listing possibilities.
+    /// </remarks>
+    public long StoredTotal { get; init; }
+
     public int Limit { get; init; }
 
     public int Offset { get; init; }

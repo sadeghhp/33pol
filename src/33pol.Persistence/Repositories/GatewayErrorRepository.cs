@@ -84,6 +84,13 @@ public sealed class GatewayErrorRepository(GatewayDbContext dbContext) : IGatewa
         var total = await grouped.LongCountAsync(cancellationToken).ConfigureAwait(false);
         var occurrenceTotal = await filtered.LongCountAsync(cancellationToken).ConfigureAwait(false);
 
+        // Unfiltered, so an empty grid can distinguish "the window hides them" from "nothing was
+        // ever captured". One indexed COUNT over a table retention keeps bounded.
+        var storedTotal = await dbContext.GatewayErrors
+            .AsNoTracking()
+            .LongCountAsync(cancellationToken)
+            .ConfigureAwait(false);
+
         var ordered = clamped.Sort switch
         {
             GatewayErrorSort.Count => grouped.OrderByDescending(g => g.Count).ThenByDescending(g => g.LastSeen),
@@ -103,6 +110,7 @@ public sealed class GatewayErrorRepository(GatewayDbContext dbContext) : IGatewa
             {
                 Total = total,
                 OccurrenceTotal = occurrenceTotal,
+                StoredTotal = storedTotal,
                 Limit = clamped.Limit,
                 Offset = clamped.Offset,
                 Source = GatewayErrorSources.Database,
@@ -128,6 +136,7 @@ public sealed class GatewayErrorRepository(GatewayDbContext dbContext) : IGatewa
             Items = groups,
             Total = total,
             OccurrenceTotal = occurrenceTotal,
+            StoredTotal = storedTotal,
             Limit = clamped.Limit,
             Offset = clamped.Offset,
             Source = GatewayErrorSources.Database,

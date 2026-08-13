@@ -95,6 +95,7 @@ function adminApp() {
     errorGroups: [],
     errorGroupsTotal: 0,
     errorOccurrenceTotal: 0,
+    errorsStoredTotal: 0,
     errorsPersisted: true,
     errorsFacets: null,
     errorsRange: '24h',
@@ -684,6 +685,7 @@ function adminApp() {
       this.errorGroups = [];
       this.errorGroupsTotal = 0;
       this.errorOccurrenceTotal = 0;
+      this.errorsStoredTotal = 0;
       this.errorOccurrences = {};
       this.errorsFacets = null;
       this.expandedErrorKey = null;
@@ -862,6 +864,7 @@ function adminApp() {
         this.errorGroups = body?.groups ?? [];
         this.errorGroupsTotal = Number(body?.total ?? 0);
         this.errorOccurrenceTotal = Number(body?.occurrenceTotal ?? 0);
+        this.errorsStoredTotal = Number(body?.storedTotal ?? 0);
         this.errorsPersisted = body?.persisted !== false;
         this.errorsLoadError = '';
       });
@@ -1063,6 +1066,7 @@ function adminApp() {
         this.errorGroups = [];
         this.errorGroupsTotal = 0;
         this.errorOccurrenceTotal = 0;
+        this.errorsStoredTotal = 0;
         this.errorOccurrences = {};
         this.expandedErrorKey = null;
         this.errorsOffset = 0;
@@ -2764,10 +2768,23 @@ function adminApp() {
     },
 
     get errorsEmptyText() {
-      if (this.errorsFilterActive) return 'No errors match these filters.';
+      // Say which of the three causes it is. "Widen the range" is unhelpful advice when the store is
+      // empty, and "nothing was captured" is wrong when 400 rows sit just outside the window — and an
+      // operator staring at a non-zero topbar counter cannot tell those apart by looking.
+      const stored = this.errorsStoredTotal;
+      if (this.errorsFilterActive) {
+        return stored > 0
+          ? `No errors match these filters. ${this.formatNum(stored)} error `
+            + `${stored === 1 ? 'record is' : 'records are'} stored in total — clear the filters to see them.`
+          : 'No errors match these filters, and no error records are stored at all.';
+      }
+      if (this.errorsRange !== 'all' && stored > 0) {
+        return `No errors in this time range, but ${this.formatNum(stored)} `
+          + `${stored === 1 ? 'record is' : 'records are'} stored outside it. Search all time to see them.`;
+      }
       if (this.errorsRange !== 'all') {
-        return 'No errors recorded in this window. The grid is filtered to a time range — widen it '
-          + 'to look further back.';
+        return 'No errors recorded in this window, and none stored outside it either. '
+          + this.errorsCounterNote;
       }
       // Nothing at all, across all time. If the Overview counter is non-zero the two disagree, and
       // the reason is almost always that the counter predates error recording: it is a cumulative
@@ -2775,11 +2792,31 @@ function adminApp() {
       // first ran a build that captured them. Saying so beats leaving the operator to guess.
       if (this.totalErrorsCount > 0) {
         return `No error records stored, though the Overview counter reads ${this.totalErrorsText}. `
-          + 'That counter is a cumulative lifetime total kept across restarts; individual records '
-          + 'are only written from the point this gateway started capturing them. New failures will '
-          + 'appear here as they happen.';
+          + this.errorsCounterNote;
       }
       return 'No errors recorded — the gateway is clean.';
+    },
+
+    /**
+     * Why the Overview counter can exceed what this grid holds. Every reason here is a real,
+     * by-design divergence rather than a fault, and none of them is guessable from the two numbers.
+     */
+    get errorsCounterNote() {
+      return 'That counter is a cumulative lifetime total restored across restarts, and it also '
+        + 'counts client disconnects, which are deliberately not stored here. Records are only kept '
+        + 'from the point this gateway began capturing them, and are pruned on the retention '
+        + 'schedule. New failures appear here as they happen — use Clear all to rebase both to zero.';
+    },
+
+    /** Only worth saying when the grid has rows — the empty state already explains itself in full. */
+    get showErrorsCounterMismatch() {
+      return this.hasErrorGroups && this.totalErrorsCount > this.errorsStoredTotal;
+    },
+
+    get errorsCounterMismatchText() {
+      const stored = this.formatNum(this.errorsStoredTotal);
+      return `The Overview counter reads ${this.totalErrorsText} against ${stored} stored here. `
+        + this.errorsCounterNote;
     },
 
     /** Offered from the empty state, so "is it the filter or the data?" is one click to answer. */

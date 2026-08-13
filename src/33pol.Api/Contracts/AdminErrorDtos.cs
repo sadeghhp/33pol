@@ -162,6 +162,12 @@ public sealed class AdminErrorGroupListResponse
     /// <summary>Occurrences across all matching groups.</summary>
     public long OccurrenceTotal { get; init; }
 
+    /// <summary>
+    /// Occurrences the store holds in total, ignoring every filter and the time window — what lets
+    /// an empty grid say whether the window is hiding rows or nothing was ever captured.
+    /// </summary>
+    public long StoredTotal { get; init; }
+
     public int Limit { get; init; }
 
     public int Offset { get; init; }
@@ -185,6 +191,7 @@ public sealed class AdminErrorGroupListResponse
         Groups = [.. page.Items.Select(AdminErrorGroupDto.From)],
         Total = page.Total,
         OccurrenceTotal = page.OccurrenceTotal,
+        StoredTotal = page.StoredTotal,
         Limit = page.Limit,
         Offset = page.Offset,
         Source = page.Source,

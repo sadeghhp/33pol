@@ -144,6 +144,7 @@ public sealed class InMemoryGatewayErrorStore : IGatewayErrorStore
                 Items = page,
                 Total = matched.Count,
                 OccurrenceTotal = matched.Sum(a => a.Count),
+                StoredTotal = _groups.Values.Sum(a => a.Count),
                 Limit = clamped.Limit,
                 Offset = clamped.Offset,
                 Source = GatewayErrorSources.Memory,
