@@ -814,9 +814,11 @@ function adminApp() {
      * same classifier the global banner uses so the wording does not diverge between the two.
      */
     describeLoadFailure(error) {
-      // The store classifies before it throws, so title/detail are already operator-readable.
-      const detail = error?.title || error?.message || 'the request failed';
-      return `Could not refresh — ${detail} Showing the last successful result.`;
+      // The store classifies before it throws: `message` is a full sentence, `title` only a short
+      // label, so prefer the former and punctuate whichever we end up with.
+      const raw = (error?.message || error?.title || 'The request failed').trim();
+      const sentence = /[.!?]$/.test(raw) ? raw : raw + '.';
+      return `Could not refresh. ${sentence} Showing the last successful result.`;
     },
 
     /**
@@ -2746,10 +2748,29 @@ function adminApp() {
 
     get errorsEmptyText() {
       if (this.errorsFilterActive) return 'No errors match these filters.';
-      return this.errorsRange === 'all'
-        ? 'No errors recorded — the gateway is clean.'
-        : 'No errors recorded in this window. Widen the time range to look further back.';
+      if (this.errorsRange !== 'all') {
+        return 'No errors recorded in this window. The grid is filtered to a time range — widen it '
+          + 'to look further back.';
+      }
+      // Nothing at all, across all time. If the Overview counter is non-zero the two disagree, and
+      // the reason is almost always that the counter predates error recording: it is a cumulative
+      // lifetime total restored across restarts, while records only exist from when this gateway
+      // first ran a build that captured them. Saying so beats leaving the operator to guess.
+      if (this.totalErrorsCount > 0) {
+        return `No error records stored, though the Overview counter reads ${this.totalErrorsText}. `
+          + 'That counter is a cumulative lifetime total kept across restarts; individual records '
+          + 'are only written from the point this gateway started capturing them. New failures will '
+          + 'appear here as they happen.';
+      }
+      return 'No errors recorded — the gateway is clean.';
     },
+
+    /** Offered from the empty state, so "is it the filter or the data?" is one click to answer. */
+    get showErrorsWidenHint() {
+      return this.errorsEmpty && !this.errorsFilterActive && this.errorsRange !== 'all';
+    },
+
+    searchAllTime() { return this.setErrorsRange('all'); },
 
     get errorsSummaryText() {
       if (!this.errorGroupsTotal) return '';

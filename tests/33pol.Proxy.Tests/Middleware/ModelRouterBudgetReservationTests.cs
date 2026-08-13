@@ -181,6 +181,48 @@ public sealed class ModelRouterBudgetReservationTests
             Arg.Any<CancellationToken>());
     }
 
+    /// <summary>
+    /// A rejected reservation already counts as an error on the dashboard, so it has to leave a
+    /// trace an operator can find. Without this the Overview counter climbs while the live feed and
+    /// the Errors tab stay empty — a number with nothing behind it.
+    /// </summary>
+    [Fact]
+    public async Task InvokeAsync_BudgetRejected_RecordsTheFailureForTheFeedAndErrorsTab()
+    {
+        var budget = Substitute.For<IBudgetEnforcementService>();
+        budget.CheckBeforeForwardAsync(Arg.Any<string?>(), Arg.Any<CancellationToken>())
+            .Returns(BudgetCheckResult.Allowed);
+        budget.TryReserveAsync(
+                Arg.Any<string?>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<long?>(),
+                Arg.Any<long>(), Arg.Any<CancellationToken>())
+            .Returns(BudgetCheckResult.HardExceeded("monthly-cap"));
+
+        RecentRequestEntry? recorded = null;
+        var recentRequestStore = Substitute.For<IRecentRequestStore>();
+        recentRequestStore.When(x => x.Record(Arg.Any<RecentRequestEntry>()))
+            .Do(call => recorded = call.Arg<RecentRequestEntry>());
+
+        var errors = new List<GatewayErrorRecord>();
+        var errorRecorder = Substitute.For<IGatewayErrorRecorder>();
+        errorRecorder.When(x => x.Record(Arg.Any<GatewayErrorRecord>()))
+            .Do(call => errors.Add(call.Arg<GatewayErrorRecord>()));
+
+        await RunAsync(
+            budget,
+            CreateForwarderReturning(ForwarderError.None),
+            recentRequestStore: recentRequestStore,
+            errorRecorder: errorRecorder);
+
+        recorded.Should().NotBeNull();
+        recorded!.ErrorCode.Should().NotBeNull();
+
+        errors.Should().ContainSingle();
+        errors[0].Outcome.Should().Be("budget_exceeded");
+        errors[0].ModelId.Should().Be("m1");
+        // A budget stop is the gateway working as configured, not a fault to page someone about.
+        errors[0].Level.Should().Be(GatewayLogLevel.Warning.ToString());
+    }
+
     private static IBudgetEnforcementService CreateBudgetEnforcement()
     {
         var budget = Substitute.For<IBudgetEnforcementService>();
@@ -241,7 +283,8 @@ public sealed class ModelRouterBudgetReservationTests
         IBudgetEnforcementService budgetEnforcement,
         IInferenceHttpForwarder forwarder,
         IUsageRecorder? usageRecorder = null,
-        IRecentRequestStore? recentRequestStore = null)
+        IRecentRequestStore? recentRequestStore = null,
+        IGatewayErrorRecorder? errorRecorder = null)
     {
         var configPath = Path.Combine(Path.GetTempPath(), $"33pol-budget-{Guid.NewGuid():N}.json");
         await File.WriteAllTextAsync(configPath, """
@@ -255,7 +298,7 @@ public sealed class ModelRouterBudgetReservationTests
             await registry.LoadModelsAsync(configPath);
 
             var middleware = CreateMiddleware(
-                registry, forwarder, budgetEnforcement, usageRecorder, recentRequestStore);
+                registry, forwarder, budgetEnforcement, usageRecorder, recentRequestStore, errorRecorder);
 
             var bodyBytes = Encoding.UTF8.GetBytes("""{"model":"m1","stream":false}""");
             var context = new DefaultHttpContext
@@ -284,7 +327,8 @@ public sealed class ModelRouterBudgetReservationTests
         IInferenceHttpForwarder forwarder,
         IBudgetEnforcementService budgetEnforcement,
         IUsageRecorder? usageRecorder,
-        IRecentRequestStore? recentRequestStore)
+        IRecentRequestStore? recentRequestStore,
+        IGatewayErrorRecorder? errorRecorder = null)
     {
         var health = Substitute.For<IBackendHealthStore>();
         health.IsBackendHealthy(Arg.Any<string>()).Returns(true);
@@ -327,7 +371,7 @@ public sealed class ModelRouterBudgetReservationTests
             options,
             Substitute.For<IUpstreamBearerTokenResolver>(),
             budgetEnforcement,
-            Substitute.For<IGatewayErrorRecorder>(),
+            errorRecorder ?? Substitute.For<IGatewayErrorRecorder>(),
             NullLogger<ModelRouterMiddleware>.Instance);
     }
 }

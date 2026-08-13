@@ -692,6 +692,13 @@ code.inp-hint { font-family: var(--font-mono); font-size: 0.95em; padding: 0.05r
   cursor: pointer; transition: all var(--dur-fast);
 }
 .preset:hover { color: var(--text-primary); border-color: var(--text-tertiary); }
+/* The Usage presets are one-shot ("apply this range"), but the Errors chips are a persistent
+   selection — without a selected state the grid silently filters to a window nobody can see. */
+.preset.active {
+  background: var(--accent-soft); color: var(--accent-text);
+  border-color: var(--accent-border); font-weight: var(--fw-semi);
+}
+.preset:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--bg-base), 0 0 0 4px var(--accent); }
 
 /* ================================================================
    10. CARDS & GRIDS

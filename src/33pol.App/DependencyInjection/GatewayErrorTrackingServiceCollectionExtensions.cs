@@ -35,11 +35,13 @@ public static class GatewayErrorTrackingServiceCollectionExtensions
         var connectionString = configuration.GetConnectionString(
             PersistenceServiceCollectionExtensions.ConnectionStringName);
 
-        var persistenceEnabled = configuration
-            .GetSection(GatewayErrorTrackingOptions.SectionName)
-            .GetValue("PersistToDatabase", defaultValue: true);
+        var section = configuration.GetSection(GatewayErrorTrackingOptions.SectionName);
+        var trackingEnabled = section.GetValue("Enabled", defaultValue: true);
+        var persistenceEnabled = section.GetValue("PersistToDatabase", defaultValue: true);
 
-        if (string.IsNullOrWhiteSpace(connectionString) || !persistenceEnabled)
+        // Nothing is captured when tracking is off, so the writer would flush empty batches and the
+        // retention service would announce a retention policy for a table that never grows.
+        if (!trackingEnabled || !persistenceEnabled || string.IsNullOrWhiteSpace(connectionString))
         {
             return services;
         }

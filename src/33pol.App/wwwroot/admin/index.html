@@ -17,11 +17,11 @@
        is that no expression below may contain an operator, a ternary or a call with arguments:
        every value comes from a getter, a zero-argument method, or a {get,set} pair on adminApp. -->
   <link rel="stylesheet" href="vendor/fonts.css?v=1" />
-  <link rel="stylesheet" href="admin.css?v=14" />
+  <link rel="stylesheet" href="admin.css?v=15" />
   <script defer src="admin-icons.js?v=10"></script>
   <script defer src="admin-errors.js?v=7"></script>
   <script defer src="admin-store.js?v=9"></script>
-  <script defer src="admin-app.js?v=25"></script>
+  <script defer src="admin-app.js?v=26"></script>
   <script defer src="vendor/alpine-csp-3.14.9.min.js"></script>
 </head>
 <body x-data="adminApp" x-cloak @keydown.window="onModalKeydown">
@@ -1039,6 +1039,9 @@
           <div class="empty-state" x-show="errorsEmpty">
             <span class="empty-state-icon icon" x-html="icons.bug"></span>
             <p x-text="errorsEmptyText"></p>
+            <button type="button" class="action secondary" x-show="showErrorsWidenHint" @click="searchAllTime">
+              <span class="icon" x-html="icons.search"></span> Search all time
+            </button>
           </div>
         </section>
 

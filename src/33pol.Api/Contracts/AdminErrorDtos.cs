@@ -153,7 +153,15 @@ public sealed class AdminErrorGroupListResponse
     /// <summary><c>database</c> or <c>memory</c>.</summary>
     public required string Source { get; init; }
 
-    /// <summary>False when errors are held in memory only and will not survive a restart.</summary>
+    /// <summary>
+    /// False when the rows in this response are held in memory only and will not survive a restart.
+    /// </summary>
+    /// <remarks>
+    /// Derived from where the page was actually served from, not from how the store is configured.
+    /// A database-backed store that fell back to its in-memory buffer after a failed query is
+    /// serving volatile data, and saying otherwise would put "kept across restarts" above rows that
+    /// are not.
+    /// </remarks>
     public bool Persisted { get; init; }
 
     public static AdminErrorGroupListResponse From(GatewayErrorGroupPage page, bool persisted) => new()
@@ -164,7 +172,7 @@ public sealed class AdminErrorGroupListResponse
         Limit = page.Limit,
         Offset = page.Offset,
         Source = page.Source,
-        Persisted = persisted,
+        Persisted = persisted && page.Source == GatewayErrorSources.Database,
     };
 }
 
@@ -190,7 +198,7 @@ public sealed class AdminErrorListResponse
         Limit = page.Limit,
         Offset = page.Offset,
         Source = page.Source,
-        Persisted = persisted,
+        Persisted = persisted && page.Source == GatewayErrorSources.Database,
     };
 }
 

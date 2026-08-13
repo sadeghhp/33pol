@@ -359,6 +359,18 @@ public sealed class ModelRouterMiddleware
                 await context.WriteGatewayErrorAsync(
                     _errors.Write(GatewayErrorCode.QuotaExceeded),
                     context.RequestAborted).ConfigureAwait(false);
+
+                // SetOutcome above already counted this as an error. Without recording it here too,
+                // the dashboard counter climbs while the feed and the Errors tab show nothing —
+                // the operator sees a number with no way to find out what it refers to.
+                RecordRecentRequest(
+                    context,
+                    modelConfig.Id,
+                    started,
+                    requestInfo.Stream,
+                    success: false,
+                    outcome: "budget_exceeded",
+                    upstreamUrl: modelConfig.Url);
                 return;
             }
 
