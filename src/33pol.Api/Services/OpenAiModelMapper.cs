@@ -7,7 +7,7 @@ internal static class OpenAiModelMapper
 {
     internal const long DefaultCreatedEpoch = 1_733_328_000;
 
-    public static OpenAiModelResponse ToResponse(ModelConfig model, bool available, bool? requiresApiKey = null) =>
+    public static OpenAiModelResponse ToResponse(ModelConfig model, bool available) =>
         new()
         {
             Id = model.Id,
@@ -17,7 +17,6 @@ internal static class OpenAiModelMapper
             Parent = null,
             MaxModelLen = model.MaxContextLength,
             Available = available,
-            RequiresApiKey = requiresApiKey,
         };
 
     private static OpenAiModelPermission CreateSyntheticPermission(string modelId) =>

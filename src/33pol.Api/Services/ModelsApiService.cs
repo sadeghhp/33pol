@@ -15,32 +15,32 @@ public sealed class ModelsApiService(
         ListHealthyModelsCore(_ => true);
 
     /// <summary>
-    /// Listing for callers with no usable credential on a gateway that requires one. Every healthy
-    /// model is shown so the caller can discover what the gateway offers, and each is tagged with
-    /// <c>requires_api_key</c> so it is obvious which ones need a key. Public models are marked
-    /// <c>false</c>; everything else <c>true</c>. A <c>help</c> line explains how to authenticate.
+    /// Listing for callers with no usable credential on a gateway that requires one.
+    /// <c>data</c> keeps the OpenAI shape and holds only the models the caller can actually use
+    /// (public ones). <c>models</c> is a minimal inventory of every healthy model with an
+    /// <c>api_key_required</c> flag, so the caller can see what exists and that a key is needed.
     /// </summary>
     public OpenAiModelListResponse ListAnonymousHealthyModels()
     {
-        var data = registry.GetAllModels()
+        var healthy = registry.GetAllModels()
             .Where(model => healthStore.IsBackendHealthy(model.Id))
-            .Select(model => OpenAiModelMapper.ToResponse(
-                model,
-                available: true,
-                requiresApiKey: !model.AllowsPublicGatewayAccess()))
             .ToList();
 
         return new OpenAiModelListResponse
         {
-            Data = data,
-            Help = data.Any(m => m.RequiresApiKey == true) ? AnonymousHelpText : null,
+            Data = healthy
+                .Where(model => model.AllowsPublicGatewayAccess())
+                .Select(model => OpenAiModelMapper.ToResponse(model, available: true))
+                .ToList(),
+            Models = healthy
+                .Select(model => new ModelAvailabilityHint
+                {
+                    Id = model.Id,
+                    ApiKeyRequired = !model.AllowsPublicGatewayAccess(),
+                })
+                .ToList(),
         };
     }
-
-    public const string AnonymousHelpText =
-        "Models with \"requires_api_key\": true need an inference API key. " +
-        "Ask the gateway administrator for a key and send it as the header " +
-        "'Authorization: Bearer <your-key>'. Models with \"requires_api_key\": false can be used without a key.";
 
     public async Task<OpenAiModelListResponse> ListHealthyModelsAsync(
         Guid tenantId,
@@ -74,14 +74,9 @@ public sealed class ModelsApiService(
     public (OpenAiModelResponse? Model, ErrorResult? Error) TryGetModel(string name) =>
         TryGetModelCore(name, _ => true);
 
-    /// <summary>
-    /// Single-model lookup for anonymous callers on a gateway that requires a key. Mirrors
-    /// <see cref="ListAnonymousHealthyModels"/>: the model is returned (never hidden as 404) with
-    /// <c>requires_api_key</c> set so the caller learns whether a key is needed.
-    /// </summary>
-    public (OpenAiModelResponse? Model, ErrorResult? Error) TryGetAnonymousModel(string name)
+    public (OpenAiModelResponse? Model, ErrorResult? Error) TryGetPublicModel(string name)
     {
-        if (!registry.TryGetModel(name, out var model) || model is null)
+        if (!registry.TryGetModel(name, out var model) || model is null || !model.AllowsPublicGatewayAccess())
         {
             return (null, ErrorResult.FromCode(
                 GatewayErrorCode.ModelNotFound,
@@ -89,8 +84,7 @@ public sealed class ModelsApiService(
                 "invalid_request_error"));
         }
 
-        var available = healthStore.IsBackendHealthy(model.Id);
-        return (OpenAiModelMapper.ToResponse(model, available, requiresApiKey: !model.AllowsPublicGatewayAccess()), null);
+        return TryGetModelCore(name, id => string.Equals(id, model.Id, StringComparison.OrdinalIgnoreCase));
     }
 
     public async Task<(OpenAiModelResponse? Model, ErrorResult? Error)> TryGetModelAsync(

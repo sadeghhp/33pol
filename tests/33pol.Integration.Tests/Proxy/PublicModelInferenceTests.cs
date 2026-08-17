@@ -106,7 +106,7 @@ public sealed class PublicModelInferenceTests
     }
 
     [Fact]
-    public async Task GetModels_NoApiKey_ListsAllModelsAndFlagsWhichNeedKey()
+    public async Task GetModels_NoApiKey_DataIsPublicOnly_ModelsHintListsAll()
     {
         await using var factory = CreateFactoryWithPublicModel();
         var client = factory.CreateClient();
@@ -115,12 +115,14 @@ public sealed class PublicModelInferenceTests
         response.EnsureSuccessStatusCode();
 
         using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
-        var byId = doc.RootElement.GetProperty("data").EnumerateArray()
-            .ToDictionary(e => e.GetProperty("id").GetString()!, e => e.GetProperty("requires_api_key").GetBoolean());
+        doc.RootElement.GetProperty("data").EnumerateArray()
+            .Select(e => e.GetProperty("id").GetString())
+            .Should().ContainSingle().Which.Should().Be(ModelId);
 
-        byId.Should().ContainKey(ModelId).WhoseValue.Should().BeFalse();
-        byId.Should().ContainKey(PrivateModelId).WhoseValue.Should().BeTrue();
-        doc.RootElement.GetProperty("help").GetString().Should().Contain("Authorization: Bearer");
+        var hints = doc.RootElement.GetProperty("models").EnumerateArray()
+            .ToDictionary(e => e.GetProperty("id").GetString()!, e => e.GetProperty("api_key_required").GetBoolean());
+        hints.Should().ContainKey(ModelId).WhoseValue.Should().BeFalse();
+        hints.Should().ContainKey(PrivateModelId).WhoseValue.Should().BeTrue();
     }
 
     /// <summary>
@@ -128,7 +130,7 @@ public sealed class PublicModelInferenceTests
     /// otherwise an SDK configured with a dummy key cannot find the models it is allowed to call.
     /// </summary>
     [Fact]
-    public async Task GetModels_PlaceholderApiKey_ListsAllModelsAndFlagsWhichNeedKey()
+    public async Task GetModels_PlaceholderApiKey_DataIsPublicOnly_ModelsHintListsAll()
     {
         await using var factory = CreateFactoryWithPublicModel();
         var client = factory.CreateClient();
@@ -138,11 +140,14 @@ public sealed class PublicModelInferenceTests
         response.EnsureSuccessStatusCode();
 
         using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
-        var byId = doc.RootElement.GetProperty("data").EnumerateArray()
-            .ToDictionary(e => e.GetProperty("id").GetString()!, e => e.GetProperty("requires_api_key").GetBoolean());
+        doc.RootElement.GetProperty("data").EnumerateArray()
+            .Select(e => e.GetProperty("id").GetString())
+            .Should().ContainSingle().Which.Should().Be(ModelId);
 
-        byId.Should().ContainKey(ModelId).WhoseValue.Should().BeFalse();
-        byId.Should().ContainKey(PrivateModelId).WhoseValue.Should().BeTrue();
+        var hints = doc.RootElement.GetProperty("models").EnumerateArray()
+            .ToDictionary(e => e.GetProperty("id").GetString()!, e => e.GetProperty("api_key_required").GetBoolean());
+        hints.Should().ContainKey(ModelId).WhoseValue.Should().BeFalse();
+        hints.Should().ContainKey(PrivateModelId).WhoseValue.Should().BeTrue();
     }
 
     [Fact]

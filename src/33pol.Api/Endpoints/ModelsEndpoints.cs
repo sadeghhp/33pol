@@ -56,7 +56,7 @@ public static class ModelsEndpoints
         {
             if (authState.IsAuthenticationRequired)
             {
-                var (publicResponse, publicError) = modelsApi.TryGetAnonymousModel(model);
+                var (publicResponse, publicError) = modelsApi.TryGetPublicModel(model);
                 if (publicError is not null)
                 {
                     return Results.Json(publicError, statusCode: StatusCodes.Status404NotFound);
