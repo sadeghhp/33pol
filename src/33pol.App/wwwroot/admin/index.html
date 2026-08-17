@@ -17,11 +17,11 @@
        is that no expression below may contain an operator, a ternary or a call with arguments:
        every value comes from a getter, a zero-argument method, or a {get,set} pair on adminApp. -->
   <link rel="stylesheet" href="vendor/fonts.css?v=1" />
-  <link rel="stylesheet" href="admin.css?v=16" />
+  <link rel="stylesheet" href="admin.css?v=17" />
   <script defer src="admin-icons.js?v=10"></script>
   <script defer src="admin-errors.js?v=7"></script>
   <script defer src="admin-store.js?v=9"></script>
-  <script defer src="admin-app.js?v=28"></script>
+  <script defer src="admin-app.js?v=29"></script>
   <script defer src="vendor/alpine-csp-3.14.9.min.js"></script>
 </head>
 <body x-data="adminApp" x-cloak @keydown.window="onModalKeydown">
@@ -170,11 +170,19 @@
                    operator tenant. On a multi-tenant gateway the two request totals legitimately
                    differ, so both pages say which population they count. -->
               <p class="page-sub">Gateway-wide across all tenants — for per-tenant spend see <strong>Usage &amp; cost</strong>.</p>
-              <p class="page-sub" x-show="summaryUpdatedAt">Updated <span x-text="summaryAgeText"></span> · live, refreshing every 2s</p>
+              <p class="page-sub" x-show="summaryUpdatedAt" x-text="updatedLineText"></p>
             </div>
-            <button type="button" class="action secondary" @click="loadOverviewData" :disabled="loadingOverview" title="Refresh">
-              <span class="icon" x-html="icons.refresh"></span> Refresh
-            </button>
+            <div class="page-actions">
+              <!-- Push-stream state: Live while the gateway is streaming frames, Polling when the
+                   console has fallen back to its 2s refresh, Reconnecting in between. -->
+              <span :class="liveBadgeClass" :title="liveBadgeTitle" role="status">
+                <span class="pulse-dot" :class="liveBadgeDotClass"></span>
+                <span x-text="liveBadgeText"></span>
+              </span>
+              <button type="button" class="action secondary" @click="loadOverviewData" :disabled="loadingOverview" title="Refresh">
+                <span class="icon" x-html="icons.refresh"></span> Refresh
+              </button>
+            </div>
           </div>
 
           <p class="notice warn" x-show="showStaleNotice" role="status">Live data may be stale — the last refresh failed. Check your connection.</p>
@@ -316,23 +324,36 @@
               <input type="checkbox" x-model="mdl.requestsErrorsOnly" /> Errors only
             </label>
           </div>
+          <!-- What the tail adds up to right now: rows in flight, errors, priced spend and tokens
+               across the visible window, so the operator reads the feed as a whole before the rows. -->
+          <div class="feed-strip" x-show="requestsTableVisible" role="status">
+            <template x-for="s in feedStrip" :key="s.key">
+              <span :class="s.cls">
+                <span class="pulse-dot live" x-show="s.live" aria-hidden="true"></span>
+                <span x-text="s.text"></span>
+              </span>
+            </template>
+          </div>
           <div class="table-wrap">
             <table class="t-requests" x-show="requestsTableVisible">
               <!-- Column shares drive the fixed table layout: the wide free-text columns
-                   (path, error) absorb the space, the rest stay at their natural size. -->
+                   (route, model) absorb the space, the rest stay at their natural size. -->
               <colgroup>
-                <col style="width:8%" /><col style="width:11%" /><col style="width:6%" />
-                <col style="width:24%" /><col style="width:17%" /><col style="width:6%" />
-                <col style="width:20%" /><col style="width:8%" />
+                <col style="width:7%" /><col style="width:11%" /><col style="width:16%" />
+                <col style="width:12%" /><col style="width:11%" /><col style="width:13%" />
+                <col style="width:10%" /><col style="width:11%" /><col style="width:9%" />
               </colgroup>
               <thead>
                 <tr>
                   <th class="sortable" @click="sortBy.requestsTime">Time<span x-html="sortIcon.requestsTime"></span></th>
                   <th>Request ID</th>
-                  <th>Method</th><th>Path</th><th>Model</th>
+                  <th>Route</th>
+                  <th>Model</th>
+                  <th>Cost center</th>
                   <th class="sortable" @click="sortBy.requestsStatus">Status<span x-html="sortIcon.requestsStatus"></span></th>
-                  <th>Error</th>
-                  <th class="num">ms</th>
+                  <th class="num" title="Prompt → completion tokens">Tokens</th>
+                  <th class="num" title="Input + output cost from the model's rate card">Cost</th>
+                  <th class="num">Duration</th>
                 </tr>
               </thead>
               <!-- One tbody per request: x-for clones only the template's first element, so the row
@@ -346,7 +367,7 @@
                     @click="r.toggle"
                     @keydown.enter.prevent="r.toggle"
                     @keydown.space.prevent="r.toggle">
-                    <td x-text="r.time"></td>
+                    <td class="cell-time" x-text="r.clock" :title="r.time"></td>
                     <td class="cell-code" @click.stop>
                       <span class="cell-code-inner">
                         <code x-text="r.shortId" :title="r.requestId"></code>
@@ -355,24 +376,45 @@
                         </button>
                       </span>
                     </td>
-                    <td><span class="tag" x-text="r.method"></span></td>
-                    <td class="col-truncate" x-text="r.path" :title="r.path"></td>
-                    <td class="col-truncate" x-text="r.modelId" :title="r.modelId"></td>
-                    <td class="num">
-                      <span class="pulse-dot live" x-show="r.inFlight" aria-hidden="true"></span>
-                      <span x-text="r.statusCode"></span>
+                    <td class="cell-route" :title="r.path">
+                      <span class="tag" x-text="r.method"></span>
+                      <span class="route-path" x-text="r.path"></span>
                     </td>
-                    <td class="col-truncate" :class="r.errorClass" x-text="r.errorText" :title="r.errorText"></td>
+                    <td class="col-truncate" x-text="r.modelId" :title="r.modelId"></td>
+                    <td class="col-truncate"><span :class="r.costCenterClass" x-text="r.costCenter" :title="r.costCenterTitle"></span></td>
+                    <td class="cell-status">
+                      <span class="status-line">
+                        <span class="pulse-dot live" x-show="r.inFlight" aria-hidden="true"></span>
+                        <span class="status-code" x-text="r.statusCode"></span>
+                      </span>
+                      <span class="status-error" :class="r.errorClass" x-show="r.hasError" x-text="r.errorText" :title="r.errorText"></span>
+                    </td>
+                    <td class="num" x-text="r.tokensText" :title="r.tokensTitle"></td>
+                    <td class="num" :class="r.costClass" x-text="r.costText" :title="r.costTitle"></td>
                     <td class="num" x-text="r.durationText"></td>
                   </tr>
                   <tr x-show="r.expanded" class="request-detail-row">
-                    <td colspan="8">
+                    <td colspan="9">
                       <dl class="request-detail-list">
                         <div><dt>Request ID</dt><dd><code x-text="r.requestId"></code></dd></div>
+                        <div><dt>Started</dt><dd x-text="r.time"></dd></div>
                         <div><dt>Status</dt><dd x-text="r.statusDetail"></dd></div>
                         <div><dt>Error code</dt><dd x-text="r.errorText"></dd></div>
+                        <div><dt>Duration</dt><dd x-text="r.durationDetail"></dd></div>
                         <div><dt>Tenant</dt><dd x-text="r.tenant"></dd></div>
+                        <div><dt>Cost center</dt><dd x-text="r.costCenter"></dd></div>
                         <div><dt>Streaming</dt><dd x-text="r.streaming"></dd></div>
+                      </dl>
+                      <dl class="request-detail-list request-detail-usage">
+                        <div><dt>Prompt tokens</dt><dd x-text="r.promptTokensText"></dd></div>
+                        <div><dt>Completion tokens</dt><dd x-text="r.completionTokensText"></dd></div>
+                        <div><dt>Total tokens</dt><dd x-text="r.totalTokensText"></dd></div>
+                        <div><dt>Output speed</dt><dd x-text="r.throughputText"></dd></div>
+                        <div><dt>Input cost</dt><dd class="cost-detail" x-text="r.inputCostText"></dd></div>
+                        <div><dt>Output cost</dt><dd class="cost-detail" x-text="r.outputCostText"></dd></div>
+                        <div><dt>Total cost</dt><dd class="cost-detail is-total" x-text="r.totalCostText"></dd></div>
+                        <div><dt>Token source</dt><dd x-text="r.tokenSourceText"></dd></div>
+                        <div class="span-2"><dt>Pricing</dt><dd x-text="r.pricingText"></dd></div>
                       </dl>
                     </td>
                   </tr>
@@ -380,7 +422,7 @@
               </template>
             </table>
             <table x-show="requestsSkeleton">
-              <tbody><tr class="skeleton-row"><td colspan="8"></td></tr><tr class="skeleton-row"><td colspan="8"></td></tr><tr class="skeleton-row"><td colspan="8"></td></tr></tbody>
+              <tbody><tr class="skeleton-row"><td colspan="9"></td></tr><tr class="skeleton-row"><td colspan="9"></td></tr><tr class="skeleton-row"><td colspan="9"></td></tr></tbody>
             </table>
           </div>
           <div class="empty-state" x-show="requestsEmpty">

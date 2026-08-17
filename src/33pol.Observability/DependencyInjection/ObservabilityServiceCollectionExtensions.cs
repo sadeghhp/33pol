@@ -24,6 +24,7 @@ public static class ObservabilityServiceCollectionExtensions
         services.AddSingleton<IGatewayMetricsCollector, GatewayMetricsCollector>();
         services.AddSingleton<IRequestTracker, GatewayRequestTracker>();
         services.AddSingleton<IRecentRequestStore, InMemoryRecentRequestStore>();
+        services.AddSingleton<IAdminLiveFeed, GatewayAdminLiveFeed>();
         services.AddSingleton<IGatewayLogStore, InMemoryGatewayLogStore>();
 
         // The in-memory store is the floor: it serves the Errors tab on its own when no database is

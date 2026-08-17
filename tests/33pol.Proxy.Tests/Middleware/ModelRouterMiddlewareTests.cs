@@ -636,6 +636,72 @@ public sealed class ModelRouterMiddlewareTests
         }
     }
 
+    /// <summary>
+    /// The cost center is known at admission (it rides on the tenant context), so both the
+    /// in-flight row and the completed row carry it — the Overview shows who is paying for a
+    /// request while it is still running.
+    /// </summary>
+    [Fact]
+    public async Task InvokeAsync_StampsTheCostCenterOnTheInFlightAndCompletedFeedRows()
+    {
+        var registry = Substitute.For<IModelRegistry>();
+        registry.TryGetModel("m1", out Arg.Any<ModelConfig?>())
+            .Returns(call =>
+            {
+                call[1] = new ModelConfig { Id = "m1", Url = "http://backend:8000" };
+                return true;
+            });
+
+        var forwarder = Substitute.For<IInferenceHttpForwarder>();
+        forwarder.SendAsync(
+                Arg.Any<HttpContext>(),
+                Arg.Any<string>(),
+                Arg.Any<string?>(),
+                Arg.Any<StreamingHttpTransformer>(),
+                Arg.Any<bool>(),
+                Arg.Any<InferenceForwardTimeouts>(),
+                Arg.Any<CancellationToken>())
+            .Returns(ForwarderError.None);
+
+        RecentRequestEntry? started = null;
+        RecentRequestEntry? recorded = null;
+        var recentRequestStore = Substitute.For<IRecentRequestStore>();
+        recentRequestStore.When(x => x.BeginInFlight(Arg.Any<RecentRequestEntry>()))
+            .Do(call => started = call.Arg<RecentRequestEntry>());
+        recentRequestStore.When(x => x.Record(Arg.Any<RecentRequestEntry>()))
+            .Do(call => recorded = call.Arg<RecentRequestEntry>());
+
+        var middleware = CreateMiddleware(
+            registry: registry,
+            forwarder: forwarder,
+            recentRequestStore: recentRequestStore);
+        var context = CreateContext(
+            HttpMethods.Post,
+            "/v1/chat/completions",
+            """{"model":"m1","stream":false}""");
+        var tenantId = Guid.NewGuid();
+        SetInferenceUser(context, tenantId, Guid.NewGuid());
+        context.Items[TenantContextKeys.HttpContextItemKey] = new TenantContext
+        {
+            TenantId = tenantId.ToString(),
+            ApiKeyId = Guid.NewGuid().ToString(),
+            Role = ApiKeyRole.Inference,
+            CostCenter = "FIN-204",
+        };
+
+        await middleware.InvokeAsync(context);
+
+        started.Should().NotBeNull();
+        started!.CostCenter.Should().Be("FIN-204");
+        started.IsInFlight.Should().BeTrue();
+        recorded.Should().NotBeNull();
+        recorded!.CostCenter.Should().Be("FIN-204");
+        // The stubbed forwarder produced no body, so no usage — and the row must say so rather
+        // than promise a price that will never arrive.
+        recorded.PricingStatus.Should().BeNull();
+        recorded.PromptTokens.Should().BeNull();
+    }
+
     [Fact]
     public async Task InvokeAsync_UnknownModel_DoesNotRecordRecentRequest()
     {

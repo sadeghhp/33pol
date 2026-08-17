@@ -22,6 +22,13 @@ function adminApp() {
     models: { tab: 'routing', routingSubTab: 'models' }
   };
 
+  /**
+   * Request ids the feed has shown, with the time each was first seen. Kept out of the reactive
+   * component state on purpose: it is bookkeeping written from inside a getter, and a reactive Map
+   * mutated during render would schedule that render again.
+   */
+  const SEEN_REQUEST_IDS = new Map();
+
   // The canonical taxonomy is served by GET /admin/api/model-types and loaded during init, so the
   // UI never keeps its own copy to drift from. This bootstrap list is only what renders before that
   // request completes (and if it fails); it is replaced wholesale on load.
@@ -80,6 +87,25 @@ function adminApp() {
     requests: [],
     requestsErrorsOnly: false,
     expandedRequestId: null,
+    /**
+     * Push channel state for the Overview. 'stream' while the server-sent-event stream is
+     * delivering frames, 'reconnecting' between a drop and the next attempt (polling covers the
+     * gap), 'polling' when the stream cannot be established at all, '' when not on the Overview.
+     */
+    liveMode: '',
+    liveVersion: null,
+    liveFrameAt: null,
+    _liveAbort: null,
+    _liveRetryTimer: null,
+    _liveRetryDelay: 1000,
+    _liveFrames: 0,
+    /**
+     * Reactive clock, ticked twice a second while the Overview is on screen. Reading it from a
+     * getter is what makes an in-flight row's elapsed time and the "updated Ns ago" line advance
+     * between frames instead of jumping only when data arrives.
+     */
+    _nowTick: Date.now(),
+    _tickTimer: null,
     logs: [],
     logsLevel: 'all',
     logsSearch: '',
@@ -171,7 +197,13 @@ function adminApp() {
       this.loadModelTypes();
       this.restoreTab();
       window.addEventListener('hashchange', () => this.applyHashTab());
-      document.addEventListener('visibilitychange', () => this.syncPoll());
+      document.addEventListener('visibilitychange', () => { this.syncPoll(); this.syncLive(); });
+      window.addEventListener('beforeunload', () => this.stopLive());
+      this._tickTimer = setInterval(() => {
+        if (document.hidden) return;
+        // Only the Overview reads the clock; ticking it elsewhere would re-render for nothing.
+        if (this.tab === 'dashboard' && this.apiKey) this._nowTick = Date.now();
+      }, 500);
       if (this.apiKey) {
         this.store.startConnectionWatch(() => this.editModelUrl());
         this.saveKey();
@@ -245,6 +277,7 @@ function adminApp() {
         if (location.hash !== next) location.hash = next;
       }
       this.syncPoll();
+      this.syncLive();
       this.onTabActivated(name);
     },
 
@@ -329,6 +362,12 @@ function adminApp() {
       try { return new Date(iso).toLocaleString(); } catch { return iso; }
     },
 
+    /** Time of day only — the feed is a live tail; the date is in the row's title. */
+    formatClock(iso) {
+      if (!iso) return '—';
+      try { return new Date(iso).toLocaleTimeString(undefined, { hour12: false }); } catch { return iso; }
+    },
+
     formatCost(value, currency) {
       const n = Number(value);
       if (Number.isNaN(n)) return value ?? '—';
@@ -358,8 +397,8 @@ function adminApp() {
 
     summaryAgeText() {
       if (!this.summaryUpdatedAt) return '';
-      const sec = Math.floor((Date.now() - this.summaryUpdatedAt) / 1000);
-      return sec < 5 ? 'just now' : sec + 's ago';
+      const sec = Math.floor((this._nowTick - this.summaryUpdatedAt) / 1000);
+      return sec < 3 ? 'just now' : sec + 's ago';
     },
 
     usageQuery() {
@@ -487,11 +526,14 @@ function adminApp() {
         // its own schedule, and polling on regardless meant a stale tab sent a 401 every 2s forever,
         // filling the gateway's admin audit trail.
         if (this.connectionStatus === 'fail') return;
-        this.loadSummary(true);
+        // While the push stream is delivering frames it owns the summary and the feed; polling on
+        // top of it would only double the load for data that is already fresher than 2s.
+        const streaming = this.liveMode === 'stream' && this.tab === 'dashboard';
+        if (!streaming) this.loadSummary(true);
         // The live tail is only rendered on Overview, but it has to actually be live there — it used
         // to refresh solely on tab activation, so a request that arrived while you were watching the
         // page never appeared until you clicked Refresh.
-        if (this.tab === 'dashboard') this.loadRequests(true);
+        if (this.tab === 'dashboard' && !streaming) this.loadRequests(true);
         if (this._pollTick % 5 === 0) this.loadHealth();
         // Every 5th tick (10s) — the log buffer does not move fast enough to justify 2s polling,
         // and only while the tab is actually on screen.
@@ -657,6 +699,7 @@ function adminApp() {
         this.showChangeKey = false;
         this.syncPoll();
         await this.loadOverviewData();
+        this.syncLive();
         this.onTabActivated(this.tab);
       });
     },
@@ -664,6 +707,7 @@ function adminApp() {
     clearSession() {
       if (this.poll) clearInterval(this.poll);
       this.poll = null;
+      this.stopLive();
       this.store.stopConnectionWatch();
       this.store.persistApiKey('');
       this.gateApiKey = '';
@@ -673,6 +717,7 @@ function adminApp() {
       this.store.connectionDegraded = false;
       this.summary = null;
       this.vitalsHistory = [];
+      SEEN_REQUEST_IDS.clear();
       this.usage = null;
       this.usageEvents = null;
       this.backends = [];
@@ -1112,6 +1157,114 @@ function adminApp() {
       });
     },
 
+    // ---- live push stream (Overview) ----
+
+    /**
+     * Opens or closes the push stream to match where the operator is: it runs only while the
+     * Overview is on screen with a working key. Everything else — other tabs, a hidden window, a
+     * rejected key — tears it down and leaves the 2s poll in charge.
+     */
+    syncLive() {
+      const wanted = !!this.apiKey && this.tab === 'dashboard' && !document.hidden && this.connectionStatus !== 'fail';
+      if (!wanted) { this.stopLive(); return; }
+      if (this._liveAbort || this._liveRetryTimer) return;
+      this.openLiveStream();
+    },
+
+    stopLive() {
+      if (this._liveRetryTimer) { clearTimeout(this._liveRetryTimer); this._liveRetryTimer = null; }
+      if (this._liveAbort) { this._liveAbort.abort(); this._liveAbort = null; }
+      this.liveMode = '';
+      this._liveRetryDelay = 1000;
+    },
+
+    /**
+     * Server-sent events over fetch rather than EventSource: the admin key travels in a header,
+     * which EventSource cannot set. Frames are `event: update` + one JSON line; comment lines are
+     * heartbeats. A drop schedules a reconnect with backoff and hands the page back to polling in
+     * the meantime, so a proxy that cannot stream simply leaves the console on its 2s cadence.
+     */
+    async openLiveStream() {
+      const controller = new AbortController();
+      this._liveAbort = controller;
+      if (!this.liveMode) this.liveMode = 'reconnecting';
+      let gotFrame = false;
+      try {
+        const res = await fetch('/admin/api/live?limit=25', {
+          headers: { ...this.store.headers(), Accept: 'text/event-stream' },
+          cache: 'no-store',
+          signal: controller.signal
+        });
+        if (res.status === 401) {
+          // Same policy as the poll: a rejected key is not retried; the connection watchdog decides.
+          this.store.connectionStatus = 'fail';
+          this.store.connectionDegraded = true;
+          this.stopLive();
+          return;
+        }
+        if (!res.ok || !res.body) throw new Error('live stream unavailable: ' + res.status);
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          let sep;
+          while ((sep = buffer.indexOf('\n\n')) >= 0) {
+            const raw = buffer.slice(0, sep);
+            buffer = buffer.slice(sep + 2);
+            const frame = this.parseSseFrame(raw);
+            if (!frame) continue;
+            gotFrame = true;
+            this.applyLiveFrame(frame);
+          }
+        }
+        // Server closed cleanly (deploy, restart): reconnect quickly.
+        throw new Error('live stream ended');
+      } catch (err) {
+        if (controller.signal.aborted) return;
+        if (this._liveAbort === controller) this._liveAbort = null;
+        // A stream that delivered nothing before failing is treated as "cannot stream here", so
+        // the badge says Polling rather than promising a reconnect that will not help.
+        this.liveMode = gotFrame || this._liveFrames > 0 ? 'reconnecting' : 'polling';
+        const delay = this._liveRetryDelay;
+        this._liveRetryDelay = Math.min(delay * 2, 15000);
+        this._liveRetryTimer = setTimeout(() => {
+          this._liveRetryTimer = null;
+          this.syncLive();
+        }, delay);
+      }
+    },
+
+    parseSseFrame(raw) {
+      let event = 'message';
+      const data = [];
+      for (const line of raw.split('\n')) {
+        if (!line || line.startsWith(':')) continue;
+        if (line.startsWith('event:')) event = line.slice(6).trim();
+        else if (line.startsWith('data:')) data.push(line.slice(5).replace(/^ /, ''));
+      }
+      if (event !== 'update' || data.length === 0) return null;
+      try { return JSON.parse(data.join('\n')); } catch { return null; }
+    },
+
+    applyLiveFrame(frame) {
+      if (!frame || typeof frame !== 'object') return;
+      this._liveFrames++;
+      this._liveRetryDelay = 1000;
+      this.liveMode = 'stream';
+      this.liveVersion = frame.version ?? null;
+      this.liveFrameAt = Date.now();
+      if (frame.summary) this.summary = frame.summary;
+      if (Array.isArray(frame.requests)) this.requests = frame.requests;
+      this.summaryUpdatedAt = Date.now();
+      this._nowTick = Date.now();
+      this.recordVitals();
+      this.pollFailCount = 0;
+      this.overviewStale = false;
+    },
+
     filteredBackends() {
       const q = (this.backendsFilter || '').trim().toLowerCase();
       let list = [...(this.backends || [])];
@@ -1233,7 +1386,11 @@ function adminApp() {
       if (this.requestsErrorsOnly) {
         list = list.filter(r => Number(r.statusCode) >= 400 || r.errorCode);
       }
-      return this.sortedList(list, 'requests');
+      // Whatever the sort, work in progress stays on top: it is the part of the feed that is
+      // changing, and a request that started 40s ago should not sink under ones that finished since.
+      const sorted = this.sortedList(list, 'requests');
+      const running = sorted.filter(r => r.isInFlight);
+      return running.length ? running.concat(sorted.filter(r => !r.isInFlight)) : sorted;
     },
 
     urlLooksLocalhost() {
@@ -2448,40 +2605,264 @@ function adminApp() {
       };
     },
 
+    /**
+     * Cost of one request. Per-call amounts are routinely sub-cent, so this keeps enough digits to
+     * tell $0.0004 from $0.004 instead of rounding both to $0.00.
+     */
+    formatRequestCost(value, currency) {
+      const n = Number(value);
+      if (value == null || !Number.isFinite(n)) return '—';
+      const digits = n === 0 ? 2 : n >= 1 ? 2 : n >= 0.01 ? 4 : 6;
+      try {
+        return new Intl.NumberFormat(undefined, {
+          style: 'currency', currency: currency || 'USD',
+          minimumFractionDigits: 2, maximumFractionDigits: digits
+        }).format(n);
+      } catch { return n.toFixed(digits); }
+    },
+
+    /** How the row's cost cell should read, from the pricing state the gateway reports. */
+    requestCostText(r) {
+      const status = r?.pricingStatus;
+      if (status === 'priced') return this.formatRequestCost(r.totalCost, r.currency);
+      if (status === 'pending') return 'pricing…';
+      if (status === 'unpriced') return 'unpriced';
+      return '—';
+    },
+
+    requestTokensText(r) {
+      if (r?.promptTokens == null && r?.completionTokens == null && r?.totalTokens == null) return '—';
+      if (r.tokenSource === 'totalOnly') return this.formatCompact(r.totalTokens ?? 0) + ' total';
+      return this.formatCompact(r.promptTokens ?? 0) + ' → ' + this.formatCompact(r.completionTokens ?? 0);
+    },
+
+    tokenSourceLabel(source) {
+      if (source === 'estimated') return 'estimated (client disconnected before the usage frame)';
+      if (source === 'totalOnly') return 'combined total only (no input/output split reported)';
+      if (source === 'split') return 'reported by upstream';
+      return '—';
+    },
+
+    pricingStatusLabel(r) {
+      const status = r?.pricingStatus;
+      if (status === 'priced') return 'Priced from the model\'s rate card';
+      if (status === 'pending') return 'Queued for pricing — costs land after the next usage flush';
+      if (status === 'unpriced') return 'No rate card for this model (or no billing store configured)';
+      if (r?.isInFlight) return 'Not yet — usage arrives with the response';
+      return 'No usage recorded for this request';
+    },
+
+    /**
+     * Elapsed time for the feed. In-flight rows tick against the reactive clock so the timer runs
+     * smoothly between frames; the server's own elapsed figure is the floor, so a clock skew between
+     * browser and gateway can never make a running request look younger than it is.
+     */
+    requestElapsedMs(r) {
+      const reported = Number(r?.durationMs);
+      if (!r?.isInFlight) return Number.isFinite(reported) ? reported : null;
+      const started = r.timestampUtc ? new Date(r.timestampUtc).getTime() : NaN;
+      const local = Number.isFinite(started) ? this._nowTick - started : NaN;
+      return Math.max(Number.isFinite(reported) ? reported : 0, Number.isFinite(local) ? local : 0);
+    },
+
+    formatDurationMs(ms) {
+      if (ms == null || !Number.isFinite(ms)) return '—';
+      if (ms < 1000) return Math.round(ms) + ' ms';
+      if (ms < 60000) return (ms / 1000).toFixed(ms < 10000 ? 2 : 1) + ' s';
+      const m = Math.floor(ms / 60000);
+      const sec = Math.round((ms % 60000) / 1000);
+      return m + 'm ' + String(sec).padStart(2, '0') + 's';
+    },
+
+    /** Marks a request id as seen; true for ~2s after its first appearance so the row can flash in. */
+    isRecentArrival(id) {
+      if (!id) return false;
+      const seen = SEEN_REQUEST_IDS;
+      let first = seen.get(id);
+      if (first === undefined) {
+        first = Date.now();
+        seen.set(id, first);
+      }
+      return this._nowTick - first < 2000;
+    },
+
+    /**
+     * Bookkeeping for the arrival highlight, run once per render because it needs the whole
+     * visible set, not one row.
+     *
+     * Seeding: the first feed rendered is history, not arrivals — without this the entire table
+     * flashes on load. Purging: only ids that have already scrolled out of the feed are forgotten.
+     * Evicting a *visible* id would make its row read as new again on the very next render and
+     * flash a request that has been sitting there for minutes.
+     */
+    trackFeedArrivals(rows) {
+      const seen = SEEN_REQUEST_IDS;
+      if (seen.size === 0 && rows.length > 0) {
+        for (const r of rows) seen.set(r.requestId, 0);
+        return;
+      }
+      if (seen.size > 400) {
+        const visible = new Set(rows.map(r => r.requestId));
+        for (const id of [...seen.keys()]) {
+          if (!visible.has(id)) seen.delete(id);
+        }
+      }
+    },
+
     get requestRows() {
-      return this.sortedRequests().map(r => {
+      const rows = this.sortedRequests();
+      this.trackFeedArrivals(rows);
+      return rows.map(r => {
         const expanded = this.isRequestExpanded(r.requestId);
-        const duration = r.durationMs;
         // An in-flight row has no status yet and its duration is the elapsed time so far, restamped
-        // by the gateway on every read — so the timer visibly advances between polls.
+        // by the gateway on every read and ticked locally in between — so the timer visibly runs.
         const inFlight = !!r.isInFlight;
+        const elapsed = this.requestElapsedMs(r);
+        const priced = r.pricingStatus === 'priced';
+        const hasTokens = r.promptTokens != null || r.completionTokens != null || r.totalTokens != null;
+        const completion = Number(r.completionTokens ?? 0);
+        const tokensPerSec = !inFlight && completion > 0 && elapsed > 0 ? completion / (elapsed / 1000) : null;
+        const arrived = this.isRecentArrival(r.requestId);
+        const rowClass = this.requestRowClass(r) + (arrived ? ' row-enter' : '');
+        const costText = this.requestCostText(r);
         return {
           key: r.requestId,
           requestId: r.requestId ?? '—',
           shortId: this.shortRequestId(r.requestId),
           time: this.formatTime(r.timestampUtc),
+          clock: this.formatClock(r.timestampUtc),
           method: r.method ?? '—',
           path: r.path ?? '',
           modelId: r.modelId ?? '—',
+          costCenter: r.costCenter || '—',
+          costCenterClass: r.costCenter ? 'cc-tag' : 'cc-tag is-empty',
+          costCenterTitle: r.costCenter ? 'Cost center ' + r.costCenter : 'No cost center on this key or tenant',
           inFlight,
           settled: !inFlight,
           statusCode: inFlight ? '···' : (r.statusCode ?? '—'),
+          hasError: !!r.errorCode,
           errorText: inFlight ? 'running' : (r.errorCode ?? '—'),
           errorClass: inFlight ? 'live' : (r.errorCode ? 'error' : ''),
-          durationText: typeof duration?.toFixed === 'function' ? duration.toFixed(0) : (duration ?? '—'),
-          rowClass: this.requestRowClass(r),
+          tokensText: inFlight ? '…' : this.requestTokensText(r),
+          tokensTitle: hasTokens
+            ? this.formatNum(r.promptTokens ?? 0) + ' prompt · ' + this.formatNum(r.completionTokens ?? 0) +
+              ' completion · ' + this.tokenSourceLabel(r.tokenSource)
+            : (inFlight ? 'Usage arrives with the response' : 'No usage recorded'),
+          costText: inFlight ? '…' : costText,
+          costClass: 'cost-cell' + (priced ? ' is-priced' : r.pricingStatus === 'pending' ? ' is-pending' : ' is-muted'),
+          costTitle: this.pricingStatusLabel(r),
+          durationText: this.formatDurationMs(elapsed),
+          rowClass,
           expanded,
           ariaExpanded: expanded ? 'true' : 'false',
           ariaLabel: 'Request ' + this.shortRequestId(r.requestId) +
             (inFlight ? ', in progress' : '') +
-            (r.errorCode ? ', error ' + r.errorCode : ''),
+            (r.errorCode ? ', error ' + r.errorCode : '') +
+            (r.costCenter ? ', cost center ' + r.costCenter : ''),
           tenant: r.tenantId ?? '—',
           streaming: r.isStreaming ? 'Yes' : 'No',
           statusDetail: inFlight ? 'In progress' : String(r.statusCode ?? '—'),
+          // Detail panel
+          promptTokensText: hasTokens ? this.formatNum(r.promptTokens ?? 0) : '—',
+          completionTokensText: hasTokens ? this.formatNum(r.completionTokens ?? 0) : '—',
+          totalTokensText: hasTokens ? this.formatNum(r.totalTokens ?? 0) : '—',
+          tokenSourceText: hasTokens ? this.tokenSourceLabel(r.tokenSource) : '—',
+          inputCostText: priced ? this.formatRequestCost(r.inputCost, r.currency) : costText,
+          outputCostText: priced ? this.formatRequestCost(r.outputCost, r.currency) : costText,
+          totalCostText: priced ? this.formatRequestCost(r.totalCost, r.currency) : costText,
+          pricingText: this.pricingStatusLabel(r),
+          throughputText: tokensPerSec != null ? tokensPerSec.toFixed(tokensPerSec < 10 ? 1 : 0) + ' tok/s' : '—',
+          durationDetail: this.formatDurationMs(elapsed) + (inFlight ? ' so far' : ''),
           toggle: () => this.toggleRequestDetails(r.requestId),
           copyId: () => this.copyText(r.requestId, 'Request ID copied.')
         };
       });
+    },
+
+    /** One line of "what is in the feed right now", so the tail reads as a whole, not just rows. */
+    get feedStats() {
+      const rows = this.requests || [];
+      const running = rows.filter(r => r.isInFlight);
+      const settled = rows.filter(r => !r.isInFlight);
+      const errors = settled.filter(r => Number(r.statusCode) >= 400 || r.errorCode);
+      const priced = settled.filter(r => r.pricingStatus === 'priced' && r.totalCost != null);
+      const pending = settled.filter(r => r.pricingStatus === 'pending');
+      // Rate cards each carry their own currency, so a gateway pricing some models in USD and
+      // others in EUR must not be handed a single meaningless total.
+      const currencies = new Set(priced.map(r => r.currency).filter(Boolean));
+      const mixedCurrency = currencies.size > 1;
+      const spend = mixedCurrency ? null : priced.reduce((sum, r) => sum + Number(r.totalCost || 0), 0);
+      const currency = currencies.values().next().value;
+      const tokens = settled.reduce((sum, r) => sum + Number(r.totalTokens ?? ((r.promptTokens ?? 0) + (r.completionTokens ?? 0))), 0);
+      const costCenters = new Set(rows.map(r => r.costCenter).filter(Boolean));
+      return { rows: rows.length, running: running.length, settled: settled.length, errors: errors.length,
+        priced: priced.length, pending: pending.length, spend, currency, mixedCurrency, tokens,
+        costCenters: costCenters.size };
+    },
+    /**
+     * The strip is built as a list rather than a row of individually x-shown spans: the separators
+     * are CSS sibling rules, and a hidden-but-present span still counts as a sibling — which left a
+     * dangling "·" in front of the strip whenever nothing was in flight.
+     */
+    get feedStrip() {
+      const f = this.feedStats;
+      const items = [];
+      if (f.running > 0) {
+        items.push({ key: 'running', text: this.formatNum(f.running) + ' in flight', cls: 'feed-stat is-live', live: true });
+      }
+      items.push({ key: 'shown', text: this.formatNum(f.rows) + ' shown', cls: 'feed-stat', live: false });
+      items.push({
+        key: 'errors',
+        text: this.formatNum(f.errors) + (f.errors === 1 ? ' error' : ' errors'),
+        cls: f.errors > 0 ? 'feed-stat is-error' : 'feed-stat',
+        live: false
+      });
+      items.push({ key: 'spend', text: this.feedSpendText, cls: 'feed-stat is-cost', live: false });
+      items.push({ key: 'tokens', text: this.formatCompact(f.tokens) + ' tokens', cls: 'feed-stat', live: false });
+      items.push({
+        key: 'cost-centers',
+        text: f.costCenters === 0 ? 'no cost centers' : f.costCenters + (f.costCenters === 1 ? ' cost center' : ' cost centers'),
+        cls: 'feed-stat',
+        live: false
+      });
+      return items;
+    },
+
+    get feedSpendText() {
+      const f = this.feedStats;
+      if (f.priced === 0) return f.pending > 0 ? 'spend pricing…' : 'no priced spend';
+      const pendingNote = f.pending > 0 ? ' (+' + f.pending + ' pricing)' : '';
+      if (f.mixedCurrency) return 'mixed currencies' + pendingNote;
+      return this.formatRequestCost(f.spend, f.currency) + ' spend' + pendingNote;
+    },
+
+    // ---- live badge ----
+
+    get liveBadgeClass() {
+      if (this.liveMode === 'stream') return 'live-badge is-stream';
+      if (this.liveMode === 'reconnecting') return 'live-badge is-reconnecting';
+      if (this.liveMode === 'polling') return 'live-badge is-polling';
+      return 'live-badge';
+    },
+    get liveBadgeText() {
+      if (this.liveMode === 'stream') return 'Streaming';
+      if (this.liveMode === 'reconnecting') return 'Reconnecting';
+      if (this.liveMode === 'polling') return 'Polling';
+      return 'Connecting';
+    },
+    get liveBadgeTitle() {
+      if (this.liveMode === 'stream') return 'Pushed by the gateway the moment activity changes' + (this.liveVersion != null ? ' · frame #' + this.liveVersion : '');
+      if (this.liveMode === 'reconnecting') return 'Push stream dropped — polling every 2s until it is back';
+      if (this.liveMode === 'polling') return 'Push stream unavailable here — refreshing every 2s';
+      return 'Opening the push stream…';
+    },
+    get liveBadgeStreaming() { return this.liveMode === 'stream'; },
+    get liveBadgeDotClass() { return this.liveMode === 'stream' ? 'live' : ''; },
+    get updatedLineText() {
+      const age = this.summaryAgeText();
+      if (!age) return '';
+      if (this.liveMode === 'stream') return 'Updated ' + age + ' · streamed from the gateway as activity changes';
+      return 'Updated ' + age + ' · refreshing every 2s';
     },
 
     get requestsSkeleton() { return this.isLoading('overview') && this.requestRows.length === 0; },

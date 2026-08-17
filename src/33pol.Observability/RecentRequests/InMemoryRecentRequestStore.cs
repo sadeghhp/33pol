@@ -12,5 +12,7 @@ public sealed class InMemoryRecentRequestStore(GatewayRuntimeState runtimeState)
 
     public void CompleteInFlight(string requestId) => runtimeState.CompleteInFlight(requestId);
 
+    public void AttachUsage(string requestId, RecentRequestUsage usage) => runtimeState.AttachUsage(requestId, usage);
+
     public IReadOnlyList<RecentRequestEntry> GetRecent(int limit) => runtimeState.GetRecent(limit);
 }

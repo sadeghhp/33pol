@@ -16,6 +16,7 @@ public sealed class InferenceUsageCapture
     private readonly string? _quotaPartition;
     private readonly long _requestBodyBytes;
     private int _enqueued;
+    private UsageEvent? _captured;
 
     public InferenceUsageCapture(
         IUsageRecorder usageRecorder,
@@ -158,6 +159,13 @@ public sealed class InferenceUsageCapture
     public bool HasEnqueuedUsage => Volatile.Read(ref _enqueued) != 0;
 
     /// <summary>
+    /// The usage event built from the response, whether or not the recorder accepted it. The router
+    /// copies its token counts onto the live-feed row at completion so the console shows them
+    /// immediately, without waiting for the billing writer's flush.
+    /// </summary>
+    public UsageEvent? CapturedUsage => Volatile.Read(ref _captured);
+
+    /// <summary>
     /// Enqueues a usage event. When <paramref name="estimatedCompletionTokens"/> is supplied the
     /// event is marked <see cref="UsageTokenSource.Estimated"/> instead of carrying parsed counts.
     /// </summary>
@@ -184,6 +192,7 @@ public sealed class InferenceUsageCapture
                 _tenant);
 
         usageEvent = UsageEventFactory.WithQuotaPartition(usageEvent, _quotaPartition);
+        Volatile.Write(ref _captured, usageEvent);
 
         if (_usageRecorder.Enqueue(usageEvent))
         {

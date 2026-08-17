@@ -1,7 +1,10 @@
+using System.Text.Json;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.Logging;
 using Pol33.Api;
 using Pol33.Api.Contracts;
 using Pol33.Api.Services;
@@ -23,6 +26,7 @@ public static class AdminControlPlaneEndpoints
         group.MapGet("/models", ListModels);
         group.MapGet("/model-types", GetModelTypes);
         group.MapGet("/requests", ListRequests);
+        group.MapGet("/live", StreamLive);
         group.MapPost("/models", AddModel);
         group.MapPatch("/models/{id}", UpdateModel);
         group.MapDelete("/models/{id}", RemoveModel);
@@ -54,6 +58,93 @@ public static class AdminControlPlaneEndpoints
 
     private static IResult ListRequests(IControlPlaneCommands commands, int? limit) =>
         Results.Json(commands.ListRecentRequests(limit is > 0 and <= 500 ? limit.Value : 50));
+
+    private static readonly JsonSerializerOptions LiveJson = new(JsonSerializerDefaults.Web);
+
+    /// <summary>
+    /// The Overview's push channel: a server-sent-event stream that emits a
+    /// <c>{ version, summary, requests }</c> frame whenever the gateway's activity changes, so a
+    /// request appears the moment it is admitted and its cost the moment it is priced — not on the
+    /// next 2-second poll. Frames are coalesced to at most one every <see cref="LiveMinInterval"/>;
+    /// a comment heartbeat keeps intermediaries from closing an idle connection.
+    /// </summary>
+    /// <remarks>
+    /// Polling is not removed: the console falls back to it when the stream cannot be established
+    /// (a proxy that buffers, a browser that lost the connection), so this endpoint is an upgrade,
+    /// not a dependency.
+    /// </remarks>
+    private static async Task StreamLive(
+        HttpContext httpContext,
+        IControlPlaneCommands commands,
+        IAdminLiveFeed feed,
+        ILoggerFactory loggerFactory,
+        int? limit,
+        CancellationToken cancellationToken)
+    {
+        var take = limit is > 0 and <= 500 ? limit.Value : 50;
+        var response = httpContext.Response;
+        response.StatusCode = StatusCodes.Status200OK;
+        response.ContentType = "text/event-stream";
+        response.Headers.CacheControl = "no-cache, no-store";
+        response.Headers.Connection = "keep-alive";
+        // Tells nginx-style proxies not to buffer the stream.
+        response.Headers["X-Accel-Buffering"] = "no";
+        httpContext.Features.Get<IHttpResponseBodyFeature>()?.DisableBuffering();
+
+        long? sent = null;
+        var lastWrite = DateTimeOffset.UtcNow;
+
+        try
+        {
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                var version = feed.Version;
+                var now = DateTimeOffset.UtcNow;
+
+                if (sent != version)
+                {
+                    var frame = new
+                    {
+                        version,
+                        summary = commands.GetSummary(),
+                        requests = commands.ListRecentRequests(take),
+                    };
+
+                    await response.WriteAsync("event: update\ndata: ", cancellationToken).ConfigureAwait(false);
+                    await response.WriteAsync(JsonSerializer.Serialize(frame, LiveJson), cancellationToken).ConfigureAwait(false);
+                    await response.WriteAsync("\n\n", cancellationToken).ConfigureAwait(false);
+                    await response.Body.FlushAsync(cancellationToken).ConfigureAwait(false);
+                    sent = version;
+                    lastWrite = now;
+                }
+                else if (now - lastWrite >= LiveHeartbeat)
+                {
+                    await response.WriteAsync(": ping\n\n", cancellationToken).ConfigureAwait(false);
+                    await response.Body.FlushAsync(cancellationToken).ConfigureAwait(false);
+                    lastWrite = now;
+                }
+
+                await Task.Delay(LiveMinInterval, cancellationToken).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // The browser navigated away or the tab closed; nothing to report.
+        }
+        catch (Exception ex)
+        {
+            // The response is long since committed, so this cannot become an error page. Letting it
+            // escape would reach the terminal handler, be recorded as a gateway error, and — because
+            // the console reconnects — repeat for as long as the fault persists, burying real faults
+            // in the Errors tab. Close the stream instead and let the client fall back to polling.
+            loggerFactory
+                .CreateLogger(typeof(AdminControlPlaneEndpoints).FullName!)
+                .LogWarning(ex, "Admin live stream ended early; the console will fall back to polling.");
+        }
+    }
+
+    private static readonly TimeSpan LiveMinInterval = TimeSpan.FromMilliseconds(250);
+    private static readonly TimeSpan LiveHeartbeat = TimeSpan.FromSeconds(15);
 
     private static async Task<IResult> AddModel(
         AdminModelProvisioningService provisioning,

@@ -17,6 +17,22 @@ public sealed class GatewayRuntimeState
     private readonly ConcurrentDictionary<string, RecentRequestEntry> _inFlight = new(StringComparer.Ordinal);
     private int _inFlightCount;
 
+    /// <summary>
+    /// Priced usage keyed by request id, merged onto feed rows at read time. Rows are immutable
+    /// records sitting in a queue that cannot be updated in place, and pricing arrives one flush
+    /// interval after the row was written — so the join happens on read rather than on write.
+    /// Bounded by <see cref="MaxRecentRequests"/> plus <see cref="MaxInFlightTracked"/>: an id the
+    /// feed has already evicted is dropped in insertion order.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, RecentRequestUsage> _usageByRequest = new(StringComparer.Ordinal);
+    private readonly ConcurrentQueue<string> _usageOrder = new();
+
+    /// <summary>
+    /// Bumped on every change an operator could see on the Overview: admission, completion,
+    /// rejection, pricing, resets. The live endpoint pushes a frame when it moves.
+    /// </summary>
+    private long _version;
+
     private readonly object _statsSync = new();
     private long _totalRequests;
     private long _totalErrors;
@@ -62,7 +78,13 @@ public sealed class GatewayRuntimeState
 
         Interlocked.Decrement(ref _activeRequests);
         DecrementActiveForModel(modelId);
+        Touch();
     }
+
+    /// <summary>Monotonic change counter; see <see cref="_version"/>.</summary>
+    public long Version => Interlocked.Read(ref _version);
+
+    private void Touch() => Interlocked.Increment(ref _version);
 
     /// <summary>
     /// Marks a request as in flight. Every admitted request counts toward
@@ -82,6 +104,7 @@ public sealed class GatewayRuntimeState
 
         Interlocked.Increment(ref _activeRequests);
         _activeRequestsPerModel.AddOrUpdate(modelId, 1, static (_, count) => count + 1);
+        Touch();
     }
 
     /// <summary>
@@ -98,6 +121,7 @@ public sealed class GatewayRuntimeState
 
         _requestsPerModel.AddOrUpdate(modelId, 1, static (_, count) => count + 1);
         _errorsPerModel.AddOrUpdate(modelId, 1, static (_, count) => count + 1);
+        Touch();
     }
 
     private void DecrementActiveForModel(string modelId)
@@ -164,6 +188,7 @@ public sealed class GatewayRuntimeState
                 _recentRequests.Enqueue(entry);
             }
 
+            Touch();
             return (clearedTotal, removed);
         }
     }
@@ -193,12 +218,27 @@ public sealed class GatewayRuntimeState
             while (_recentRequests.TryDequeue(out _))
             {
             }
+
+            _usageByRequest.Clear();
+            while (_usageOrder.TryDequeue(out _))
+            {
+            }
+
+            Touch();
         }
     }
 
-    public void RecordRateLimitRejection() => Interlocked.Increment(ref _rateLimitRejections);
+    public void RecordRateLimitRejection()
+    {
+        Interlocked.Increment(ref _rateLimitRejections);
+        Touch();
+    }
 
-    public void RecordQuotaRejection() => Interlocked.Increment(ref _quotaRejections);
+    public void RecordQuotaRejection()
+    {
+        Interlocked.Increment(ref _quotaRejections);
+        Touch();
+    }
 
     public void EnqueueRecent(RecentRequestEntry entry)
     {
@@ -211,10 +251,47 @@ public sealed class GatewayRuntimeState
 
         _recentRequests.Enqueue(entry);
         while (_recentRequests.Count > MaxRecentRequests &&
-               _recentRequests.TryDequeue(out _))
+               _recentRequests.TryDequeue(out var evicted))
         {
+            // The row is gone from the feed, so its pricing has nowhere to be merged onto.
+            _usageByRequest.TryRemove(evicted.RequestId, out _);
         }
+
+        Touch();
     }
+
+    /// <summary>
+    /// Records the priced usage for a request. Merged onto the matching feed row on every read, so
+    /// it works whether the row is in flight, completed, or — when the writer wins the race with
+    /// the completion — not yet recorded.
+    /// </summary>
+    public void AttachUsage(string requestId, RecentRequestUsage usage)
+    {
+        ArgumentNullException.ThrowIfNull(usage);
+        if (string.IsNullOrEmpty(requestId))
+        {
+            return;
+        }
+
+        if (_usageByRequest.TryAdd(requestId, usage))
+        {
+            _usageOrder.Enqueue(requestId);
+            var cap = MaxRecentRequests + MaxInFlightTracked;
+            while (_usageOrder.Count > cap && _usageOrder.TryDequeue(out var oldest))
+            {
+                _usageByRequest.TryRemove(oldest, out _);
+            }
+        }
+        else
+        {
+            _usageByRequest[requestId] = usage;
+        }
+
+        Touch();
+    }
+
+    private RecentRequestEntry MergeUsage(RecentRequestEntry entry) =>
+        _usageByRequest.TryGetValue(entry.RequestId, out var usage) ? entry.WithUsage(usage) : entry;
 
     public void BeginInFlight(RecentRequestEntry entry)
     {
@@ -237,6 +314,8 @@ public sealed class GatewayRuntimeState
         {
             _inFlight[entry.RequestId] = entry with { IsInFlight = true };
         }
+
+        Touch();
     }
 
     public void CompleteInFlight(string requestId)
@@ -244,6 +323,7 @@ public sealed class GatewayRuntimeState
         if (!string.IsNullOrEmpty(requestId) && _inFlight.TryRemove(requestId, out _))
         {
             Interlocked.Decrement(ref _inFlightCount);
+            Touch();
         }
     }
 
@@ -260,7 +340,7 @@ public sealed class GatewayRuntimeState
         var running = _inFlight.Values
             .OrderByDescending(e => e.TimestampUtc)
             .Take(take)
-            .Select(e => e with { DurationMs = Math.Max(0, (now - e.TimestampUtc).TotalMilliseconds) })
+            .Select(e => MergeUsage(e with { DurationMs = Math.Max(0, (now - e.TimestampUtc).TotalMilliseconds) }))
             .ToList();
 
         if (running.Count >= take)
@@ -268,7 +348,7 @@ public sealed class GatewayRuntimeState
             return running;
         }
 
-        running.AddRange(_recentRequests.Reverse().Take(take - running.Count));
+        running.AddRange(_recentRequests.Reverse().Take(take - running.Count).Select(MergeUsage));
         return running;
     }
 
@@ -310,7 +390,9 @@ public sealed class GatewayRuntimeState
                 QuotaRejections = Interlocked.Read(ref _quotaRejections),
                 RequestsPerModel = new Dictionary<string, long>(_requestsPerModel, StringComparer.OrdinalIgnoreCase),
                 ErrorsPerModel = new Dictionary<string, long>(_errorsPerModel, StringComparer.OrdinalIgnoreCase),
-                Recent = _recentRequests.ToList(),
+                // Pricing is merged in so a restart does not turn every restored row back into
+                // "pending" with nothing left to settle it.
+                Recent = _recentRequests.Select(MergeUsage).ToList(),
             };
         }
     }
@@ -354,6 +436,8 @@ public sealed class GatewayRuntimeState
             {
                 EnqueueRecent(entry);
             }
+
+            Touch();
         }
     }
 }

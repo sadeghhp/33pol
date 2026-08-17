@@ -33,6 +33,22 @@ internal sealed class RecentRequestSnapshotEntityConfiguration : IEntityTypeConf
         builder.Property(r => r.ErrorCode)
             .HasMaxLength(128);
 
+        builder.Property(r => r.CostCenter)
+            .HasMaxLength(128);
+
+        builder.Property(r => r.TokenSource)
+            .HasMaxLength(16);
+
+        builder.Property(r => r.Currency)
+            .HasMaxLength(8);
+
+        builder.Property(r => r.PricingStatus)
+            .HasMaxLength(16);
+
+        builder.Property(r => r.InputCost).HasPrecision(18, 6);
+        builder.Property(r => r.OutputCost).HasPrecision(18, 6);
+        builder.Property(r => r.TotalCost).HasPrecision(18, 6);
+
         builder.HasIndex(r => r.TimestampUtc);
     }
 }

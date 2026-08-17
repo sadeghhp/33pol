@@ -2,6 +2,7 @@ using Microsoft.Extensions.Logging;
 using Pol33.Core.Abstractions;
 using Pol33.Core.Billing;
 using Pol33.Core.Models;
+using Pol33.Core.Usage;
 
 namespace Pol33.Billing.Usage;
 
@@ -16,7 +17,10 @@ public sealed class BillingUsagePersistenceHandler(
     BillingUnpricedModelTracker unpricedModelTracker,
     IApiKeyLastUsedTracker lastUsedTracker,
     BudgetReservationLedger reservationLedger,
-    ILogger<BillingUsagePersistenceHandler> logger) : IUsagePersistenceHandler
+    ILogger<BillingUsagePersistenceHandler> logger,
+    // Optional so the handler still composes without the observability layer (unit tests, tools).
+    // When present, every priced event is echoed to the console's live feed.
+    IRecentRequestStore? recentRequests = null) : IUsagePersistenceHandler
 {
     public async ValueTask PersistAsync(UsageEvent usageEvent, CancellationToken cancellationToken = default)
     {
@@ -57,6 +61,11 @@ public sealed class BillingUsagePersistenceHandler(
         }
 
         var appended = await AppendAsync(records, cancellationToken).ConfigureAwait(false);
+
+        // Priced now, and the write is behind us: tell the live feed. Duplicates included — the same
+        // request id was already stored at this cost, and the operator's row should not sit on
+        // "pending" because a retry happened to flush first.
+        PublishToLiveFeed(usageEvents, records, pricedByModel);
         if (appended.Count != records.Count)
         {
             // Duplicates: the cost was already persisted for those requests, so free their
@@ -144,6 +153,25 @@ public sealed class BillingUsagePersistenceHandler(
         // Firing it inline sent a "daily" summary containing whatever had accrued by a tenant's
         // first request of the day — and, because both paths share the same dedup tracker, that
         // send consumed the tracker slot so the real end-of-day summary was never delivered at all.
+    }
+
+    private void PublishToLiveFeed(
+        IReadOnlyList<UsageEvent> usageEvents,
+        IReadOnlyList<BillingEventRecord> records,
+        Dictionary<string, RateCardRecord?> pricedByModel)
+    {
+        if (recentRequests is null)
+        {
+            return;
+        }
+
+        for (var i = 0; i < records.Count; i++)
+        {
+            var record = records[i];
+            var source = usageEvents[i];
+            var currency = pricedByModel.TryGetValue(source.ModelId, out var rateCard) ? rateCard?.Currency : null;
+            recentRequests.AttachUsage(record.RequestId, RecentRequestUsageMapper.FromBillingEvent(record, source, currency));
+        }
     }
 
     private async Task<IReadOnlyList<BillingEventRecord>> AppendAsync(

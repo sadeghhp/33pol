@@ -69,6 +69,48 @@ public sealed class GatewayStatsSnapshotStoreTests
         }
     }
 
+    /// <summary>
+    /// A restart must not turn every restored feed row back into "no cost centre, not priced".
+    /// </summary>
+    [Fact]
+    public async Task SaveThenLoad_RoundTripsCostCentreTokensAndPricing()
+    {
+        var dbName = nameof(SaveThenLoad_RoundTripsCostCentreTokensAndPricing);
+        var priced = Entry("r1", DateTimeOffset.UtcNow) with
+        {
+            CostCenter = "FIN-204",
+            PromptTokens = 120,
+            CompletionTokens = 30,
+            TotalTokens = 150,
+            TokenSource = "split",
+            InputCost = 0.00036m,
+            OutputCost = 0.00045m,
+            TotalCost = 0.00081m,
+            Currency = "USD",
+            PricingStatus = "priced",
+        };
+
+        await using (var db = PersistenceTestDbContextFactory.CreateInMemory(dbName))
+        {
+            await new GatewayStatsSnapshotStore(db).SaveAsync(new GatewayRuntimeSnapshot { Recent = [priced] });
+        }
+
+        await using (var db = PersistenceTestDbContextFactory.CreateInMemory(dbName))
+        {
+            var row = (await new GatewayStatsSnapshotStore(db).LoadAsync())!.Recent.Single();
+            row.CostCenter.Should().Be("FIN-204");
+            row.PromptTokens.Should().Be(120);
+            row.CompletionTokens.Should().Be(30);
+            row.TotalTokens.Should().Be(150);
+            row.TokenSource.Should().Be("split");
+            row.InputCost.Should().Be(0.00036m);
+            row.OutputCost.Should().Be(0.00045m);
+            row.TotalCost.Should().Be(0.00081m);
+            row.Currency.Should().Be("USD");
+            row.PricingStatus.Should().Be("priced");
+        }
+    }
+
     [Fact]
     public async Task SaveAsync_ReplacesPreviousSnapshotAndRecentFeed()
     {

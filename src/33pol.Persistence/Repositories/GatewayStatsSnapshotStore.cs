@@ -113,6 +113,16 @@ public sealed class GatewayStatsSnapshotStore(GatewayDbContext dbContext) : IGat
         IsStreaming = entry.IsStreaming,
         ErrorCode = entry.ErrorCode,
         TimestampUtc = entry.TimestampUtc,
+        CostCenter = entry.CostCenter,
+        PromptTokens = entry.PromptTokens,
+        CompletionTokens = entry.CompletionTokens,
+        TotalTokens = entry.TotalTokens,
+        TokenSource = entry.TokenSource,
+        InputCost = entry.InputCost,
+        OutputCost = entry.OutputCost,
+        TotalCost = entry.TotalCost,
+        Currency = entry.Currency,
+        PricingStatus = entry.PricingStatus,
     };
 
     private static RecentRequestEntry ToEntry(RecentRequestSnapshotEntity entity) => new()
@@ -127,5 +137,15 @@ public sealed class GatewayStatsSnapshotStore(GatewayDbContext dbContext) : IGat
         IsStreaming = entity.IsStreaming,
         ErrorCode = entity.ErrorCode,
         TimestampUtc = entity.TimestampUtc,
+        CostCenter = entity.CostCenter,
+        PromptTokens = entity.PromptTokens,
+        CompletionTokens = entity.CompletionTokens,
+        TotalTokens = entity.TotalTokens,
+        TokenSource = entity.TokenSource,
+        InputCost = entity.InputCost,
+        OutputCost = entity.OutputCost,
+        TotalCost = entity.TotalCost,
+        Currency = entity.Currency,
+        PricingStatus = entity.PricingStatus,
     };
 }

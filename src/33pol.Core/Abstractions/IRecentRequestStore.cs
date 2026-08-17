@@ -17,5 +17,14 @@ public interface IRecentRequestStore
     /// <summary>Removes an in-flight entry. Idempotent, and a no-op for an unknown request id.</summary>
     void CompleteInFlight(string requestId);
 
+    /// <summary>
+    /// Attaches the priced usage of a request to its feed row. Called by the billing pipeline once
+    /// the usage event has been written, which is one flush interval after the request completed —
+    /// so this must find the row whether it is still in flight, already completed, or (in the rare
+    /// race where pricing wins) not yet recorded at all. Unknown ids are retained briefly so a
+    /// completion that lands afterwards still picks the usage up.
+    /// </summary>
+    void AttachUsage(string requestId, RecentRequestUsage usage);
+
     IReadOnlyList<RecentRequestEntry> GetRecent(int limit);
 }

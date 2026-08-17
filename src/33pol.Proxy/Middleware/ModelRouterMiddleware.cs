@@ -12,6 +12,7 @@ using Pol33.Core.Models;
 using Pol33.Core.Identity;
 using Pol33.Core.RateLimiting;
 using Pol33.Core.Security;
+using Pol33.Core.Usage;
 using System.Security.Claims;
 using Pol33.Proxy.Errors;
 using Pol33.Proxy.Forwarding;
@@ -287,14 +288,15 @@ public sealed class ModelRouterMiddleware
 
             // Published before the forward, not after it: this is what puts a running inference on
             // the dashboard while it runs instead of only once it has already finished.
-            using var inFlightLease = PublishInFlight(context, requestId, modelConfig.Id, started, requestInfo.Stream);
-
             TenantContext? usageTenant = null;
             if (context.Items.TryGetValue(TenantContextKeys.HttpContextItemKey, out var usageTenantValue) &&
                 usageTenantValue is TenantContext tenantContextForUsage)
             {
                 usageTenant = tenantContextForUsage;
             }
+
+            using var inFlightLease = PublishInFlight(
+                context, requestId, modelConfig.Id, started, requestInfo.Stream, usageTenant?.CostCenter);
 
             // Length of the body actually forwarded. Used only to approximate prompt tokens when a
             // stream ends before its authoritative usage frame — the upstream read and charged for
@@ -335,7 +337,8 @@ public sealed class ModelRouterMiddleware
                     requestInfo.Stream,
                     success: false,
                     outcome: "upstream_auth_missing",
-                    upstreamUrl: modelConfig.Url);
+                    upstreamUrl: modelConfig.Url,
+                    usage: usageCapture);
                 return;
             }
 
@@ -370,7 +373,8 @@ public sealed class ModelRouterMiddleware
                     requestInfo.Stream,
                     success: false,
                     outcome: "budget_exceeded",
-                    upstreamUrl: modelConfig.Url);
+                    upstreamUrl: modelConfig.Url,
+                    usage: usageCapture);
                 return;
             }
 
@@ -435,7 +439,8 @@ public sealed class ModelRouterMiddleware
                         requestInfo.Stream,
                         success: false,
                         outcome: "upstream_5xx",
-                        upstreamUrl: modelConfig.Url);
+                        upstreamUrl: modelConfig.Url,
+                    usage: usageCapture);
                     return;
                 }
 
@@ -464,7 +469,8 @@ public sealed class ModelRouterMiddleware
                     requestInfo.Stream,
                     success: !clientError,
                     outcome: clientError ? "upstream_4xx" : "success",
-                    upstreamUrl: modelConfig.Url);
+                    upstreamUrl: modelConfig.Url,
+                    usage: usageCapture);
                 return;
             }
 
@@ -490,7 +496,8 @@ public sealed class ModelRouterMiddleware
                     requestInfo.Stream,
                     success: false,
                     outcome: "upstream_timeout",
-                    upstreamUrl: modelConfig.Url);
+                    upstreamUrl: modelConfig.Url,
+                    usage: usageCapture);
                 return;
             }
 
@@ -525,7 +532,8 @@ public sealed class ModelRouterMiddleware
                     requestInfo.Stream,
                     success: false,
                     outcome: "stream_idle_timeout",
-                    upstreamUrl: modelConfig.Url);
+                    upstreamUrl: modelConfig.Url,
+                    usage: usageCapture);
                 return;
             }
 
@@ -543,7 +551,8 @@ public sealed class ModelRouterMiddleware
                     requestInfo.Stream,
                     success: false,
                     outcome: "client_canceled",
-                    upstreamUrl: modelConfig.Url);
+                    upstreamUrl: modelConfig.Url,
+                    usage: usageCapture);
                 return;
             }
 
@@ -565,7 +574,8 @@ public sealed class ModelRouterMiddleware
                 requestInfo.Stream,
                 success: false,
                 outcome: "upstream_error",
-                upstreamUrl: modelConfig.Url);
+                upstreamUrl: modelConfig.Url,
+                    usage: usageCapture);
             }
             finally
             {
@@ -626,7 +636,8 @@ public sealed class ModelRouterMiddleware
         string requestId,
         string modelId,
         DateTimeOffset started,
-        bool isStreaming)
+        bool isStreaming,
+        string? costCenter)
     {
         _recentRequestStore.BeginInFlight(new RecentRequestEntry
         {
@@ -635,6 +646,7 @@ public sealed class ModelRouterMiddleware
             Path = context.Request.Path.Value ?? string.Empty,
             ModelId = modelId,
             TenantId = ResolveTenantId(context),
+            CostCenter = costCenter,
             StatusCode = 0,
             DurationMs = 0,
             IsStreaming = isStreaming,
@@ -664,10 +676,12 @@ public sealed class ModelRouterMiddleware
         }
     }
 
-    private static string? ResolveTenantId(HttpContext context) =>
+    private static string? ResolveTenantId(HttpContext context) => ResolveTenant(context)?.TenantId;
+
+    private static TenantContext? ResolveTenant(HttpContext context) =>
         context.Items.TryGetValue(TenantContextKeys.HttpContextItemKey, out var tenantValue) &&
         tenantValue is TenantContext tenant
-            ? tenant.TenantId
+            ? tenant
             : null;
 
     /// <param name="outcome">
@@ -676,6 +690,12 @@ public sealed class ModelRouterMiddleware
     /// than by status code alone.
     /// </param>
     /// <param name="upstreamUrl">The model's configured base URL, sanitized before it is stored.</param>
+    /// <param name="usage">
+    /// The response's usage capture, when the request got far enough to have one. Its token counts
+    /// go on the feed row immediately; the costs follow from the billing writer via
+    /// <see cref="IRecentRequestStore.AttachUsage"/>, so the row is marked <c>pending</c> only when
+    /// an event was actually accepted for pricing.
+    /// </param>
     private void RecordRecentRequest(
         HttpContext context,
         string modelId,
@@ -683,10 +703,12 @@ public sealed class ModelRouterMiddleware
         bool isStreaming,
         bool success,
         string? outcome = null,
-        string? upstreamUrl = null)
+        string? upstreamUrl = null,
+        InferenceUsageCapture? usage = null)
     {
         var requestId = ResolveRequestId(context);
-        var tenantId = ResolveTenantId(context);
+        var tenant = ResolveTenant(context);
+        var tenantId = tenant?.TenantId;
 
         var durationMs = (DateTimeOffset.UtcNow - started).TotalMilliseconds;
 
@@ -701,19 +723,31 @@ public sealed class ModelRouterMiddleware
 
         var errorCode = ResolveErrorCode(context);
 
-        _recentRequestStore.Record(new RecentRequestEntry
+        var entry = new RecentRequestEntry
         {
             RequestId = requestId,
             Method = context.Request.Method,
             Path = context.Request.Path.Value ?? string.Empty,
             ModelId = modelId,
             TenantId = tenantId,
+            CostCenter = tenant?.CostCenter,
             StatusCode = statusCode,
             DurationMs = durationMs,
             IsStreaming = isStreaming,
             ErrorCode = errorCode,
             TimestampUtc = DateTimeOffset.UtcNow,
-        });
+        };
+
+        if (usage?.CapturedUsage is UsageEvent captured)
+        {
+            entry = entry.WithUsage(RecentRequestUsageMapper.FromUsageEvent(
+                captured,
+                pricingStatus: usage.HasEnqueuedUsage
+                    ? RecentRequestUsage.StatusPending
+                    : RecentRequestUsage.StatusUnpriced));
+        }
+
+        _recentRequestStore.Record(entry);
 
         if (!success)
         {

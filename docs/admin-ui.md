@@ -58,7 +58,7 @@ directive that the evaluator could not resolve fails the build instead of the op
 
 | Section | Hash | Content |
 |---------|------|---------|
-| Overview | `#/dashboard` | Metrics (2s poll while visible), health chips, in-flight requests, recent requests |
+| Overview | `#/dashboard` | Metrics, health chips, in-flight requests, recent requests with cost centre / tokens / cost — pushed over SSE, 2s poll as fallback |
 | Usage | `#/usage` | Date presets, cost center / API key filters, rollups, enriched billing events, forecast, export |
 | Routing | `#/routing` | **Models** (registry, quick-add drawer) and **Backends** (health table) |
 | API keys | `#/keys` | List (assignee, MTD usage, last used), create/edit metadata, per-key model access, revoke, view usage |
@@ -89,9 +89,14 @@ Two consequences worth knowing before they read as bugs:
   silently rewrite the throughput history alongside them; `scope=all` is the explicit opt-in that
   resets the whole counter snapshot.
 
-**Polling:** the Overview vitals poll every 2s. Logs and Errors quiet-poll every 10s, only while
-their tab is on screen and auto-refresh is on. All polling stops when the tab is hidden or the key
-has been rejected.
+**Polling and push:** on the Overview the console opens `GET /admin/api/live`, a server-sent-event
+stream that delivers `{ version, summary, requests }` the moment activity changes; while it is
+delivering, the 2s summary/requests poll is skipped. If the stream cannot be established (a
+buffering proxy, a dropped connection) the poll takes over and the badge beside **Refresh** reads
+**Polling** or **Reconnecting** instead of **Streaming**; reconnects back off from 1s to 15s. The
+vitals bar still polls every 2s on other tabs. Logs and Errors quiet-poll every 10s, only while
+their tab is on screen and auto-refresh is on. All polling and streaming stops when the tab is
+hidden or the key has been rejected.
 
 ## Errors and feedback
 
@@ -113,9 +118,23 @@ has been rejected.
 | Request correlation | **Request ID** column (copy button; click row for full ID, tenant, streaming flag) |
 | Filter failures | **Errors only** checkbox on Recent requests |
 
-Overview **polls every 2s** while the tab is visible — summary metrics, errors-by-model, and recent
-requests. Polling pauses while the key is rejected (`connectionStatus === 'fail'`), so a stale tab
+Overview is **pushed** while the tab is visible (see *Polling and push* above), with a 2s poll as
+the fallback. Both pause while the key is rejected (`connectionStatus === 'fail'`), so a stale tab
 does not retry a 401 forever.
+
+### Cost, tokens and cost centre on the feed
+
+| Data | Where shown |
+|------|-------------|
+| Cost centre the request bills to (the key's own, else the tenant default) | **Cost center** column, and the detail panel; present on in-flight rows too |
+| Prompt → completion tokens (or the combined total when the upstream reported no split) | **Tokens** column; detail panel lists prompt, completion, total, source and output tokens/s |
+| Input cost, output cost, total | **Cost** column (total); detail panel splits **Input cost** / **Output cost** / **Total cost** |
+| Pricing state | Cost cell reads `pricing…` while the usage event is queued, an amount once priced, `unpriced` when the model has no rate card (or the gateway has no billing store), `—` when the request produced no usage |
+| What the visible tail adds up to | Strip above the table: in flight, shown, errors, priced spend (and how many rows are still pricing), tokens, distinct cost centres |
+
+Token counts are stamped on the row when the response finishes; the cost arrives one usage-writer
+flush later (`Billing:UsageWriterFlushIntervalMs`, 1s by default) and the row updates in place —
+over the push stream that is the next frame, over polling the next 2s tick.
 
 ### In-flight requests
 
@@ -157,7 +176,7 @@ GET requests retry once on network failure. Usage export uses `downloadBlob` wit
 
 | Section | Endpoints |
 |---------|-----------|
-| Overview | `GET /admin/api/summary`, `GET /admin/api/requests?limit=25`, `GET /health/live`, `GET /health/ready` |
+| Overview | `GET /admin/api/live?limit=25` (SSE; falls back to `GET /admin/api/summary` + `GET /admin/api/requests?limit=25`), `GET /health/live`, `GET /health/ready` |
 | Usage | `GET /admin/api/usage?costCenter=`, `/usage/events?apiKeyId=&costCenter=`, `/usage/forecast`, `GET /usage/export` |
 | Routing — Models | `GET/POST/PATCH/DELETE /admin/api/models` (write body: `{ model, apiKey?, clearApiKey? }`; GET returns `{ model, hasUpstreamCredential }`), `POST /admin/api/models/{id}/test` (type-specific health check) |
 | Routing — Backends | `GET /admin/api/backends` |
