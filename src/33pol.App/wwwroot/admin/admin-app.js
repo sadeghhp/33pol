@@ -2586,6 +2586,7 @@ function adminApp() {
         keysPrefix: this.sortIndicator('keys', 'keyPrefix'),
         keysLabel: this.sortIndicator('keys', 'label'),
         keysAssignee: this.sortIndicator('keys', 'assignee'),
+        keysCostCenter: this.sortIndicator('keys', 'costCenter'),
         keysLastUsed: this.sortIndicator('keys', 'lastUsedAt'),
         keysCreated: this.sortIndicator('keys', 'createdAt')
       };
@@ -2600,6 +2601,7 @@ function adminApp() {
         keysPrefix: () => this.sortToggle('keys', 'keyPrefix'),
         keysLabel: () => this.sortToggle('keys', 'label'),
         keysAssignee: () => this.sortToggle('keys', 'assignee'),
+        keysCostCenter: () => this.sortToggle('keys', 'costCenter'),
         keysLastUsed: () => this.sortToggle('keys', 'lastUsedAt'),
         keysCreated: () => this.sortToggle('keys', 'createdAt')
       };
@@ -3028,6 +3030,9 @@ function adminApp() {
           keyPrefix: k.keyPrefix,
           label: k.label || '—',
           assignee: k.assignee || '—',
+          costCenter: k.costCenter || '—',
+          costCenterClass: k.costCenter ? 'cc-tag' : 'cc-tag is-empty',
+          costCenterTitle: k.costCenter ? 'Cost center ' + k.costCenter : 'No cost center on this key',
           role: k.role,
           roleClass: k.role === 'Admin' ? 'admin' : '',
           lastUsed: k.lastUsedAt ? this.formatTime(k.lastUsedAt) : '—',

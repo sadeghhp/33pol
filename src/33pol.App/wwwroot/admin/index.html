@@ -718,7 +718,7 @@
             </label>
             <label class="filter-field">
               <span class="icon" x-html="icons.search"></span>
-              <input x-model="mdl.keysTextFilter" placeholder="prefix, label, assignee…" aria-label="Filter keys" />
+              <input x-model="mdl.keysTextFilter" placeholder="prefix, label, assignee, cost center…" aria-label="Filter keys" />
             </label>
             <span class="spacer"></span>
             <button type="button" class="action danger" @click="confirmRevokeSelected" :disabled="revokeSelectedDisabled">
@@ -731,9 +731,9 @@
           <div class="table-wrap">
             <table class="t-keys" x-show="hasKeyRows">
               <colgroup>
-                <col style="width:3.5%" /><col style="width:10%" /><col style="width:12%" /><col style="width:12%" />
-                <col style="width:7%" /><col style="width:10%" /><col style="width:8%" /><col style="width:7%" />
-                <col style="width:10%" /><col style="width:8%" /><col style="width:12.5%" />
+                <col style="width:3.5%" /><col style="width:9%" /><col style="width:11%" /><col style="width:10%" />
+                <col style="width:9%" /><col style="width:6%" /><col style="width:9%" /><col style="width:7%" />
+                <col style="width:6%" /><col style="width:9%" /><col style="width:7%" /><col style="width:11.5%" />
               </colgroup>
               <thead>
                 <tr>
@@ -747,6 +747,7 @@
                   <th class="sortable" @click="sortBy.keysPrefix">Prefix<span x-html="sortIcon.keysPrefix"></span></th>
                   <th class="sortable" @click="sortBy.keysLabel">Label<span x-html="sortIcon.keysLabel"></span></th>
                   <th class="sortable" @click="sortBy.keysAssignee">Assignee<span x-html="sortIcon.keysAssignee"></span></th>
+                  <th class="sortable" @click="sortBy.keysCostCenter">Cost center<span x-html="sortIcon.keysCostCenter"></span></th>
                   <th>Role</th>
                   <th class="sortable" @click="sortBy.keysLastUsed">Last used<span x-html="sortIcon.keysLastUsed"></span></th>
                   <th class="num">MTD cost</th>
@@ -766,6 +767,7 @@
                     <td class="cell-code"><span class="cell-code-inner"><code x-text="k.keyPrefix" :title="k.keyPrefix"></code></span></td>
                     <td class="col-truncate" x-text="k.label" :title="k.label"></td>
                     <td class="col-truncate" x-text="k.assignee" :title="k.assignee"></td>
+                    <td class="col-truncate"><span :class="k.costCenterClass" x-text="k.costCenter" :title="k.costCenterTitle"></span></td>
                     <td><span class="tag role-tag" :class="k.roleClass" x-text="k.role"></span></td>
                     <td x-text="k.lastUsed"></td>
                     <td class="num" x-text="k.mtdCost"></td>
