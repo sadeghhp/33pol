@@ -67,7 +67,7 @@ public sealed class ModelsApiServiceTests
     }
 
     [Fact]
-    public void ListPublicHealthyModels_ReturnsOnlyPublicHealthy()
+    public void ListAnonymousHealthyModels_ShowsAllHealthyAndFlagsWhichNeedKey()
     {
         var registry = Substitute.For<IModelRegistry>();
         registry.GetAllModels().Returns(
@@ -81,9 +81,49 @@ public sealed class ModelsApiServiceTests
 
         var service = new ModelsApiService(registry, health, Substitute.For<IModelGrantService>());
 
-        var list = service.ListPublicHealthyModels();
+        var list = service.ListAnonymousHealthyModels();
 
-        list.Data.Should().ContainSingle(m => m.Id == "public-a");
+        list.Data.Should().HaveCount(2);
+        list.Data.Single(m => m.Id == "public-a").RequiresApiKey.Should().BeFalse();
+        list.Data.Single(m => m.Id == "private-b").RequiresApiKey.Should().BeTrue();
+        list.Help.Should().Be(ModelsApiService.AnonymousHelpText);
+    }
+
+    [Fact]
+    public void ListAnonymousHealthyModels_AllPublic_OmitsHelp()
+    {
+        var registry = Substitute.For<IModelRegistry>();
+        registry.GetAllModels().Returns(
+        [
+            new ModelConfig { Id = "public-a", Url = "http://a", PublicAccess = true },
+        ]);
+
+        var health = Substitute.For<IBackendHealthStore>();
+        health.IsBackendHealthy(Arg.Any<string>()).Returns(true);
+
+        var service = new ModelsApiService(registry, health, Substitute.For<IModelGrantService>());
+
+        var list = service.ListAnonymousHealthyModels();
+
+        list.Data.Should().ContainSingle(m => m.Id == "public-a" && m.RequiresApiKey == false);
+        list.Help.Should().BeNull();
+    }
+
+    [Fact]
+    public void ListHealthyModels_Authenticated_OmitsRequiresApiKeyAndHelp()
+    {
+        var registry = Substitute.For<IModelRegistry>();
+        registry.GetAllModels().Returns([new ModelConfig { Id = "private-b", Url = "http://b" }]);
+
+        var health = Substitute.For<IBackendHealthStore>();
+        health.IsBackendHealthy(Arg.Any<string>()).Returns(true);
+
+        var service = new ModelsApiService(registry, health, Substitute.For<IModelGrantService>());
+
+        var list = service.ListHealthyModels();
+
+        list.Data.Should().ContainSingle().Which.RequiresApiKey.Should().BeNull();
+        list.Help.Should().BeNull();
     }
 
     [Fact]
@@ -112,7 +152,7 @@ public sealed class ModelsApiServiceTests
     }
 
     [Fact]
-    public void TryGetPublicModel_NonPublic_ReturnsNotFound()
+    public void TryGetAnonymousModel_NonPublic_ReturnsModelFlaggedAsRequiringKey()
     {
         var registry = Substitute.For<IModelRegistry>();
         registry.TryGetModel("private", out Arg.Any<ModelConfig?>())
@@ -126,9 +166,11 @@ public sealed class ModelsApiServiceTests
         health.IsBackendHealthy("private").Returns(true);
         var service = new ModelsApiService(registry, health, Substitute.For<IModelGrantService>());
 
-        var (_, error) = service.TryGetPublicModel("private");
+        var (model, error) = service.TryGetAnonymousModel("private");
 
-        error!.Error.Code.Should().Be("model_not_found");
+        error.Should().BeNull();
+        model!.Id.Should().Be("private");
+        model.RequiresApiKey.Should().BeTrue();
     }
 
     [Fact]

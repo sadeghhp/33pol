@@ -4,6 +4,10 @@ All notable changes to this project are documented here. Version tags follow [Se
 
 ## [Unreleased]
 
+### Changed — anonymous model discovery
+
+- **`GET /v1/models` without an API key now lists every healthy model** instead of an empty (or public-only) list. Each entry carries `"requires_api_key": true|false` and the envelope carries a `help` line telling the caller to obtain an inference key and send it as `Authorization: Bearer <key>`. Public models (`publicAccess: true`) are marked `false`. `GET /v1/models/{id}` behaves the same way for anonymous callers instead of answering `404` for non-public models. Authenticated responses are unchanged (neither field is emitted). Inference on a `requires_api_key: true` model still requires a key.
+
 ### Changed — throughput and admission control
 
 Investigation of "the gateway serves requests one at a time" reports. Measured on this branch with a deliberately concurrent slow mock (`perf/scripts/concurrent-mock-upstream.py`, 2 s per request): 64 simultaneous requests through the gateway complete in 2.05 s wall-clock, streaming and non-streaming alike, with the upstream observing all 64 at once — the request path itself does not serialize. What *did* make a busy gateway look serial were the admission limits and how rejections were reported:

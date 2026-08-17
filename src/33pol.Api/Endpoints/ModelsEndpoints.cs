@@ -33,7 +33,7 @@ public static class ModelsEndpoints
         {
             if (authState.IsAuthenticationRequired)
             {
-                return Results.Json(modelsApi.ListPublicHealthyModels());
+                return Results.Json(modelsApi.ListAnonymousHealthyModels());
             }
 
             return Results.Json(modelsApi.ListHealthyModels());
@@ -56,7 +56,7 @@ public static class ModelsEndpoints
         {
             if (authState.IsAuthenticationRequired)
             {
-                var (publicResponse, publicError) = modelsApi.TryGetPublicModel(model);
+                var (publicResponse, publicError) = modelsApi.TryGetAnonymousModel(model);
                 if (publicError is not null)
                 {
                     return Results.Json(publicError, statusCode: StatusCodes.Status404NotFound);

@@ -9,6 +9,15 @@ public sealed class OpenAiModelListResponse
 
     [JsonPropertyName("data")]
     public IReadOnlyList<OpenAiModelResponse> Data { get; init; } = [];
+
+    /// <summary>
+    /// Short human-readable guidance, only present on anonymous listings when the gateway
+    /// requires an API key. Tells the caller why some models are marked <c>requires_api_key</c>
+    /// and how to authenticate.
+    /// </summary>
+    [JsonPropertyName("help")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Help { get; init; }
 }
 
 public sealed class OpenAiModelResponse
@@ -39,6 +48,15 @@ public sealed class OpenAiModelResponse
 
     [JsonPropertyName("available")]
     public bool Available { get; init; }
+
+    /// <summary>
+    /// Only present on anonymous responses when the gateway requires an API key: <c>true</c>
+    /// when the caller must present an inference key to use this model, <c>false</c> when the
+    /// model is open to the public. Omitted on authenticated responses.
+    /// </summary>
+    [JsonPropertyName("requires_api_key")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? RequiresApiKey { get; init; }
 }
 
 public sealed class OpenAiModelPermission

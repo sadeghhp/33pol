@@ -5,7 +5,7 @@
 | Surface | Credential | Notes |
 |---------|------------|-------|
 | Inference (`/v1/*` POST) | Inference API key | Required when keys configured in DB/bootstrap, except models with `publicAccess: true` |
-| Inference (`GET /v1/models*`) | Optional | Callers with no key — or an unrecognised placeholder one — see only `publicAccess` models; authenticated callers see public + granted models. A revoked or expired key is still `401` |
+| Inference (`GET /v1/models*`) | Optional | Callers with no key — or an unrecognised placeholder one — see every healthy model with a `requires_api_key` flag (`false` for `publicAccess` models) and a `help` line explaining how to authenticate; they cannot use the flagged models. Authenticated callers see public + granted models with no flag. A revoked or expired key is still `401` |
 | Admin, per-tenant (`/admin/api/keys*`, `model-grants`, `usage`) | Admin API key | Scoped to the caller's own tenant |
 | Admin, gateway-wide (models, providers, CORS, rate limits, config, backup, `/stats`, requests/logs) | **Operator-tenant** Admin API key | Admin role alone is per-tenant; these surfaces additionally require the key to belong to the operator tenant (`Gateway:Security:OperatorTenantSlug`, defaulting to the bootstrap tenant). Never expose keys in browser URLs |
 | Health / metrics | None | `/health/live`, `/health/ready`, `/metrics` public for probes |
@@ -94,6 +94,7 @@ The static admin UI (`/admin`) stores the API key in **localStorage**. Treat the
 Operators may mark individual registry models with `"publicAccess": true` (admin UI: **Allow use without 33pol API key**). For those models only:
 
 - Clients may call inference with **no** API key, or with any placeholder `Authorization: Bearer` value the gateway does not recognise (`lm-studio`, `not-needed`, …). This matters in practice: OpenAI-compatible SDKs refuse to construct a client with an empty `api_key`, so most callers of a public model send a dummy one.
+- `GET /v1/models` without a key (or with a placeholder) lists **all** healthy models, not only public ones, each with `"requires_api_key": true|false` and a top-level `help` message. This is discovery only — a caller who then tries inference on a `requires_api_key: true` model still gets `401`. Model *names* are therefore visible to anonymous callers; do not encode secrets in model ids.
 - A key the gateway **does** recognise but will not honour — revoked, expired, or belonging to a deactivated tenant — is still rejected with `401`, on public models and on `GET /v1/models` alike. Serving those anonymously would answer `200` to a caller whose credential had been withdrawn, leaving no signal anywhere that it had stopped working.
 - A **valid** inference key still works and attributes usage to the tenant (rate limits, quotas, budgets).
 - Model grants are **not** enforced for public models.

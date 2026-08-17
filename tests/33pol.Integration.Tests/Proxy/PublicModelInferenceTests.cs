@@ -106,7 +106,7 @@ public sealed class PublicModelInferenceTests
     }
 
     [Fact]
-    public async Task GetModels_NoApiKey_ReturnsOnlyPublicModels()
+    public async Task GetModels_NoApiKey_ListsAllModelsAndFlagsWhichNeedKey()
     {
         await using var factory = CreateFactoryWithPublicModel();
         var client = factory.CreateClient();
@@ -115,11 +115,12 @@ public sealed class PublicModelInferenceTests
         response.EnsureSuccessStatusCode();
 
         using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
-        var ids = doc.RootElement.GetProperty("data").EnumerateArray()
-            .Select(e => e.GetProperty("id").GetString())
-            .ToList();
+        var byId = doc.RootElement.GetProperty("data").EnumerateArray()
+            .ToDictionary(e => e.GetProperty("id").GetString()!, e => e.GetProperty("requires_api_key").GetBoolean());
 
-        ids.Should().ContainSingle().Which.Should().Be(ModelId);
+        byId.Should().ContainKey(ModelId).WhoseValue.Should().BeFalse();
+        byId.Should().ContainKey(PrivateModelId).WhoseValue.Should().BeTrue();
+        doc.RootElement.GetProperty("help").GetString().Should().Contain("Authorization: Bearer");
     }
 
     /// <summary>
@@ -127,7 +128,7 @@ public sealed class PublicModelInferenceTests
     /// otherwise an SDK configured with a dummy key cannot find the models it is allowed to call.
     /// </summary>
     [Fact]
-    public async Task GetModels_PlaceholderApiKey_ReturnsOnlyPublicModels()
+    public async Task GetModels_PlaceholderApiKey_ListsAllModelsAndFlagsWhichNeedKey()
     {
         await using var factory = CreateFactoryWithPublicModel();
         var client = factory.CreateClient();
@@ -137,11 +138,11 @@ public sealed class PublicModelInferenceTests
         response.EnsureSuccessStatusCode();
 
         using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
-        var ids = doc.RootElement.GetProperty("data").EnumerateArray()
-            .Select(e => e.GetProperty("id").GetString())
-            .ToList();
+        var byId = doc.RootElement.GetProperty("data").EnumerateArray()
+            .ToDictionary(e => e.GetProperty("id").GetString()!, e => e.GetProperty("requires_api_key").GetBoolean());
 
-        ids.Should().ContainSingle().Which.Should().Be(ModelId);
+        byId.Should().ContainKey(ModelId).WhoseValue.Should().BeFalse();
+        byId.Should().ContainKey(PrivateModelId).WhoseValue.Should().BeTrue();
     }
 
     [Fact]
