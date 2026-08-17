@@ -167,7 +167,7 @@ export GATEWAY_KEY="sk-xxxxxxxx"   # paste your new inference key
 
 ## Step 5 — List models through 33pol
 
-Opening `http://localhost:8080/v1/models` in the browser address bar (no API key) shows every model with `"requires_api_key": true|false` and a `help` line — useful to check what the gateway offers, but you cannot use a `requires_api_key: true` model until you send a key.
+Opening `http://localhost:8080/v1/models` in the browser address bar (no API key) returns an empty `data` list plus a `models` array (`{ "id", "api_key_required" }`) — useful to see what the gateway offers, but you cannot use an `api_key_required: true` model until you send a key.
 
 ```bash
 curl -s http://localhost:8080/v1/models \

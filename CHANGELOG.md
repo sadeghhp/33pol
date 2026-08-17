@@ -6,7 +6,7 @@ All notable changes to this project are documented here. Version tags follow [Se
 
 ### Changed — anonymous model discovery
 
-- **`GET /v1/models` without an API key now lists every healthy model** instead of an empty (or public-only) list. Each entry carries `"requires_api_key": true|false` and the envelope carries a `help` line telling the caller to obtain an inference key and send it as `Authorization: Bearer <key>`. Public models (`publicAccess: true`) are marked `false`. `GET /v1/models/{id}` behaves the same way for anonymous callers instead of answering `404` for non-public models. Authenticated responses are unchanged (neither field is emitted). Inference on a `requires_api_key: true` model still requires a key.
+- **`GET /v1/models` without an API key now includes a minimal `models` hint.** `data` still holds only the models the anonymous caller can use (`publicAccess: true`), so it is empty on a key-only gateway; a new sibling `models` array lists every healthy model as `{ "id": "…", "api_key_required": true|false }` so callers can see what exists and that they must obtain a key. Authenticated responses are unchanged (`models` is not emitted). Inference on an `api_key_required: true` model still requires a key.
 
 ### Changed — throughput and admission control
 
