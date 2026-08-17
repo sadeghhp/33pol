@@ -193,12 +193,78 @@ public sealed class ApiKeyValidatorTests
         result.Failure.Should().Be(ApiKeyValidationFailure.Revoked);
     }
 
+    /// <summary>
+    /// A key the gateway never issued is answered from the negative cache on the second try — no
+    /// second database lookup — while a key sharing its prefix, and a key issued afterwards under a
+    /// different value, are unaffected.
+    /// </summary>
+    [Fact]
+    public async Task ValidateAsync_UnknownKey_IsRememberedAsInvalidWithoutASecondLookup()
+    {
+        await using var db = CreateDb();
+        var tenantId = await SeedTenantAsync(db);
+        await SeedKeyAsync(db, tenantId, "sk-33pol-real-key-0000001", ApiKeyRole.Inference);
+
+        using var negative = new ApiKeyNegativeCache();
+        var apiKeys = new CountingApiKeyRepository(new ApiKeyRepository(db));
+        var sut = new ApiKeyValidator(
+            apiKeys,
+            new TenantRepository(db),
+            new MemoryCache(new MemoryCacheOptions()),
+            Options.Create(new GatewaySecurityOptions { KeyPepper = Pepper }),
+            negative);
+
+        const string placeholder = "lm-studio";
+        (await sut.ValidateAsync(placeholder)).Failure.Should().Be(ApiKeyValidationFailure.Invalid);
+        (await sut.ValidateAsync(placeholder)).Failure.Should().Be(ApiKeyValidationFailure.Invalid);
+        apiKeys.Lookups.Should().Be(1, "the second presentation must be served from the negative cache");
+
+        // Cached by hash, so a different key is never confused with the remembered one.
+        (await sut.ValidateAsync("sk-33pol-real-key-0000001")).IsSuccess.Should().BeTrue();
+        apiKeys.Lookups.Should().Be(2);
+    }
+
+    private sealed class CountingApiKeyRepository(IApiKeyRepository inner) : IApiKeyRepository
+    {
+        public int Lookups { get; private set; }
+
+        public Task<IReadOnlyList<ApiKeyRecord>> FindByPrefixesAsync(
+            IReadOnlyCollection<string> keyPrefixes,
+            CancellationToken cancellationToken = default)
+        {
+            Lookups++;
+            return inner.FindByPrefixesAsync(keyPrefixes, cancellationToken);
+        }
+
+        public Task<ApiKeyRecord?> FindByPrefixAsync(string keyPrefix, CancellationToken cancellationToken = default) =>
+            inner.FindByPrefixAsync(keyPrefix, cancellationToken);
+
+        public Task<ApiKeyRecord?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) =>
+            inner.GetByIdAsync(id, cancellationToken);
+
+        public Task<IReadOnlyList<ApiKeyRecord>> ListByTenantAsync(Guid tenantId, CancellationToken cancellationToken = default) =>
+            inner.ListByTenantAsync(tenantId, cancellationToken);
+
+        public Task<ApiKeyRecord> CreateAsync(ApiKeyRecord apiKey, CancellationToken cancellationToken = default) =>
+            inner.CreateAsync(apiKey, cancellationToken);
+
+        public Task RevokeAsync(Guid id, DateTimeOffset revokedAt, CancellationToken cancellationToken = default) =>
+            inner.RevokeAsync(id, revokedAt, cancellationToken);
+
+        public Task<ApiKeyRecord> UpdateMetadataAsync(Guid id, ApiKeyMetadataUpdate update, CancellationToken cancellationToken = default) =>
+            inner.UpdateMetadataAsync(id, update, cancellationToken);
+
+        public Task TouchLastUsedAsync(Guid id, DateTimeOffset atUtc, CancellationToken cancellationToken = default) =>
+            inner.TouchLastUsedAsync(id, atUtc, cancellationToken);
+    }
+
     private static ApiKeyValidator CreateValidator(Pol33.Persistence.GatewayDbContext db) =>
         new(
             new ApiKeyRepository(db),
             new TenantRepository(db),
             new MemoryCache(new MemoryCacheOptions()),
-            Options.Create(new GatewaySecurityOptions { KeyPepper = Pepper }));
+            Options.Create(new GatewaySecurityOptions { KeyPepper = Pepper }),
+            new ApiKeyNegativeCache());
 
     private static Pol33.Persistence.GatewayDbContext CreateDb()
     {

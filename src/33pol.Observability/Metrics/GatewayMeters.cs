@@ -72,6 +72,9 @@ public static class GatewayMeters
     public static readonly UpDownCounter<long> BulkheadInflight =
         Meter.CreateUpDownCounter<long>("gateway_bulkhead_inflight");
 
+    public static readonly UpDownCounter<long> BulkheadQueued =
+        Meter.CreateUpDownCounter<long>("gateway_bulkhead_queued");
+
     public static readonly UpDownCounter<long> UsageWriterQueueDepth =
         Meter.CreateUpDownCounter<long>("gateway_usage_writer_queue_depth");
 

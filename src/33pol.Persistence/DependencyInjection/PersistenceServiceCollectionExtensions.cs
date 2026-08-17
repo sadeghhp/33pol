@@ -35,7 +35,13 @@ public static class PersistenceServiceCollectionExtensions
         }
         else
         {
-            services.AddDbContext<GatewayDbContext>(options =>
+            // Pooled: a context is resolved for every authenticated inference request (the API-key
+            // validator, grant service and budget check all sit behind scoped repositories) even
+            // when every one of them is answered from cache. Renting a reset instance from the pool
+            // instead of building change tracker, state manager and service provider anew each time
+            // takes that steady per-request allocation off the hot path. GatewayDbContext holds no
+            // per-request state, which is the precondition for pooling.
+            services.AddDbContextPool<GatewayDbContext>(options =>
                 SqliteGatewayDbContext.Configure(options, connectionString));
             services.AddScoped<ISqliteBackupService, Maintenance.SqliteBackupService>();
         }

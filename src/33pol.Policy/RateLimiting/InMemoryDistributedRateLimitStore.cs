@@ -23,26 +23,38 @@ public sealed class InMemoryDistributedRateLimitStore : IDistributedRateLimitSto
         _compactEveryOperations = Math.Max(1, compactEvery);
     }
 
+    /// <summary>
+    /// Admits a request against the partition's token bucket.
+    /// </summary>
+    /// <remarks>
+    /// <para>The bucket holds up to <c>Rpm + Burst</c> tokens and refills continuously at
+    /// <c>Rpm</c> tokens per minute. A full bucket therefore admits the same instantaneous burst the
+    /// old per-minute window did, but the steady state is a smooth <c>Rpm</c>-per-minute drip rather
+    /// than "everything at the top of the minute, nothing until the next".</para>
+    ///
+    /// <para>That distinction is what callers feel. A fixed window answered a rejected request with
+    /// <c>Retry-After</c> of up to 59 seconds — the time to the next minute boundary — and every
+    /// OpenAI-compatible SDK honours that header by sleeping for it, so a tenant that burst past its
+    /// limit saw all further calls hang for most of a minute and read it as the gateway queueing
+    /// them one by one. With a continuously refilling bucket the wait for the next token is
+    /// <c>60 / Rpm</c> seconds, so <c>Retry-After</c> is almost always 1 second.</para>
+    /// </remarks>
     public RateLimitAcquireResult TryAcquireRequest(
         string partitionKey,
         RateLimitPolicy policy,
         DateTimeOffset now)
     {
-        var limit = policy.Rpm + policy.Burst;
-        if (limit <= 0)
+        var capacity = policy.Rpm + policy.Burst;
+        if (capacity <= 0)
         {
             return new RateLimitAcquireResult(true);
         }
 
-        var windowStart = AlignToMinute(now);
-        var state = _requestWindows.GetOrAdd(partitionKey, _ => new RequestWindowState(windowStart, now));
+        var state = _requestWindows.GetOrAdd(partitionKey, _ => new RequestWindowState(now));
 
-        // Window rollover, the limit decision and the increment happen under one lock. Splitting
-        // them (AddOrUpdate then read Count) meant a rollover between the two could have the decision
-        // judged against a different window's count, and the increment landed before the check — so a
-        // client that kept hammering after a 429 pushed the counter further out of reach and could
-        // not recover within the window.
-        var acquired = state.TryAdvance(windowStart, now, limit);
+        // Refill, the limit decision and the debit happen under one lock, so a rejected request
+        // never consumes a token and the decision is always made against the current fill.
+        var acquired = state.TryTake(now, capacity, refillPerSecond: Math.Max(1, policy.Rpm) / 60.0, out var retryAfter);
 
         // Compaction runs on both outcomes: a partition stuck in permanent rejection would otherwise
         // never be swept.
@@ -53,11 +65,10 @@ public sealed class InMemoryDistributedRateLimitStore : IDistributedRateLimitSto
             return new RateLimitAcquireResult(true);
         }
 
-        var retryAfter = (int)Math.Ceiling((windowStart.AddMinutes(1) - now).TotalSeconds);
         return new RateLimitAcquireResult(
             false,
             GatewayRateLimitReason.RateLimitExceeded,
-            Math.Max(1, retryAfter));
+            Math.Max(1, (int)Math.Ceiling(retryAfter.TotalSeconds)));
     }
 
     public RateLimitAcquireResult TryAcquireStreamSlot(string partitionKey, RateLimitPolicy policy)
@@ -107,9 +118,6 @@ public sealed class InMemoryDistributedRateLimitStore : IDistributedRateLimitSto
         }
     }
 
-    private static DateTimeOffset AlignToMinute(DateTimeOffset now) =>
-        new(now.Year, now.Month, now.Day, now.Hour, now.Minute, 0, now.Offset);
-
     private void CompactIfNeeded(DateTimeOffset now)
     {
         if (Interlocked.Increment(ref _operationCount) % _compactEveryOperations != 0)
@@ -136,57 +144,65 @@ public sealed class InMemoryDistributedRateLimitStore : IDistributedRateLimitSto
         }
     }
 
+    /// <summary>Token bucket for one partition. All members are guarded by <see cref="_sync"/>.</summary>
     private sealed class RequestWindowState
     {
         private readonly object _sync = new();
-        private DateTimeOffset _windowStart;
+        private double _tokens;
+        private DateTimeOffset _lastRefillUtc;
         private DateTimeOffset _lastSeenUtc;
-        private int _count;
+        private bool _primed;
 
-        public RequestWindowState(DateTimeOffset windowStart, DateTimeOffset now)
+        public RequestWindowState(DateTimeOffset now)
         {
-            _windowStart = windowStart;
+            _lastRefillUtc = now;
             _lastSeenUtc = now;
-            _count = 0;
-        }
-
-        public int Count
-        {
-            get
-            {
-                lock (_sync)
-                {
-                    return _count;
-                }
-            }
         }
 
         /// <summary>
-        /// Rolls the window if needed, decides whether the request fits, and consumes a slot only if
-        /// it does — all under one lock, so the decision can never be made against a different
-        /// window's count and a rejected request never consumes quota.
+        /// Refills the bucket for the time elapsed since the last call, then takes one token if one
+        /// is available. When it is not, <paramref name="retryAfter"/> is how long until the next
+        /// token arrives at the current refill rate.
         /// </summary>
-        public bool TryAdvance(DateTimeOffset windowStart, DateTimeOffset now, int limit)
+        public bool TryTake(DateTimeOffset now, int capacity, double refillPerSecond, out TimeSpan retryAfter)
         {
             lock (_sync)
             {
-                if (windowStart != _windowStart)
+                if (!_primed)
                 {
-                    _windowStart = windowStart;
-                    _count = 0;
+                    // A new (or evicted-and-recreated) partition starts full: its first burst is
+                    // admitted exactly as a fresh minute window would have admitted it.
+                    _tokens = capacity;
+                    _primed = true;
+                }
+
+                var elapsedSeconds = (now - _lastRefillUtc).TotalSeconds;
+                if (elapsedSeconds > 0)
+                {
+                    _tokens = Math.Min(capacity, _tokens + (elapsedSeconds * refillPerSecond));
+                    _lastRefillUtc = now;
+                }
+                else if (elapsedSeconds < 0)
+                {
+                    // Clock went backwards (or callers supplied out-of-order timestamps); do not
+                    // let a stale "last refill" grant a windfall when time catches up.
+                    _lastRefillUtc = now;
                 }
 
                 // Touch on every attempt, including rejections, so an actively-rejected partition is
                 // not treated as stale and evicted from under itself.
                 _lastSeenUtc = now;
 
-                if (_count >= limit)
+                if (_tokens >= 1.0)
                 {
-                    return false;
+                    _tokens -= 1.0;
+                    retryAfter = TimeSpan.Zero;
+                    return true;
                 }
 
-                _count++;
-                return true;
+                var deficit = 1.0 - _tokens;
+                retryAfter = TimeSpan.FromSeconds(deficit / refillPerSecond);
+                return false;
             }
         }
 

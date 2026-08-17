@@ -33,7 +33,9 @@ k6 scenarios, mock upstreams, and the scripted verification suite used to check 
 
 | Helper | Purpose |
 |--------|---------|
-| `scripts/mock-upstream.py` | Threaded Python mock OpenAI upstream (also emits SSE) |
+| `scripts/mock-upstream.py` | Threaded Python mock OpenAI upstream, answers instantly (k6 smoke) |
+| `scripts/concurrent-mock-upstream.py` | asyncio mock with configurable latency (`LATENCY`, streamed `TOKENS`); serves any number of requests at once and reports peak concurrency at `/__stats` — for "is it parallel?" tests |
+| `scripts/concurrency-bench.py` | Fires N requests at once (stdlib only) and prints wall-clock vs single-request latency, TTFT, and which admission limit produced any 429s. Run against the gateway and against the model server directly to attribute a bottleneck |
 | `scripts/sdk-smoke.py` | OpenAI Python SDK check — models list, chat, streaming chat |
 
 ## Full local verification
@@ -70,6 +72,7 @@ Numbers from a real upstream (vLLM or a cloud provider) are the only ones worth 
 `reports/` holds run records worth keeping. Two are current:
 
 - [k6-smoke-ci.md](reports/k6-smoke-ci.md) — what the CI smoke job runs and how to reproduce it locally.
+- [concurrency-2026-08-16.md](reports/concurrency-2026-08-16.md) — does the request path serialize? (No: 64 concurrent 2 s requests finish in 2 s.) What made it *look* serial — bulkhead 64, per-tenant stream cap 50, fixed-window `Retry-After` up to 59 s — and the changes that followed.
 - [sqlite-wal-2026-07-19.md](reports/sqlite-wal-2026-07-19.md) — SQLite WAL behavior under concurrent write load, and the pragma tuning conclusions that follow from it. Read this before changing `busy_timeout`, `synchronous`, or WAL checkpointing.
 
 Ad-hoc run records go here too, but delete them once the build they describe is several releases old — a stale report reads as a current claim.

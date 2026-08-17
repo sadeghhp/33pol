@@ -69,6 +69,9 @@ public static class GatewayConfigSnapshotServiceCollectionExtensions
             },
             RateLimits = new RateLimitsConfigSection
             {
+                // Carried over explicitly: without it a database-less deployment (and the window
+                // before the first DB load) enforced limits even with RateLimiting:Enabled=false.
+                Enabled = rateLimiting.Enabled,
                 Default = ToPolicy(rateLimiting.Default),
                 Plans = rateLimiting.Plans.ToDictionary(
                     static p => p.Key,

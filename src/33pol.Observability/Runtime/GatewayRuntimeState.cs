@@ -15,6 +15,7 @@ public sealed class GatewayRuntimeState
     /// caller that leaks a begin without its matching completion.
     /// </summary>
     private readonly ConcurrentDictionary<string, RecentRequestEntry> _inFlight = new(StringComparer.Ordinal);
+    private int _inFlightCount;
 
     private readonly object _statsSync = new();
     private long _totalRequests;
@@ -203,7 +204,10 @@ public sealed class GatewayRuntimeState
     {
         // Promoting the finished entry and retiring the in-flight one is a single step, so the feed
         // never shows the same request twice and never blinks it out between the two writes.
-        _inFlight.TryRemove(entry.RequestId, out _);
+        if (_inFlight.TryRemove(entry.RequestId, out _))
+        {
+            Interlocked.Decrement(ref _inFlightCount);
+        }
 
         _recentRequests.Enqueue(entry);
         while (_recentRequests.Count > MaxRecentRequests &&
@@ -216,19 +220,30 @@ public sealed class GatewayRuntimeState
     {
         ArgumentNullException.ThrowIfNull(entry);
 
-        if (_inFlight.Count >= MaxInFlightTracked && !_inFlight.ContainsKey(entry.RequestId))
+        // The cap is checked against a separately maintained counter. ConcurrentDictionary.Count
+        // acquires every internal lock of the dictionary to produce an exact answer, which made this
+        // one line — executed once per forwarded request — a global barrier that stalled every
+        // concurrent BeginInFlight/CompleteInFlight and grew with concurrency.
+        if (Volatile.Read(ref _inFlightCount) >= MaxInFlightTracked && !_inFlight.ContainsKey(entry.RequestId))
         {
             return;
         }
 
-        _inFlight[entry.RequestId] = entry with { IsInFlight = true };
+        if (_inFlight.TryAdd(entry.RequestId, entry with { IsInFlight = true }))
+        {
+            Interlocked.Increment(ref _inFlightCount);
+        }
+        else
+        {
+            _inFlight[entry.RequestId] = entry with { IsInFlight = true };
+        }
     }
 
     public void CompleteInFlight(string requestId)
     {
-        if (!string.IsNullOrEmpty(requestId))
+        if (!string.IsNullOrEmpty(requestId) && _inFlight.TryRemove(requestId, out _))
         {
-            _inFlight.TryRemove(requestId, out _);
+            Interlocked.Decrement(ref _inFlightCount);
         }
     }
 

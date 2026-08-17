@@ -52,6 +52,36 @@ public static class GatewayOptionsValidation
             errors.Add($"{nameof(GatewayOptions.Resilience)}.{nameof(GatewayResilienceOptions.MaxConcurrentForwardsPerModel)} must be at least 1.");
         }
 
+        if (options.Resilience.MaxQueuedForwardsPerModel < 0)
+        {
+            errors.Add($"{nameof(GatewayOptions.Resilience)}.{nameof(GatewayResilienceOptions.MaxQueuedForwardsPerModel)} must be 0 or greater.");
+        }
+
+        if (options.Resilience.BulkheadQueueTimeoutSeconds < 1)
+        {
+            errors.Add($"{nameof(GatewayOptions.Resilience)}.{nameof(GatewayResilienceOptions.BulkheadQueueTimeoutSeconds)} must be at least 1.");
+        }
+
+        if (options.Resilience.UpstreamConnectTimeoutSeconds < 1)
+        {
+            errors.Add($"{nameof(GatewayOptions.Resilience)}.{nameof(GatewayResilienceOptions.UpstreamConnectTimeoutSeconds)} must be at least 1.");
+        }
+
+        if (options.Resilience.UpstreamPooledConnectionLifetimeSeconds < 0)
+        {
+            errors.Add($"{nameof(GatewayOptions.Resilience)}.{nameof(GatewayResilienceOptions.UpstreamPooledConnectionLifetimeSeconds)} must be 0 or greater.");
+        }
+
+        if (options.Resilience.UpstreamPooledConnectionIdleTimeoutSeconds < 1)
+        {
+            errors.Add($"{nameof(GatewayOptions.Resilience)}.{nameof(GatewayResilienceOptions.UpstreamPooledConnectionIdleTimeoutSeconds)} must be at least 1.");
+        }
+
+        if (options.Resilience.UpstreamMaxConnectionsPerServer < 0)
+        {
+            errors.Add($"{nameof(GatewayOptions.Resilience)}.{nameof(GatewayResilienceOptions.UpstreamMaxConnectionsPerServer)} must be 0 or greater.");
+        }
+
         if (options.Resilience.MaxTrackedResilienceModels < 1)
         {
             errors.Add($"{nameof(GatewayOptions.Resilience)}.{nameof(GatewayResilienceOptions.MaxTrackedResilienceModels)} must be at least 1.");

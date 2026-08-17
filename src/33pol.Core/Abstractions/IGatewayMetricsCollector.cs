@@ -35,6 +35,15 @@ public interface IGatewayMetricsCollector
 
     void RecordBulkheadInflightChange(string modelId, int delta);
 
+    /// <summary>
+    /// Requests currently waiting in the per-model bulkhead queue for a forwarding slot. A
+    /// persistently non-zero value means the model is saturated: the GPU (or its
+    /// <c>Gateway:Resilience:MaxConcurrentForwardsPerModel</c> ceiling) is the bottleneck.
+    /// </summary>
+    void RecordBulkheadQueuedChange(string modelId, int delta)
+    {
+    }
+
     void RecordTimeToFirstToken(string modelId, double seconds);
 
     /// <summary>

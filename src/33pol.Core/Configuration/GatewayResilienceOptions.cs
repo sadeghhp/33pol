@@ -70,9 +70,70 @@ public sealed class GatewayResilienceOptions
     /// </remarks>
     public int ShutdownDrainSeconds { get; set; }
 
-    public int MaxConcurrentForwardsPerModel { get; set; } = 64;
+    /// <summary>
+    /// Upper bound on requests forwarded to one model at the same time (the per-model bulkhead).
+    /// </summary>
+    /// <remarks>
+    /// <para>This is a gateway-side ceiling on <em>in-flight</em> forwards, not a queue: it exists to
+    /// protect the gateway's own memory and to stop one model's backlog from starving the others.
+    /// The model server keeps its own admission queue (vLLM's scheduler, Ollama's
+    /// <c>OLLAMA_MAX_QUEUE</c>), so the correct value is at least the backend's own concurrency
+    /// (vLLM's <c>--max-num-seqs</c>, default 256). Set lower than the backend's and the gateway,
+    /// not the GPU, becomes the ceiling on throughput.</para>
+    ///
+    /// <para>The previous default of 64 was well below what a single GPU serving with continuous
+    /// batching handles, and every request past it was refused with 429 rather than waited on —
+    /// which is what made a busy gateway look like it was serving callers one batch at a time.</para>
+    /// </remarks>
+    public int MaxConcurrentForwardsPerModel { get; set; } = 256;
+
+    /// <summary>
+    /// How many requests may wait for a bulkhead slot per model once
+    /// <see cref="MaxConcurrentForwardsPerModel"/> is reached, before further arrivals are refused
+    /// with 429 immediately. 0 disables queueing (refuse at capacity, the previous behaviour).
+    /// </summary>
+    /// <remarks>
+    /// A short bounded queue turns a burst above the cap into a brief wait instead of a 429 that
+    /// the client SDK then retries with exponential backoff — the retry loop is slower for the
+    /// caller and adds load for everyone else. The queue is bounded, and each waiter is bounded by
+    /// <see cref="BulkheadQueueTimeoutSeconds"/>, so it cannot become an unbounded backlog: past
+    /// either bound the gateway sheds load rather than absorbing it.
+    /// </remarks>
+    public int MaxQueuedForwardsPerModel { get; set; }
+
+    /// <summary>
+    /// Longest a queued request waits for a bulkhead slot before it is refused with 429.
+    /// </summary>
+    public int BulkheadQueueTimeoutSeconds { get; set; } = 30;
 
     public int MaxTrackedResilienceModels { get; set; } = 1024;
+
+    /// <summary>
+    /// TCP connect deadline for a new upstream connection. Distinct from the header timeout: a
+    /// backend that is down should fail fast here rather than consuming the whole
+    /// <see cref="ForwardTimeoutSeconds"/> allowance per request while the breaker slowly notices.
+    /// </summary>
+    public int UpstreamConnectTimeoutSeconds { get; set; } = 10;
+
+    /// <summary>
+    /// How long a pooled upstream connection may be reused before it is retired and re-established
+    /// (so DNS / load-balancer changes are picked up). 0 = never retire on age.
+    /// </summary>
+    public int UpstreamPooledConnectionLifetimeSeconds { get; set; } = 900;
+
+    /// <summary>
+    /// How long an idle pooled upstream connection is kept warm. Longer than the runtime default of
+    /// 60 s so bursty traffic reuses connections instead of paying a TCP handshake per burst.
+    /// </summary>
+    public int UpstreamPooledConnectionIdleTimeoutSeconds { get; set; } = 300;
+
+    /// <summary>
+    /// Cap on concurrent HTTP/1.1 connections to a single upstream host. 0 = unlimited (the
+    /// bulkhead is the intended concurrency control, so a second, hidden cap here is normally
+    /// undesirable). Set only when the model server itself is known to misbehave past a certain
+    /// connection count.
+    /// </summary>
+    public int UpstreamMaxConnectionsPerServer { get; set; }
 
     public int CircuitBreakerFailureThreshold { get; set; } = 5;
 

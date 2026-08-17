@@ -45,6 +45,7 @@ public static class ServiceCollectionExtensions
         services.AddGatewayRegistry();
         services.AddGatewayApi();
         services.AddGatewayProxy();
+        services.AddHostedService<GatewayAdmissionLimitsStartupLogger>();
         services.AddHttpClient(UpstreamHttpClientNames.Inference)
             .ConfigureHttpClient(client =>
             {
@@ -54,6 +55,41 @@ public static class ServiceCollectionExtensions
                 // header allowance the forwarder widens for large-context requests, re-imposing the
                 // very ceiling that made a working backend look dead to the circuit breaker.
                 client.Timeout = Timeout.InfiniteTimeSpan;
+            })
+            // The connection pool is configured explicitly rather than left to the factory's
+            // defaults. The factory otherwise rotates the whole handler — and with it every pooled
+            // connection — every two minutes, so under steady load each rotation opens a fresh burst
+            // of TCP connections to the model server; and it lets idle connections die after 60 s,
+            // so bursty traffic pays a handshake per burst. Pinning the handler and letting
+            // SocketsHttpHandler age connections itself is the pattern Microsoft documents for
+            // long-lived clients. Nothing here caps concurrency: MaxConnectionsPerServer stays
+            // unlimited unless the operator opts in, so the per-model bulkhead remains the only
+            // admission control between clients and the GPU.
+            .SetHandlerLifetime(Timeout.InfiniteTimeSpan)
+            .ConfigurePrimaryHttpMessageHandler(sp =>
+            {
+                var resilience = sp.GetRequiredService<IOptions<GatewayOptions>>().Value.Resilience;
+                var handler = new SocketsHttpHandler
+                {
+                    AllowAutoRedirect = false,
+                    // Upstream bodies must arrive uncompressed for usage capture to read them; the
+                    // transformer already omits Accept-Encoding, this keeps the handler consistent.
+                    AutomaticDecompression = System.Net.DecompressionMethods.None,
+                    UseCookies = false,
+                    ConnectTimeout = TimeSpan.FromSeconds(resilience.UpstreamConnectTimeoutSeconds),
+                    PooledConnectionLifetime = resilience.UpstreamPooledConnectionLifetimeSeconds > 0
+                        ? TimeSpan.FromSeconds(resilience.UpstreamPooledConnectionLifetimeSeconds)
+                        : Timeout.InfiniteTimeSpan,
+                    PooledConnectionIdleTimeout =
+                        TimeSpan.FromSeconds(resilience.UpstreamPooledConnectionIdleTimeoutSeconds),
+                    MaxConnectionsPerServer = resilience.UpstreamMaxConnectionsPerServer > 0
+                        ? resilience.UpstreamMaxConnectionsPerServer
+                        : int.MaxValue,
+                    // A single HTTP/2 connection multiplexes ~100 streams; a backend that speaks
+                    // HTTP/2 would otherwise queue the 101st concurrent request behind the rest.
+                    EnableMultipleHttp2Connections = true,
+                };
+                return handler;
             });
 
         if (configuration.GetValue<bool>("Gateway:OperatorConsole:Enabled"))

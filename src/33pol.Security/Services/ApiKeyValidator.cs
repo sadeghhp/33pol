@@ -13,17 +13,20 @@ public sealed class ApiKeyValidator : IApiKeyValidator
     private readonly IApiKeyRepository _apiKeys;
     private readonly ITenantRepository _tenants;
     private readonly IMemoryCache _cache;
+    private readonly ApiKeyNegativeCache _negativeCache;
     private readonly GatewaySecurityOptions _options;
 
     public ApiKeyValidator(
         IApiKeyRepository apiKeys,
         ITenantRepository tenants,
         IMemoryCache cache,
-        IOptions<GatewaySecurityOptions> options)
+        IOptions<GatewaySecurityOptions> options,
+        ApiKeyNegativeCache? negativeCache = null)
     {
         _apiKeys = apiKeys;
         _tenants = tenants;
         _cache = cache;
+        _negativeCache = negativeCache ?? ApiKeyNegativeCache.Shared;
         _options = options.Value;
     }
 
@@ -46,6 +49,15 @@ public sealed class ApiKeyValidator : IApiKeyValidator
             return cached;
         }
 
+        // A key the gateway never issued is answered from the (small, short-lived) negative cache.
+        // Without it every request bearing an unknown key ran a database lookup: that is the normal
+        // case for public models — SDKs insist on sending some placeholder key — and a cheap
+        // amplifier for anyone spraying random keys.
+        if (_negativeCache.IsKnownInvalid(hash))
+        {
+            return ApiKeyValidationResult.Fail(ApiKeyValidationFailure.Invalid);
+        }
+
         // Probe every prefix format the key may be stored under, then let the hash decide: prefixes are
         // neither unique nor stable across formats, so only the hash can identify the key.
         var prefixes = ApiKeyHashing.CreateLookupPrefixes(normalized);
@@ -63,6 +75,7 @@ public sealed class ApiKeyValidator : IApiKeyValidator
 
         if (record is null)
         {
+            _negativeCache.MarkInvalid(hash);
             return ApiKeyValidationResult.Fail(ApiKeyValidationFailure.Invalid);
         }
 

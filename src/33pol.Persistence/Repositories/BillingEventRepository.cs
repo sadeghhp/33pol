@@ -6,7 +6,7 @@ using Pol33.Persistence.Mapping;
 
 namespace Pol33.Persistence.Repositories;
 
-public sealed class BillingEventRepository(GatewayDbContext dbContext) : IBillingEventRepository
+public sealed class BillingEventRepository(GatewayDbContext dbContext) : IBillingEventRepository, IBillingEventBatchAppender
 {
     public async Task<bool> TryAppendAsync(
         BillingEventRecord record,
@@ -39,6 +39,77 @@ public sealed class BillingEventRepository(GatewayDbContext dbContext) : IBillin
         catch (DbUpdateException ex) when (IsDuplicateRequestId(ex))
         {
             return false;
+        }
+    }
+
+    public async Task<IReadOnlyList<BillingEventRecord>> TryAppendManyAsync(
+        IReadOnlyList<BillingEventRecord> records,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(records);
+        if (records.Count == 0)
+        {
+            return [];
+        }
+
+        foreach (var record in records)
+        {
+            if (string.IsNullOrWhiteSpace(record.RequestId))
+            {
+                throw new ArgumentException("RequestId is required for idempotent billing events.", nameof(records));
+            }
+        }
+
+        // One probe for the whole batch instead of one per event, then one SaveChanges — a single
+        // transaction and a single WAL commit — for every new row. Duplicates within the batch itself
+        // are collapsed here too, so the unique index is never asked to arbitrate the common case.
+        var requestIds = records.Select(r => r.RequestId).Distinct(StringComparer.Ordinal).ToList();
+        var existing = await dbContext.BillingEvents
+            .AsNoTracking()
+            .Where(e => requestIds.Contains(e.RequestId))
+            .Select(e => e.RequestId)
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+        var seen = new HashSet<string>(existing, StringComparer.Ordinal);
+
+        var appended = new List<BillingEventRecord>(records.Count);
+        foreach (var record in records)
+        {
+            if (!seen.Add(record.RequestId))
+            {
+                continue;
+            }
+
+            dbContext.BillingEvents.Add(BillingEntityMapper.ToEntity(record));
+            appended.Add(record);
+        }
+
+        if (appended.Count == 0)
+        {
+            return appended;
+        }
+
+        try
+        {
+            await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            return appended;
+        }
+        catch (DbUpdateException ex) when (IsDuplicateRequestId(ex))
+        {
+            // A concurrent writer landed one of these ids between the probe and the commit (a
+            // reconciliation rerun, or a second gateway instance). Fall back to the row-by-row path
+            // for this batch only, so the rest of the batch is still persisted exactly once.
+            dbContext.ChangeTracker.Clear();
+            var fallback = new List<BillingEventRecord>(appended.Count);
+            foreach (var record in appended)
+            {
+                if (await TryAppendAsync(record, cancellationToken).ConfigureAwait(false))
+                {
+                    fallback.Add(record);
+                }
+            }
+
+            return fallback;
         }
     }
 

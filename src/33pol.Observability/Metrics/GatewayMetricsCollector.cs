@@ -61,6 +61,11 @@ public sealed class GatewayMetricsCollector(GatewayRuntimeState runtimeState) : 
             delta,
             new KeyValuePair<string, object?>("model", modelId));
 
+    public void RecordBulkheadQueuedChange(string modelId, int delta) =>
+        GatewayMeters.BulkheadQueued.Add(
+            delta,
+            new KeyValuePair<string, object?>("model", modelId));
+
     public void RecordTimeToFirstToken(string modelId, double seconds) =>
         GatewayMeters.TimeToFirstToken.Record(
             seconds,

@@ -51,6 +51,23 @@ Serilog → Routing → CORS → RequestId → Auth → Authorization
   → Rate limit → Quota → Model router → upstream HTTP
 ```
 
+## Concurrency model and admission control
+
+Every stage of the inference path is asynchronous and per-request: Kestrel accepts connections without a per-connection thread, the body is buffered and scanned once (`Utf8JsonReader`, no `JsonDocument`), and the upstream call is an `HttpClient` send with `ResponseHeadersRead` followed by a 16 KB chunk copy that flushes per chunk when streaming. Nothing on the path holds a process-wide lock across an await, and no request awaits a database write — usage, errors and stats are enqueued to bounded in-memory buffers drained by background writers. Measured against a slow, deliberately concurrent mock (see `perf/reports/concurrency-2026-08-16.md`), 64 simultaneous 2-second requests complete in ~2 s wall-clock, streaming or not.
+
+What *bounds* concurrency is admission control, applied in this order and each answering `429` with `Retry-After` and an `X-33pol-Error-Code`:
+
+| Stage | Scope | Setting | Default | On breach |
+|-------|-------|---------|---------|-----------|
+| Request rate | per partition (tenant, or remote address when anonymous) | Admin → Rate limits: `Rpm`, `Burst` (token bucket, capacity `Rpm + Burst`, refill `Rpm`/min) | 3000 / 500 | `rate_limit_exceeded`, `Retry-After ≈ 1 s` |
+| Model bulkhead | per model | `Gateway:Resilience:MaxConcurrentForwardsPerModel` + `MaxQueuedForwardsPerModel` (bounded FIFO wait, `BulkheadQueueTimeoutSeconds`) | 256 in flight + 256 queued, 30 s | `concurrency_limit_exceeded` once queue is full or the wait times out |
+| Stream slots | per partition | Admin → Rate limits: `MaxConcurrentStreams` (0 = unlimited) | 256 | `concurrency_limit_exceeded` |
+| Circuit breaker | per model | `Gateway:Resilience:CircuitBreaker*` | 5 failures / 50 % in 30 s | `circuit_open` |
+
+Two things about partitions are easy to miss. Every API key issued from the admin console belongs to the operator tenant, so all API-key traffic shares **one** partition and the default tier applies to the deployment as a whole; and without `Gateway:ForwardedHeaders`, all anonymous traffic behind a proxy shares the proxy's address. The rate-limit tier is read from the config snapshot — the database when one is configured, seeded on first boot — so it is edited in the admin UI, not in `appsettings.json`. The gateway logs the effective ceilings at startup (`Admission limits: …`) and warns when the stream cap is below the bulkhead.
+
+The model server keeps its own queue behind the bulkhead: vLLM/TGI/SGLang batch continuously up to `--max-num-seqs`; Ollama serves `OLLAMA_NUM_PARALLEL` (auto 1–4) at a time and queues the rest; LM Studio serves one request at a time. If requests through the gateway complete one after another while the gateway reports no 429s and `gateway_bulkhead_queued` stays at zero, the serialization is in the model server — `perf/scripts/concurrency-bench.py` run against the gateway and against the server directly attributes it in one step.
+
 ## Data flows
 
 **Inference:** Client → gateway validates key and model grant → policy checks → proxy selects backend URL → stream or buffer response → usage event enqueued → optional persistence batch.

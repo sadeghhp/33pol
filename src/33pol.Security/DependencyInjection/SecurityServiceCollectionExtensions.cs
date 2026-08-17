@@ -86,8 +86,10 @@ public static class SecurityServiceCollectionExtensions
         services.AddSingleton<IValidateOptions<GatewaySecurityOptions>, GatewaySecurityOptionsValidator>();
         services.AddOptions<GatewaySecurityOptions>().ValidateOnStart();
 
+        services.AddSingleton<ApiKeyNegativeCache>();
         services.AddScoped<IApiKeyValidator, ApiKeyValidator>();
-        services.AddScoped<IModelGrantService, ModelGrantService>();
+        // Singleton: answers from cache and only opens a scope (and a DbContext) on a miss.
+        services.AddSingleton<IModelGrantService, ModelGrantService>();
         services.AddScoped<IModelGrantAdminService, ModelGrantAdminService>();
         services.AddScoped<IAdminKeyService, AdminKeyService>();
         services.AddScoped<IApiKeyLastUsedTracker, DebouncedApiKeyLastUsedTracker>();

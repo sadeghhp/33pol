@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Minimal OpenAI-compatible mock for local k6 smoke (no Docker)."""
-from http.server import BaseHTTPRequestHandler, HTTPServer
+"""Minimal OpenAI-compatible mock for local k6 smoke (no Docker). Answers instantly, many at once."""
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -32,4 +32,8 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     port = 18080
     print(f"mock upstream listening on http://127.0.0.1:{port}", flush=True)
-    HTTPServer(("127.0.0.1", port), Handler).serve_forever()
+    # ThreadingHTTPServer, not HTTPServer: the single-threaded server accepted one connection at a
+    # time, so any concurrency test through the gateway measured the mock's serialization and
+    # reported it as the gateway's. For a slow, deliberately concurrent backend model see
+    # concurrent-mock-upstream.py.
+    ThreadingHTTPServer(("127.0.0.1", port), Handler).serve_forever()

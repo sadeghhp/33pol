@@ -4,6 +4,34 @@ All notable changes to this project are documented here. Version tags follow [Se
 
 ## [Unreleased]
 
+### Changed — throughput and admission control
+
+Investigation of "the gateway serves requests one at a time" reports. Measured on this branch with a deliberately concurrent slow mock (`perf/scripts/concurrent-mock-upstream.py`, 2 s per request): 64 simultaneous requests through the gateway complete in 2.05 s wall-clock, streaming and non-streaming alike, with the upstream observing all 64 at once — the request path itself does not serialize. What *did* make a busy gateway look serial were the admission limits and how rejections were reported:
+
+- **Per-model bulkhead default raised from 64 to 256** (vLLM's own `--max-num-seqs` default) and given a **bounded wait queue** — `Gateway:Resilience:MaxQueuedForwardsPerModel` (256 in the shipped config, 0 = old refuse-immediately behaviour) with `BulkheadQueueTimeoutSeconds` (30). A burst above the ceiling now waits briefly for a slot instead of being answered 429 and left to the client SDK's exponential-backoff retry loop, which was slower for the caller and added load for everyone else. Queue depth is exported as `gateway_bulkhead_queued{model}`; a persistently non-zero value means the model server (or the ceiling) is the bottleneck.
+- **Request-rate limiting is a token bucket, not a fixed per-minute window.** Capacity is still `Rpm + Burst` and a fresh partition still admits that as an instantaneous burst, but tokens refill continuously at `Rpm`/minute. Under the fixed window a partition that burst past its limit was told `Retry-After: <up to 59 s>` — and OpenAI-compatible SDKs honour that header by sleeping — so every further call from that tenant hung until the top of the next minute, which read as the gateway queueing them one by one. `Retry-After` is now `ceil(60 / Rpm)`, in practice 1 second.
+- **`RateLimiting:Enabled=false` is honoured without a database.** The initial config snapshot copied every rate-limit field except `Enabled`, so a database-less gateway (and the window before the first DB load) enforced limits regardless.
+- **Upstream connection pool configured explicitly** (`Gateway:Resilience:Upstream*`): connect timeout 10 s (was infinite — a down backend consumed the whole header allowance per request), pooled-connection lifetime 15 min / idle 5 min (was a full handler rotation every 2 min plus a 60 s idle reap, i.e. a burst of new TCP connections to the model server every two minutes under steady load), `MaxConnectionsPerServer` unlimited unless opted in, multiple HTTP/2 connections enabled.
+- **Shipped default rate-limit tier raised** from 600 rpm / 100 burst / 50 concurrent streams to 3000 / 500 / 256 (streams now match the bulkhead). The default tier is applied per *partition*, and every API key issued from the admin console shares the operator tenant's partition, so the old numbers capped the whole deployment at 50 simultaneous streams and ~10 requests/s regardless of GPU. **Existing databases keep the values seeded on their first boot** — raise them under Admin → Rate limits; editing `appsettings.json` on an installed gateway changes nothing.
+- **Startup logs the effective admission ceilings** — bulkhead, queue, rate-limit tier and where it was read from — and warns when the default tier's `MaxConcurrentStreams` is below the bulkhead, because every API key issued from the admin console shares one tenant partition and that number, not the GPU, then caps the whole deployment's simultaneous streams.
+
+### Changed — hot-path efficiency
+
+- Console logging is asynchronous (`Serilog.Sinks.Async`, bounded, drop-when-full). The console sink was writing inline on the request thread under one lock per completed request, so a slow log consumer stalled request completion.
+- The in-flight request table no longer calls `ConcurrentDictionary.Count` per forwarded request; that call takes every internal lock of the dictionary and had become a global barrier between concurrent requests.
+- `GatewayDbContext` is pooled. A context was built for every authenticated inference request — API-key validator, grant service and budget check all sit behind scoped repositories — even when all three answered from cache.
+- The model-grant service is a singleton that opens a scope only on a cache miss, and coalesces concurrent misses for the same key into one query instead of a burst at every TTL expiry.
+- Unknown API keys are remembered for 30 s in a bounded negative cache. Every request with an unrecognised key ran a database lookup — the normal case for `publicAccess` models, whose SDK callers must send *some* placeholder key.
+- Billing events are inserted one batch per transaction (one existence probe, one `SaveChanges`) instead of one round trip and one WAL commit per event; the usage writer drained at ~900 events/s before, so this is capacity headroom rather than a fix for a current stall.
+- The two latency histograms (`gateway_inference_duration_seconds`, `gateway_time_to_first_token_seconds`) get seconds-shaped bucket boundaries; the SDK defaults were millisecond-shaped and put every inference between 0.5 s and 60 s in two buckets, so `histogram_quantile()` could not distinguish a slow model from a queueing gateway.
+
+### Added — perf tooling
+
+- `perf/scripts/concurrent-mock-upstream.py`: asyncio mock backend with configurable latency that serves any number of requests at once and reports its peak observed concurrency at `/__stats`.
+- `perf/scripts/concurrency-bench.py`: standard-library script that fires N requests simultaneously and prints whether the path is parallel or serialized, and which admission limit produced any 429s. Run it against the gateway and against the model server directly to attribute the bottleneck.
+- `perf/scripts/mock-upstream.py` is now multi-threaded; the single-threaded server it used measured its own serialization and attributed it to the gateway.
+- `perf/reports/concurrency-2026-08-16.md`: the measurements behind the changes above.
+
 ### Fixed — billing correctness
 
 - Non-streaming responses larger than the capture buffer are now billed. The response tail is retained for non-streaming bodies too, and usage is recovered from it by fragment scan when the body outgrew the head. Previously any such response failed to parse and recorded **no usage at all** — which included essentially every batch embeddings response.

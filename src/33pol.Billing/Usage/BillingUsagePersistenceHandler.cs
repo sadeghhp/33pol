@@ -47,20 +47,28 @@ public sealed class BillingUsagePersistenceHandler(
 
         // Each event still becomes its own billing_events row: that is the audit trail, and its
         // per-request detail (request id, duration, per-event cost) must not be aggregated away.
-        var appended = new List<BillingEventRecord>(usageEvents.Count);
+        // They are written as one batch — one existence probe and one transaction — rather than one
+        // SaveChanges per event, which had turned a 100-event batch into 200 round trips and 100
+        // separate WAL commits and made the usage writer the slowest stage in the process.
+        var records = new List<BillingEventRecord>(usageEvents.Count);
         foreach (var usageEvent in usageEvents)
         {
-            var record = BillingEventFactory.FromUsageEvent(usageEvent, PriceEvent(usageEvent, pricedByModel));
+            records.Add(BillingEventFactory.FromUsageEvent(usageEvent, PriceEvent(usageEvent, pricedByModel)));
+        }
 
-            if (!await billingEvents.TryAppendAsync(record, cancellationToken).ConfigureAwait(false))
+        var appended = await AppendAsync(records, cancellationToken).ConfigureAwait(false);
+        if (appended.Count != records.Count)
+        {
+            // Duplicates: the cost was already persisted for those requests, so free their
+            // reservations and keep them out of the rollup aggregation.
+            var appendedIds = new HashSet<string>(appended.Select(r => r.RequestId), StringComparer.Ordinal);
+            foreach (var record in records)
             {
-                // Duplicate: the cost was already persisted for this request, so free its
-                // reservation and keep it out of the rollup aggregation.
-                reservationLedger.Release(usageEvent.RequestId);
-                continue;
+                if (!appendedIds.Contains(record.RequestId))
+                {
+                    reservationLedger.Release(record.RequestId);
+                }
             }
-
-            appended.Add(record);
         }
 
         if (appended.Count == 0)
@@ -136,6 +144,27 @@ public sealed class BillingUsagePersistenceHandler(
         // Firing it inline sent a "daily" summary containing whatever had accrued by a tenant's
         // first request of the day — and, because both paths share the same dedup tracker, that
         // send consumed the tracker slot so the real end-of-day summary was never delivered at all.
+    }
+
+    private async Task<IReadOnlyList<BillingEventRecord>> AppendAsync(
+        IReadOnlyList<BillingEventRecord> records,
+        CancellationToken cancellationToken)
+    {
+        if (billingEvents is IBillingEventBatchAppender batchAppender)
+        {
+            return await batchAppender.TryAppendManyAsync(records, cancellationToken).ConfigureAwait(false);
+        }
+
+        var appended = new List<BillingEventRecord>(records.Count);
+        foreach (var record in records)
+        {
+            if (await billingEvents.TryAppendAsync(record, cancellationToken).ConfigureAwait(false))
+            {
+                appended.Add(record);
+            }
+        }
+
+        return appended;
     }
 
     private void ReleaseReservations(IReadOnlyList<BillingEventRecord> appended)
