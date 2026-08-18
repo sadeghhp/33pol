@@ -41,6 +41,46 @@ public sealed class DailyUsageRollupRepository(GatewayDbContext dbContext) : IDa
         return entities.Select(DailyUsageRollupEntityMapper.ToRecord).ToList();
     }
 
+    public async Task<IReadOnlyList<DailyUsageRollupRecord>> GetScopedRollupsAsync(
+        UsageScope scope,
+        DateOnly? fromDate,
+        DateOnly? toDate,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(scope);
+        var query = dbContext.DailyUsageRollups.AsNoTracking();
+
+        if (fromDate is not null)
+        {
+            query = query.Where(r => r.UsageDate >= fromDate.Value);
+        }
+
+        if (toDate is not null)
+        {
+            query = query.Where(r => r.UsageDate <= toDate.Value);
+        }
+
+        if (scope.TenantId is Guid tenantId)
+        {
+            query = scope.IncludeAnonymous
+                ? query.Where(r => r.TenantId == tenantId || r.TenantId == null)
+                : query.Where(r => r.TenantId == tenantId);
+        }
+        else if (!scope.IncludeAnonymous)
+        {
+            query = query.Where(r => r.TenantId != null);
+        }
+
+        var entities = await query
+            .OrderBy(r => r.UsageDate)
+            .ThenBy(r => r.TenantId)
+            .ThenBy(r => r.ModelId)
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        return entities.Select(DailyUsageRollupEntityMapper.ToRecord).ToList();
+    }
+
     public async Task UpsertRollupsAsync(
         IReadOnlyList<DailyUsageRollupRecord> rollups,
         CancellationToken cancellationToken = default)

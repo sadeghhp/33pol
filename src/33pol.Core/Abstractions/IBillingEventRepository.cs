@@ -31,6 +31,16 @@ public interface IBillingEventRepository
         DateOnly fromDate,
         DateOnly toDate,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Aggregates the ledger rows matching <paramref name="filter"/> into daily rollup buckets
+    /// (date, tenant, model, cost centre), exactly as <see cref="GetDailyTotalsAsync"/> does but
+    /// honouring the tenant scope, key and cost-centre filters. <c>Limit</c> and <c>Cursor</c> are
+    /// ignored. This is what backs per-key usage reports, which the rollup table cannot answer.
+    /// </summary>
+    Task<IReadOnlyList<DailyUsageRollupRecord>> AggregateDailyAsync(
+        BillingEventQuery filter,
+        CancellationToken cancellationToken = default);
 }
 
 /// <summary>

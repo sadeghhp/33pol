@@ -119,23 +119,91 @@ public sealed class BillingEventRepository(GatewayDbContext dbContext) : IBillin
     {
         ArgumentNullException.ThrowIfNull(query);
 
-        var limit = Math.Clamp(query.Limit, 1, 5000);
-        var dbQuery = dbContext.BillingEvents.AsNoTracking();
+        var limit = Math.Clamp(query.Limit, 1, UsageExportLimits.MaxEventPageSize);
+        var dbQuery = ApplyFilter(dbContext.BillingEvents.AsNoTracking(), query);
 
-        if (query.TenantId is not null)
+        // Keyset paging: everything at or before the boundary timestamp, minus the ids already
+        // served at that exact timestamp. Fetching (limit + boundary count) then trimming in memory
+        // is exact even when several rows share the boundary tick.
+        var boundaryIds = query.Cursor?.BoundaryIds ?? [];
+        if (query.Cursor is not null)
         {
-            dbQuery = dbQuery.Where(e => e.TenantId == query.TenantId.Value);
+            var at = query.Cursor.At;
+            dbQuery = dbQuery.Where(e => e.RecordedAt <= at);
         }
 
-        if (query.ApiKeyId is not null)
+        var entities = await dbQuery
+            .OrderByDescending(e => e.RecordedAt)
+            .ThenByDescending(e => e.Id)
+            .Take(limit + boundaryIds.Count)
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        IEnumerable<Entities.BillingEventEntity> rows = entities;
+        if (boundaryIds.Count > 0)
         {
-            dbQuery = dbQuery.Where(e => e.ApiKeyId == query.ApiKeyId.Value);
+            var excluded = new HashSet<Guid>(boundaryIds);
+            rows = rows.Where(e => !excluded.Contains(e.Id));
         }
 
-        if (!string.IsNullOrWhiteSpace(query.CostCenter))
+        return rows.Take(limit).Select(BillingEntityMapper.ToRecord).ToList();
+    }
+
+    public async Task<IReadOnlyList<DailyUsageRollupRecord>> AggregateDailyAsync(
+        BillingEventQuery filter,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(filter);
+        if (filter.FromDate is not null && filter.ToDate is not null && filter.ToDate < filter.FromDate)
         {
-            var costCenter = query.CostCenter.Trim();
-            dbQuery = dbQuery.Where(e => e.CostCenter == costCenter);
+            return [];
+        }
+
+        var rows = ApplyFilter(dbContext.BillingEvents.AsNoTracking(), filter with { Cursor = null })
+            .Select(e => new LedgerRow(
+                e.RecordedAt,
+                e.TenantId,
+                e.ModelId,
+                e.CostCenter,
+                e.PromptTokens,
+                e.CompletionTokens,
+                e.TotalCost))
+            .AsAsyncEnumerable();
+
+        return await BucketAsync(rows, cancellationToken).ConfigureAwait(false);
+    }
+
+    private static IQueryable<Entities.BillingEventEntity> ApplyFilter(
+        IQueryable<Entities.BillingEventEntity> dbQuery,
+        BillingEventQuery query)
+    {
+        if (query.TenantId is Guid tenantId)
+        {
+            dbQuery = query.IncludeAnonymous
+                ? dbQuery.Where(e => e.TenantId == tenantId || e.TenantId == null)
+                : dbQuery.Where(e => e.TenantId == tenantId);
+        }
+        else if (!query.IncludeAnonymous)
+        {
+            // No tenant filter but anonymous rows not requested: same reading as UsageScope.Matches.
+            dbQuery = dbQuery.Where(e => e.TenantId != null);
+        }
+
+        if (query.ApiKeyId is Guid apiKeyId)
+        {
+            dbQuery = dbQuery.Where(e => e.ApiKeyId == apiKeyId);
+        }
+
+        if (query.NoCostCenter)
+        {
+            dbQuery = dbQuery.Where(e => e.CostCenter == null || e.CostCenter == "");
+        }
+        else if (!string.IsNullOrWhiteSpace(query.CostCenter))
+        {
+            // Case-insensitive: cost centres are free text typed by operators, and "Engineering"
+            // vs "engineering" silently returning nothing was a recurring support question.
+            var costCenter = query.CostCenter.Trim().ToLowerInvariant();
+            dbQuery = dbQuery.Where(e => e.CostCenter != null && e.CostCenter.ToLower() == costCenter);
         }
 
         if (query.FromDate is not null)
@@ -150,13 +218,7 @@ public sealed class BillingEventRepository(GatewayDbContext dbContext) : IBillin
             dbQuery = dbQuery.Where(e => e.RecordedAt <= to);
         }
 
-        var entities = await dbQuery
-            .OrderByDescending(e => e.RecordedAt)
-            .Take(limit)
-            .ToListAsync(cancellationToken)
-            .ConfigureAwait(false);
-
-        return entities.Select(BillingEntityMapper.ToRecord).ToList();
+        return dbQuery;
     }
 
     public async Task<IReadOnlyDictionary<Guid, ApiKeyUsageSummary>> GetUsageSummariesAsync(
@@ -219,18 +281,32 @@ public sealed class BillingEventRepository(GatewayDbContext dbContext) : IBillin
         var rows = dbContext.BillingEvents
             .AsNoTracking()
             .Where(e => e.RecordedAt >= from && e.RecordedAt <= to)
-            .Select(e => new
-            {
+            .Select(e => new LedgerRow(
                 e.RecordedAt,
                 e.TenantId,
                 e.ModelId,
                 e.CostCenter,
                 e.PromptTokens,
                 e.CompletionTokens,
-                e.TotalCost,
-            })
+                e.TotalCost))
             .AsAsyncEnumerable();
 
+        return await BucketAsync(rows, cancellationToken).ConfigureAwait(false);
+    }
+
+    private sealed record LedgerRow(
+        DateTimeOffset RecordedAt,
+        Guid? TenantId,
+        string ModelId,
+        string? CostCenter,
+        long PromptTokens,
+        long CompletionTokens,
+        decimal? TotalCost);
+
+    private static async Task<IReadOnlyList<DailyUsageRollupRecord>> BucketAsync(
+        IAsyncEnumerable<LedgerRow> rows,
+        CancellationToken cancellationToken)
+    {
         var buckets = new Dictionary<DailyUsageRollupKey, (long Prompt, long Completion, decimal Cost, int Count)>();
 
         await foreach (var row in rows.WithCancellation(cancellationToken).ConfigureAwait(false))

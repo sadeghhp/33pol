@@ -20,13 +20,24 @@ Phase 4 implements **quota gating** on the inference hot path. Phase 5 adds **bi
 | Endpoint | Purpose |
 |----------|---------|
 | `GET /admin/api/usage` | Daily rollup report + summary (admin auth) |
-| `GET /admin/api/usage/export?format=csv\|json` | Download rollups |
-| `GET /admin/api/usage/forecast?days=7` | Trailing spend + projected monthly cost |
-| `GET /admin/api/usage/events?limit=100` | Paginated billing events (newest first) |
+| `GET /admin/api/usage/export?dataset=rollups\|events&format=csv\|json` | Download rollups or the raw ledger (events capped at 5,000 rows; `X-Export-Truncated: true` when the cap was hit) |
+| `GET /admin/api/usage/forecast?days=7` | Month-end projection |
+| `GET /admin/api/usage/events?limit=100&cursor=` | Billing events, newest first, keyset-paged |
 
-**Forecast formula:** sums `total_cost` from daily rollups over the trailing window (default 7 days, clamped 1–90), divides by window length for a daily average, then multiplies by days in the current UTC calendar month. Response includes `trailingDays`, `trailingTotalCost`, `projectedMonthlyCost`, and `currency` (from `Billing:DefaultCurrency`).
+**Common query params** (all four routes accept them; the forecast ignores `from`/`to`):
 
-Query params: `from`, `to` (dates), `tenantId` (optional).
+| Param | Meaning |
+|---|---|
+| `from`, `to` | Inclusive UTC calendar days. Default: the 30 days ending today. `from > to` or a span over 366 days is a `400 {"code":"invalid_range" \| "range_too_long"}`. |
+| `costCenter` | Case-insensitive exact match. The sentinel `(none)` selects rows with **no** cost centre. |
+| `apiKeyId` | Restrict to one key. The rollup table has no per-key dimension, so the report is then aggregated from `billing_events` into the same daily buckets (`source: "events"` in the response). |
+| `includeAnonymous` | Also include rows with no tenant — requests to `publicAccess` models sent without an API key. They are priced and persisted like any other request but belong to no tenant, so they are **excluded by default**. The admin console sends `true` by default (toggle on the page). |
+
+**Report response** adds `currency` (from `Billing:DefaultCurrency`), `source` (`rollups` | `events`), `unpricedModelIds` (models in the report with no current rate card — their spend is recorded as `0`), and `summary.anonymousRequests`.
+
+**Events response** is `{ events, limit, hasMore, nextCursor }`. Pass `nextCursor` back as `cursor` for the next page; the cursor is opaque and tie-safe (rows sharing a timestamp are never repeated or skipped). An unrecognised cursor is a `400 invalid_cursor`.
+
+**Forecast formula:** `projectedMonthlyCost = monthToDateCost + averageDailyCost × daysRemainingInMonth`, where `averageDailyCost` is the mean of the last `days` **complete** UTC days (yesterday backwards; clamped 1–90) and `daysRemainingInMonth` excludes today. Today's partial spend counts toward month-to-date but does not dilute the average. The forecast honours the same `costCenter` / `apiKeyId` / `includeAnonymous` filters as the report, so it is comparable to the numbers beside it. Response: `trailingDays`, `windowStart`, `windowEnd`, `trailingTotalCost`, `averageDailyCost`, `monthToDateCost`, `daysRemainingInMonth`, `projectedMonthlyCost`, `currency`.
 
 ## Webhooks
 
@@ -52,7 +63,7 @@ Budgets with `HardStopEnabled` block inference when period spend ≥ `AmountLimi
 - In-memory channel capacity **10,000** events with **`DropOldest`** when saturated (oldest event discarded, newest kept).
 - Batched persistence: flush at **100** events or **1 s** (`Billing:UsageWriterBatchSize`, `Billing:UsageWriterFlushIntervalMs`).
 - Metrics: `gateway_usage_writer_queue_depth`, `gateway_usage_writer_dropped_total` (see `deploy/prometheus/alerts/33pol-writer.yml`).
-- Admin read API: `GET /admin/api/usage/events?tenantId=&from=&to=&limit=` for paginated billing event history.
+- Admin read API: `GET /admin/api/usage/events?from=&to=&limit=&cursor=` for paginated billing event history (tenant comes from the admin key).
 
 ## Model pricing (rate cards)
 
@@ -79,8 +90,10 @@ PATCH /admin/api/models/{id}
 - Deleting a model also deletes its rate card.
 
 **A model with no rate card records zero cost.** Its billing events persist with null costs and roll
-up as `0`, which is indistinguishable from genuinely free usage in the Usage & cost tab. The gateway
-logs a warning once per unpriced model to make this visible.
+up as `0`. The Usage & cost tab flags this: the report's `unpricedModelIds` lists any model in the
+range without a current rate card and the page shows a warning with a link to Routing → Models, and
+ledger rows with a null cost render as `—` rather than `$0.00`. The gateway also logs a warning once
+per unpriced model.
 
 **Caching:** rate cards are cached in-process for `Billing:RateCardCacheTtlSeconds` (default 60),
 because budget enforcement prices every request before forwarding it. Admin edits invalidate the

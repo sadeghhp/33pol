@@ -13,6 +13,15 @@ public interface IBillingUsageService
         IReadOnlyList<DailyUsageRollupRecord> rollups,
         string format);
 
+    /// <summary>
+    /// Ledger export. Rows are capped at <see cref="UsageExportLimits.MaxEventRows"/>; the result
+    /// says whether the cap was hit.
+    /// </summary>
+    Task<UsageExportResult> ExportEventsAsync(
+        BillingEventQuery query,
+        string format,
+        CancellationToken cancellationToken = default);
+
     Task<BillingEventsPage> QueryEventsAsync(
         BillingEventQuery query,
         CancellationToken cancellationToken = default);

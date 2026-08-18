@@ -6,6 +6,11 @@ public interface IApiKeyRepository
 {
     Task<ApiKeyRecord?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default);
 
+    /// <summary>Loads many keys at once; ids that do not exist are simply absent from the result.</summary>
+    Task<IReadOnlyList<ApiKeyRecord>> GetByIdsAsync(
+        IReadOnlyCollection<Guid> ids,
+        CancellationToken cancellationToken = default);
+
     Task<ApiKeyRecord?> FindByPrefixAsync(string keyPrefix, CancellationToken cancellationToken = default);
 
     /// <summary>

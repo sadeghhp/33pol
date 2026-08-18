@@ -41,15 +41,8 @@ public static class AdminBillingEventMapper
             .Distinct()
             .ToArray();
 
-        var keysById = new Dictionary<Guid, ApiKeyLookup>();
-        foreach (var keyId in keyIds)
-        {
-            var key = await apiKeys.GetByIdAsync(keyId, cancellationToken).ConfigureAwait(false);
-            if (key is not null)
-            {
-                keysById[keyId] = new ApiKeyLookup(key.KeyPrefix, key.Assignee);
-            }
-        }
+        var keys = await apiKeys.GetByIdsAsync(keyIds, cancellationToken).ConfigureAwait(false);
+        var keysById = keys.ToDictionary(k => k.Id, k => new ApiKeyLookup(k.KeyPrefix, k.Assignee));
 
         return events.Select(e => ToListItem(e, keysById)).ToList();
     }

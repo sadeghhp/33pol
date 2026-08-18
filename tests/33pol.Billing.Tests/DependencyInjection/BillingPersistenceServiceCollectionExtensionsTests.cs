@@ -289,5 +289,10 @@ public sealed class BillingPersistenceServiceCollectionExtensionsTests
             DateOnly toDate,
             CancellationToken cancellationToken = default) =>
             Task.FromResult<IReadOnlyList<DailyUsageRollupRecord>>([]);
+
+        public Task<IReadOnlyList<DailyUsageRollupRecord>> AggregateDailyAsync(
+            BillingEventQuery filter,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<DailyUsageRollupRecord>>([]);
     }
 }
