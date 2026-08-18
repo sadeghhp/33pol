@@ -6,12 +6,11 @@ namespace Pol33.Billing.Forecast;
 public sealed class NoOpBillingForecastService : IBillingForecastService
 {
     public Task<UsageForecastResponse> GetForecastAsync(
-        Guid? tenantId,
-        int trailingDays = 7,
+        UsageForecastRequest request,
         CancellationToken cancellationToken = default) =>
         Task.FromResult(new UsageForecastResponse
         {
-            TrailingDays = trailingDays,
+            TrailingDays = request.TrailingDays,
             TrailingTotalCost = 0m,
             ProjectedMonthlyCost = 0m,
             Currency = "USD",

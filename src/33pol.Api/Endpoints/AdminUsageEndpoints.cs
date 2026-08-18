@@ -11,6 +11,24 @@ namespace Pol33.Api.Endpoints;
 
 public static class AdminUsageEndpoints
 {
+    /// <summary>
+    /// Sentinel accepted in <c>costCenter</c> to select rows that have <em>no</em> cost centre.
+    /// </summary>
+    public const string NoCostCenterSentinel = "(none)";
+
+    /// <summary>Longest inclusive window one report may span, in days.</summary>
+    public const int MaxRangeDays = 366;
+
+    /// <summary>
+    /// Window applied when the caller supplies no <c>from</c> date: 30 days inclusive of <c>to</c>.
+    /// </summary>
+    /// <remarks>
+    /// The rollup query has no row limit and both date bounds were optional, so a parameterless call
+    /// materialised every rollup row ever written and serialised the lot into one response. A
+    /// bounded default keeps the common call cheap; callers wanting more supply an explicit range.
+    /// </remarks>
+    public const int DefaultUsageWindowDays = 30;
+
     public static IEndpointRouteBuilder MapAdminUsageEndpoints(this IEndpointRouteBuilder endpoints)
     {
         var group = endpoints.MapGroup("/admin/api/usage")
@@ -24,29 +42,110 @@ public static class AdminUsageEndpoints
         return endpoints;
     }
 
+    /// <summary>The one filter shape every usage endpoint accepts.</summary>
+    /// <remarks>
+    /// Bound by hand rather than <c>[AsParameters]</c> so the same validation (range order, range
+    /// length, the <c>(none)</c> sentinel) is applied identically on all four routes.
+    /// </remarks>
+    private sealed record UsageFilter(
+        Guid TenantId,
+        DateOnly From,
+        DateOnly To,
+        string? CostCenter,
+        bool NoCostCenter,
+        Guid? ApiKeyId,
+        bool IncludeAnonymous)
+    {
+        public UsageScope Scope => new(TenantId, IncludeAnonymous);
+
+        public UsageReportRequest ToReportRequest() => new()
+        {
+            FromDate = From,
+            ToDate = To,
+            TenantId = TenantId,
+            IncludeAnonymous = IncludeAnonymous,
+            CostCenter = CostCenter,
+            NoCostCenter = NoCostCenter,
+            ApiKeyId = ApiKeyId,
+        };
+
+        public BillingEventQuery ToEventQuery(int limit, BillingEventCursor? cursor) => new(
+            From,
+            To,
+            TenantId,
+            ApiKeyId,
+            CostCenter,
+            limit,
+            IncludeAnonymous,
+            NoCostCenter,
+            cursor);
+    }
+
+    private static bool TryBindFilter(
+        HttpContext httpContext,
+        DateOnly? from,
+        DateOnly? to,
+        string? costCenter,
+        Guid? apiKeyId,
+        bool? includeAnonymous,
+        out UsageFilter filter,
+        out IResult? error)
+    {
+        filter = null!;
+        error = null;
+
+        if (!TryGetTenantId(httpContext, out var tenantId))
+        {
+            error = Results.Unauthorized();
+            return false;
+        }
+
+        var toDate = to ?? DateOnly.FromDateTime(DateTime.UtcNow);
+        var fromDate = from ?? toDate.AddDays(-(DefaultUsageWindowDays - 1));
+
+        if (fromDate > toDate)
+        {
+            error = BadRequest("invalid_range", "'from' must be on or before 'to'.");
+            return false;
+        }
+
+        if (toDate.DayNumber - fromDate.DayNumber + 1 > MaxRangeDays)
+        {
+            error = BadRequest("range_too_long", $"The date range may span at most {MaxRangeDays} days.");
+            return false;
+        }
+
+        var trimmed = string.IsNullOrWhiteSpace(costCenter) ? null : costCenter.Trim();
+        var noCostCenter = string.Equals(trimmed, NoCostCenterSentinel, StringComparison.OrdinalIgnoreCase);
+
+        filter = new UsageFilter(
+            tenantId,
+            fromDate,
+            toDate,
+            noCostCenter ? null : trimmed,
+            noCostCenter,
+            apiKeyId,
+            includeAnonymous == true);
+        return true;
+    }
+
     private static async Task<IResult> GetUsage(
         HttpContext httpContext,
         IBillingUsageService usageService,
         DateOnly? from,
         DateOnly? to,
         string? costCenter,
+        Guid? apiKeyId,
+        bool? includeAnonymous,
         CancellationToken cancellationToken)
     {
-        if (!TryGetTenantId(httpContext, out var tenantId))
+        if (!TryBindFilter(httpContext, from, to, costCenter, apiKeyId, includeAnonymous, out var filter, out var error))
         {
-            return Results.Unauthorized();
+            return error!;
         }
 
         var report = await usageService
-            .GetUsageReportAsync(
-                new UsageReportRequest
-                {
-                    FromDate = from ?? DefaultFromDate(to),
-                    ToDate = to,
-                    TenantId = tenantId,
-                    CostCenter = costCenter,
-                },
-                cancellationToken)
+            .GetUsageReportAsync(filter.ToReportRequest(), cancellationToken)
             .ConfigureAwait(false);
 
         return Results.Json(report);
@@ -56,15 +155,29 @@ public static class AdminUsageEndpoints
         HttpContext httpContext,
         IBillingForecastService forecastService,
         int? days,
+        string? costCenter,
+        Guid? apiKeyId,
+        bool? includeAnonymous,
         CancellationToken cancellationToken)
     {
-        if (!TryGetTenantId(httpContext, out var tenantId))
+        // The forecast has its own window (trailing complete days + month to date), so the report's
+        // from/to are deliberately not accepted here; the other filters are shared.
+        if (!TryBindFilter(httpContext, null, null, costCenter, apiKeyId, includeAnonymous, out var filter, out var error))
         {
-            return Results.Unauthorized();
+            return error!;
         }
 
         var report = await forecastService
-            .GetForecastAsync(tenantId, days ?? 7, cancellationToken)
+            .GetForecastAsync(
+                new UsageForecastRequest
+                {
+                    Scope = filter.Scope,
+                    CostCenter = filter.CostCenter,
+                    NoCostCenter = filter.NoCostCenter,
+                    ApiKeyId = filter.ApiKeyId,
+                    TrailingDays = days ?? 7,
+                },
+                cancellationToken)
             .ConfigureAwait(false);
 
         return Results.Json(report);
@@ -77,18 +190,24 @@ public static class AdminUsageEndpoints
         DateOnly? to,
         Guid? apiKeyId,
         string? costCenter,
+        bool? includeAnonymous,
         int? limit,
+        string? cursor,
         CancellationToken cancellationToken)
     {
-        if (!TryGetTenantId(httpContext, out var tenantId))
+        if (!TryBindFilter(httpContext, from, to, costCenter, apiKeyId, includeAnonymous, out var filter, out var error))
         {
-            return Results.Unauthorized();
+            return error!;
+        }
+
+        BillingEventCursor? decoded = null;
+        if (!string.IsNullOrWhiteSpace(cursor) && !BillingEventCursor.TryDecode(cursor, out decoded))
+        {
+            return BadRequest("invalid_cursor", "The 'cursor' value is not a cursor issued by this endpoint.");
         }
 
         var page = await usageService
-            .QueryEventsAsync(
-                new BillingEventQuery(from, to, tenantId, apiKeyId, costCenter, limit ?? 100),
-                cancellationToken)
+            .QueryEventsAsync(filter.ToEventQuery(limit ?? 100, decoded), cancellationToken)
             .ConfigureAwait(false);
 
         return Results.Json(page);
@@ -100,43 +219,52 @@ public static class AdminUsageEndpoints
         DateOnly? from,
         DateOnly? to,
         string? costCenter,
+        Guid? apiKeyId,
+        bool? includeAnonymous,
         string? format,
+        string? dataset,
         CancellationToken cancellationToken)
     {
-        if (!TryGetTenantId(httpContext, out var tenantId))
+        if (!TryBindFilter(httpContext, from, to, costCenter, apiKeyId, includeAnonymous, out var filter, out var error))
         {
-            return Results.Unauthorized();
+            return error!;
         }
 
-        var report = await usageService
-            .GetUsageReportAsync(
-                new UsageReportRequest
-                {
-                    FromDate = from ?? DefaultFromDate(to),
-                    ToDate = to,
-                    TenantId = tenantId,
-                    CostCenter = costCenter,
-                },
-                cancellationToken)
-            .ConfigureAwait(false);
+        var fmt = (format ?? "json").Trim().ToLowerInvariant();
+        if (fmt is not ("json" or "csv"))
+        {
+            return BadRequest("invalid_format", "'format' must be 'json' or 'csv'.");
+        }
 
-        var export = usageService.ExportRollups(report.Rollups, format ?? "json");
+        var set = (dataset ?? "rollups").Trim().ToLowerInvariant();
+        UsageExportResult export;
+        switch (set)
+        {
+            case "rollups":
+                var report = await usageService
+                    .GetUsageReportAsync(filter.ToReportRequest(), cancellationToken)
+                    .ConfigureAwait(false);
+                export = usageService.ExportRollups(report.Rollups, fmt);
+                break;
+            case "events":
+                export = await usageService
+                    .ExportEventsAsync(filter.ToEventQuery(UsageExportLimits.MaxEventRows, null), fmt, cancellationToken)
+                    .ConfigureAwait(false);
+                break;
+            default:
+                return BadRequest("invalid_dataset", "'dataset' must be 'rollups' or 'events'.");
+        }
+
+        httpContext.Response.Headers["X-Export-Truncated"] = export.Truncated ? "true" : "false";
+        httpContext.Response.Headers["Access-Control-Expose-Headers"] = "Content-Disposition, X-Export-Truncated";
         return Results.File(
             System.Text.Encoding.UTF8.GetBytes(export.Body),
             export.ContentType,
             export.FileName);
     }
 
-    /// <summary>Window applied when the caller supplies no <c>from</c> date.</summary>
-    /// <remarks>
-    /// The rollup query has no row limit and both date bounds were optional, so a parameterless call
-    /// materialised every rollup row ever written and serialised the lot into one response. A
-    /// bounded default keeps the common call cheap; callers wanting more supply an explicit range.
-    /// </remarks>
-    private const int DefaultUsageWindowDays = 30;
-
-    private static DateOnly DefaultFromDate(DateOnly? toDate) =>
-        (toDate ?? DateOnly.FromDateTime(DateTime.UtcNow)).AddDays(-DefaultUsageWindowDays);
+    private static IResult BadRequest(string code, string message) =>
+        Results.Json(new { code, message }, statusCode: StatusCodes.Status400BadRequest);
 
     private static bool TryGetTenantId(HttpContext context, out Guid tenantId)
     {

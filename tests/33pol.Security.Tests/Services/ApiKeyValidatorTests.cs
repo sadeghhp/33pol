@@ -242,6 +242,11 @@ public sealed class ApiKeyValidatorTests
         public Task<ApiKeyRecord?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) =>
             inner.GetByIdAsync(id, cancellationToken);
 
+        public Task<IReadOnlyList<ApiKeyRecord>> GetByIdsAsync(
+            IReadOnlyCollection<Guid> ids,
+            CancellationToken cancellationToken = default) =>
+            inner.GetByIdsAsync(ids, cancellationToken);
+
         public Task<IReadOnlyList<ApiKeyRecord>> ListByTenantAsync(Guid tenantId, CancellationToken cancellationToken = default) =>
             inner.ListByTenantAsync(tenantId, cancellationToken);
 

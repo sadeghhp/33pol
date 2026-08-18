@@ -5,7 +5,6 @@ namespace Pol33.Core.Abstractions;
 public interface IBillingForecastService
 {
     Task<UsageForecastResponse> GetForecastAsync(
-        Guid? tenantId,
-        int trailingDays = 7,
+        UsageForecastRequest request,
         CancellationToken cancellationToken = default);
 }

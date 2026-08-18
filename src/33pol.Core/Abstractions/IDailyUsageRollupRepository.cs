@@ -10,6 +10,16 @@ public interface IDailyUsageRollupRepository
         Guid? tenantId,
         CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Rollups visible under <paramref name="scope"/> for an inclusive date window, ordered by date
+    /// then model. Unlike the tenant-only overload this can also return anonymous (no-tenant) rows.
+    /// </summary>
+    Task<IReadOnlyList<DailyUsageRollupRecord>> GetScopedRollupsAsync(
+        UsageScope scope,
+        DateOnly? fromDate,
+        DateOnly? toDate,
+        CancellationToken cancellationToken = default);
+
     Task UpsertRollupsAsync(
         IReadOnlyList<DailyUsageRollupRecord> rollups,
         CancellationToken cancellationToken = default);

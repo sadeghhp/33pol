@@ -20,6 +20,30 @@ public sealed class ApiKeyRepository : IApiKeyRepository
         return entity is null ? null : IdentityEntityMapper.ToRecord(entity);
     }
 
+    public async Task<IReadOnlyList<ApiKeyRecord>> GetByIdsAsync(
+        IReadOnlyCollection<Guid> ids,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(ids);
+        if (ids.Count == 0)
+        {
+            return [];
+        }
+
+        // Chunked to stay well under SQLite's default 999 bound-parameter limit.
+        var result = new List<ApiKeyRecord>(ids.Count);
+        foreach (var chunk in ids.Distinct().Chunk(500))
+        {
+            var entities = await _db.ApiKeys
+                .AsNoTracking()
+                .Where(k => chunk.Contains(k.Id))
+                .ToListAsync(cancellationToken);
+            result.AddRange(entities.Select(IdentityEntityMapper.ToRecord));
+        }
+
+        return result;
+    }
+
     public async Task<ApiKeyRecord?> FindByPrefixAsync(string keyPrefix, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(keyPrefix);
