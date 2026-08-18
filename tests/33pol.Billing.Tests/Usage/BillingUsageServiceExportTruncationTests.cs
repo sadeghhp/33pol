@@ -94,7 +94,8 @@ public sealed class BillingUsageServiceExportTruncationTests
             ledger,
             apiKeys,
             Substitute.For<IRateCardRepository>(),
-            Options.Create(new BillingOptions()));
+            Options.Create(new BillingOptions()),
+            Substitute.For<IModelRegistry>());
         return (service, ledger);
     }
 

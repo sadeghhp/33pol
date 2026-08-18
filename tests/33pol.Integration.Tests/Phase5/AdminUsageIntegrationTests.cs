@@ -139,7 +139,9 @@ public sealed class AdminUsageIntegrationTests
         var tenantId = await GetBootstrapTenantIdAsync(factory);
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
         await SeedRollupsAsync(factory, tenantId);
-        await SeedRollupsAsync(factory, null, today, "public-model", requests: 3);
+        // "local-mock" is a registered model with no rate card; "gpt-4o" is not registered at all
+        // (retired), so only the former is an actionable unpriced-model hint.
+        await SeedRollupsAsync(factory, null, today, "local-mock", requests: 3);
         await SeedRollupsAsync(factory, Guid.NewGuid(), today, "gpt-4o", requests: 9); // another tenant
 
         var client = factory.CreateClient();
@@ -153,7 +155,7 @@ public sealed class AdminUsageIntegrationTests
         withAnon!.Summary!.TotalRequests.Should().Be(5);
         withAnon.Summary.AnonymousRequests.Should().Be(3);
         withAnon.Rollups.Should().HaveCount(2);
-        withAnon.UnpricedModelIds.Should().BeEquivalentTo("gpt-4o", "public-model");
+        withAnon.UnpricedModelIds.Should().BeEquivalentTo("local-mock");
         withAnon.Currency.Should().Be("USD");
         withAnon.Source.Should().Be("rollups");
 

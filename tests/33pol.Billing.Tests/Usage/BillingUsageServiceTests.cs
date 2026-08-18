@@ -14,6 +14,7 @@ public sealed class BillingUsageServiceTests
     private readonly IBillingEventRepository _events = Substitute.For<IBillingEventRepository>();
     private readonly IApiKeyRepository _apiKeys = Substitute.For<IApiKeyRepository>();
     private readonly IRateCardRepository _rateCards = Substitute.For<IRateCardRepository>();
+    private readonly IModelRegistry _registry = Substitute.For<IModelRegistry>();
     private readonly BillingUsageService _service;
 
     public BillingUsageServiceTests()
@@ -26,8 +27,11 @@ public sealed class BillingUsageServiceTests
             });
         _apiKeys.GetByIdsAsync(Arg.Any<IReadOnlyCollection<Guid>>(), Arg.Any<CancellationToken>())
             .Returns(Array.Empty<ApiKeyRecord>());
+        // Every model id is "registered" unless a test says otherwise; retired models are the
+        // exception exercised explicitly.
+        _registry.TryGetModel(Arg.Any<string>(), out Arg.Any<ModelConfig?>()).Returns(true);
         _service = new BillingUsageService(
-            _rollups, _events, _apiKeys, _rateCards, Options.Create(new BillingOptions { DefaultCurrency = "EUR" }));
+            _rollups, _events, _apiKeys, _rateCards, Options.Create(new BillingOptions { DefaultCurrency = "EUR" }), _registry);
     }
 
     private static RateCardRecord RateCard(string modelId) => new(
@@ -101,6 +105,31 @@ public sealed class BillingUsageServiceTests
         report.Summary.TotalRequests.Should().Be(6);
         report.Summary.AnonymousRequests.Should().Be(4);
         report.UnpricedModelIds.Should().Equal("Free-Model");
+    }
+
+    /// <summary>
+    /// Rollups outlive models. A model deleted long ago still has rows in the range and no rate
+    /// card, but it must not be reported as unpriced: there is nothing to price any more and the
+    /// "set pricing under Routing → Models" hint would point at a model that does not exist.
+    /// </summary>
+    [Fact]
+    public async Task GetUsageReportAsync_RetiredModelWithoutRateCard_IsNotReportedAsUnpriced()
+    {
+        var tenantId = Guid.NewGuid();
+        _registry.TryGetModel("retired-embed", out Arg.Any<ModelConfig?>()).Returns(false);
+        _rollups
+            .GetScopedRollupsAsync(Arg.Any<UsageScope>(), null, null, Arg.Any<CancellationToken>())
+            .Returns(
+            [
+                new DailyUsageRollupRecord(new DateOnly(2026, 8, 1), tenantId, "retired-embed", null, 10, 0, 0m, 3),
+                new DailyUsageRollupRecord(new DateOnly(2026, 8, 1), tenantId, "Free-Model", null, 10, 5, 0m, 1),
+                new DailyUsageRollupRecord(new DateOnly(2026, 8, 1), tenantId, "gpt-4o", null, 10, 5, 1m, 1),
+            ]);
+
+        var report = await _service.GetUsageReportAsync(new UsageReportRequest { TenantId = tenantId });
+
+        report.UnpricedModelIds.Should().Equal("Free-Model");
+        report.Summary.TotalRequests.Should().Be(5, "retired usage still counts in the totals");
     }
 
     [Fact]

@@ -39,6 +39,9 @@ public sealed class BillingPersistenceServiceCollectionExtensionsTests
 
         var services = new ServiceCollection();
         services.AddLogging();
+        // The usage report consults the registry (unpriced-model hint is limited to registered
+        // models); the host always registers one, this container stands in for it.
+        services.AddSingleton(Substitute.For<IModelRegistry>());
         services.AddGatewayPersistence(configuration);
         services.AddGatewayBilling(configuration);
         services.AddGatewayBillingPersistence(configuration);

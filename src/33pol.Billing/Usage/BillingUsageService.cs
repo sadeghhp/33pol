@@ -12,7 +12,8 @@ public sealed class BillingUsageService(
     IBillingEventRepository billingEvents,
     IApiKeyRepository apiKeys,
     IRateCardRepository rateCards,
-    IOptions<BillingOptions> options) : IBillingUsageService
+    IOptions<BillingOptions> options,
+    IModelRegistry registry) : IBillingUsageService
 {
     public async Task<UsageReportResponse> GetUsageReportAsync(
         UsageReportRequest request,
@@ -177,6 +178,16 @@ public sealed class BillingUsageService(
             .ToList();
     }
 
+    /// <summary>
+    /// Models in the report that are still registered but have no active rate card — the set an
+    /// operator can act on by setting pricing.
+    /// </summary>
+    /// <remarks>
+    /// Rollups outlive models: deleting a model removes its rate card but keeps its historical rows,
+    /// so a range overlapping those days would otherwise flag the retired model forever, and the
+    /// "set pricing under Routing → Models" hint would point at nothing. Retired models are left
+    /// out; their historical usage stays in the report at whatever cost was recorded at the time.
+    /// </remarks>
     private async Task<IReadOnlyList<string>> FindUnpricedModelsAsync(
         IReadOnlyList<DailyUsageRollupRecord> records,
         CancellationToken cancellationToken)
@@ -195,7 +206,7 @@ public sealed class BillingUsageService(
         var lookup = new HashSet<string>(priced.Keys, StringComparer.OrdinalIgnoreCase);
 
         return models
-            .Where(m => !lookup.Contains(m))
+            .Where(m => !lookup.Contains(m) && registry.TryGetModel(m, out _))
             .OrderBy(m => m, StringComparer.OrdinalIgnoreCase)
             .ToList();
     }
