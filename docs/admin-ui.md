@@ -170,7 +170,26 @@ terminal handler and do reach the Errors tab with their stack trace.
 
 If the gateway error body was not written (e.g. forward failed after the upstream response already started), **Error** may be empty even when **Status** is 4xx/5xx.
 
-GET requests retry once on network failure. Usage export uses `downloadBlob` with the same error mapping as JSON APIs.
+GET requests retry once on network failure. Usage export uses `downloadBlob` with the same error mapping as JSON APIs and saves under the server's `Content-Disposition` filename.
+
+### Usage & cost
+
+- **Scope.** Rollups, ledger, chart, tiles, forecast and exports all honour the same filter: UTC date
+  range, cost centre (case-insensitive; `(none)` = rows without one; a datalist offers the known
+  values), API key, and **Include anonymous usage** — requests to public models sent without a key,
+  which are priced but belong to no tenant. The toggle defaults on and is remembered per browser.
+  With a key selected the whole page is aggregated from the ledger for that key.
+- **Presets** are inclusive UTC calendar days ("Last 7 days" = 7 days ending today) and show as
+  selected when the inputs match. `From > To` is flagged inline and disables Apply/exports.
+- **Tiles.** Cost is the selected range; **Projected this month** is month-to-date plus the average
+  of the last 7 complete UTC days for each remaining day (same filters). Requests notes how many were
+  anonymous. Money renders sub-cent amounts with three significant digits and unpriced as `—`.
+- **Unpriced usage** banner lists models in the range that have no rate card.
+- **Chart** has a y-axis and one column per UTC day in the range, zero days included.
+- **Tables.** Rollups are sortable, newest first, 100 at a time; the ledger shows UTC timestamps
+  (local time on hover), pages 50 at a time with **Load 50 more**, tags anonymous rows, and dims
+  unpriced costs. Exports offer rollups or events, CSV or JSON, capped at 5,000 events with a toast
+  when truncated.
 
 ## API surface (by section)
 

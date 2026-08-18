@@ -436,24 +436,32 @@
           <div class="page-header">
             <div class="titles">
               <span class="eyebrow">Billing</span><h2>Usage &amp; cost</h2>
-              <p class="page-sub">Scoped to your tenant, and billed from persisted usage events —
-                so these totals will not match the gateway-wide request counts on <strong>Overview</strong>.</p>
+              <p class="page-sub">Scoped to your tenant (plus anonymous public-model traffic when included), billed from
+                persisted usage events — so these totals will not match the gateway-wide request counts on <strong>Overview</strong>.</p>
             </div>
           </div>
 
-          <div class="chip-row">
-            <button type="button" class="preset" @click="usagePreset7">Last 7 days</button>
-            <button type="button" class="preset" @click="usagePreset30">Last 30 days</button>
-            <button type="button" class="preset" @click="usagePresetMtd">Month to date</button>
+          <div class="chip-row" role="group" aria-label="Date presets">
+            <button type="button" :class="usagePresetActive.d7" :aria-pressed="usagePresetActive.d7Pressed" @click="usagePreset7">Last 7 days</button>
+            <button type="button" :class="usagePresetActive.d30" :aria-pressed="usagePresetActive.d30Pressed" @click="usagePreset30">Last 30 days</button>
+            <button type="button" :class="usagePresetActive.mtd" :aria-pressed="usagePresetActive.mtdPressed" @click="usagePresetMtd">Month to date</button>
           </div>
 
           <div class="card form-card">
             <div class="grid">
-              <label>From <input type="date" x-model="mdl.usageFrom" /></label>
-              <label>To <input type="date" x-model="mdl.usageTo" /></label>
-              <label>Cost center <input x-model="mdl.usageFilterCostCenter" placeholder="Filter rollups &amp; events" /></label>
+              <label>From <input type="date" x-model="mdl.usageFrom" @keydown.enter.prevent="applyUsageRange" :aria-invalid="usageRangeInvalid" /></label>
+              <label>To <input type="date" x-model="mdl.usageTo" @keydown.enter.prevent="applyUsageRange" :aria-invalid="usageRangeInvalid" /></label>
+              <label>Cost center
+                <input x-model="mdl.usageFilterCostCenter" list="usage-cost-centers" placeholder="Exact name (case-insensitive) or (none)"
+                  @keydown.enter.prevent="applyUsageRange" autocomplete="off" />
+                <datalist id="usage-cost-centers">
+                  <template x-for="c in usageCostCenterOptions" :key="c.key">
+                    <option :value="c.value"></option>
+                  </template>
+                </datalist>
+              </label>
               <label>API key
-                <select x-model="mdl.usageFilterApiKeyId">
+                <select x-model="mdl.usageFilterApiKeyId" @change="applyUsageRange">
                   <option value="">All keys</option>
                   <template x-for="k in usageKeyOptions" :key="k.key">
                     <option :value="k.id" x-text="k.label"></option>
@@ -461,17 +469,37 @@
                 </select>
               </label>
             </div>
-            <p class="hint" x-show="usageFilterApiKeyId">Rollups are grouped by cost center; use the billing events below for per-key detail.</p>
+            <p class="field-error" x-show="usageRangeInvalid" x-text="usageRangeError" role="alert"></p>
+            <p class="hint">Dates are UTC calendar days; ledger times below are shown in UTC to match.</p>
+            <label class="checkbox field-inline">
+              <input type="checkbox" x-model="mdl.usageIncludeAnonymous" @change="applyUsageRange" />
+              Include anonymous usage (requests to public models sent without an API key)
+            </label>
             <div class="toolbar" style="margin-top: var(--space-3); margin-bottom: 0">
-              <button type="button" class="action" @click="applyUsageRange" :disabled="loadingUsage">Apply range</button>
-              <button type="button" class="action secondary" @click="clearUsageFilters" :disabled="loadingUsage">Clear filters</button>
+              <button type="button" class="action" @click="applyUsageRange" :disabled="usageApplyDisabled">Apply</button>
+              <button type="button" class="action secondary" @click="clearUsageFilters" :disabled="usageBusy">Clear filters</button>
               <span class="spacer"></span>
-              <button type="button" class="action secondary" @click="downloadExportJson" :disabled="loadingUsage"><span class="icon" x-html="icons.download"></span> JSON</button>
-              <button type="button" class="action secondary" @click="downloadExportCsv" :disabled="loadingUsage"><span class="icon" x-html="icons.download"></span> CSV</button>
+              <span class="export-group" role="group" aria-label="Export daily rollups">
+                <span class="export-label">Rollups</span>
+                <button type="button" class="action secondary" @click="exportRollupsJson" :disabled="usageApplyDisabled"><span class="icon" x-html="icons.download"></span> JSON</button>
+                <button type="button" class="action secondary" @click="exportRollupsCsv" :disabled="usageApplyDisabled"><span class="icon" x-html="icons.download"></span> CSV</button>
+              </span>
+              <span class="export-group" role="group" aria-label="Export billing events">
+                <span class="export-label">Events</span>
+                <button type="button" class="action secondary" @click="exportEventsJson" :disabled="usageApplyDisabled"><span class="icon" x-html="icons.download"></span> JSON</button>
+                <button type="button" class="action secondary" @click="exportEventsCsv" :disabled="usageApplyDisabled"><span class="icon" x-html="icons.download"></span> CSV</button>
+              </span>
             </div>
           </div>
 
-          <div class="vitals-grid" x-show="usageSummary.has" style="margin-top: var(--space-4)">
+          <p class="hint" x-show="hasUsageScopeNote" x-text="usageScopeNote" style="margin-top: var(--space-3)"></p>
+
+          <div class="notice warn" x-show="hasUsageUnpriced" style="margin-top: var(--space-4)">
+            <strong>Unpriced usage.</strong> <span x-text="usageUnpricedText"></span>
+            <a href="#/routing" @click.prevent="openRoutingModels">Set pricing under Routing → Models →</a>
+          </div>
+
+          <div class="vitals-grid vitals-5" x-show="usageSummary.has" style="margin-top: var(--space-4)">
             <article class="vital">
               <div class="vital-head"><span class="vital-label">Prompt tokens</span><span class="icon" x-html="icons.hash"></span></div>
               <strong class="vital-value" x-text="usageSummary.promptCompact"></strong>
@@ -485,14 +513,17 @@
             <article class="vital accent-live">
               <div class="vital-head"><span class="vital-label">Cost</span><span class="icon" x-html="icons.dollar-sign"></span></div>
               <strong class="vital-value" x-text="usageSummary.costText"></strong>
-              <div class="vital-foot" x-show="usageSummary.hasForecast">
-                <span class="vital-trend up"><span class="icon" x-html="icons.trending-up"></span> <span x-text="usageSummary.forecastText"></span></span>
-              </div>
+              <div class="vital-foot"><span x-text="usageSummary.costFoot"></span></div>
             </article>
             <article class="vital">
               <div class="vital-head"><span class="vital-label">Requests</span><span class="icon" x-html="icons.activity"></span></div>
               <strong class="vital-value" x-text="usageSummary.requestsText"></strong>
-              <div class="vital-foot"><span>billed inference calls</span></div>
+              <div class="vital-foot"><span x-text="usageSummary.requestsFoot"></span></div>
+            </article>
+            <article class="vital" x-show="hasUsageForecast" :title="usageForecastTile.title">
+              <div class="vital-head"><span class="vital-label">Projected this month</span><span class="icon" x-html="icons.trending-up"></span></div>
+              <strong class="vital-value" x-text="usageForecastTile.value"></strong>
+              <div class="vital-foot"><span x-text="usageForecastTile.foot"></span></div>
             </article>
           </div>
 
@@ -500,66 +531,98 @@
           <div class="card" x-show="hasUsageCols" style="margin-top: var(--space-4)">
             <span class="eyebrow">Trend</span>
             <h3>Cost per day</h3>
-            <div class="colchart">
-              <div class="colchart-plot">
-                <template x-for="d in usageCols" :key="d.key">
-                  <div class="col" :title="d.title">
-                    <span class="col-fill" :style="d.style"></span>
-                  </div>
-                </template>
+            <div class="colchart" role="img" :aria-label="usageChartAria">
+              <div class="colchart-body">
+                <div class="colchart-y" aria-hidden="true">
+                  <span x-text="usageYTicks.top"></span>
+                  <span x-text="usageYTicks.mid"></span>
+                  <span x-text="usageYTicks.bottom"></span>
+                </div>
+                <div class="colchart-plot" aria-hidden="true">
+                  <template x-for="d in usageCols" :key="d.key">
+                    <div :class="d.cls" :title="d.title">
+                      <span class="col-fill" :style="d.style"></span>
+                    </div>
+                  </template>
+                </div>
               </div>
-              <div class="colchart-axis">
+              <div class="colchart-axis" aria-hidden="true">
                 <span x-text="usageAxisStart"></span>
+                <span x-text="usageAxisMid"></span>
                 <span x-text="usageAxisEnd"></span>
               </div>
             </div>
           </div>
 
-          <div class="section-header"><div><span class="eyebrow">Detail</span><h3>Daily rollups</h3></div></div>
+          <div class="section-header">
+            <div><span class="eyebrow">Detail</span><h3>Daily rollups</h3></div>
+            <span class="hint" x-show="hasUsageRollups" x-text="usageRollupsCountText" style="margin:0"></span>
+          </div>
           <div class="table-wrap">
             <table class="t-usage-rollups" x-show="hasUsageRollups">
               <colgroup>
                 <col style="width:12%" /><col style="width:24%" /><col style="width:20%" />
                 <col style="width:11%" /><col style="width:11%" /><col style="width:11%" /><col style="width:11%" />
               </colgroup>
-              <thead><tr><th>Date</th><th>Model</th><th>Cost center</th><th class="num">Prompt</th><th class="num">Completion</th><th class="num">Cost</th><th class="num">Req</th></tr></thead>
+              <thead><tr>
+                <th class="sortable" @click="sortBy.rollupDate">Date (UTC)<span x-html="sortIcon.rollupDate"></span></th>
+                <th class="sortable" @click="sortBy.rollupModel">Model<span x-html="sortIcon.rollupModel"></span></th>
+                <th class="sortable" @click="sortBy.rollupCostCenter">Cost center<span x-html="sortIcon.rollupCostCenter"></span></th>
+                <th class="num sortable" @click="sortBy.rollupPrompt">Prompt<span x-html="sortIcon.rollupPrompt"></span></th>
+                <th class="num sortable" @click="sortBy.rollupCompletion">Completion<span x-html="sortIcon.rollupCompletion"></span></th>
+                <th class="num sortable" @click="sortBy.rollupCost">Cost<span x-html="sortIcon.rollupCost"></span></th>
+                <th class="num sortable" @click="sortBy.rollupRequests">Req<span x-html="sortIcon.rollupRequests"></span></th>
+              </tr></thead>
               <tbody>
                 <template x-for="row in usageRollupRows" :key="row.key">
                   <tr>
-                    <td x-text="row.usageDate"></td><td x-text="row.modelId"></td><td x-text="row.costCenter"></td>
-                    <td class="num" x-text="row.promptTokens"></td><td class="num" x-text="row.completionTokens"></td>
-                    <td class="num" x-text="row.totalCost"></td><td class="num" x-text="row.requestCount"></td>
+                    <td x-text="row.usageDate"></td><td x-text="row.modelId"></td>
+                    <td>
+                      <span x-show="row.named" x-text="row.costCenterText"></span>
+                      <span class="tag muted" x-show="row.anonymous" title="Requests to a public model sent without an API key">public · no key</span>
+                    </td>
+                    <td class="num" x-text="row.promptText"></td><td class="num" x-text="row.completionText"></td>
+                    <td class="num" x-text="row.costText"></td><td class="num" x-text="row.requestsText"></td>
                   </tr>
                 </template>
               </tbody>
             </table>
+          </div>
+          <div class="toolbar" x-show="usageRollupsHasMore" style="margin-top: var(--space-2)">
+            <button type="button" class="action secondary" @click="showMoreUsageRollups">Show 100 more</button>
           </div>
           <div class="empty-state" x-show="usageRollupsEmpty">
             <span class="empty-state-icon icon" x-html="icons.bar-chart"></span>
             <p>No usage in this date range. Try widening the range or clearing filters.</p>
           </div>
 
-          <div class="section-header"><div><span class="eyebrow">Ledger</span><h3>Recent billing events</h3></div></div>
+          <div class="section-header">
+            <div><span class="eyebrow">Ledger</span><h3>Recent billing events</h3></div>
+            <span class="hint" x-show="hasUsageEvents" x-text="usageEventsCountText" style="margin:0"></span>
+          </div>
           <div class="table-wrap">
             <table class="t-usage-events" x-show="hasUsageEvents">
               <colgroup>
-                <col style="width:14%" /><col style="width:11%" /><col style="width:17%" /><col style="width:22%" />
+                <col style="width:17%" /><col style="width:12%" /><col style="width:16%" /><col style="width:19%" />
                 <col style="width:12%" /><col style="width:12%" /><col style="width:12%" />
               </colgroup>
-              <thead><tr><th>Time</th><th>Key</th><th>Assignee</th><th>Model</th><th class="num">Prompt</th><th class="num">Completion</th><th class="num">Cost</th></tr></thead>
+              <thead><tr><th>Time (UTC)</th><th>Key</th><th>Assignee</th><th>Model</th><th class="num">Prompt</th><th class="num">Completion</th><th class="num">Cost</th></tr></thead>
               <tbody>
                 <template x-for="ev in usageEventRows" :key="ev.key">
                   <tr>
-                    <td x-text="ev.time"></td>
-                    <td><span class="tag" x-text="ev.keyPrefix"></span></td>
+                    <td class="nowrap" :title="ev.localTime" x-text="ev.time"></td>
+                    <td><span :class="ev.keyClass" :title="ev.keyTitle" x-text="ev.keyPrefix"></span></td>
                     <td x-text="ev.assignee"></td>
                     <td x-text="ev.modelId"></td>
                     <td class="num" x-text="ev.promptTokens"></td><td class="num" x-text="ev.completionTokens"></td>
-                    <td class="num" x-text="ev.totalCost"></td>
+                    <td :class="ev.costClass" :title="ev.costTitle" x-text="ev.totalCost"></td>
                   </tr>
                 </template>
               </tbody>
             </table>
+          </div>
+          <div class="toolbar" x-show="usageEventsHasMore" style="margin-top: var(--space-2)">
+            <button type="button" class="action secondary" @click="loadMoreUsageEvents" :disabled="loadingUsageEvents">Load 50 more</button>
           </div>
           <div class="empty-state" x-show="usageEventsEmpty">
             <span class="empty-state-icon icon" x-html="icons.clock"></span>

@@ -661,6 +661,7 @@ input, select, textarea {
 }
 input[type="checkbox"] { accent-color: var(--accent); }
 input::placeholder, textarea::placeholder { color: var(--text-tertiary); }
+input[aria-invalid="true"] { border-color: var(--error); }
 input:focus-visible, select:focus-visible, textarea:focus-visible {
   outline: none; border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft);
@@ -757,6 +758,7 @@ code.inp-hint { font-family: var(--font-mono); font-size: 0.95em; padding: 0.05r
   gap: var(--space-4);
   margin-bottom: var(--space-4);
 }
+.vitals-grid.vitals-5 { grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
 
 .vital {
   position: relative;
@@ -881,12 +883,21 @@ code.inp-hint { font-family: var(--font-mono); font-size: 0.95em; padding: 0.05r
 
 /* Column chart (usage over time) */
 .colchart { margin-top: var(--space-4); }
-.colchart-plot { display: flex; align-items: flex-end; gap: 3px; height: 132px; padding-top: var(--space-2); }
+/* y-axis ticks sit in a fixed gutter to the left of the plot; the x-axis row is offset by the same
+   gutter so its labels line up under the first/last bar. */
+.colchart-body { display: flex; gap: var(--space-2); align-items: stretch; }
+.colchart-y {
+  flex: 0 0 auto; width: 4.5rem; display: flex; flex-direction: column; justify-content: space-between;
+  align-items: flex-end; padding-top: var(--space-2); font-family: var(--font-mono); font-size: var(--text-2xs);
+  color: var(--text-tertiary); line-height: 1;
+}
+.colchart-plot { flex: 1; min-width: 0; display: flex; align-items: flex-end; gap: 3px; height: 132px; padding-top: var(--space-2); border-bottom: 1px solid var(--border); }
 .col { flex: 1; min-width: 3px; display: flex; flex-direction: column; justify-content: flex-end; height: 100%; border-radius: var(--r-xs) var(--r-xs) 0 0; overflow: hidden; background: var(--bg-sunken); position: relative; }
-.col-fill { width: 100%; border-radius: var(--r-xs) var(--r-xs) 0 0; background: linear-gradient(180deg, var(--accent), color-mix(in srgb, var(--accent) 55%, transparent)); transition: height var(--dur-slow) var(--ease-out); min-height: 2px; }
+.col.empty { background: transparent; border-bottom: 2px dotted var(--border); }
+.col-fill { width: 100%; border-radius: var(--r-xs) var(--r-xs) 0 0; background: linear-gradient(180deg, var(--accent), color-mix(in srgb, var(--accent) 55%, transparent)); transition: height var(--dur-slow) var(--ease-out); }
 .col:hover .col-fill { background: linear-gradient(180deg, var(--accent-hover), var(--accent)); }
 .col-tip { position: absolute; }
-.colchart-axis { display: flex; justify-content: space-between; margin-top: 0.5rem; font-family: var(--font-mono); font-size: var(--text-2xs); color: var(--text-tertiary); }
+.colchart-axis { display: flex; justify-content: space-between; margin: 0.5rem 0 0 calc(4.5rem + var(--space-2)); font-family: var(--font-mono); font-size: var(--text-2xs); color: var(--text-tertiary); }
 .chart-legend { display: flex; flex-wrap: wrap; gap: var(--space-3); margin-top: var(--space-3); font-size: var(--text-xs); color: var(--text-secondary); }
 .chart-legend span { display: inline-flex; align-items: center; gap: 0.35rem; }
 .legend-swatch { width: 10px; height: 10px; border-radius: 3px; }
@@ -995,6 +1006,14 @@ td.live { color: var(--live-text); font-family: var(--font-mono); }
 
 /* Tags stay on one line; the cell around them may still wrap. */
 td .tag { white-space: nowrap; }
+.tag.muted { color: var(--text-tertiary); border-style: dashed; background: transparent; }
+td.nowrap { white-space: nowrap; }
+td.num.muted { color: var(--text-tertiary); font-size: inherit; }
+
+/* Export controls on the Usage page: two labelled groups (rollups / events). */
+.export-group { display: inline-flex; align-items: center; gap: var(--space-2); }
+.export-group + .export-group { margin-left: var(--space-3); padding-left: var(--space-3); border-left: 1px solid var(--border); }
+.export-label { font-size: var(--text-2xs); font-weight: var(--fw-semi); letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-tertiary); }
 
 /* Feed strip: the tail's totals, above the rows. */
 .feed-strip {

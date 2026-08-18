@@ -4,6 +4,21 @@ All notable changes to this project are documented here. Version tags follow [Se
 
 ## [Unreleased]
 
+### Fixed — admin Usage & cost
+
+- **Anonymous public-model spend was invisible.** Requests to `publicAccess` models sent without an API key are priced and persisted with no tenant, and every query on the page filtered by tenant, so that spend appeared nowhere. All four usage endpoints now accept `includeAnonymous=true`; the console sends it by default (toggle on the page), tags those rows **public · no key** / **anonymous**, and reports `summary.anonymousRequests`.
+- **`$0.00` no longer hides sub-cent or unpriced costs.** Amounts under a cent keep three significant digits; a null (unpriced) cost renders as `—`. The report lists `unpricedModelIds` and the page shows a warning linking to Routing → Models.
+- **"Last 7 / 30 days" returned 8 / 31 days.** Presets are now inclusive UTC calendar days and show as selected.
+- **Forecast** is `month-to-date + average of the last N complete UTC days × days remaining`, honours the page's filters, no longer dilutes the average with today's partial day, and sits in its own **Projected this month** tile instead of inside the range-scoped Cost tile.
+- **Cost-centre filter** matches case-insensitively; `(none)` selects rows without one; a datalist offers known values.
+- **API-key filter scopes everything** — tiles, chart, rollups, forecast and export — by aggregating the ledger for that key (`source: "events"`), not just the ledger table.
+- **Export** honours the key filter, adds `dataset=events` (CSV/JSON, capped at 5,000 rows with `X-Export-Truncated`), and saves under the server's date-stamped filename.
+- **`from > to` and spans over 366 days are `400`** on every route (`invalid_range` / `range_too_long`) instead of a silent empty result; the console validates inline.
+- **Chart** gained a y-axis and one column per UTC day (missing days are no longer collapsed).
+- **Pagination.** Events: `hasMore` + tie-safe keyset `nextCursor` and a **Load 50 more** button; rollups sortable, newest first, 100 at a time.
+- **UTC labelling.** Date inputs are labelled UTC and ledger times render in UTC (local on hover), matching the rollup days.
+- **Robustness.** Loading uses `Promise.allSettled` so a failing forecast does not blank the tables; fire-and-forget loads no longer leak unhandled rejections; billing-event enrichment does one batched key lookup instead of one query per key.
+
 ### Changed — admin Overview: cost, cost centre and a push feed
 
 - **Recent requests carry the cost centre, tokens and cost.** Every feed row (`GET /admin/api/requests`) now includes `costCenter` (known from admission, so in-flight rows have it too), `promptTokens` / `completionTokens` / `totalTokens` / `tokenSource` at completion, and `inputCost` / `outputCost` / `totalCost` / `currency` once the usage writer has priced the request. `pricingStatus` says where the row stands: `pending` (queued for pricing), `priced`, `unpriced` (no rate card, or no billing store), or `null` when the request produced no usage. Token counts are stamped by the router at completion; costs are attached by the billing writer one flush interval later (`IRecentRequestStore.AttachUsage`) and merged onto the row on read, so the order the two land in does not matter. Pricing survives a restart with the stats snapshot (migration `RecentRequestUsage` adds the columns to `recent_requests`; applied automatically at startup).

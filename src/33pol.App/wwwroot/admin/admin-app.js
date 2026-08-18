@@ -60,8 +60,17 @@ function adminApp() {
     overviewStale: false,
     usage: null,
     usageEvents: null,
+    usageEventsHasMore: false,
+    usageEventsCursor: null,
     usageFrom: '',
     usageTo: '',
+    /** Anonymous (no-key, public-model) usage is priced like everything else, so it is shown by default. */
+    usageIncludeAnonymous: localStorage.getItem('33pol-usage-anon') !== 'false',
+    usageRollupLimit: 100,
+    /** The range the current report was loaded for — the inputs may have been edited since. */
+    usageLoadedFrom: '',
+    usageLoadedTo: '',
+    _usageSeriesCache: null,
     forecast: null,
     backends: [],
     backendsFilter: '',
@@ -162,7 +171,8 @@ function adminApp() {
       models: { key: 'id', dir: 1 },
       backends: { key: 'modelId', dir: 1 },
       keys: { key: 'createdAt', dir: -1 },
-      requests: { key: 'timestampUtc', dir: -1 }
+      requests: { key: 'timestampUtc', dir: -1 },
+      usageRollups: { key: 'usageDate', dir: -1 }
     },
     _saveModelInFlight: false,
     _createKeyInFlight: false,
@@ -198,6 +208,15 @@ function adminApp() {
       this.restoreTab();
       window.addEventListener('hashchange', () => this.applyHashTab());
       document.addEventListener('visibilitychange', () => { this.syncPoll(); this.syncLive(); });
+      // Safety net: an API failure that escapes a fire-and-forget call site still lands in the
+      // banner instead of only in the devtools console.
+      window.addEventListener('unhandledrejection', ev => {
+        const e = ev.reason;
+        if (e && (e.title || e.global !== undefined)) {
+          ev.preventDefault();
+          if (!e._reported) this.handleCatch(e);
+        }
+      });
       window.addEventListener('beforeunload', () => this.stopLive());
       this._tickTimer = setInterval(() => {
         if (document.hidden) return;
@@ -210,12 +229,11 @@ function adminApp() {
       }
     },
 
+    /** Default window: the last 30 UTC calendar days, today included. */
     initUsageDates() {
-      const to = new Date();
-      const from = new Date();
-      from.setDate(from.getDate() - 30);
-      this.usageTo = to.toISOString().slice(0, 10);
-      this.usageFrom = from.toISOString().slice(0, 10);
+      const { from, to } = this.usagePresetRange(30);
+      this.usageFrom = from;
+      this.usageTo = to;
     },
 
     resolveHash(hash) {
@@ -345,6 +363,7 @@ function adminApp() {
         return await this.store.withLoading(scope, label, fn);
       } catch (e) {
         this.handleCatch(e, options);
+        if (e && typeof e === 'object') e._reported = true;
         throw e;
       }
     },
@@ -368,13 +387,24 @@ function adminApp() {
       try { return new Date(iso).toLocaleTimeString(undefined, { hour12: false }); } catch { return iso; }
     },
 
+    /**
+     * Money on the Usage page. null/undefined is "not priced" and renders as a dash — it must not
+     * collapse into $0.00, which is what a free request costs. Sub-cent amounts keep three
+     * significant digits so a $0.0000014 event is distinguishable from zero.
+     */
     formatCost(value, currency) {
+      if (value === null || value === undefined || value === '') return '—';
       const n = Number(value);
-      if (Number.isNaN(n)) return value ?? '—';
+      if (!Number.isFinite(n)) return String(value);
+      const opts = { style: 'currency', currency: currency || 'USD' };
+      if (n !== 0 && Math.abs(n) < 0.01) {
+        opts.maximumSignificantDigits = 3;
+      } else {
+        opts.minimumFractionDigits = 2;
+        opts.maximumFractionDigits = 4;
+      }
       try {
-        return new Intl.NumberFormat(undefined, {
-          style: 'currency', currency: currency || 'USD', maximumFractionDigits: 4
-        }).format(n);
+        return new Intl.NumberFormat(undefined, opts).format(n);
       } catch { return n.toFixed(4); }
     },
 
@@ -401,38 +431,59 @@ function adminApp() {
       return sec < 3 ? 'just now' : sec + 's ago';
     },
 
-    usageQuery() {
+    /**
+     * The one filter every usage call sends: range, cost centre, key and the anonymous toggle.
+     * `withRange: false` drops from/to (the forecast has its own window).
+     */
+    usageParams(extra, withRange = true) {
       const q = new URLSearchParams();
-      if (this.usageFrom) q.set('from', this.usageFrom);
-      if (this.usageTo) q.set('to', this.usageTo);
+      if (withRange && this.usageFrom) q.set('from', this.usageFrom);
+      if (withRange && this.usageTo) q.set('to', this.usageTo);
       const costCenter = (this.usageFilterCostCenter || '').trim();
       if (costCenter) q.set('costCenter', costCenter);
-      const s = q.toString();
-      return s ? '?' + s : '';
+      if (this.usageFilterApiKeyId) q.set('apiKeyId', this.usageFilterApiKeyId);
+      if (this.usageIncludeAnonymous) q.set('includeAnonymous', 'true');
+      for (const [k, v] of Object.entries(extra || {})) {
+        if (v !== undefined && v !== null && v !== '') q.set(k, String(v));
+      }
+      return q.toString();
     },
 
-    usageEventsQuery() {
-      const params = new URLSearchParams();
-      if (this.usageFrom) params.set('from', this.usageFrom);
-      if (this.usageTo) params.set('to', this.usageTo);
-      const costCenter = (this.usageFilterCostCenter || '').trim();
-      if (costCenter) params.set('costCenter', costCenter);
-      if (this.usageFilterApiKeyId) params.set('apiKeyId', this.usageFilterApiKeyId);
-      params.set('limit', '50');
-      return params.toString();
+    /** Today's UTC calendar date as YYYY-MM-DD; rollups and event bounds are UTC days. */
+    utcToday() { return new Date().toISOString().slice(0, 10); },
+
+    /** "Last N days" means N UTC calendar days ending today, so `from` is today minus N-1. */
+    usagePresetRange(days) {
+      const to = new Date();
+      const from = new Date(to);
+      if (days === 'mtd') {
+        from.setUTCDate(1);
+      } else {
+        from.setUTCDate(from.getUTCDate() - (Number(days) - 1));
+      }
+      return { from: from.toISOString().slice(0, 10), to: to.toISOString().slice(0, 10) };
     },
 
     async setUsagePreset(days) {
-      const to = new Date();
-      const from = new Date();
-      if (days === 'mtd') {
-        from.setDate(1);
-      } else {
-        from.setDate(from.getDate() - Number(days));
-      }
-      this.usageTo = to.toISOString().slice(0, 10);
-      this.usageFrom = from.toISOString().slice(0, 10);
-      if (this.apiKey) await this.applyUsageRange();
+      const { from, to } = this.usagePresetRange(days);
+      this.usageFrom = from;
+      this.usageTo = to;
+      if (this.apiKey) await this.applyUsageRange().catch(() => {});
+    },
+
+    /** Inline validation for the range; the server enforces the same rules with a 400. */
+    get usageRangeError() {
+      if (!this.usageFrom || !this.usageTo) return '';
+      if (this.usageFrom > this.usageTo) return '"From" must be on or before "To".';
+      const days = (Date.parse(this.usageTo) - Date.parse(this.usageFrom)) / 86400000 + 1;
+      if (days > 366) return 'The range may span at most 366 days.';
+      return '';
+    },
+    get usageRangeInvalid() { return !!this.usageRangeError; },
+
+    setUsageIncludeAnonymous(on) {
+      this.usageIncludeAnonymous = !!on;
+      localStorage.setItem('33pol-usage-anon', this.usageIncludeAnonymous ? 'true' : 'false');
     },
 
     async copyText(text, successMsg) {
@@ -467,6 +518,9 @@ function adminApp() {
         if (key === 'createdAt' || key === 'timestampUtc' || key === 'lastUsedAt') {
           av = av ? new Date(av).getTime() : 0;
           bv = bv ? new Date(bv).getTime() : 0;
+        } else if (typeof av === 'number' || typeof bv === 'number') {
+          av = Number(av) || 0;
+          bv = Number(bv) || 0;
         } else {
           av = (av ?? '').toString().toLowerCase();
           bv = (bv ?? '').toString().toLowerCase();
@@ -651,9 +705,20 @@ function adminApp() {
       return Math.round((Number(value) / max) * 100) + '%';
     },
 
+    /**
+     * One entry per UTC day across the whole requested range, zero-filled — days with no traffic
+     * must show as gaps, otherwise the x-axis silently stops being linear. Memoised on the report
+     * object because several getters and every chart column read it during one render.
+     */
     usageDailySeries() {
-      const rollups = this.usage?.rollups || [];
-      if (!rollups.length) return [];
+      const usage = this.usage;
+      const cache = this._usageSeriesCache;
+      const from = this.usageLoadedFrom;
+      const to = this.usageLoadedTo;
+      if (cache && cache.usage === usage && cache.from === from && cache.to === to) {
+        return cache.series;
+      }
+      const rollups = usage?.rollups || [];
       const byDate = new Map();
       for (const r of rollups) {
         const d = r.usageDate;
@@ -664,15 +729,32 @@ function adminApp() {
         cur.requests += Number(r.requestCount || 0);
         byDate.set(d, cur);
       }
-      return [...byDate.values()].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+      let series = [];
+      if (byDate.size) {
+        const dates = [...byDate.keys()].sort();
+        const start = from && from <= dates[0] ? from : dates[0];
+        const end = to && to >= dates[dates.length - 1] ? to : dates[dates.length - 1];
+        const cur = new Date(start + 'T00:00:00Z');
+        const last = new Date(end + 'T00:00:00Z');
+        for (let guard = 0; cur <= last && guard < 400; guard++) {
+          const key = cur.toISOString().slice(0, 10);
+          series.push(byDate.get(key) || { date: key, cost: 0, prompt: 0, completion: 0, requests: 0 });
+          cur.setUTCDate(cur.getUTCDate() + 1);
+        }
+      }
+      this._usageSeriesCache = { usage, from, to, series };
+      return series;
     },
 
     usageMaxCost() {
-      return Math.max(1e-9, ...this.usageDailySeries().map(d => d.cost));
+      return Math.max(0, ...this.usageDailySeries().map(d => d.cost));
     },
 
     colHeight(value) {
-      return Math.max(2, Math.round((Number(value) / this.usageMaxCost()) * 100)) + '%';
+      const max = this.usageMaxCost();
+      const n = Number(value) || 0;
+      if (n <= 0 || max <= 0) return '0%';
+      return Math.max(1, Math.round((n / max) * 100)) + '%';
     },
 
     shortDate(iso) {
@@ -745,8 +827,10 @@ function adminApp() {
       if (!this.apiKey) return;
       if (name === 'dashboard') this.loadOverviewData();
       if (name === 'usage') {
-        if (!this.keys?.length) this.fetchKeys();
-        this.applyUsageRange();
+        // Fire-and-forget entry points: runApi already reports failures, so swallow the rethrow
+        // here rather than leaking an unhandled rejection to the console.
+        if (!this.keys?.length) this.runApi('usage', 'Loading keys…', () => this.fetchKeys()).catch(() => {});
+        this.applyUsageRange().catch(() => {});
       }
       if (name === 'routing') {
         if (this.routingSubTab === 'backends') this.loadBackends();
@@ -1595,8 +1679,11 @@ function adminApp() {
 
     viewKeyUsage(key) {
       if (!key?.id) return;
+      // The key filter alone scopes the whole page (aggregated from the ledger), so the key's
+      // current cost centre is deliberately not pre-filled — it would hide history recorded
+      // under a previous assignment.
       this.usageFilterApiKeyId = key.id;
-      this.usageFilterCostCenter = key.costCenter || '';
+      this.usageFilterCostCenter = '';
       this.setUsagePreset('mtd');
       this.setTab('usage');
     },
@@ -1604,7 +1691,7 @@ function adminApp() {
     clearUsageFilters() {
       this.usageFilterApiKeyId = '';
       this.usageFilterCostCenter = '';
-      if (this.apiKey) this.applyUsageRange();
+      if (this.apiKey) this.applyUsageRange().catch(() => {});
     },
 
     closeKeysDrawer() {
@@ -1957,16 +2044,42 @@ function adminApp() {
     },
 
     async applyUsageRange() {
+      if (this.usageRangeInvalid) {
+        this.toast(this.usageRangeError, 'error');
+        return;
+      }
       await this.runApi('usage', 'Loading usage…', async () => {
-        await Promise.all([
-          this.apiJson('/admin/api/usage' + this.usageQuery()).then(u => { this.usage = u; }),
-          this.apiJson('/admin/api/usage/events?' + this.usageEventsQuery()).then(page => {
-            this.usageEvents = page?.events ?? page?.Events ?? [];
+        // Settled, not all-or-nothing: a failing forecast must not blank the tables that loaded.
+        const results = await Promise.allSettled([
+          this.apiJson('/admin/api/usage?' + this.usageParams()).then(u => {
+            this.usage = u;
+            this.usageLoadedFrom = this.usageFrom;
+            this.usageLoadedTo = this.usageTo;
+            this.usageRollupLimit = 100;
           }),
-          this.apiJson('/admin/api/usage/forecast?days=7').then(f => { this.forecast = f; })
+          this.apiJson('/admin/api/usage/events?' + this.usageParams({ limit: 50 })).then(page => {
+            this.usageEvents = page?.events ?? [];
+            this.usageEventsHasMore = !!page?.hasMore;
+            this.usageEventsCursor = page?.nextCursor || null;
+          }),
+          this.apiJson('/admin/api/usage/forecast?' + this.usageParams({ days: 7 }, false)).then(f => { this.forecast = f; })
         ]);
+        const failed = results.find(r => r.status === 'rejected');
+        if (failed) throw failed.reason;
       });
     },
+
+    async loadMoreUsageEvents() {
+      if (!this.usageEventsCursor) return;
+      await this.runApi('usageEvents', 'Loading more events…', async () => {
+        const page = await this.apiJson('/admin/api/usage/events?' + this.usageParams({ limit: 50, cursor: this.usageEventsCursor }));
+        this.usageEvents = [...(this.usageEvents || []), ...(page?.events ?? [])];
+        this.usageEventsHasMore = !!page?.hasMore;
+        this.usageEventsCursor = page?.nextCursor || null;
+      }).catch(() => {});
+    },
+
+    showMoreUsageRollups() { this.usageRollupLimit += 100; },
 
     async fetchBackends() {
       this.backends = (await this.apiJson('/admin/api/backends')) ?? [];
@@ -2235,21 +2348,23 @@ function adminApp() {
       });
     },
 
-    async downloadExport(format) {
-      await this.runApi('usage', 'Preparing export…', async () => {
-        const params = new URLSearchParams();
-        if (this.usageFrom) params.set('from', this.usageFrom);
-        if (this.usageTo) params.set('to', this.usageTo);
-        const costCenter = (this.usageFilterCostCenter || '').trim();
-        if (costCenter) params.set('costCenter', costCenter);
-        params.set('format', format);
+    /** @param dataset 'rollups' | 'events' — the same filters the page shows apply to both. */
+    async downloadExport(dataset, format) {
+      if (this.usageRangeInvalid) {
+        this.toast(this.usageRangeError, 'error');
+        return;
+      }
+      await this.runApi('usageExport', 'Preparing export…', async () => {
         const ext = format === 'csv' ? 'csv' : 'json';
-        await this.store.downloadBlob(
-          '/admin/api/usage/export?' + params.toString(),
-          'usage-export.' + ext,
+        const res = await this.store.downloadBlob(
+          '/admin/api/usage/export?' + this.usageParams({ dataset, format }),
+          'usage-' + dataset + '.' + ext,
           this.editModelUrl());
-        this.toast('Export downloaded.');
-      });
+        const truncated = res?.headers?.get?.('X-Export-Truncated') === 'true';
+        this.toast(truncated
+          ? 'Export downloaded — capped at 5,000 events; narrow the range for the rest.'
+          : 'Export downloaded.', truncated ? 'error' : undefined);
+      }).catch(() => {});
     },
 
     // =====================================================================================
@@ -2292,6 +2407,10 @@ function adminApp() {
         usageTo: b('usageTo'),
         usageFilterCostCenter: b('usageFilterCostCenter'),
         usageFilterApiKeyId: b('usageFilterApiKeyId'),
+        usageIncludeAnonymous: {
+          get: () => self.usageIncludeAnonymous,
+          set: v => self.setUsageIncludeAnonymous(v)
+        },
         modelsFilter: b('modelsFilter'),
         backendsFilter: b('backendsFilter'),
         keysFilter: b('keysFilter'),
@@ -2378,6 +2497,10 @@ function adminApp() {
     get loadingAuth() { return this.isLoading('auth'); },
     get loadingOverview() { return this.isLoading('overview'); },
     get loadingUsage() { return this.isLoading('usage'); },
+    get loadingUsageEvents() { return this.isLoading('usageEvents'); },
+    get loadingUsageExport() { return this.isLoading('usageExport'); },
+    get usageBusy() { return this.isLoading('usage') || this.isLoading('usageExport'); },
+    get usageApplyDisabled() { return this.usageBusy || this.usageRangeInvalid; },
     get loadingModels() { return this.isLoading('routingModels'); },
     get loadingBackends() { return this.isLoading('routingBackends'); },
     get loadingKeys() { return this.isLoading('keys'); },
@@ -2588,7 +2711,14 @@ function adminApp() {
         keysAssignee: this.sortIndicator('keys', 'assignee'),
         keysCostCenter: this.sortIndicator('keys', 'costCenter'),
         keysLastUsed: this.sortIndicator('keys', 'lastUsedAt'),
-        keysCreated: this.sortIndicator('keys', 'createdAt')
+        keysCreated: this.sortIndicator('keys', 'createdAt'),
+        rollupDate: this.sortIndicator('usageRollups', 'usageDate'),
+        rollupModel: this.sortIndicator('usageRollups', 'modelId'),
+        rollupCostCenter: this.sortIndicator('usageRollups', 'costCenter'),
+        rollupPrompt: this.sortIndicator('usageRollups', 'promptTokens'),
+        rollupCompletion: this.sortIndicator('usageRollups', 'completionTokens'),
+        rollupCost: this.sortIndicator('usageRollups', 'totalCost'),
+        rollupRequests: this.sortIndicator('usageRollups', 'requestCount')
       };
     },
 
@@ -2603,7 +2733,14 @@ function adminApp() {
         keysAssignee: () => this.sortToggle('keys', 'assignee'),
         keysCostCenter: () => this.sortToggle('keys', 'costCenter'),
         keysLastUsed: () => this.sortToggle('keys', 'lastUsedAt'),
-        keysCreated: () => this.sortToggle('keys', 'createdAt')
+        keysCreated: () => this.sortToggle('keys', 'createdAt'),
+        rollupDate: () => this.sortToggle('usageRollups', 'usageDate'),
+        rollupModel: () => this.sortToggle('usageRollups', 'modelId'),
+        rollupCostCenter: () => this.sortToggle('usageRollups', 'costCenter'),
+        rollupPrompt: () => this.sortToggle('usageRollups', 'promptTokens'),
+        rollupCompletion: () => this.sortToggle('usageRollups', 'completionTokens'),
+        rollupCost: () => this.sortToggle('usageRollups', 'totalCost'),
+        rollupRequests: () => this.sortToggle('usageRollups', 'requestCount')
       };
     },
 
@@ -2878,45 +3015,125 @@ function adminApp() {
 
     // ---- usage & cost ----
 
-    get usageCurrency() { return this.forecast?.currency || this.usage?.currency; },
+    get usageCurrency() { return this.usage?.currency || this.forecast?.currency || 'USD'; },
 
     usagePreset7() { return this.setUsagePreset(7); },
     usagePreset30() { return this.setUsagePreset(30); },
     usagePresetMtd() { return this.setUsagePreset('mtd'); },
-    downloadExportJson() { return this.downloadExport('json'); },
-    downloadExportCsv() { return this.downloadExport('csv'); },
+    exportRollupsJson() { return this.downloadExport('rollups', 'json'); },
+    exportRollupsCsv() { return this.downloadExport('rollups', 'csv'); },
+    exportEventsJson() { return this.downloadExport('events', 'json'); },
+    exportEventsCsv() { return this.downloadExport('events', 'csv'); },
+
+    /** Which preset the current from/to equals, so the chip can show as selected. */
+    get usagePresetActive() {
+      const same = days => {
+        const r = this.usagePresetRange(days);
+        return r.from === this.usageFrom && r.to === this.usageTo;
+      };
+      return {
+        d7: same(7) ? 'preset active' : 'preset',
+        d30: same(30) ? 'preset active' : 'preset',
+        mtd: same('mtd') ? 'preset active' : 'preset',
+        d7Pressed: same(7) ? 'true' : 'false',
+        d30Pressed: same(30) ? 'true' : 'false',
+        mtdPressed: same('mtd') ? 'true' : 'false'
+      };
+    },
 
     get usageKeyOptions() {
       return (this.keys || []).map(k => ({
         key: k.id,
         id: k.id,
-        label: (k.label || k.keyPrefix) + (k.assignee ? ' · ' + k.assignee : '')
+        label: (k.label || k.keyPrefix) + (k.assignee ? ' · ' + k.assignee : '') + (k.isRevoked ? ' (revoked)' : '')
       }));
     },
+
+    /** Known cost centres for the datalist: from keys and from whatever the current report shows. */
+    get usageCostCenterOptions() {
+      const set = new Set();
+      for (const k of this.keys || []) if (k.costCenter) set.add(String(k.costCenter).trim());
+      for (const r of this.usage?.rollups || []) if (r.costCenter) set.add(String(r.costCenter).trim());
+      const list = [...set].sort((a, b) => a.localeCompare(b)).map(v => ({ key: v, value: v }));
+      list.push({ key: '(none)', value: '(none)' });
+      return list;
+    },
+
+    get usageSelectedKeyLabel() {
+      const id = this.usageFilterApiKeyId;
+      if (!id) return '';
+      const k = (this.keys || []).find(x => x.id === id);
+      return k ? (k.label || k.keyPrefix) : id;
+    },
+    get usageScopedToKey() { return !!this.usageFilterApiKeyId; },
+    get usageScopeNote() {
+      const parts = [];
+      if (this.usageScopedToKey) parts.push('key ' + this.usageSelectedKeyLabel);
+      const cc = (this.usageFilterCostCenter || '').trim();
+      if (cc) parts.push(cc === '(none)' ? 'no cost centre' : 'cost centre ' + cc);
+      if (!this.usageIncludeAnonymous) parts.push('anonymous usage hidden');
+      return parts.length ? 'Filtered: ' + parts.join(' · ') : '';
+    },
+    get hasUsageScopeNote() { return !!this.usageScopeNote; },
 
     get usageSummary() {
       const s = this.usage?.summary;
       const currency = this.usageCurrency;
+      const anon = Number(s?.anonymousRequests ?? 0);
       return {
         has: !!s,
         promptCompact: this.formatCompact(s?.totalPromptTokens ?? 0),
         promptTotal: this.formatNum(s?.totalPromptTokens ?? 0) + ' total',
         completionCompact: this.formatCompact(s?.totalCompletionTokens ?? 0),
         completionTotal: this.formatNum(s?.totalCompletionTokens ?? 0) + ' total',
-        costText: this.formatCost(s?.totalCost, currency),
+        costText: this.formatCost(s?.totalCost ?? 0, currency),
+        costFoot: this.usageLoadedFrom && this.usageLoadedTo
+          ? this.usageLoadedFrom + ' → ' + this.usageLoadedTo + ' UTC'
+          : 'selected range',
         requestsText: this.formatNum(s?.totalRequests ?? 0),
-        hasForecast: !!this.forecast,
-        forecastText: this.formatCost(this.forecast?.projectedMonthlyCost, this.forecast?.currency) + '/mo projected'
+        requestsFoot: anon > 0
+          ? 'recorded inference calls · ' + this.formatNum(anon) + ' anonymous'
+          : 'recorded inference calls'
       };
     },
 
+    /** Month-end projection tile — deliberately separate from the range-scoped Cost tile. */
+    get usageForecastTile() {
+      const f = this.forecast;
+      if (!f) return { has: false, value: '', foot: '', title: '' };
+      const cur = f.currency || this.usageCurrency;
+      const days = Number(f.daysRemainingInMonth ?? 0);
+      return {
+        has: true,
+        value: this.formatCost(f.projectedMonthlyCost, cur),
+        foot: this.formatCost(f.monthToDateCost, cur) + ' month to date + '
+          + this.formatCost(f.averageDailyCost, cur) + '/day × ' + days + (days === 1 ? ' day' : ' days'),
+        title: 'Average of the last ' + f.trailingDays + ' complete UTC days'
+          + (f.windowStart ? ' (' + f.windowStart + ' → ' + f.windowEnd + ')' : '')
+          + ', applied to the rest of the month. Same filters as the report.'
+      };
+    },
+    get hasUsageForecast() { return !!this.forecast; },
+
+    get usageUnpricedModels() { return this.usage?.unpricedModelIds || []; },
+    get hasUsageUnpriced() { return this.usageUnpricedModels.length > 0; },
+    get usageUnpricedText() {
+      const list = this.usageUnpricedModels;
+      if (!list.length) return '';
+      return (list.length === 1 ? '1 model in this range has' : list.length + ' models in this range have')
+        + ' no rate card, so their spend is recorded as ' + this.formatCost(0, this.usageCurrency)
+        + ': ' + list.join(', ') + '.';
+    },
+    openRoutingModels() { this.setRoutingSubTab('models'); this.setTab('routing'); },
+
     get usageCols() {
       const series = this.usageDailySeries();
+      const currency = this.usageCurrency;
       return series.map(d => ({
         key: d.date,
-        title: d.date + ' · ' + this.formatCost(d.cost, this.usageCurrency) + ' · ' +
-          this.formatNum(d.requests) + ' req',
-        style: 'height:' + this.colHeight(d.cost)
+        title: d.date + ' · ' + this.formatCost(d.cost, currency) + ' · ' + this.formatNum(d.requests) + ' req',
+        style: 'height:' + this.colHeight(d.cost),
+        cls: d.cost > 0 ? 'col' : 'col empty'
       }));
     },
 
@@ -2926,40 +3143,97 @@ function adminApp() {
       const series = this.usageDailySeries();
       return this.shortDate(series[series.length - 1]?.date);
     },
-
-    get usageRollupRows() {
-      const currency = this.usageCurrency;
-      return (this.usage?.rollups ?? []).map(row => ({
-        key: row.usageDate + row.modelId + (row.costCenter || ''),
-        usageDate: row.usageDate,
-        modelId: row.modelId,
-        costCenter: row.costCenter ?? '—',
-        promptTokens: this.formatNum(row.promptTokens),
-        completionTokens: this.formatNum(row.completionTokens),
-        totalCost: this.formatCost(row.totalCost, currency),
-        requestCount: this.formatNum(row.requestCount)
-      }));
+    get usageAxisMid() {
+      const series = this.usageDailySeries();
+      return series.length > 2 ? this.shortDate(series[Math.floor(series.length / 2)]?.date) : '';
+    },
+    /** Three y-axis ticks (max, half, zero) so the bars have a scale. */
+    get usageYTicks() {
+      const max = this.usageMaxCost();
+      const cur = this.usageCurrency;
+      return { top: this.formatCost(max, cur), mid: this.formatCost(max / 2, cur), bottom: this.formatCost(0, cur) };
+    },
+    get usageChartAria() {
+      const series = this.usageDailySeries();
+      if (!series.length) return 'Cost per day chart, no data';
+      let peak = series[0];
+      for (const d of series) if (d.cost > peak.cost) peak = d;
+      return 'Cost per day, ' + series.length + ' days from ' + series[0].date + ' to ' + series[series.length - 1].date
+        + ' (UTC), highest ' + this.formatCost(peak.cost, this.usageCurrency) + ' on ' + peak.date;
     },
 
-    get hasUsageRollups() { return this.usageRollupRows.length > 0; },
-    get usageRollupsEmpty() { return !this.isLoading('usage') && this.usageRollupRows.length === 0; },
+    usageRollupsAll() {
+      const currency = this.usageCurrency;
+      const rows = (this.usage?.rollups ?? []).map(row => ({
+        key: [row.usageDate, row.tenantId ?? 'anon', row.modelId, row.costCenter ?? ''].join('\u0000'),
+        usageDate: row.usageDate,
+        modelId: row.modelId,
+        anonymous: row.tenantId == null,
+        named: row.tenantId != null,
+        costCenter: row.costCenter ?? '',
+        costCenterText: row.costCenter ?? '—',
+        promptTokens: Number(row.promptTokens) || 0,
+        completionTokens: Number(row.completionTokens) || 0,
+        totalCost: Number(row.totalCost) || 0,
+        requestCount: Number(row.requestCount) || 0
+      }));
+      return this.sortedList(rows, 'usageRollups').map(r => ({
+        ...r,
+        promptText: this.formatNum(r.promptTokens),
+        completionText: this.formatNum(r.completionTokens),
+        costText: this.formatCost(r.totalCost, currency),
+        requestsText: this.formatNum(r.requestCount)
+      }));
+    },
+    get usageRollupRows() { return this.usageRollupsAll().slice(0, this.usageRollupLimit); },
+    get usageRollupTotal() { return (this.usage?.rollups ?? []).length; },
+    get hasUsageRollups() { return this.usageRollupTotal > 0; },
+    get usageRollupsEmpty() { return !this.isLoading('usage') && this.usageRollupTotal === 0; },
+    get usageRollupsHasMore() { return this.usageRollupTotal > this.usageRollupLimit; },
+    get usageRollupsCountText() {
+      const total = this.usageRollupTotal;
+      const shown = Math.min(total, this.usageRollupLimit);
+      return shown < total
+        ? 'Showing ' + this.formatNum(shown) + ' of ' + this.formatNum(total) + ' rows'
+        : this.formatNum(total) + (total === 1 ? ' row' : ' rows');
+    },
+
+    /** Ledger timestamps render in UTC to match the UTC-day rollups; local time sits in the title. */
+    formatUtcTime(iso) {
+      if (!iso) return '—';
+      try {
+        const d = new Date(iso);
+        return d.toLocaleString(undefined, { timeZone: 'UTC', hour12: false }) + ' UTC';
+      } catch { return iso; }
+    },
 
     get usageEventRows() {
       const currency = this.usageCurrency;
       return (this.usageEvents ?? []).map(ev => ({
         key: ev.id,
-        time: this.formatTime(ev.recordedAt),
-        keyPrefix: ev.keyPrefix ?? '—',
+        time: this.formatUtcTime(ev.recordedAt),
+        localTime: this.formatTime(ev.recordedAt) + ' (local)',
+        anonymous: ev.apiKeyId == null,
+        keyClass: ev.apiKeyId == null ? 'tag muted' : 'tag',
+        costClass: ev.totalCost == null ? 'num muted' : 'num',
+        keyPrefix: ev.apiKeyId == null ? 'anonymous' : (ev.keyPrefix ?? (ev.apiKeyId ? String(ev.apiKeyId).slice(0, 8) + '… (deleted)' : '—')),
+        keyTitle: ev.apiKeyId == null ? 'No API key — public-model request' : (ev.apiKeyId || ''),
         assignee: ev.assignee ?? '—',
         modelId: ev.modelId ?? '—',
         promptTokens: this.formatNum(ev.promptTokens ?? '—'),
         completionTokens: this.formatNum(ev.completionTokens ?? '—'),
-        totalCost: this.formatCost(ev.totalCost, currency)
+        totalCost: this.formatCost(ev.totalCost, currency),
+        unpriced: ev.totalCost == null,
+        costTitle: ev.totalCost == null ? 'Unpriced — no rate card for this model when the request was recorded' : ''
       }));
     },
 
     get hasUsageEvents() { return this.usageEventRows.length > 0; },
     get usageEventsEmpty() { return !this.isLoading('usage') && this.usageEventRows.length === 0; },
+    get usageEventsCountText() {
+      const n = this.usageEventRows.length;
+      return 'Showing ' + this.formatNum(n) + (n === 1 ? ' event' : ' events') + (this.usageEventsHasMore ? ' — newest first, more available' : ' — newest first');
+    },
 
     // ---- routing ----
 

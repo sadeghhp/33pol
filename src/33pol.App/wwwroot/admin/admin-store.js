@@ -158,16 +158,26 @@ document.addEventListener('alpine:init', () => {
       return JSON.parse(text);
     },
 
-    async downloadBlob(url, filename, editModelUrl) {
+    /** Saves the response body; the server's Content-Disposition filename wins over the fallback. */
+    async downloadBlob(url, fallbackFilename, editModelUrl) {
       const res = await this.fetchWithRetry(
         url, { headers: this.headers() }, editModelUrl, 0, false);
       const blob = await res.blob();
       const objectUrl = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = objectUrl;
-      a.download = filename;
+      a.download = this.filenameFromDisposition(res.headers.get('Content-Disposition')) || fallbackFilename;
       a.click();
       URL.revokeObjectURL(objectUrl);
+      return res;
+    },
+
+    filenameFromDisposition(header) {
+      if (!header) return '';
+      const star = /filename\*=(?:UTF-8'')?([^;]+)/i.exec(header);
+      if (star) { try { return decodeURIComponent(star[1].trim().replace(/^"|"$/g, '')); } catch { /* fall through */ } }
+      const plain = /filename="?([^";]+)"?/i.exec(header);
+      return plain ? plain[1].trim() : '';
     },
 
     persistApiKey(key) {
