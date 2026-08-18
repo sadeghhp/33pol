@@ -114,6 +114,12 @@ spec:
             {{- end }}
             - name: ConnectionStrings__GatewayDb
               value: {{ .Values.persistence.connectionString | quote }}
+            # The app's defaults for these two files are relative to /app, which is read-only under
+            # securityContext.readOnlyRootFilesystem; keep them on the writable data volume.
+            - name: Gateway__UpstreamSecretsPath
+              value: {{ .Values.persistence.upstreamSecretsPath | quote }}
+            - name: Gateway__Security__AuditLogPath
+              value: {{ .Values.persistence.auditLogPath | quote }}
             {{- with .Values.providerApiKeys.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

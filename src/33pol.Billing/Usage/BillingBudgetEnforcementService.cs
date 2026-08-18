@@ -153,7 +153,7 @@ public sealed class BillingBudgetEnforcementService(
         CancellationToken cancellationToken)
     {
         var periodStart = BillingUsagePersistenceHandler.GetPeriodStart(today, budget.PeriodStartDay);
-        if (spendCache.TryGet(tenantId, periodStart, today, out var cached))
+        if (spendCache.TryGet(tenantId, periodStart, today, out var cached, out var generation))
         {
             return cached;
         }
@@ -168,7 +168,8 @@ public sealed class BillingBudgetEnforcementService(
             periodStart,
             today,
             spend,
-            TimeSpan.FromSeconds(Math.Max(1, billingOptions.Value.BudgetSpendCacheTtlSeconds)));
+            TimeSpan.FromSeconds(Math.Max(1, billingOptions.Value.BudgetSpendCacheTtlSeconds)),
+            generation);
         return spend;
     }
 

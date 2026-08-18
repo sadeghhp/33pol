@@ -25,13 +25,13 @@ public sealed class BudgetSpendCacheInvalidationTests
         var tenant = Guid.NewGuid();
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
 
-        cache.Set(tenant, today, today, 42m, TimeSpan.FromMinutes(5));
-        cache.TryGet(tenant, today, today, out var before).Should().BeTrue();
+        cache.Set(tenant, today, today, 42m, TimeSpan.FromMinutes(5), cache.GetGeneration(tenant)).Should().BeTrue();
+        cache.TryGet(tenant, today, today, out var before, out _).Should().BeTrue();
         before.Should().Be(42m);
 
         cache.Invalidate(tenant);
 
-        cache.TryGet(tenant, today, today, out _).Should().BeFalse();
+        cache.TryGet(tenant, today, today, out _, out _).Should().BeFalse();
         cache.GetGeneration(tenant).Should().Be(1);
     }
 
@@ -43,14 +43,34 @@ public sealed class BudgetSpendCacheInvalidationTests
         var tenantB = Guid.NewGuid();
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
 
-        cache.Set(tenantA, today, today, 1m, TimeSpan.FromMinutes(5));
-        cache.Set(tenantB, today, today, 2m, TimeSpan.FromMinutes(5));
+        cache.Set(tenantA, today, today, 1m, TimeSpan.FromMinutes(5), 0);
+        cache.Set(tenantB, today, today, 2m, TimeSpan.FromMinutes(5), 0);
 
         cache.Invalidate(tenantA);
 
-        cache.TryGet(tenantA, today, today, out _).Should().BeFalse();
-        cache.TryGet(tenantB, today, today, out var b).Should().BeTrue();
+        cache.TryGet(tenantA, today, today, out _, out _).Should().BeFalse();
+        cache.TryGet(tenantB, today, today, out var b, out _).Should().BeTrue();
         b.Should().Be(2m);
+    }
+
+    /// <summary>
+    /// The race the generation capture exists for: a read misses (gen 0), sums the rollups BEFORE a
+    /// batch lands, the writer commits and invalidates (gen 1), and only then does the reader try
+    /// to cache its pre-batch figure. It must be refused, and a later read must miss.
+    /// </summary>
+    [Fact]
+    public void Set_WithAGenerationSupersededByInvalidate_IsRefusedAndNotServed()
+    {
+        var cache = new BudgetSpendCache(new MemoryCache(new MemoryCacheOptions()));
+        var tenant = Guid.NewGuid();
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+
+        cache.TryGet(tenant, today, today, out _, out var observed).Should().BeFalse();
+        cache.Invalidate(tenant);
+
+        cache.Set(tenant, today, today, 50m, TimeSpan.FromMinutes(5), observed).Should().BeFalse();
+        cache.TryGet(tenant, today, today, out _, out var now).Should().BeFalse();
+        now.Should().Be(1);
     }
 
     /// <summary>

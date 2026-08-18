@@ -119,6 +119,12 @@ persistence:
   enabled: true
   mountPath: /data
   connectionString: "Data Source=/data/gateway.db"
+  # Encrypted upstream provider secrets and the admin audit trail. Both MUST live on a writable
+  # volume: the image defaults (config/*.enc, config/*.jsonl under /app) are unwritable once
+  # securityContext.readOnlyRootFilesystem is on, which would make model provisioning with an inline
+  # API key fail and silently disable audit logging.
+  upstreamSecretsPath: /data/upstream-secrets.enc
+  auditLogPath: /data/audit-log.jsonl
   size: 1Gi
   accessMode: ReadWriteOnce
   # storageClass: ""   # unset uses the cluster default StorageClass
@@ -136,7 +142,8 @@ probes:
 terminationGracePeriodSeconds: 60
 
 # Hardened by default so the pod is admitted under the "restricted" Pod Security Standard. The image
-# already runs as uid 1654 (APP_UID) and only writes to /data (persistence) and /tmp (emptyDir below).
+# already runs as uid 1654 (APP_UID) and only writes to /data (persistence: database, upstream secrets,
+# audit log) and /tmp (emptyDir below).
 podSecurityContext:
   runAsNonRoot: true
   runAsUser: 1654
