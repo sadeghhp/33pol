@@ -219,40 +219,55 @@ public static class InferenceRequestParser
     }
 
     /// <summary>
-    /// Matches a top-level property name, first occurrence wins.
+    /// Matches a top-level property name. A second occurrence of any routed property is rejected.
     /// </summary>
     /// <remarks>
-    /// First-wins mirrors <c>JsonElement.TryGetProperty</c>, which returned the first match. A
-    /// property is marked seen even when its value turns out to be the wrong kind, so a duplicate
-    /// later in the body cannot resurrect a field the first occurrence disqualified.
+    /// The gateway routes, authorises and bills on the value it parses, but forwards the body bytes
+    /// as-is. Most upstream JSON parsers are last-key-wins, so a duplicate <c>model</c> (or
+    /// <c>stream</c>/<c>max_tokens</c>) key would let the value the gateway checked differ from the
+    /// value the upstream serves. Rather than pick a winner, the body is rejected as invalid JSON. A
+    /// property counts as seen even when its value turns out to be the wrong kind, so a duplicate
+    /// cannot resurrect a field the first occurrence disqualified.
     /// </remarks>
     private static TopLevelProperty ClassifyProperty(ref Utf8JsonReader reader, TopLevelScan scan)
     {
-        if (!scan.ModelSeen && reader.ValueTextEquals(ModelPropertyName))
+        if (reader.ValueTextEquals(ModelPropertyName))
         {
+            ThrowIfDuplicate(scan.ModelSeen, "model");
             scan.ModelSeen = true;
             return TopLevelProperty.Model;
         }
 
-        if (!scan.StreamSeen && reader.ValueTextEquals(StreamPropertyName))
+        if (reader.ValueTextEquals(StreamPropertyName))
         {
+            ThrowIfDuplicate(scan.StreamSeen, "stream");
             scan.StreamSeen = true;
             return TopLevelProperty.Stream;
         }
 
-        if (!scan.MaxTokensSeen && reader.ValueTextEquals(MaxTokensPropertyName))
+        if (reader.ValueTextEquals(MaxTokensPropertyName))
         {
+            ThrowIfDuplicate(scan.MaxTokensSeen, "max_tokens");
             scan.MaxTokensSeen = true;
             return TopLevelProperty.MaxTokens;
         }
 
-        if (!scan.MaxCompletionTokensSeen && reader.ValueTextEquals(MaxCompletionTokensPropertyName))
+        if (reader.ValueTextEquals(MaxCompletionTokensPropertyName))
         {
+            ThrowIfDuplicate(scan.MaxCompletionTokensSeen, "max_completion_tokens");
             scan.MaxCompletionTokensSeen = true;
             return TopLevelProperty.MaxCompletionTokens;
         }
 
         return TopLevelProperty.None;
+    }
+
+    private static void ThrowIfDuplicate(bool alreadySeen, string propertyName)
+    {
+        if (alreadySeen)
+        {
+            throw new JsonException($"Duplicate top-level '{propertyName}' property in request body.");
+        }
     }
 
     private static void ReadPendingValue(ref Utf8JsonReader reader, TopLevelScan scan, long bufferStartOffset)

@@ -5,8 +5,11 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Pol33.Core.Abstractions;
 using Pol33.Core.Billing;
+using Pol33.Core.Identity;
 using Pol33.Integration.Tests.Support;
 using Pol33.Persistence;
+using Pol33.Persistence.Entities;
+using Pol33.Persistence.Security;
 
 namespace Pol33.Integration.Tests.Phase5;
 
@@ -198,6 +201,43 @@ public sealed class AdminUsageIntegrationTests
         }
     }
 
+    /// <summary>
+    /// Anonymous rows belong to no tenant, so they are operator-level data. A tenant admin outside
+    /// the operator tenant asking for them gets its own tenant-scoped report — the flag is ignored,
+    /// not rejected — on every usage route.
+    /// </summary>
+    [Fact]
+    public async Task GetUsage_IncludeAnonymous_IsIgnoredForNonOperatorTenantAdmin()
+    {
+        const string tenantBAdminKey = "sk-33pol-usage-tenant-b-admin";
+        await using var factory = GatewayWebApplicationFactory.CreateWithInMemoryDatabase();
+        await GatewayWebApplicationFactory.EnsureAuthReadyAsync(factory);
+
+        var tenantBId = await SeedSecondTenantAdminAsync(factory, tenantBAdminKey);
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        await SeedRollupsAsync(factory, tenantBId, today, "gpt-4o", requests: 4);
+        await SeedRollupsAsync(factory, null, today, "public-model", requests: 3);
+        await SeedBillingEventAsync(factory, tenantBId, "b-own");
+
+        var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Add("X-API-Key", tenantBAdminKey);
+
+        var report = await client.GetFromJsonAsync<UsageReportDto>("/admin/api/usage?includeAnonymous=true");
+        report!.Summary!.TotalRequests.Should().Be(4);
+        report.Summary.AnonymousRequests.Should().Be(0);
+        report.Rollups.Should().HaveCount(1);
+
+        var events = await client.GetFromJsonAsync<BillingEventsPageDto>("/admin/api/usage/events?includeAnonymous=true");
+        events!.Events.Should().OnlyContain(e => e.RequestId == "b-own");
+
+        var forecast = await client.GetAsync("/admin/api/usage/forecast?includeAnonymous=true");
+        forecast.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var export = await client.GetAsync("/admin/api/usage/export?format=csv&includeAnonymous=true");
+        export.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await export.Content.ReadAsStringAsync()).Should().NotContain("public-model");
+    }
+
     [Fact]
     public async Task GetUsage_WithApiKeyId_AggregatesLedgerForThatKeyOnly()
     {
@@ -310,6 +350,38 @@ public sealed class AdminUsageIntegrationTests
         var body = await response.Content.ReadAsStringAsync();
         body.Should().Contain("\"modelId\": \"gpt-4o\"");
         body.Should().Contain("\"costCenter\": \"eng\"");
+    }
+
+    private static async Task<Guid> SeedSecondTenantAdminAsync(WebApplicationFactory<Program> factory, string apiKey)
+    {
+        await using var scope = factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<GatewayDbContext>();
+
+        var now = DateTimeOffset.UtcNow;
+        var tenantId = Guid.NewGuid();
+        db.Tenants.Add(new TenantEntity
+        {
+            Id = tenantId,
+            Slug = "usage-tenant-b",
+            Name = "Usage Tenant B",
+            IsActive = true,
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+
+        db.ApiKeys.Add(new ApiKeyEntity
+        {
+            Id = Guid.NewGuid(),
+            TenantId = tenantId,
+            KeyHash = ApiKeyHashing.Hash(apiKey, "integration-test-pepper"),
+            KeyPrefix = ApiKeyHashing.CreatePrefix(apiKey),
+            Role = ApiKeyRole.Admin,
+            Scopes = ["admin"],
+            CreatedAt = now,
+        });
+
+        await db.SaveChangesAsync();
+        return tenantId;
     }
 
     private static async Task<Guid> GetBootstrapTenantIdAsync(WebApplicationFactory<Program> factory)

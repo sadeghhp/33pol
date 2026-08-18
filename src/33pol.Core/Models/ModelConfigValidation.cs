@@ -9,6 +9,21 @@ public static class ModelConfigValidation
         ArgumentNullException.ThrowIfNull(model);
         error = null;
 
+        // The id is deliberately not checked here: an update body may leave it blank to keep the
+        // existing id, and creation paths enforce it themselves.
+
+        // Callers used to check only that url was non-blank, so "not a url" or "ftp://…" was
+        // accepted into the registry and only failed per request in the forwarder (and threw in the
+        // health checker's Uri constructor). Reject it at write time instead.
+        if (string.IsNullOrWhiteSpace(model.Url) ||
+            !Uri.TryCreate(model.Url.Trim(), UriKind.Absolute, out var url) ||
+            (!string.Equals(url.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase) &&
+             !string.Equals(url.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)))
+        {
+            error = "url must be an absolute http or https URL.";
+            return false;
+        }
+
         if (!ModelTypes.TryNormalize(model.ModelType, out _, out error))
         {
             return false;

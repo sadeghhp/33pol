@@ -1,4 +1,3 @@
-using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Pol33.Core.Abstractions;
@@ -12,7 +11,7 @@ namespace Pol33.Billing.Usage;
 public sealed class BillingBudgetEnforcementService(
     IServiceScopeFactory scopeFactory,
     BudgetReservationLedger reservationLedger,
-    IMemoryCache memoryCache,
+    BudgetSpendCache spendCache,
     IOptions<BillingOptions> billingOptions) : IBudgetEnforcementService
 {
     public async ValueTask<BudgetCheckResult> CheckBeforeForwardAsync(
@@ -141,8 +140,10 @@ public sealed class BillingBudgetEnforcementService(
     /// This runs on the inference hot path — once per budget, per request — and each call scanned
     /// every rollup row in the billing period and summed them in memory. The cache is safe against
     /// overshoot because it only covers <em>persisted</em> spend: cost incurred since the last read
-    /// is held by the reservation ledger, which is exact and consulted separately. The TTL is short
-    /// so a hard stop takes effect promptly once spend does land in the rollups.
+    /// is held by the reservation ledger, which is exact and consulted separately — and the usage
+    /// writer invalidates the tenant's entries (<see cref="BudgetSpendCache.Invalidate"/>) before it
+    /// releases the reservations of a persisted batch, so there is no window in which spend is
+    /// counted by neither. The TTL bounds staleness for spend written by another replica.
     /// </remarks>
     private async Task<decimal> GetPeriodSpendAsync(
         IDailyUsageRollupRepository rollups,
@@ -152,9 +153,7 @@ public sealed class BillingBudgetEnforcementService(
         CancellationToken cancellationToken)
     {
         var periodStart = BillingUsagePersistenceHandler.GetPeriodStart(today, budget.PeriodStartDay);
-        var cacheKey = $"budget-spend:{tenantId:N}:{periodStart:yyyy-MM-dd}:{today:yyyy-MM-dd}";
-
-        if (memoryCache.TryGetValue<decimal>(cacheKey, out var cached))
+        if (spendCache.TryGet(tenantId, periodStart, today, out var cached))
         {
             return cached;
         }
@@ -164,8 +163,10 @@ public sealed class BillingBudgetEnforcementService(
             .ConfigureAwait(false);
         var spend = periodRollups.Sum(r => r.TotalCost);
 
-        memoryCache.Set(
-            cacheKey,
+        spendCache.Set(
+            tenantId,
+            periodStart,
+            today,
             spend,
             TimeSpan.FromSeconds(Math.Max(1, billingOptions.Value.BudgetSpendCacheTtlSeconds)));
         return spend;

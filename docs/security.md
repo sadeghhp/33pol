@@ -8,7 +8,7 @@
 | Inference (`GET /v1/models*`) | Optional | Callers with no key — or an unrecognised placeholder one — get `data` containing only `publicAccess` models plus a minimal `models` array listing every healthy model as `{ "id", "api_key_required" }` so they can see what exists and that they need a key. Authenticated callers see public + granted models in `data` and no `models` array. A revoked or expired key is still `401` |
 | Admin, per-tenant (`/admin/api/keys*`, `model-grants`, `usage`) | Admin API key | Scoped to the caller's own tenant |
 | Admin, gateway-wide (models, providers, CORS, rate limits, config, backup, `/stats`, requests/logs) | **Operator-tenant** Admin API key | Admin role alone is per-tenant; these surfaces additionally require the key to belong to the operator tenant (`Gateway:Security:OperatorTenantSlug`, defaulting to the bootstrap tenant). Never expose keys in browser URLs |
-| Health / metrics | None | `/health/live`, `/health/ready`, `/metrics` public for probes |
+| Health / metrics | None / scrape token | `/health/live`, `/health/ready` public for probes; `/health` anonymous summary (backend URLs/errors only for Operator keys); `/metrics` requires `Gateway:Metrics:ScrapeToken` (Bearer) or an Operator key unless `Gateway:Metrics:AllowAnonymous=true` |
 
 Keys are stored **hashed** (HMAC + pepper). Plaintext secrets are shown only once at creation.
 

@@ -48,6 +48,8 @@ public static class BillingServiceCollectionExtensions
             return new BillingDailyUsageWebhookTracker(billingOptions.DailyWebhookTrackerRetentionLimit);
         });
         services.AddSingleton<BillingUnpricedModelTracker>();
+        services.AddMemoryCache();
+        services.AddSingleton<BudgetSpendCache>();
         services.AddSingleton<IRateCardAdminService, NoOpRateCardAdminService>();
         services.AddSingleton<IBudgetEnforcementService, NoOpBudgetEnforcementService>();
         // Registered concretely as well: the sender service reads the dispatcher's queue, and both

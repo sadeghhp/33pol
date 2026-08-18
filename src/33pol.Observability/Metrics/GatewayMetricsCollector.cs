@@ -71,6 +71,18 @@ public sealed class GatewayMetricsCollector(GatewayRuntimeState runtimeState) : 
             seconds,
             new KeyValuePair<string, object?>("model", modelId));
 
+    /// <summary>
+    /// Shares <c>gateway_usage_writer_dropped_total</c> with the channel-full path: either way the
+    /// request never reaches the ledger, and the existing writer-backlog alert should fire.
+    /// </summary>
+    public void RecordUsageEventsDropped(int count)
+    {
+        if (count > 0)
+        {
+            GatewayMeters.UsageWriterDropped.Add(count);
+        }
+    }
+
     public void RecordBillingReconciliation(int discrepancyCount, double absoluteCostDrift)
     {
         // Recorded as gauges, not counters: the question is "is billing consistent right now", and a

@@ -20,8 +20,16 @@ namespace Pol33.Proxy.Hosting;
 /// so in-flight requests finish and the balancer removes this instance before Kestrel closes.
 /// <see cref="GatewayResilienceOptions.ShutdownDrainSeconds"/> should be a small multiple of the
 /// readiness probe interval, and the host's own shutdown timeout must exceed it.</para>
+///
+/// <para>The drain has to run while Kestrel is still listening, and hosted-service
+/// <see cref="IHostedService.StopAsync"/> is too late for that: <c>WebApplication.CreateBuilder</c>
+/// registers the server's hosted service after all user services and the host stops services in
+/// reverse registration order, so the server has already unbound by the time this service's
+/// <c>StopAsync</c> runs. <see cref="IHostedLifecycleService.StoppingAsync"/> is awaited for every
+/// hosted service before any <c>StopAsync</c> starts, which is the last point at which readiness
+/// probes are still answered — so that is where the drain flag is raised and the window is held.</para>
 /// </remarks>
-public sealed class GatewayShutdownHostedService : IHostedService
+public sealed class GatewayShutdownHostedService : IHostedLifecycleService
 {
     private readonly IGatewayDrainState _drainState;
     private readonly TimeSpan _drainDuration;
@@ -37,14 +45,20 @@ public sealed class GatewayShutdownHostedService : IHostedService
         _logger = logger;
     }
 
+    public Task StartingAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
     public Task StartAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
+    public Task StartedAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
     /// <remarks>
-    /// Runs as a hosted-service stop step rather than an <c>ApplicationStopping</c> callback, because
-    /// stop steps are awaited — a callback returning a task is not, so any delay inside one is
-    /// ignored and the drain window never actually happens.
+    /// Runs as an awaited lifecycle step rather than an <c>ApplicationStopping</c> callback, because
+    /// lifecycle steps are awaited — a callback returning a task is not, so any delay inside one is
+    /// ignored and the drain window never actually happens. It is the <em>stopping</em> step rather
+    /// than <see cref="StopAsync"/> so that it completes before the server's own stop step unbinds
+    /// the listener (see the class remarks).
     /// </remarks>
-    public async Task StopAsync(CancellationToken cancellationToken)
+    public async Task StoppingAsync(CancellationToken cancellationToken)
     {
         _drainState.BeginDrain();
 
@@ -71,4 +85,17 @@ public sealed class GatewayShutdownHostedService : IHostedService
                 _drainDuration.TotalSeconds);
         }
     }
+
+    /// <remarks>
+    /// The drain already happened in <see cref="StoppingAsync"/>. Raising the flag again is a harmless
+    /// idempotent no-op that only matters for hosts that stop services without running the lifecycle
+    /// steps; there is deliberately no second delay here — by now the server is gone.
+    /// </remarks>
+    public Task StopAsync(CancellationToken cancellationToken)
+    {
+        _drainState.BeginDrain();
+        return Task.CompletedTask;
+    }
+
+    public Task StoppedAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 }

@@ -29,6 +29,12 @@ Non-interactive (generated secrets, Production environment):
 ./scripts/install-33pol.sh install --yes --profile gpu-gateway
 ```
 
+Re-running `install` on a host that already has `.env` keeps the existing `GATEWAY_KEY_PEPPER` and
+`GATEWAY_ADMIN_API_KEY` (and the Grafana password / metrics scrape token): with `--yes` it performs an
+**upgrade**; interactively, choice *2) reconfigure* rewrites `.env` with the same secrets. Rotating
+them is opt-in with `--rotate-secrets` — it invalidates every stored API key hash, and the seeded
+admin key must then be re-installed with `scripts/reset-admin-key.py`.
+
 ## Architecture
 
 ```text

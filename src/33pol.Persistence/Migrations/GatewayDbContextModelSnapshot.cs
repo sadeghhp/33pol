@@ -123,7 +123,8 @@ namespace Pol33.Persistence.Migrations
 
                     b.Property<string>("CostCenter")
                         .HasMaxLength(128)
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .UseCollation("NOCASE");
 
                     b.Property<double>("DurationMs")
                         .HasColumnType("REAL");
@@ -264,6 +265,7 @@ namespace Pol33.Persistence.Migrations
                         .HasColumnType("INTEGER");
 
                     b.Property<string>("CostCenter")
+                        .IsRequired()
                         .HasMaxLength(128)
                         .HasColumnType("TEXT");
 
@@ -278,7 +280,7 @@ namespace Pol33.Persistence.Migrations
                     b.Property<int>("RequestCount")
                         .HasColumnType("INTEGER");
 
-                    b.Property<Guid?>("TenantId")
+                    b.Property<Guid>("TenantId")
                         .HasColumnType("TEXT");
 
                     b.Property<decimal>("TotalCost")
@@ -500,7 +502,8 @@ namespace Pol33.Persistence.Migrations
                     b.Property<string>("ModelId")
                         .IsRequired()
                         .HasMaxLength(256)
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .UseCollation("NOCASE");
 
                     b.Property<string>("ModelType")
                         .HasMaxLength(64)

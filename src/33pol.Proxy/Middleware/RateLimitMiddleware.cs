@@ -4,6 +4,7 @@ using Pol33.Core.Errors;
 using Pol33.Core.Identity;
 using Pol33.Core.RateLimiting;
 using Pol33.Proxy.Errors;
+using Pol33.Proxy.Parsing;
 using Pol33.Proxy.Routing;
 
 namespace Pol33.Proxy.Middleware;
@@ -48,6 +49,16 @@ public sealed class RateLimitMiddleware
             return;
         }
 
+        // A body the router is going to reject anyway must not debit the RPM bucket. The parse
+        // result is already cached by PublicModelDetectionMiddleware (which runs earlier), so this
+        // is a dictionary lookup, not a parse; when nothing is cached the router parses and rejects
+        // as before. Answering here means a burst of malformed requests cannot lock a tenant's valid
+        // traffic out of its own rate limit.
+        if (await RejectUnroutableBodyAsync(context).ConfigureAwait(false))
+        {
+            return;
+        }
+
         var tenantContext = context.Items.TryGetValue(TenantContextKeys.HttpContextItemKey, out var value)
             ? value as TenantContext
             : null;
@@ -67,6 +78,37 @@ public sealed class RateLimitMiddleware
         }
 
         await _next(context).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Writes the same <c>invalid_json</c> / <c>missing_model</c> answer the router would, when the
+    /// cached parse already says the body cannot be routed. Returns false when the body is routable
+    /// or nothing is cached yet.
+    /// </summary>
+    private async Task<bool> RejectUnroutableBodyAsync(HttpContext context)
+    {
+        if (!InferenceRequestParseCache.TryGet(context, out var cached))
+        {
+            return false;
+        }
+
+        if (cached is null)
+        {
+            await context.WriteGatewayErrorAsync(
+                _errors.Write(GatewayErrorCode.InvalidJson),
+                context.RequestAborted).ConfigureAwait(false);
+            return true;
+        }
+
+        if (string.IsNullOrWhiteSpace(cached.Value.Model))
+        {
+            await context.WriteGatewayErrorAsync(
+                _errors.Write(GatewayErrorCode.MissingModel),
+                context.RequestAborted).ConfigureAwait(false);
+            return true;
+        }
+
+        return false;
     }
 
     private Task WriteRateLimitErrorAsync(HttpContext context, RateLimitAcquireResult acquire)

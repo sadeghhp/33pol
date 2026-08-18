@@ -125,8 +125,23 @@ public static class UsageExportFormatter
         return builder.ToString();
     }
 
-    private static string EscapeCsv(string value)
+    /// <summary>
+    /// Quotes a CSV cell and neutralises spreadsheet formula injection.
+    /// </summary>
+    /// <remarks>
+    /// Model ids, cost centres, assignees, key prefixes and request ids are tenant- or
+    /// client-influenced. A cell starting with <c>=</c>, <c>+</c>, <c>-</c>, <c>@</c>, tab or CR is
+    /// evaluated as a formula by Excel, LibreOffice and Sheets (CSV/DDE injection) against the
+    /// operator who opens the export, so such cells are prefixed with a single quote — the OWASP
+    /// guidance — which spreadsheets render as literal text.
+    /// </remarks>
+    internal static string EscapeCsv(string value)
     {
+        if (value.Length > 0 && value[0] is '=' or '+' or '-' or '@' or '\t' or '\r')
+        {
+            value = "'" + value;
+        }
+
         if (value.Contains('"', StringComparison.Ordinal) || value.Contains(',', StringComparison.Ordinal)
             || value.Contains('\n', StringComparison.Ordinal) || value.Contains('\r', StringComparison.Ordinal))
         {

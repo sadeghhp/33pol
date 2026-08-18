@@ -148,7 +148,8 @@ internal static class BillingBudgetEnforcementServiceTestsHelper
         IBudgetRepository budgets,
         IDailyUsageRollupRepository rollups,
         BudgetReservationLedger? ledger = null,
-        IRateCardRepository? rateCards = null)
+        IRateCardRepository? rateCards = null,
+        BudgetSpendCache? spendCache = null)
     {
         var services = new ServiceCollection();
         services.AddSingleton(budgets);
@@ -162,8 +163,8 @@ internal static class BillingBudgetEnforcementServiceTestsHelper
         return new BillingBudgetEnforcementService(
             provider.GetRequiredService<IServiceScopeFactory>(),
             ledger ?? new BudgetReservationLedger(TimeSpan.FromMinutes(2)),
-            new Microsoft.Extensions.Caching.Memory.MemoryCache(
-                new Microsoft.Extensions.Caching.Memory.MemoryCacheOptions()),
+            spendCache ?? new BudgetSpendCache(new Microsoft.Extensions.Caching.Memory.MemoryCache(
+                new Microsoft.Extensions.Caching.Memory.MemoryCacheOptions())),
             Microsoft.Extensions.Options.Options.Create(new Pol33.Core.Configuration.BillingOptions()));
     }
 }

@@ -10,7 +10,7 @@ namespace Pol33.Persistence.Tests.Repositories;
 /// <summary>
 /// The Usage &amp; cost page's repository contract: tenant scope with optional anonymous rows,
 /// case-insensitive cost-centre matching, keyset paging and ledger aggregation. Runs on real SQLite
-/// so the LOWER() translation and tick comparisons are the ones Production executes.
+/// so the NOCASE collation and tick comparisons are the ones Production executes.
 /// </summary>
 public sealed class UsageScopeAndPagingRepositoryTests
 {

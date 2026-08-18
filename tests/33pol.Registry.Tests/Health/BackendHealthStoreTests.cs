@@ -42,6 +42,20 @@ public sealed class BackendHealthStoreTests
         store.GetAllHealth().Should().ContainKey("model-a");
     }
 
+    [Fact]
+    public void RetainOnly_DropsEntriesForModelsNoLongerRegistered()
+    {
+        var store = CreateStore(strictMode: true);
+        store.SetHealth(new BackendHealth("model-a", "http://a", true, 200, null, DateTimeOffset.UtcNow));
+        store.SetHealth(new BackendHealth("model-b", "http://b", true, 200, null, DateTimeOffset.UtcNow));
+
+        store.RetainOnly(["MODEL-A"]);
+
+        store.GetAllHealth().Keys.Should().BeEquivalentTo("model-a");
+        store.GetHealth("model-b").Should().BeNull();
+        store.IsBackendHealthy("model-b").Should().BeFalse("strict mode must not answer for a model that no longer exists");
+    }
+
     private static BackendHealthStore CreateStore(bool strictMode) =>
         new(Options.Create(new GatewayOptions { HealthCheckStrictMode = strictMode }));
 }

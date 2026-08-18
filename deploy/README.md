@@ -29,11 +29,15 @@ helm upgrade --install 33pol deploy/helm/33pol -f my-values.yaml
 
 | Value | Purpose |
 |-------|---------|
+| `gateway.existingSecret` | **Required** (or inline `gateway.keyPepper` + `gateway.adminApiKey` for dev): Secret with keys `keyPepper`, `adminApiKey` (optional `metricsScrapeToken`). The chart fails to render without one; the pepper must stay stable for the life of the database |
+| `gateway.metrics.allowAnonymous` | `false` (default) keeps `/metrics` behind an operator key or the scrape token; the ServiceMonitor sends the token as a Bearer credential |
+| `podSecurityContext` / `securityContext` | Restricted-PSS defaults: non-root uid 1654, no privilege escalation, drop ALL, seccomp RuntimeDefault, read-only root fs (`/tmp` is an emptyDir) |
+| `probes.startup` | startupProbe on `/health/live` (30 x 5s) before liveness applies |
 | `gateway.operatorConsole.enabled` | Keep `false` in Kubernetes |
 | `persistence.enabled` | Provision the ReadWriteOnce PVC for the embedded SQLite database (keep `replicaCount: 1`) |
 | `serviceMonitor.enabled` | Prometheus Operator scrape of `/metrics` |
 | `ingress.enabled` | Expose gateway HTTP (configure SSE timeouts for streaming) |
-| `autoscaling.enabled` | HPA on CPU |
+| `autoscaling.enabled` | Must stay `false` (single-instance SQLite; the chart refuses to render otherwise) |
 
 **Grafana:** not included in the Helm chart. Use [grafana/](./grafana/) JSON + provisioning with your own Grafana/Prometheus stack, or run the full local stack via [docker/README.md](./docker/README.md).
 

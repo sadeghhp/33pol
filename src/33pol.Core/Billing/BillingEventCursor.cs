@@ -39,8 +39,12 @@ public sealed record BillingEventCursor(DateTimeOffset At, IReadOnlyList<Guid> B
         {
             var raw = Encoding.ASCII.GetString(Convert.FromBase64String(encoded.Trim()));
             var parts = raw.Split('|');
+            // long.TryParse accepts values DateTimeOffset cannot represent; without the range check a
+            // crafted cursor turned this "Try" method into an ArgumentOutOfRangeException (a 500
+            // instead of a 400 at the admin endpoint).
             if (parts.Length == 0 ||
-                !long.TryParse(parts[0], NumberStyles.None, CultureInfo.InvariantCulture, out var ticks))
+                !long.TryParse(parts[0], NumberStyles.None, CultureInfo.InvariantCulture, out var ticks) ||
+                ticks > DateTime.MaxValue.Ticks)
             {
                 return false;
             }

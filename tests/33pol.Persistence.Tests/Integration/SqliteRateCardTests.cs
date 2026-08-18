@@ -226,4 +226,28 @@ public sealed class SqliteRateCardTests
         fromBulk!.InputPricePerMillionTokens.Should().Be(single!.InputPricePerMillionTokens);
         fromBulk.OutputPricePerMillionTokens.Should().Be(single.OutputPricePerMillionTokens);
     }
+
+    /// <summary>
+    /// Two admins pricing a brand-new model at once: without a write lock both saw "no active card"
+    /// and either two active cards existed (whichever GetActiveForModelAsync picked won) or the
+    /// slug's unique index turned one request into a 500. Under BEGIN IMMEDIATE the second waits and
+    /// updates the first's card.
+    /// </summary>
+    [Fact]
+    public async Task UpsertForModel_ConcurrentWritersForANewModel_LeaveExactlyOneActiveCard()
+    {
+        var connectionString = NewSharedInMemoryConnectionString();
+        await using var keepAlive = await MigratedKeepAliveAsync(connectionString);
+
+        const int writers = 8;
+        await Task.WhenAll(Enumerable.Range(0, writers).Select(async i =>
+        {
+            await using var db = PersistenceTestDbContextFactory.CreateSqlite(connectionString);
+            await new RateCardRepository(db).UpsertForModelAsync("brand/new-model", 1m + i, 2m + i);
+        }));
+
+        await using var verify = PersistenceTestDbContextFactory.CreateSqlite(connectionString);
+        (await verify.RateCards.AsNoTracking().CountAsync(r => r.ModelId == "brand/new-model")).Should().Be(1);
+        (await new RateCardRepository(verify).GetForModelAsync("brand/new-model")).Should().NotBeNull();
+    }
 }

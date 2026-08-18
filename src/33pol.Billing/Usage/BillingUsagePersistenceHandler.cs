@@ -20,7 +20,10 @@ public sealed class BillingUsagePersistenceHandler(
     ILogger<BillingUsagePersistenceHandler> logger,
     // Optional so the handler still composes without the observability layer (unit tests, tools).
     // When present, every priced event is echoed to the console's live feed.
-    IRecentRequestStore? recentRequests = null) : IUsagePersistenceHandler
+    IRecentRequestStore? recentRequests = null,
+    // Optional for the same reason; when present, a tenant's cached period spend is discarded once
+    // a batch's spend has reached the rollups, before its reservations are released.
+    BudgetSpendCache? spendCache = null) : IUsagePersistenceHandler
 {
     public async ValueTask PersistAsync(UsageEvent usageEvent, CancellationToken cancellationToken = default)
     {
@@ -133,15 +136,18 @@ public sealed class BillingUsagePersistenceHandler(
             throw;
         }
 
-        // Actual cost is now in the rollups; release the in-flight reservations (no accounting gap
-        // between reservation and persisted spend).
-        ReleaseReservations(appended);
-
         var tenantIds = appended
             .Where(r => r.TenantId is not null)
             .Select(r => r.TenantId!.Value)
             .Distinct()
             .ToList();
+
+        // Actual cost is now in the rollups. Budget enforcement caches persisted spend briefly, so
+        // that cache must be invalidated for every affected tenant BEFORE the reservations are
+        // released: otherwise, until the cached figure expired, the batch's cost was held by neither
+        // the ledger nor the cache and concurrent requests were admitted against overstated headroom.
+        InvalidateSpendCache(tenantIds);
+        ReleaseReservations(appended);
 
         foreach (var tenantId in tenantIds)
         {
@@ -193,6 +199,19 @@ public sealed class BillingUsagePersistenceHandler(
         }
 
         return appended;
+    }
+
+    private void InvalidateSpendCache(IReadOnlyList<Guid> tenantIds)
+    {
+        if (spendCache is null)
+        {
+            return;
+        }
+
+        foreach (var tenantId in tenantIds)
+        {
+            spendCache.Invalidate(tenantId);
+        }
     }
 
     private void ReleaseReservations(IReadOnlyList<BillingEventRecord> appended)

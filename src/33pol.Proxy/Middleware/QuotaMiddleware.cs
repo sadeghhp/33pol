@@ -38,6 +38,12 @@ public sealed class QuotaMiddleware
         // parameter is passed empty rather than guessed from a query string the gateway never routes on.
         const string modelHint = "";
 
+        // This is a check, not a reservation, and is therefore advisory: period usage is only
+        // known once the billing writer has flushed completed requests, so N concurrent requests
+        // near a token quota can all pass and the period can overshoot by roughly N in-flight
+        // requests. Hard-stop budgets are the enforced limit — the router reserves against those
+        // before forwarding (TryReserveAsync). Quotas are the soft, per-partition guard rail.
+        //
         // Budget enforcement deliberately does NOT run here. ModelRouterMiddleware's
         // TryReserveAsync subsumes it — it evaluates the same hard budgets against the same spend
         // and additionally reserves the request's estimated cost — so running both meant two DI

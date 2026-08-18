@@ -44,4 +44,23 @@ public sealed class BackendHealthStore : IBackendHealthStore
         ArgumentNullException.ThrowIfNull(health);
         _health[health.ModelId] = health;
     }
+
+    /// <summary>
+    /// Forgets every model not in <paramref name="modelIds"/>. Called after each health sweep so
+    /// models that were deleted or renamed stop showing stale rows in the backends view, stop being
+    /// answered by <see cref="IsBackendHealthy"/> in strict mode, and stop accumulating over
+    /// add/rename/delete cycles.
+    /// </summary>
+    public void RetainOnly(IEnumerable<string> modelIds)
+    {
+        ArgumentNullException.ThrowIfNull(modelIds);
+        var keep = new HashSet<string>(modelIds, StringComparer.OrdinalIgnoreCase);
+        foreach (var key in _health.Keys)
+        {
+            if (!keep.Contains(key))
+            {
+                _health.TryRemove(key, out _);
+            }
+        }
+    }
 }

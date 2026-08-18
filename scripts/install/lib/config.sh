@@ -160,6 +160,8 @@ install_build_env_content() {
   local admin_key="$4"
   local aspnet_env="$5"
   local key_pepper="$6"
+  local metrics_scrape_token="${7:-}"
+  local grafana_admin_password="${8:-admin}"
   local compose_profiles
   compose_profiles="$(install_profile_to_compose_profiles "${profile}")"
 
@@ -178,8 +180,15 @@ install_build_env_content() {
     install_env_line PROMETHEUS_PORT 9090
     install_env_line GRAFANA_PORT 3000
     install_env_line GRAFANA_ADMIN_USER admin
-    install_env_line GRAFANA_ADMIN_PASSWORD admin
+    install_env_line GRAFANA_ADMIN_PASSWORD "${grafana_admin_password}"
     install_env_line ASPNETCORE_ENVIRONMENT "${aspnet_env}"
+    # /metrics: Prometheus authenticates with this token; anonymous scraping stays off outside Development.
+    install_env_line GATEWAY_METRICS_SCRAPE_TOKEN "${metrics_scrape_token}"
+    if [[ "${aspnet_env}" == Development ]]; then
+      install_env_line GATEWAY_METRICS_ALLOW_ANONYMOUS true
+    else
+      install_env_line GATEWAY_METRICS_ALLOW_ANONYMOUS false
+    fi
     install_env_line QUOTA_MONTHLY_TOKEN_LIMIT 10000000
   }
 }

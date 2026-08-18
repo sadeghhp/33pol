@@ -142,7 +142,18 @@ history_add() {
 }
 
 # Read a non-secret value from .env (safe: exact key match, no shell sourcing).
-env_get() { grep -E "^$1=" "${ENV_FILE}" 2>/dev/null | tail -1 | cut -d= -f2- || true; }
+# Read one KEY=value from the env file without sourcing it. Strips one pair of surrounding quotes
+# (install_env_line writes values with special characters as KEY="..." with \" and \\ escaped inside).
+env_get() {
+  local v
+  v="$(grep -E "^$1=" "${ENV_FILE}" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '\r' || true)"
+  if [[ ${#v} -ge 2 && "${v}" == \"*\" ]]; then
+    v="${v:1:${#v}-2}"; v="${v//\\\"/\"}"; v="${v//\\\\/\\}"
+  elif [[ ${#v} -ge 2 && "${v}" == \'*\' ]]; then
+    v="${v:1:${#v}-2}"
+  fi
+  printf '%s' "${v}"
+}
 
 # --- Version computation ----------------------------------------------------
 compute_version() {
@@ -221,7 +232,9 @@ backup_db_hot() {
   key="$(env_get GATEWAY_ADMIN_API_KEY)"
   [[ -n "${key}" ]] || die "GATEWAY_ADMIN_API_KEY not set in ${ENV_FILE}; cannot authenticate a hot backup."
   log "Requesting online backup (VACUUM INTO, no downtime) ..."
-  resp="$(curl -fsS --max-time 120 -X POST -H "Authorization: Bearer ${key}" \
+  # The admin key is handed to curl through a header file (process substitution), never on the
+  # command line, so it does not show up in `ps` / /proc/*/cmdline for the duration of the request.
+  resp="$(curl -fsS --max-time 120 -X POST -H @<(printf 'Authorization: Bearer %s\n' "${key}") \
     "http://127.0.0.1:${port}/admin/api/maintenance/backup" 2>/dev/null)" \
     || die "Hot backup request failed (is the gateway healthy on :${port}?)."
   path="$(printf '%s' "${resp}" | sed -n 's/.*"path":"\([^"]*\)".*/\1/p')"
@@ -451,7 +464,9 @@ cmd_list_backups() {
   fi
 }
 
-cmd_logs() { preflight; dc "$(state_get CURRENT_VERSION || echo latest)" logs -f --tail 200 "${1:-}"; }
+# gateway_tag falls back to "latest" before the first deploy (state_get returns "" with status 0, so
+# `state_get X || echo latest` never falls back and dc would abort on its ${1:?tag} guard).
+cmd_logs() { preflight; dc "$(gateway_tag)" logs -f --tail 200 "${1:-}"; }
 
 prune_images_quiet() { KEEP="${KEEP}" prune_images >/dev/null 2>&1 || true; }
 prune_images() {

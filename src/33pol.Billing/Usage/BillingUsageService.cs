@@ -80,13 +80,43 @@ public sealed class BillingUsageService(
     {
         ArgumentNullException.ThrowIfNull(query);
 
-        // One row past the cap tells us whether anything was dropped without a second count query.
-        var probe = query with { Limit = UsageExportLimits.MaxEventRows + 1, Cursor = null };
-        var events = await billingEvents.QueryAsync(probe, cancellationToken).ConfigureAwait(false);
-        var truncated = events.Count > UsageExportLimits.MaxEventRows;
-        if (truncated)
+        // Page through the ledger with the keyset cursor up to the export cap, then probe for one
+        // more row to decide whether anything was dropped. Repositories clamp a page to
+        // UsageExportLimits.MaxEventPageSize, which equals the export cap, so asking for
+        // MaxEventRows + 1 in a single query could never observe the extra row: an export of more
+        // than MaxEventRows silently reported itself complete.
+        var events = new List<BillingEventRecord>(Math.Min(UsageExportLimits.MaxEventRows, 1024));
+        BillingEventCursor? cursor = null;
+        var truncated = false;
+        while (true)
         {
-            events = events.Take(UsageExportLimits.MaxEventRows).ToList();
+            var remaining = UsageExportLimits.MaxEventRows - events.Count;
+            if (remaining <= 0)
+            {
+                // At the cap: is there anything beyond it?
+                var probe = await billingEvents
+                    .QueryAsync(query with { Limit = 1, Cursor = cursor }, cancellationToken)
+                    .ConfigureAwait(false);
+                truncated = probe.Count > 0;
+                break;
+            }
+
+            var pageSize = Math.Min(remaining, UsageExportLimits.MaxEventPageSize);
+            var page = await billingEvents
+                .QueryAsync(query with { Limit = pageSize, Cursor = cursor }, cancellationToken)
+                .ConfigureAwait(false);
+            if (page.Count == 0)
+            {
+                break;
+            }
+
+            events.AddRange(page.Count > pageSize ? page.Take(pageSize) : page);
+            if (page.Count < pageSize)
+            {
+                break; // short page: the ledger is exhausted
+            }
+
+            cursor = BillingEventCursor.After(page, cursor);
         }
 
         var enriched = await AdminBillingEventMapper

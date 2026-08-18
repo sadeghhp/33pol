@@ -109,11 +109,12 @@ public sealed class SqliteDailyUsageRollupConcurrencyTests
     }
 
     /// <summary>
-    /// UpsertRollupsAsync (absolute totals) is the legacy path and deliberately keeps its
-    /// non-transactional behaviour; only the additive path carries the concurrency guarantee.
+    /// UpsertRollupsAsync (absolute totals, reconciliation) does an unlocked read-then-insert; when it
+    /// overlaps with an increment both can insert the same bucket. It therefore runs under the same
+    /// immediate transaction helper as the additive path.
     /// </summary>
     [Fact]
-    public async Task UpsertRollupsAsync_DoesNotOpenItsOwnTransaction()
+    public async Task UpsertRollupsAsync_UsesTheSameSerializableTransaction()
     {
         var connectionString = NewSharedInMemoryConnectionString();
         await using var keepAlive = await MigratedKeepAliveAsync(connectionString);
@@ -130,7 +131,100 @@ public sealed class SqliteDailyUsageRollupConcurrencyTests
                 DateOnly.FromDateTime(DateTime.UtcNow), Guid.NewGuid(), "gpt-4o", "cc", 1, 1, 1m, 1),
         ]);
 
-        interceptor.StartedIsolationLevels.Should().BeEmpty();
+        interceptor.StartedIsolationLevels
+            .Should().ContainSingle()
+            .Which.Should().Be(System.Data.IsolationLevel.Serializable);
+    }
+
+    /// <summary>
+    /// Anonymous traffic (no tenant) and "no cost centre" are the common buckets, and SQLite treats
+    /// NULLs as distinct in UNIQUE indexes — so they were exactly the buckets the index did not
+    /// protect. They are stored as sentinels now: two writes to such a bucket must share one row,
+    /// and callers still read <c>null</c> back.
+    /// </summary>
+    [Fact]
+    public async Task NullTenantAndCostCentreBuckets_AreUnique_AndReadBackAsNull()
+    {
+        var connectionString = NewSharedInMemoryConnectionString();
+        await using var keepAlive = await MigratedKeepAliveAsync(connectionString);
+        var usageDate = DateOnly.FromDateTime(DateTime.UtcNow);
+
+        await using (var db = PersistenceTestDbContextFactory.CreateSqlite(connectionString))
+        {
+            await new DailyUsageRollupRepository(db).IncrementRollupsAsync(
+                [new DailyUsageRollupDelta(usageDate, null, "gpt-4o", null, 1, 1, 1m, 1)]);
+        }
+
+        await using (var db = PersistenceTestDbContextFactory.CreateSqlite(connectionString))
+        {
+            await new DailyUsageRollupRepository(db).UpsertRollupsAsync(
+                [new DailyUsageRollupRecord(usageDate, null, "gpt-4o", "  ", 5, 5, 5m, 5)]);
+        }
+
+        await using (var db = PersistenceTestDbContextFactory.CreateSqlite(connectionString))
+        {
+            await new DailyUsageRollupRepository(db).IncrementRollupsAsync(
+                [new DailyUsageRollupDelta(usageDate, null, "gpt-4o", "", 1, 1, 1m, 1)]);
+        }
+
+        // Straight from the table: exactly one physical row, keyed by the sentinels.
+        await using var verify = PersistenceTestDbContextFactory.CreateSqlite(connectionString);
+        var rows = await verify.DailyUsageRollups.AsNoTracking().ToListAsync();
+        var row = rows.Should().ContainSingle().Subject;
+        row.TenantId.Should().Be(Guid.Empty);
+        row.CostCenter.Should().Be(string.Empty);
+        row.RequestCount.Should().Be(6);
+
+        // Through the repository: the sentinels are invisible.
+        var scoped = await new DailyUsageRollupRepository(verify).GetScopedRollupsAsync(
+            new UsageScope(null, IncludeAnonymous: true), usageDate, usageDate);
+        var record = scoped.Should().ContainSingle().Subject;
+        record.TenantId.Should().BeNull();
+        record.CostCenter.Should().BeNull();
+        record.PromptTokens.Should().Be(6);
+
+        // The database itself refuses a second row for that bucket.
+        verify.DailyUsageRollups.Add(new Persistence.Entities.DailyUsageRollupEntity
+        {
+            Id = Guid.NewGuid(),
+            UsageDate = usageDate,
+            TenantId = Guid.Empty,
+            ModelId = "gpt-4o",
+            CostCenter = "",
+            UpdatedAt = DateTimeOffset.UtcNow,
+        });
+        var duplicate = () => verify.SaveChangesAsync();
+        await duplicate.Should().ThrowAsync<DbUpdateException>();
+    }
+
+    /// <summary>
+    /// The scope filters must treat the sentinel as "anonymous": tenant-scoped reads exclude it
+    /// unless anonymous rows are requested, and the all-tenants read without anonymous drops it.
+    /// </summary>
+    [Fact]
+    public async Task GetScopedRollupsAsync_TreatsTheSentinelAsAnonymous()
+    {
+        var connectionString = NewSharedInMemoryConnectionString();
+        await using var keepAlive = await MigratedKeepAliveAsync(connectionString);
+        var usageDate = DateOnly.FromDateTime(DateTime.UtcNow);
+        var tenant = Guid.NewGuid();
+
+        await using var db = PersistenceTestDbContextFactory.CreateSqlite(connectionString);
+        var repository = new DailyUsageRollupRepository(db);
+        await repository.IncrementRollupsAsync(
+        [
+            new DailyUsageRollupDelta(usageDate, tenant, "gpt-4o", "cc", 1, 1, 1m, 1),
+            new DailyUsageRollupDelta(usageDate, null, "gpt-4o", null, 2, 2, 2m, 2),
+        ]);
+
+        (await repository.GetScopedRollupsAsync(new UsageScope(tenant, IncludeAnonymous: false), usageDate, usageDate))
+            .Select(r => r.TenantId).Should().BeEquivalentTo([tenant]);
+        (await repository.GetScopedRollupsAsync(new UsageScope(tenant, IncludeAnonymous: true), usageDate, usageDate))
+            .Select(r => r.TenantId).Should().BeEquivalentTo(new Guid?[] { tenant, null });
+        (await repository.GetScopedRollupsAsync(new UsageScope(null, IncludeAnonymous: false), usageDate, usageDate))
+            .Select(r => r.TenantId).Should().BeEquivalentTo([tenant]);
+        (await repository.GetRollupsAsync(usageDate, usageDate, tenantId: null))
+            .Should().HaveCount(2);
     }
 
     /// <summary>

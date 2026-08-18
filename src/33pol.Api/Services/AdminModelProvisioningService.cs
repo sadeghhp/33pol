@@ -25,11 +25,21 @@ public sealed class AdminModelProvisioningService(
         return await action(pricing).ConfigureAwait(false);
     }
 
+    public Task<RegistryMutationResult> AddAsync(
+        AdminModelWriteRequest request,
+        CancellationToken cancellationToken = default) =>
+        AddAsync(request, AdminActor.Anonymous, cancellationToken);
+
+    /// <param name="request">The model write.</param>
+    /// <param name="actor">The caller, stamped on every audit entry the write produces.</param>
+    /// <param name="cancellationToken">Cancels the write.</param>
     public async Task<RegistryMutationResult> AddAsync(
         AdminModelWriteRequest request,
+        AdminActor actor,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(actor);
         var model = request.Model ?? throw new ArgumentException("Model is required.");
 
         var prep = PrepareModel(model, request.ApiKey, request.ClearApiKey, isUpdate: false, previousId: null);
@@ -49,7 +59,7 @@ public sealed class AdminModelProvisioningService(
         // as it was, where deleting "the" secret destroyed the existing model's credential.
         var hadPriorSecret = secretStore.TryGet(prep.Model!.Id, out var priorSecret);
 
-        if (!await TryApplySecretAsync(prep, cancellationToken).ConfigureAwait(false))
+        if (!await TryApplySecretAsync(prep, actor, cancellationToken).ConfigureAwait(false))
         {
             return RegistryMutationResult.Fail(
                 "The upstream credential could not be stored, so the model was not created.");
@@ -58,20 +68,32 @@ public sealed class AdminModelProvisioningService(
         var result = await commands.AddModelAsync(prep.Model!, cancellationToken).ConfigureAwait(false);
         if (!result.Success)
         {
-            await RestoreSecretAfterFailedAddAsync(prep, hadPriorSecret, priorSecret, cancellationToken)
+            await RestoreSecretAfterFailedAddAsync(prep, hadPriorSecret, priorSecret, actor, cancellationToken)
                 .ConfigureAwait(false);
             return result;
         }
 
-        return await ApplyPricingAsync(prep.Model!.Id, request, result, cancellationToken).ConfigureAwait(false);
+        return await ApplyPricingAsync(prep.Model!.Id, request, result, actor, cancellationToken).ConfigureAwait(false);
     }
 
+    public Task<RegistryMutationResult> UpdateAsync(
+        string id,
+        AdminModelWriteRequest request,
+        CancellationToken cancellationToken = default) =>
+        UpdateAsync(id, request, AdminActor.Anonymous, cancellationToken);
+
+    /// <param name="id">The route id or alias of the model to update.</param>
+    /// <param name="request">The model write.</param>
+    /// <param name="actor">The caller, stamped on every audit entry the write produces.</param>
+    /// <param name="cancellationToken">Cancels the write.</param>
     public async Task<RegistryMutationResult> UpdateAsync(
         string id,
         AdminModelWriteRequest request,
+        AdminActor actor,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(actor);
         var model = request.Model ?? throw new ArgumentException("Model is required.");
 
         // The route parameter may be an alias, so resolve the model the write will actually land on:
@@ -101,7 +123,7 @@ public sealed class AdminModelProvisioningService(
             ? previousId
             : null;
 
-        if (!await TryApplySecretAsync(prep, cancellationToken).ConfigureAwait(false))
+        if (!await TryApplySecretAsync(prep, actor, cancellationToken).ConfigureAwait(false))
         {
             return RegistryMutationResult.Fail(
                 $"{result.Message} However, the upstream credential was not stored, so this model " +
@@ -110,10 +132,10 @@ public sealed class AdminModelProvisioningService(
 
         if (renamedFrom is not null)
         {
-            await MigrateRenamedModelAsync(renamedFrom, prep, request, cancellationToken).ConfigureAwait(false);
+            await MigrateRenamedModelAsync(renamedFrom, prep, request, actor, cancellationToken).ConfigureAwait(false);
         }
 
-        return await ApplyPricingAsync(prep.Model!.Id, request, result, cancellationToken).ConfigureAwait(false);
+        return await ApplyPricingAsync(prep.Model!.Id, request, result, actor, cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<IReadOnlyList<AdminModelListItem>> ListModelsAsync(
@@ -195,6 +217,7 @@ public sealed class AdminModelProvisioningService(
         string previousId,
         PrepResult prep,
         AdminModelWriteRequest request,
+        AdminActor actor,
         CancellationToken cancellationToken)
     {
         var newId = prep.Model!.Id;
@@ -217,7 +240,7 @@ public sealed class AdminModelProvisioningService(
         {
             audit.LogAdminAction(
                 "model.rename.credential_migration_failed",
-                new AuditLogEntry(null, null, new { previousId, newId, error = ex.Message }));
+                actor.ToAuditEntry(new { previousId, newId, error = ex.Message }));
         }
 
         // An explicit pricing instruction in the request is applied to the new id by
@@ -238,7 +261,7 @@ public sealed class AdminModelProvisioningService(
 
         audit.LogAdminAction(
             "model.renamed",
-            new AuditLogEntry(null, null, new { previousId, newId }));
+            actor.ToAuditEntry(new { previousId, newId }));
     }
 
     /// <summary>
@@ -249,6 +272,7 @@ public sealed class AdminModelProvisioningService(
         string modelId,
         AdminModelWriteRequest request,
         RegistryMutationResult modelResult,
+        AdminActor actor,
         CancellationToken cancellationToken)
     {
         if (request.ClearPricing)
@@ -279,7 +303,7 @@ public sealed class AdminModelProvisioningService(
 
         audit.LogAdminAction(
             "model.pricing.update",
-            new AuditLogEntry(null, null, new
+            actor.ToAuditEntry(new
             {
                 modelId,
                 request.Pricing.InputPricePerMillionTokens,
@@ -442,7 +466,7 @@ public sealed class AdminModelProvisioningService(
     /// the write, so the caller can abort or compensate rather than leaving a model whose credential
     /// silently does not exist.
     /// </summary>
-    private async Task<bool> TryApplySecretAsync(PrepResult prep, CancellationToken cancellationToken)
+    private async Task<bool> TryApplySecretAsync(PrepResult prep, AdminActor actor, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(prep.Model?.Id))
         {
@@ -456,7 +480,7 @@ public sealed class AdminModelProvisioningService(
                 await secretStore.DeleteAsync(prep.Model.Id, cancellationToken).ConfigureAwait(false);
                 audit.LogAdminAction(
                     "upstream_secret.deleted",
-                    new AuditLogEntry(null, null, new { modelId = prep.Model.Id }));
+                    actor.ToAuditEntry(new { modelId = prep.Model.Id }));
                 return true;
             }
 
@@ -465,7 +489,7 @@ public sealed class AdminModelProvisioningService(
                 await secretStore.PutAsync(prep.Model.Id, prep.SecretToStore, cancellationToken).ConfigureAwait(false);
                 audit.LogAdminAction(
                     "upstream_secret.updated",
-                    new AuditLogEntry(null, null, new { modelId = prep.Model.Id }));
+                    actor.ToAuditEntry(new { modelId = prep.Model.Id }));
             }
 
             return true;
@@ -474,7 +498,7 @@ public sealed class AdminModelProvisioningService(
         {
             audit.LogAdminAction(
                 "upstream_secret.failed",
-                new AuditLogEntry(null, null, new
+                actor.ToAuditEntry(new
                 {
                     modelId = prep.Model.Id,
                     operation = prep.ClearSecret ? "delete" : "put",
@@ -499,6 +523,7 @@ public sealed class AdminModelProvisioningService(
         PrepResult prep,
         bool hadPriorSecret,
         string? priorSecret,
+        AdminActor actor,
         CancellationToken cancellationToken)
     {
         var touchedStore = prep.ClearSecret || !string.IsNullOrWhiteSpace(prep.SecretToStore);
@@ -514,21 +539,21 @@ public sealed class AdminModelProvisioningService(
                 await secretStore.PutAsync(prep.Model.Id, priorSecret, cancellationToken).ConfigureAwait(false);
                 audit.LogAdminAction(
                     "upstream_secret.restored",
-                    new AuditLogEntry(null, null, new { modelId = prep.Model.Id }));
+                    actor.ToAuditEntry(new { modelId = prep.Model.Id }));
             }
             else if (!prep.ClearSecret)
             {
                 await secretStore.DeleteAsync(prep.Model.Id, cancellationToken).ConfigureAwait(false);
                 audit.LogAdminAction(
                     "upstream_secret.rolled_back",
-                    new AuditLogEntry(null, null, new { modelId = prep.Model.Id }));
+                    actor.ToAuditEntry(new { modelId = prep.Model.Id }));
             }
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             audit.LogAdminAction(
                 "upstream_secret.rollback_failed",
-                new AuditLogEntry(null, null, new { modelId = prep.Model.Id, error = ex.Message }));
+                actor.ToAuditEntry(new { modelId = prep.Model.Id, error = ex.Message }));
         }
     }
 

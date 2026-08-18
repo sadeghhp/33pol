@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Pol33.Core.Abstractions;
 using Pol33.Core.Models;
 using Pol33.Persistence.Entities;
+using Pol33.Persistence.Infrastructure;
 using Pol33.Persistence.Mapping;
 
 namespace Pol33.Persistence.Repositories;
@@ -49,63 +50,54 @@ public sealed class ModelRouteRepository(GatewayDbContext dbContext) : IModelRou
     {
         ArgumentNullException.ThrowIfNull(models);
 
-        // The whole read-check-write runs in one transaction where the provider supports it, so a
-        // second writer cannot slip between the version check and the rewrite. The EF InMemory
-        // provider (tests) has no transactions; there the check still runs, just without isolation.
-        var transaction = dbContext.Database.IsRelational()
-            ? await dbContext.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false)
-            : null;
-
-        try
-        {
-            var versionRow = await dbContext.ConfigVersions
-                .FirstOrDefaultAsync(c => c.Id == RouteVersionRowId, cancellationToken)
-                .ConfigureAwait(false);
-
-            var currentVersion = versionRow?.Version ?? 0;
-            if (expectedVersion is long expected && expected != currentVersion)
+        // The whole read-check-write runs in one BEGIN IMMEDIATE transaction on SQLite (see
+        // GatewayWriteTransaction), so a second writer blocks on the write lock before it reads the
+        // version and then sees the bumped value — surfacing as ModelRouteVersionConflictException,
+        // not SQLITE_BUSY_SNAPSHOT. The EF InMemory provider (tests) has no transactions; there the
+        // check still runs, just without isolation.
+        long newVersion = 0;
+        await GatewayWriteTransaction.RunAsync(
+            dbContext,
+            async ct =>
             {
-                throw new ModelRouteVersionConflictException(expected, currentVersion);
-            }
+                var versionRow = await dbContext.ConfigVersions
+                    .FirstOrDefaultAsync(c => c.Id == RouteVersionRowId, ct)
+                    .ConfigureAwait(false);
 
-            var now = DateTimeOffset.UtcNow;
+                var currentVersion = versionRow?.Version ?? 0;
+                if (expectedVersion is long expected && expected != currentVersion)
+                {
+                    throw new ModelRouteVersionConflictException(expected, currentVersion);
+                }
 
-            // Replace the route table wholesale. RemoveRange keeps this provider-agnostic (the EF
-            // InMemory provider used by tests does not support ExecuteDelete).
-            var existing = await dbContext.ModelRoutes
-                .ToListAsync(cancellationToken)
-                .ConfigureAwait(false);
-            dbContext.ModelRoutes.RemoveRange(existing);
+                var now = DateTimeOffset.UtcNow;
 
-            foreach (var model in models)
-            {
-                dbContext.ModelRoutes.Add(ModelRouteEntityMapper.ToEntity(model, now));
-            }
+                // Replace the route table wholesale. RemoveRange keeps this provider-agnostic (the EF
+                // InMemory provider used by tests does not support ExecuteDelete).
+                var existing = await dbContext.ModelRoutes
+                    .ToListAsync(ct)
+                    .ConfigureAwait(false);
+                dbContext.ModelRoutes.RemoveRange(existing);
 
-            if (versionRow is null)
-            {
-                versionRow = new ConfigVersionEntity { Id = RouteVersionRowId, Version = currentVersion };
-                dbContext.ConfigVersions.Add(versionRow);
-            }
+                foreach (var model in models)
+                {
+                    dbContext.ModelRoutes.Add(ModelRouteEntityMapper.ToEntity(model, now));
+                }
 
-            versionRow.Version = currentVersion + 1;
-            versionRow.UpdatedAt = now;
+                if (versionRow is null)
+                {
+                    versionRow = new ConfigVersionEntity { Id = RouteVersionRowId, Version = currentVersion };
+                    dbContext.ConfigVersions.Add(versionRow);
+                }
 
-            await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+                versionRow.Version = currentVersion + 1;
+                versionRow.UpdatedAt = now;
 
-            if (transaction is not null)
-            {
-                await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-            }
+                await dbContext.SaveChangesAsync(ct).ConfigureAwait(false);
+                newVersion = versionRow.Version;
+            },
+            cancellationToken).ConfigureAwait(false);
 
-            return versionRow.Version;
-        }
-        finally
-        {
-            if (transaction is not null)
-            {
-                await transaction.DisposeAsync().ConfigureAwait(false);
-            }
-        }
+        return newVersion;
     }
 }

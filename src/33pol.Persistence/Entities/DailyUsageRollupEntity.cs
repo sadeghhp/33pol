@@ -6,11 +6,13 @@ public sealed class DailyUsageRollupEntity
 
     public DateOnly UsageDate { get; set; }
 
-    public Guid? TenantId { get; set; }
+    /// <summary><see cref="Guid.Empty"/> for anonymous traffic (never NULL; see the entity configuration).</summary>
+    public Guid TenantId { get; set; }
 
     public required string ModelId { get; set; }
 
-    public string? CostCenter { get; set; }
+    /// <summary>Empty string for "no cost centre" (never NULL; see the entity configuration).</summary>
+    public required string CostCenter { get; set; }
 
     public long PromptTokens { get; set; }
 

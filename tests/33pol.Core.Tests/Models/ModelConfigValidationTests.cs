@@ -14,6 +14,43 @@ public sealed class ModelConfigValidationTests
         error.Should().BeNull();
     }
 
+    /// <summary>
+    /// url used to be checked only for blankness by callers, so "not a url" or an ftp:// URL was
+    /// persisted and failed later in the forwarder and threw in the health checker.
+    /// </summary>
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("not a url")]
+    [InlineData("ftp://files.example.com")]
+    [InlineData("/relative/path")]
+    [InlineData("localhost:8080")]
+    public void TryValidate_InvalidUrl_ReturnsFalse(string url)
+    {
+        ModelConfigValidation.TryValidate(new ModelConfig { Id = "m", Url = url, Aliases = [] }, out var error)
+            .Should().BeFalse();
+
+        error.Should().Contain("url");
+    }
+
+    [Theory]
+    [InlineData("http://host.docker.internal:1234")]
+    [InlineData("https://api.openai.com/v1")]
+    [InlineData(" http://x ")]
+    public void TryValidate_HttpOrHttpsUrl_ReturnsTrue(string url)
+    {
+        ModelConfigValidation.TryValidate(new ModelConfig { Id = "m", Url = url, Aliases = [] }, out var error)
+            .Should().BeTrue(error);
+    }
+
+    /// <summary>An update body may leave the id blank to keep the existing one; the validator must not reject that.</summary>
+    [Fact]
+    public void TryValidate_BlankId_IsNotRejectedHere()
+    {
+        ModelConfigValidation.TryValidate(new ModelConfig { Id = "", Url = "http://x", Aliases = [] }, out var error)
+            .Should().BeTrue(error);
+    }
+
     [Fact]
     public void TryValidate_SecretEnvVar_ReturnsFalse()
     {

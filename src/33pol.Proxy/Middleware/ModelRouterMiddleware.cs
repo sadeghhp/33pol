@@ -501,7 +501,7 @@ public sealed class ModelRouterMiddleware
                 return;
             }
 
-            if (error == ForwarderError.ResponseBodyDestination)
+            if (error == ForwarderError.ResponseBodyCanceled)
             {
                 // The upstream answered and then stalled while sending the body. The backend proved
                 // it was reachable and producing, so this is not evidence of ill health — abandon the
@@ -532,6 +532,45 @@ public sealed class ModelRouterMiddleware
                     requestInfo.Stream,
                     success: false,
                     outcome: "stream_idle_timeout",
+                    upstreamUrl: modelConfig.Url,
+                    usage: usageCapture);
+                return;
+            }
+
+            if (error == ForwarderError.ResponseBodyDestination)
+            {
+                // The upstream answered and then broke the body off — connection reset, premature
+                // EOF, bad framing. That is the backend's failure, not the client's: it counts against
+                // the breaker and shows up in the error store like any other upstream error. Before
+                // this was distinguished it was reported as client_canceled, which hid a flapping
+                // backend from the breaker and the operator, and a non-streaming client got the
+                // upstream's 200 with a truncated body instead of an error it could act on.
+                circuitLease.RecordFailure();
+                inferenceScope.SetOutcome(false, "upstream_body_error");
+                _metricsCollector.RecordForwardAttempt(modelConfig.Id, "upstream_body_error");
+                if (!context.Response.HasStarted)
+                {
+                    await context.WriteGatewayErrorAsync(
+                        _errors.Write(
+                            GatewayErrorCode.UpstreamError,
+                            message: "Backend connection failed while sending the response body."),
+                        CancellationToken.None).ConfigureAwait(false);
+                }
+                else
+                {
+                    _logger.LogWarning(
+                        "Upstream response body for model {ModelId} failed after {ElapsedMs}ms with the response already started; the client received a truncated body",
+                        modelConfig.Id,
+                        (DateTimeOffset.UtcNow - started).TotalMilliseconds);
+                }
+
+                RecordRecentRequest(
+                    context,
+                    modelConfig.Id,
+                    started,
+                    requestInfo.Stream,
+                    success: false,
+                    outcome: "upstream_body_error",
                     upstreamUrl: modelConfig.Url,
                     usage: usageCapture);
                 return;
@@ -841,6 +880,7 @@ public sealed class ModelRouterMiddleware
     {
         "upstream_timeout" => $"Upstream timed out for model '{modelId}'.",
         "stream_idle_timeout" => $"Upstream stopped sending the response body for model '{modelId}'.",
+        "upstream_body_error" => $"Upstream connection failed while sending the response body for model '{modelId}'.",
         "backend_unhealthy" => $"Rejected: no healthy backend for model '{modelId}'.",
         "circuit_open" => $"Rejected: circuit breaker open for model '{modelId}'.",
         "bulkhead_full" => $"Rejected: concurrency limit reached for model '{modelId}'.",

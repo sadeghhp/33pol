@@ -3,6 +3,7 @@ using Microsoft.Extensions.Options;
 using OpenTelemetry.Metrics;
 using Pol33.Api.DependencyInjection;
 using Pol33.Api.Endpoints;
+using Pol33.App.Metrics;
 using Pol33.Core.Configuration;
 using Pol33.Observability.Metrics;
 using Pol33.Proxy.DependencyInjection;
@@ -31,7 +32,6 @@ public static class GatewayHostBuilderExtensions
         {
             options.AllowSynchronousIO = false;
             options.AddServerHeader = false;
-            options.Limits.MaxResponseBufferSize = null;
 
             var gatewayOptions = context.Configuration
                 .GetSection(GatewayOptions.SectionName)
@@ -77,6 +77,9 @@ public static class GatewayHostBuilderExtensions
         app.UseInferenceResilience();
         app.UsePublicModelDetection();
         app.UseGatewaySecurity(app.Configuration);
+        // /metrics is an anonymous path to the authentication handler (probes and scrapers do not
+        // carry gateway keys), so its gate lives here: scrape token, Operator key, or explicit opt-in.
+        app.UseMetricsScrapeAuthorization();
 
         app.MapGet("/", GatewayEndpoints.GetRoot);
         app.MapGet("/admin", () => Results.Redirect("/admin/index.html"));

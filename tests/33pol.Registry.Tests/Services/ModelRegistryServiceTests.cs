@@ -45,6 +45,25 @@ public sealed class ModelRegistryServiceTests
         byAlias!.Id.Should().Be(byId!.Id);
     }
 
+    /// <summary>
+    /// ModelConfig is mutable. A caller that edits what TryGetModel hands back (normalising a URL,
+    /// touching aliases) must not alter the live routing table for every other request.
+    /// </summary>
+    [Fact]
+    public async Task TryGetModel_ReturnsACopy_SoCallersCannotMutateTheRoutingTable()
+    {
+        await _sut.LoadModelsAsync(TestDataPath("valid-models.json"));
+
+        _sut.TryGetModel("canonical-a", out var first).Should().BeTrue();
+        first!.Url = "http://tampered:1";
+        first.Aliases.Clear();
+
+        _sut.TryGetModel("canonical-a", out var second).Should().BeTrue();
+        second.Should().NotBeSameAs(first);
+        second!.Url.Should().Be("http://backend-a:8000");
+        _sut.TryGetModel("alias-a", out _).Should().BeTrue();
+    }
+
     [Fact]
     public async Task LoadModelsAsync_InvalidJson_ThrowsJsonException()
     {

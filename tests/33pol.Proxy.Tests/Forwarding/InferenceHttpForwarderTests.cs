@@ -302,11 +302,11 @@ public sealed class InferenceHttpForwarderTests
     }
 
     /// <summary>
-    /// A genuine mid-stream stall must be reported as ResponseBodyDestination, which the middleware
+    /// A genuine mid-stream stall must be reported as ResponseBodyCanceled, which the middleware
     /// maps to "abandon the probe" rather than "backend failure".
     /// </summary>
     [Fact]
-    public async Task SendAsync_Streaming_StalledUpstream_ReturnsResponseBodyDestination()
+    public async Task SendAsync_Streaming_StalledUpstream_ReturnsResponseBodyCanceled()
     {
         var handler = new SlowDripUpstreamHandler(
             chunks: 2,
@@ -334,11 +334,11 @@ public sealed class InferenceHttpForwarderTests
             timeouts,
             CancellationToken.None);
 
-        error.Should().Be(ForwarderError.ResponseBodyDestination);
+        error.Should().Be(ForwarderError.ResponseBodyCanceled);
     }
 
     /// <summary>
-    /// A non-streaming response that stalls mid-transfer is reported as ResponseBodyDestination, the
+    /// A non-streaming response that stalls mid-transfer is reported as ResponseBodyCanceled, the
     /// same as a stalled stream — not as a header timeout.
     /// </summary>
     /// <remarks>
@@ -349,7 +349,7 @@ public sealed class InferenceHttpForwarderTests
     /// was taken out of service for every caller.
     /// </remarks>
     [Fact]
-    public async Task SendAsync_NonStreaming_StalledUpstream_ReturnsResponseBodyDestination()
+    public async Task SendAsync_NonStreaming_StalledUpstream_ReturnsResponseBodyCanceled()
     {
         var handler = new SlowDripUpstreamHandler(
             chunks: 2,
@@ -378,7 +378,7 @@ public sealed class InferenceHttpForwarderTests
             timeouts,
             CancellationToken.None);
 
-        error.Should().Be(ForwarderError.ResponseBodyDestination);
+        error.Should().Be(ForwarderError.ResponseBodyCanceled);
     }
 
     /// <summary>
@@ -446,6 +446,137 @@ public sealed class InferenceHttpForwarderTests
             CancellationToken.None);
 
         error.Should().Be(ForwarderError.RequestTimedOut);
+    }
+
+    /// <summary>
+    /// An upstream that answers and then resets the connection mid-body is a backend failure, not a
+    /// client hang-up. Reporting it as RequestCanceled hid a flapping backend from the breaker and
+    /// the operator; for a non-streaming request nothing has reached the client, so the router can
+    /// still answer with a 502 — provided the upstream's copied headers are gone again.
+    /// </summary>
+    [Fact]
+    public async Task SendAsync_NonStreaming_UpstreamBodyReset_ReturnsResponseBodyDestinationAndClearsCopiedHeaders()
+    {
+        var handler = new BrokenBodyUpstreamHandler(bytesBeforeFailure: 0, contentType: "application/json");
+        var forwarder = new InferenceHttpForwarder(
+            new SingleHandlerClientFactory(handler),
+            NoOpGatewayMetricsCollector.Instance,
+            NullLogger<InferenceHttpForwarder>.Instance);
+
+        var context = CreatePostContext("""{"model":"gpt","stream":false}""");
+        var transformer = new StreamingHttpTransformer(false, "gpt", "gpt");
+
+        var error = await forwarder.SendAsync(
+            context,
+            "http://backend:8000",
+            null,
+            transformer,
+            isStreaming: false,
+            TestTimeouts,
+            CancellationToken.None);
+
+        error.Should().Be(ForwarderError.ResponseBodyDestination);
+        context.Response.HasStarted.Should().BeFalse();
+        context.Response.Headers.ContainsKey("X-Upstream-Marker").Should().BeFalse();
+        context.Response.Headers.ContainsKey("Content-Type").Should().BeFalse();
+    }
+
+    /// <summary>
+    /// The same failure mid-stream: some bytes are already with the client, so headers stay, but the
+    /// outcome is still the backend's fault rather than the client's.
+    /// </summary>
+    [Fact]
+    public async Task SendAsync_Streaming_UpstreamBodyReset_ReturnsResponseBodyDestination()
+    {
+        var handler = new BrokenBodyUpstreamHandler(bytesBeforeFailure: 1);
+        var forwarder = new InferenceHttpForwarder(
+            new SingleHandlerClientFactory(handler),
+            NoOpGatewayMetricsCollector.Instance,
+            NullLogger<InferenceHttpForwarder>.Instance);
+
+        var context = CreatePostContext("""{"model":"gpt","stream":true}""");
+        var transformer = new StreamingHttpTransformer(true, "gpt", "gpt");
+
+        var error = await forwarder.SendAsync(
+            context,
+            "http://backend:8000",
+            null,
+            transformer,
+            isStreaming: true,
+            TestTimeouts,
+            CancellationToken.None);
+
+        error.Should().Be(ForwarderError.ResponseBodyDestination);
+        context.Response.Body.Position = 0;
+        var body = await new StreamReader(context.Response.Body).ReadToEndAsync();
+        body.Should().Contain(BrokenBodyUpstreamHandler.ChunkMarker);
+    }
+
+    /// <summary>
+    /// When the client is the one that went away, an upstream read that fails as a consequence is
+    /// still the client's doing.
+    /// </summary>
+    [Fact]
+    public async Task SendAsync_UpstreamBodyReset_AfterClientCancellation_ReturnsRequestCanceled()
+    {
+        using var clientGone = new CancellationTokenSource();
+        var handler = new BrokenBodyUpstreamHandler(bytesBeforeFailure: 0, onFirstRead: clientGone.Cancel);
+        var forwarder = new InferenceHttpForwarder(
+            new SingleHandlerClientFactory(handler),
+            NoOpGatewayMetricsCollector.Instance,
+            NullLogger<InferenceHttpForwarder>.Instance);
+
+        var context = CreatePostContext("""{"model":"gpt","stream":true}""");
+        var transformer = new StreamingHttpTransformer(true, "gpt", "gpt");
+
+        var error = await forwarder.SendAsync(
+            context,
+            "http://backend:8000",
+            null,
+            transformer,
+            isStreaming: true,
+            TestTimeouts,
+            clientGone.Token);
+
+        error.Should().Be(ForwarderError.RequestCanceled);
+    }
+
+    /// <summary>
+    /// Upstream headers that would let the backend speak for the gateway — CORS decisions, cookies,
+    /// auth challenges, server banners — are never relayed. Ordinary provider headers still are.
+    /// </summary>
+    [Fact]
+    public async Task SendAsync_DoesNotRelayGatewayOwnedResponseHeaders()
+    {
+        var handler = new LeakyHeadersUpstreamHandler();
+        var forwarder = new InferenceHttpForwarder(
+            new SingleHandlerClientFactory(handler),
+            NoOpGatewayMetricsCollector.Instance,
+            NullLogger<InferenceHttpForwarder>.Instance);
+
+        var context = CreatePostContext("""{"model":"gpt","stream":false}""");
+        context.Response.Headers["Access-Control-Allow-Origin"] = "https://gateway.example";
+        var transformer = new StreamingHttpTransformer(false, "gpt", "gpt");
+
+        var error = await forwarder.SendAsync(
+            context,
+            "http://backend:8000",
+            null,
+            transformer,
+            isStreaming: false,
+            TestTimeouts,
+            CancellationToken.None);
+
+        error.Should().Be(ForwarderError.None);
+        context.Response.Headers["Access-Control-Allow-Origin"].ToString().Should().Be("https://gateway.example");
+        context.Response.Headers.ContainsKey("Access-Control-Allow-Credentials").Should().BeFalse();
+        context.Response.Headers.ContainsKey("Set-Cookie").Should().BeFalse();
+        context.Response.Headers.ContainsKey("WWW-Authenticate").Should().BeFalse();
+        context.Response.Headers.ContainsKey("Server").Should().BeFalse();
+        context.Response.Headers.ContainsKey("Via").Should().BeFalse();
+        context.Response.Headers.ContainsKey("X-Powered-By").Should().BeFalse();
+        context.Response.Headers["x-request-id"].ToString().Should().Be("req-upstream");
+        context.Response.Headers["x-ratelimit-remaining-requests"].ToString().Should().Be("41");
     }
 
     private static DefaultHttpContext CreatePostContext(string jsonBody)
@@ -798,6 +929,109 @@ public sealed class InferenceHttpForwarderTests
             public override void SetLength(long value) => throw new NotSupportedException();
 
             public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        }
+    }
+
+    /// <summary>
+    /// Answers 200 with headers, emits <c>bytesBeforeFailure</c> SSE frames, then fails the body read
+    /// the way a reset connection surfaces from HttpClient (<see cref="HttpIOException"/>).
+    /// </summary>
+    private sealed class BrokenBodyUpstreamHandler(
+        int bytesBeforeFailure,
+        string contentType = "text/event-stream",
+        Action? onFirstRead = null) : HttpMessageHandler
+    {
+        public const string ChunkMarker = "before-reset";
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            var response = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StreamContent(new BrokenStream(bytesBeforeFailure, onFirstRead))
+                {
+                    Headers = { ContentType = new MediaTypeHeaderValue(contentType) },
+                },
+            };
+            response.Headers.TryAddWithoutValidation("X-Upstream-Marker", "present");
+            return Task.FromResult(response);
+        }
+
+        private sealed class BrokenStream(int chunksBeforeFailure, Action? onFirstRead) : Stream
+        {
+            private int _reads;
+
+            public override bool CanRead => true;
+
+            public override bool CanSeek => false;
+
+            public override bool CanWrite => false;
+
+            public override long Length => throw new NotSupportedException();
+
+            public override long Position
+            {
+                get => throw new NotSupportedException();
+                set => throw new NotSupportedException();
+            }
+
+            public override ValueTask<int> ReadAsync(
+                Memory<byte> buffer,
+                CancellationToken cancellationToken = default)
+            {
+                if (_reads == 0)
+                {
+                    onFirstRead?.Invoke();
+                }
+
+                if (_reads++ < chunksBeforeFailure)
+                {
+                    var payload = Encoding.UTF8.GetBytes($"data: {{\"m\":\"{ChunkMarker}\"}}\n\n");
+                    payload.CopyTo(buffer);
+                    return ValueTask.FromResult(payload.Length);
+                }
+
+                throw new HttpIOException(
+                    HttpRequestError.ResponseEnded,
+                    "The response ended prematurely.");
+            }
+
+            public override int Read(byte[] buffer, int offset, int count) =>
+                ReadAsync(buffer.AsMemory(offset, count)).AsTask().GetAwaiter().GetResult();
+
+            public override void Flush()
+            {
+            }
+
+            public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+            public override void SetLength(long value) => throw new NotSupportedException();
+
+            public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        }
+    }
+
+    private sealed class LeakyHeadersUpstreamHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            var response = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("""{"ok":true}""", Encoding.UTF8, "application/json"),
+            };
+            response.Headers.TryAddWithoutValidation("Access-Control-Allow-Origin", "*");
+            response.Headers.TryAddWithoutValidation("Access-Control-Allow-Credentials", "true");
+            response.Headers.TryAddWithoutValidation("Set-Cookie", "session=abc; Path=/");
+            response.Headers.TryAddWithoutValidation("WWW-Authenticate", "Bearer realm=\"upstream\"");
+            response.Headers.TryAddWithoutValidation("Server", "nginx/1.25");
+            response.Headers.TryAddWithoutValidation("Via", "1.1 cdn");
+            response.Headers.TryAddWithoutValidation("X-Powered-By", "Express");
+            response.Headers.TryAddWithoutValidation("x-request-id", "req-upstream");
+            response.Headers.TryAddWithoutValidation("x-ratelimit-remaining-requests", "41");
+            return Task.FromResult(response);
         }
     }
 

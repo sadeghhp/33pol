@@ -48,9 +48,16 @@ public sealed class DailyUsageWebhookHostedServiceTests
             pollIntervalSeconds: 1,
             dailyWebhookUtcHour: DateTime.UtcNow.Hour);
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         await service.StartAsync(cts.Token);
-        await Task.Delay(1500, CancellationToken.None);
+        // Poll rather than sleep a fixed interval: under suite load a fixed delay races the 1 s poll
+        // timer and made this assertion intermittently fail.
+        var deadline = DateTime.UtcNow.AddSeconds(8);
+        while (DateTime.UtcNow < deadline && !webhooks.ReceivedCalls().Any(c => c.GetMethodInfo().Name == nameof(IBillingWebhookDispatcher.DispatchAsync)))
+        {
+            await Task.Delay(50, CancellationToken.None);
+        }
+
         await service.StopAsync(CancellationToken.None);
 
         await webhooks.Received().DispatchAsync(

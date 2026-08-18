@@ -21,6 +21,7 @@ source "${INSTALL_SCRIPT_DIR}/lib/prompt.sh"
 INSTALL_YES=false
 INSTALL_DRY_RUN=false
 INSTALL_FORCE_CONFIG=false
+INSTALL_ROTATE_SECRETS=false
 INSTALL_ENV_OVERRIDE=""
 INSTALL_SUBCMD="install"
 INSTALL_VOLUMES=false
@@ -52,6 +53,9 @@ Install options:
   --env-file PATH        Merge overrides into generated .env
   --bind-gateway ADDR    Gateway bind (default: 0.0.0.0)
   --force-config         Overwrite models.json for gpu-gateway
+  --rotate-secrets       Generate a NEW key pepper + admin key even when an existing .env has
+                         them (invalidates every stored API key; requires scripts/reset-admin-key.py
+                         to re-seed the admin key). Default: reuse the values from the existing .env.
   --dry-run              Print actions without executing compose
 
 Reapply options:
@@ -84,6 +88,7 @@ parse_global_flags() {
       --env-file) INSTALL_ENV_OVERRIDE="$2"; shift 2 ;;
       --bind-gateway) INSTALL_GATEWAY_BIND="$2"; shift 2 ;;
       --force-config) INSTALL_FORCE_CONFIG=true; shift ;;
+      --rotate-secrets) INSTALL_ROTATE_SECRETS=true; shift ;;
       --dry-run) INSTALL_DRY_RUN=true; shift ;;
       --volumes) INSTALL_VOLUMES=true; shift ;;
       --service) INSTALL_REAPPLY_SERVICE="$2"; shift 2 ;;
@@ -163,11 +168,19 @@ handle_existing_install() {
     return 0
   fi
   if [[ "${INSTALL_YES:-false}" == true ]]; then
+    # Non-interactive re-run on an existing install: upgrade (keep data + secrets) rather than
+    # rewriting .env. Pass --rotate-secrets to force a reconfigure that generates new secrets.
+    if [[ "${INSTALL_ROTATE_SECRETS}" == true ]]; then
+      log "Existing installation detected at ${INSTALL_DIR}; --rotate-secrets set, reconfiguring with NEW secrets."
+      return 0
+    fi
+    log "Existing installation detected at ${INSTALL_DIR}; --yes defaults to upgrade (keeps .env, pepper and admin key)."
+    INSTALL_SUBCMD=upgrade
     return 0
   fi
   echo "Existing installation detected at ${INSTALL_DIR}" >&2
   echo "  1) upgrade (keep data, pull and rebuild)" >&2
-  echo "  2) reconfigure (rewrite .env)" >&2
+  echo "  2) reconfigure (rewrite .env; keeps the existing pepper + admin key unless --rotate-secrets)" >&2
   echo "  3) abort" >&2
   local choice
   read -rp "Choice [3]: " choice
@@ -190,6 +203,7 @@ cmd_install() {
     return
   fi
 
+  install_seed_secrets_from_existing_env "${INSTALL_DIR}" "${INSTALL_ROTATE_SECRETS}"
   install_resolve_install_config
 
   install_run_doctor "${INSTALL_GATEWAY_PORT}"
@@ -215,7 +229,9 @@ cmd_install() {
     "${INSTALL_GATEWAY_BIND}" \
     "${INSTALL_ADMIN_KEY}" \
     "${INSTALL_ASPNET_ENV}" \
-    "${INSTALL_KEY_PEPPER}")"
+    "${INSTALL_KEY_PEPPER}" \
+    "${INSTALL_METRICS_SCRAPE_TOKEN}" \
+    "${INSTALL_GRAFANA_ADMIN_PASSWORD}")"
 
   if [[ -n "${INSTALL_ENV_OVERRIDE}" ]]; then
     env_content="$(install_merge_env_file "${env_content}" "${INSTALL_ENV_OVERRIDE}")"

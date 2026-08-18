@@ -97,6 +97,25 @@ public static class GatewayOptionsValidation
             errors.Add($"{nameof(GatewayOptions.Resilience)}.{nameof(GatewayResilienceOptions.CircuitBreakerBreakDurationSeconds)} must be at least 1 second.");
         }
 
+        if (options.Resilience.CircuitBreakerSamplingWindowSeconds < 1)
+        {
+            errors.Add($"{nameof(GatewayOptions.Resilience)}.{nameof(GatewayResilienceOptions.CircuitBreakerSamplingWindowSeconds)} must be at least 1 second.");
+        }
+
+        // A ratio above 1 (e.g. "50" meaning percent) can never be reached, which silently disables
+        // the breaker; 0 or below makes it purely count-based.
+        if (!(options.Resilience.CircuitBreakerFailureRatioThreshold > 0d) ||
+            options.Resilience.CircuitBreakerFailureRatioThreshold > 1d ||
+            double.IsNaN(options.Resilience.CircuitBreakerFailureRatioThreshold))
+        {
+            errors.Add($"{nameof(GatewayOptions.Resilience)}.{nameof(GatewayResilienceOptions.CircuitBreakerFailureRatioThreshold)} must be greater than 0 and at most 1 (a fraction, not a percentage).");
+        }
+
+        if (options.Resilience.ShutdownDrainSeconds < 0)
+        {
+            errors.Add($"{nameof(GatewayOptions.Resilience)}.{nameof(GatewayResilienceOptions.ShutdownDrainSeconds)} must be 0 or greater.");
+        }
+
         errors.AddRange(options.ForwardedHeaders.Validate());
 
         return errors;

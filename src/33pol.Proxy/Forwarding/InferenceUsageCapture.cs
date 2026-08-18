@@ -127,6 +127,14 @@ public sealed class InferenceUsageCapture
     public void OnCaptureFailed(Exception exception) =>
         _metrics.RecordUsageParseFailure(_canonicalModelId);
 
+    /// <summary>
+    /// Reports that the response body was deliberately not parsed — it arrived in a form usage
+    /// cannot be read from (a compressed <c>Content-Encoding</c>, say) — so the missing usage is
+    /// visible in the parse-failure metric rather than silently absent.
+    /// </summary>
+    public void OnBodyNotParseable() =>
+        _metrics.RecordUsageParseFailure(_canonicalModelId);
+
     private void Capture(ParsedUsage usage)
     {
         if (!usage.HasUsage)

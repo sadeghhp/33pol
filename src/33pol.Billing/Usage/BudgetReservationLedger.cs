@@ -17,6 +17,10 @@ public sealed class BudgetReservationLedger
     private readonly object _sync = new();
     private readonly Dictionary<string, Reservation> _byRequest = new(StringComparer.Ordinal);
     private readonly Dictionary<Guid, decimal> _outstandingByTenant = new();
+    // Earliest expiry among live reservations. Every call on the hot path used to scan the whole
+    // ledger for expired entries under the global lock; now the scan only happens once something
+    // can actually have expired.
+    private DateTimeOffset _nextExpiry = DateTimeOffset.MaxValue;
 
     public BudgetReservationLedger(TimeSpan ttl, Func<DateTimeOffset>? clock = null)
     {
@@ -58,7 +62,13 @@ public sealed class BudgetReservationLedger
                 return false;
             }
 
-            _byRequest[requestId] = new Reservation(tenantId, amount, _clock() + _ttl);
+            var expiresAt = _clock() + _ttl;
+            _byRequest[requestId] = new Reservation(tenantId, amount, expiresAt);
+            if (expiresAt < _nextExpiry)
+            {
+                _nextExpiry = expiresAt;
+            }
+
             if (amount > 0m)
             {
                 _outstandingByTenant[tenantId] = outstanding + amount;
@@ -79,21 +89,40 @@ public sealed class BudgetReservationLedger
             }
 
             Subtract(reservation.TenantId, reservation.Amount);
+            if (_byRequest.Count == 0)
+            {
+                _nextExpiry = DateTimeOffset.MaxValue;
+            }
         }
     }
 
+    /// <summary>
+    /// Reclaims expired reservations. Cheap unless the earliest expiry has passed: only then does it
+    /// scan, and it recomputes the next expiry as it goes so the following calls are cheap again.
+    /// </summary>
     private void SweepExpired()
     {
         var now = _clock();
+        if (now < _nextExpiry)
+        {
+            return;
+        }
+
         List<string>? expired = null;
+        var nextExpiry = DateTimeOffset.MaxValue;
         foreach (var (requestId, reservation) in _byRequest)
         {
             if (reservation.ExpiresAt <= now)
             {
                 (expired ??= []).Add(requestId);
             }
+            else if (reservation.ExpiresAt < nextExpiry)
+            {
+                nextExpiry = reservation.ExpiresAt;
+            }
         }
 
+        _nextExpiry = nextExpiry;
         if (expired is null)
         {
             return;

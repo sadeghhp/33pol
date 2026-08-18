@@ -26,12 +26,22 @@ public interface IInferenceHttpForwarder
     /// </param>
     /// <returns>
     /// <see cref="ForwarderError.None"/> on success;
+    /// <see cref="ForwarderError.Request"/> when the upstream could not be reached or rejected the
+    /// request before answering (a backend health signal);
     /// <see cref="ForwarderError.RequestTimedOut"/> when headers did not arrive in time (a backend
     /// health signal);
-    /// <see cref="ForwarderError.ResponseBodyDestination"/> when a streaming body stalled past the
-    /// idle timeout (inconclusive — abandon the probe);
+    /// <see cref="ForwarderError.ResponseBodyCanceled"/> when a body stalled past the idle timeout
+    /// (inconclusive — abandon the probe);
+    /// <see cref="ForwarderError.ResponseBodyDestination"/> when the upstream answered but its body
+    /// then failed mid-transfer — connection reset, premature EOF, malformed framing (a backend
+    /// health signal; the client may already have received part of the body);
     /// <see cref="ForwarderError.RequestCanceled"/> when the client went away.
     /// </returns>
+    /// <remarks>
+    /// When an error is reported before the response has started, any upstream headers already
+    /// copied onto the response have been removed again, so the caller can write a gateway error
+    /// over a clean header set.
+    /// </remarks>
     Task<ForwarderError> SendAsync(
         HttpContext context,
         string modelUrl,
@@ -59,12 +69,9 @@ public sealed class InferenceHttpForwarder(
         CancellationToken cancellationToken)
     {
         var destinationPrefix = InferenceDestinationBuilder.ToForwarderDestination(modelUrl);
-        var outboundUri = InferenceDestinationBuilder.BuildOutboundUri(
-            destinationPrefix,
-            context.Request.Path,
-            context.Request.QueryString);
 
-        using var requestMessage = new HttpRequestMessage(new HttpMethod(context.Request.Method), outboundUri);
+        // The outbound URI is derived once, by the transformer's request step below.
+        using var requestMessage = new HttpRequestMessage(new HttpMethod(context.Request.Method), (Uri?)null);
 
         if (HasRequestBody(context.Request))
         {
@@ -95,7 +102,9 @@ public sealed class InferenceHttpForwarder(
         const HttpCompletionOption completionOption = HttpCompletionOption.ResponseHeadersRead;
 
         // Header phase. Only this stretch carries the header deadline; for both modes SendAsync
-        // returns as soon as headers arrive, so it never reaches the body.
+        // returns as soon as headers arrive, so it never reaches the body. The client is configured
+        // with an infinite HttpClient.Timeout, so the two linked-token filters below are the only
+        // cancellation sources here.
         using var headerCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         headerCts.CancelAfter(timeouts.HeaderTimeout);
 
@@ -124,14 +133,13 @@ public sealed class InferenceHttpForwarder(
             logger.LogWarning(ex, "Upstream HTTP request failed for {Method} {Uri}", requestMessage.Method, requestMessage.RequestUri);
             return ForwarderError.Request;
         }
-        catch (TaskCanceledException)
-        {
-            // HttpClient.Timeout (as opposed to our linked token) also surfaces here.
-            return ForwarderError.RequestTimedOut;
-        }
 
         using (responseMessage)
         {
+            // Names of the upstream headers copied onto the response, so they can be removed again
+            // if the body phase fails before anything reached the client. Without this a gateway 502
+            // written over them carried the upstream's Content-Type/Content-Length and vendor headers.
+            List<string>? copiedHeaderNames = null;
             try
             {
                 context.Response.StatusCode = (int)responseMessage.StatusCode;
@@ -150,7 +158,7 @@ public sealed class InferenceHttpForwarder(
                     return ForwarderError.None;
                 }
 
-                CopyResponseHeaders(context, responseMessage, isStreaming);
+                copiedHeaderNames = CopyResponseHeaders(context, responseMessage, isStreaming);
 
                 if (isStreaming)
                 {
@@ -191,6 +199,22 @@ public sealed class InferenceHttpForwarder(
                         "Upstream stalled for more than {StreamIdleTimeoutSeconds}s while sending the response body for {Uri}",
                         timeouts.StreamIdleTimeout.TotalSeconds,
                         requestMessage.RequestUri);
+                    RemoveCopiedHeadersIfNotStarted(context, copiedHeaderNames);
+                    return ForwarderError.ResponseBodyCanceled;
+                }
+                catch (UpstreamBodyReadException ex) when (!cancellationToken.IsCancellationRequested)
+                {
+                    // The upstream answered and then broke the body off: connection reset, premature
+                    // EOF, bad chunk framing. Unlike a client hang-up this is the backend's doing, so
+                    // it is reported as a backend failure — otherwise a flapping backend that drops
+                    // connections mid-response was invisible to the breaker and to the operator, and
+                    // a non-streaming client got the upstream's 200 with a truncated body.
+                    logger.LogWarning(
+                        ex.InnerException,
+                        "Upstream response body failed mid-transfer for {Method} {Uri}",
+                        requestMessage.Method,
+                        requestMessage.RequestUri);
+                    RemoveCopiedHeadersIfNotStarted(context, copiedHeaderNames);
                     return ForwarderError.ResponseBodyDestination;
                 }
             }
@@ -198,9 +222,16 @@ public sealed class InferenceHttpForwarder(
             {
                 return ForwarderError.RequestCanceled;
             }
+            catch (UpstreamBodyReadException) when (cancellationToken.IsCancellationRequested)
+            {
+                // The upstream read failed as a consequence of the client going away (the aborted
+                // request tears the upstream connection down too), so the client is the cause.
+                return ForwarderError.RequestCanceled;
+            }
             catch (IOException)
             {
-                // Client disconnected while streaming response body.
+                // Writing to the client failed: the client disconnected while receiving the body.
+                // Reads from the upstream never surface here — they are wrapped above.
                 return ForwarderError.RequestCanceled;
             }
         }
@@ -208,11 +239,24 @@ public sealed class InferenceHttpForwarder(
         return ForwarderError.None;
     }
 
-    private static void CopyResponseHeaders(
+    /// <summary>
+    /// Copies the upstream's response headers onto the client response and returns the names that
+    /// were copied.
+    /// </summary>
+    /// <remarks>
+    /// A denylist rather than a copy-everything: besides the hop-by-hop set, anything that would let
+    /// the upstream speak for the gateway is dropped. <c>Access-Control-*</c> would overwrite the
+    /// origin the gateway's own CORS policy chose; <c>Set-Cookie</c> and <c>WWW-Authenticate</c>
+    /// belong to the upstream's session with the gateway, not to the client's session with the
+    /// gateway; <c>Server</c>, <c>Via</c> and <c>X-Powered-By</c> only leak topology.
+    /// </remarks>
+    private static List<string> CopyResponseHeaders(
         HttpContext context,
         HttpResponseMessage response,
         bool isStreaming)
     {
+        var copied = new List<string>();
+
         foreach (var header in response.Headers)
         {
             if (ShouldSkipResponseHeader(header.Key, isStreaming))
@@ -221,11 +265,12 @@ public sealed class InferenceHttpForwarder(
             }
 
             context.Response.Headers[header.Key] = header.Value.ToArray();
+            copied.Add(header.Key);
         }
 
         if (response.Content is null)
         {
-            return;
+            return copied;
         }
 
         foreach (var header in response.Content.Headers)
@@ -236,6 +281,27 @@ public sealed class InferenceHttpForwarder(
             }
 
             context.Response.Headers[header.Key] = header.Value.ToArray();
+            copied.Add(header.Key);
+        }
+
+        return copied;
+    }
+
+    /// <summary>
+    /// Undoes <see cref="CopyResponseHeaders"/> when the body phase failed before the response
+    /// started, so the gateway error the caller writes next is not decorated with the upstream's
+    /// headers.
+    /// </summary>
+    private static void RemoveCopiedHeadersIfNotStarted(HttpContext context, List<string>? copiedHeaderNames)
+    {
+        if (copiedHeaderNames is null || context.Response.HasStarted)
+        {
+            return;
+        }
+
+        foreach (var name in copiedHeaderNames)
+        {
+            context.Response.Headers.Remove(name);
         }
     }
 
@@ -246,16 +312,38 @@ public sealed class InferenceHttpForwarder(
         context.Response.Headers["X-Accel-Buffering"] = "no";
     }
 
+    private static readonly string[] NeverCopiedResponseHeaders =
+    [
+        // Hop-by-hop: describe the upstream connection, not the client's.
+        "Connection",
+        "Keep-Alive",
+        "Proxy-Authenticate",
+        "Proxy-Authorization",
+        "TE",
+        "Trailer",
+        "Transfer-Encoding",
+        "Upgrade",
+        // The gateway's own concerns; an upstream value must not overwrite or leak.
+        "Set-Cookie",
+        "Set-Cookie2",
+        "WWW-Authenticate",
+        "Server",
+        "Via",
+        "X-Powered-By",
+        "Alt-Svc",
+    ];
+
     private static bool ShouldSkipResponseHeader(string headerName, bool isStreaming)
     {
-        if (string.Equals(headerName, "Connection", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(headerName, "Keep-Alive", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(headerName, "Proxy-Authenticate", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(headerName, "Proxy-Authorization", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(headerName, "TE", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(headerName, "Trailer", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(headerName, "Transfer-Encoding", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(headerName, "Upgrade", StringComparison.OrdinalIgnoreCase))
+        foreach (var never in NeverCopiedResponseHeaders)
+        {
+            if (string.Equals(headerName, never, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        if (headerName.StartsWith("Access-Control-", StringComparison.OrdinalIgnoreCase))
         {
             return true;
         }
@@ -293,6 +381,11 @@ public sealed class InferenceHttpForwarder(
     /// Streaming responses must reach the client chunk by chunk. A buffered response has no such
     /// requirement, so it is left to the server's own flushing rather than paying a flush per read.
     /// </param>
+    /// <exception cref="UpstreamBodyReadException">
+    /// The upstream read failed with an <see cref="IOException"/> (which includes
+    /// <see cref="HttpIOException"/>). Wrapped so the caller can tell an upstream failure from a
+    /// client-side write failure, which surfaces as a bare <see cref="IOException"/>.
+    /// </exception>
     private static async Task CopyStreamWithFlushAsync(
         Stream source,
         Stream destination,
@@ -305,11 +398,25 @@ public sealed class InferenceHttpForwarder(
         var firstByteWritten = false;
         try
         {
-            int read;
-            while ((read = await source
-                       .ReadAsync(buffer.AsMemory(0, buffer.Length), cancellationToken)
-                       .ConfigureAwait(false)) > 0)
+            while (true)
             {
+                int read;
+                try
+                {
+                    read = await source
+                        .ReadAsync(buffer.AsMemory(0, buffer.Length), cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                catch (IOException ex)
+                {
+                    throw new UpstreamBodyReadException(ex);
+                }
+
+                if (read <= 0)
+                {
+                    break;
+                }
+
                 await destination.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
                 if (flushEachChunk)
                 {
@@ -339,4 +446,10 @@ public sealed class InferenceHttpForwarder(
         HttpMethods.IsPatch(request.Method) ||
         request.ContentLength is > 0;
 
+    /// <summary>
+    /// An <see cref="IOException"/> raised while reading the upstream response body, as opposed to
+    /// one raised while writing to the client.
+    /// </summary>
+    private sealed class UpstreamBodyReadException(IOException inner)
+        : Exception("Reading the upstream response body failed.", inner);
 }

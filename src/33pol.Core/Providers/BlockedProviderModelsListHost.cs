@@ -101,6 +101,75 @@ internal static class BlockedProviderModelsListHost
         };
     }
 
+    /// <summary>
+    /// IPv6 addresses that embed an IPv4 address are judged by that IPv4 address as well: NAT64
+    /// (<c>64:ff9b::/96</c>, how an IPv6-only cluster reaches IPv4 — including the metadata
+    /// service), IPv4-compatible (<c>::a.b.c.d</c>), 6to4 (<c>2002::/16</c>) and Teredo
+    /// (<c>2001::/32</c>, whose embedded server address is the reachable IPv4 host). Site-local and
+    /// multicast are never legitimate upstream targets either.
+    /// </summary>
+    private static bool IsBlockedIPv6(IPAddress address)
+    {
+        if (address.IsIPv6LinkLocal ||
+            address.IsIPv6UniqueLocal ||
+            address.IsIPv6SiteLocal ||
+            address.IsIPv6Multicast ||
+            address.Equals(IPAddress.IPv6Any) ||
+            IPAddress.IsLoopback(address))
+        {
+            return true;
+        }
+
+        var embedded = TryExtractEmbeddedIPv4(address);
+        return embedded is not null && IsBlockedIPv4(embedded);
+    }
+
+    private static IPAddress? TryExtractEmbeddedIPv4(IPAddress address)
+    {
+        var b = address.GetAddressBytes();
+        if (b.Length != 16)
+        {
+            return null;
+        }
+
+        // NAT64 well-known prefix 64:ff9b::/96 — IPv4 in the last four bytes.
+        if (b[0] == 0x00 && b[1] == 0x64 && b[2] == 0xff && b[3] == 0x9b &&
+            b[4] == 0 && b[5] == 0 && b[6] == 0 && b[7] == 0 &&
+            b[8] == 0 && b[9] == 0 && b[10] == 0 && b[11] == 0)
+        {
+            return new IPAddress(b[12..16]);
+        }
+
+        // IPv4-compatible ::a.b.c.d (deprecated but still routed by some stacks) — first 12 bytes zero.
+        // "::" itself and "::1" are handled above; anything else here carries an IPv4 payload.
+        if (b[..12].All(static x => x == 0))
+        {
+            return new IPAddress(b[12..16]);
+        }
+
+        // 6to4 2002:AABB:CCDD::/48 — IPv4 in bytes 2..5.
+        if (b[0] == 0x20 && b[1] == 0x02)
+        {
+            return new IPAddress(b[2..6]);
+        }
+
+        // Teredo 2001:0000:SERVER-IPv4:flags:~port:~client-IPv4. Both the server (bytes 4..7,
+        // plain) and the client (bytes 12..15, bitwise NOT) are reachable IPv4 hosts; either being
+        // internal is disqualifying.
+        if (b[0] == 0x20 && b[1] == 0x01 && b[2] == 0x00 && b[3] == 0x00)
+        {
+            var client = new IPAddress([(byte)~b[12], (byte)~b[13], (byte)~b[14], (byte)~b[15]]);
+            if (IsBlockedIPv4(client))
+            {
+                return client;
+            }
+
+            return new IPAddress(b[4..8]);
+        }
+
+        return null;
+    }
+
     private static bool IsBlockedIPv4(IPAddress address)
     {
         var bytes = address.GetAddressBytes();
@@ -146,10 +215,4 @@ internal static class BlockedProviderModelsListHost
 
         return bytes[0] == 0;
     }
-
-    private static bool IsBlockedIPv6(IPAddress address) =>
-        address.IsIPv6LinkLocal ||
-        address.IsIPv6UniqueLocal ||
-        address.Equals(IPAddress.IPv6Any) ||
-        IPAddress.IsLoopback(address);
 }

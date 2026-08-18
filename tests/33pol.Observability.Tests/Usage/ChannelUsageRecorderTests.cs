@@ -174,6 +174,8 @@ public sealed class ChannelUsageRecorderTests
         await persistence.DidNotReceive().PersistAsync(
             Arg.Is<UsageEvent>(e => e.RequestId == $"req-{channelCapacity}"),
             Arg.Any<CancellationToken>());
+        // Token metrics count only accepted events, so gateway_tokens_total cannot outrun billed usage.
+        metrics.Received(channelCapacity).RecordTokenUsage("m1", 1, 0);
     }
 
     [Fact]

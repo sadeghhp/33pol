@@ -1,4 +1,5 @@
 using Pol33.Core.Abstractions;
+using Pol33.Core.Diagnostics;
 using Pol33.Core.Models;
 
 namespace Pol33.Observability.Diagnostics;
@@ -149,8 +150,11 @@ public sealed class InMemoryGatewayLogStore : IGatewayLogStore
             Level = entry.Level,
             Category = entry.Category,
             EventCode = entry.EventCode,
-            Message = entry.Message,
-            Detail = Truncate(entry.Detail),
+            // Same exception object that feeds the Errors tab (where it is scrubbed): upstream error
+            // bodies and HttpRequestException messages routinely echo Authorization headers, key=
+            // query strings and userinfo URLs, so mask them here before they become searchable.
+            Message = GatewayErrorRedactor.Scrub(entry.Message, 0) ?? entry.Message,
+            Detail = GatewayErrorRedactor.Scrub(entry.Detail, MaxDetailLength),
             Hint = entry.Hint,
             ModelId = entry.ModelId,
             RequestId = entry.RequestId,
@@ -179,9 +183,4 @@ public sealed class InMemoryGatewayLogStore : IGatewayLogStore
 
     private static bool Contains(string? haystack, string needle) =>
         haystack is not null && haystack.Contains(needle, StringComparison.OrdinalIgnoreCase);
-
-    private static string? Truncate(string? detail) =>
-        detail is null || detail.Length <= MaxDetailLength
-            ? detail
-            : detail[..MaxDetailLength] + "…";
 }

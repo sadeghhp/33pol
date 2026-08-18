@@ -224,6 +224,27 @@ public sealed class ApiKeyValidatorTests
         apiKeys.Lookups.Should().Be(2);
     }
 
+    /// <summary>
+    /// Expiry used to be checked only on the miss path, so a key expiring inside the cache window
+    /// kept authenticating for up to CacheTtlMinutes after ExpiresAt. The positive entry's lifetime
+    /// is now capped at the key's remaining lifetime.
+    /// </summary>
+    [Fact]
+    public async Task ValidateAsync_KeyExpiringInsideCacheWindow_StopsAuthenticatingAtExpiry()
+    {
+        await using var db = CreateDb();
+        var tenantId = await SeedTenantAsync(db);
+        const string secret = "sk-33pol-soon-to-expire-key";
+        await SeedKeyAsync(db, tenantId, secret, ApiKeyRole.Inference, expiresAt: DateTimeOffset.UtcNow.AddMilliseconds(300));
+
+        var sut = CreateValidator(db);
+        (await sut.ValidateAsync(secret)).IsSuccess.Should().BeTrue();
+
+        await Task.Delay(TimeSpan.FromMilliseconds(500));
+
+        (await sut.ValidateAsync(secret)).Failure.Should().Be(ApiKeyValidationFailure.Expired);
+    }
+
     private sealed class CountingApiKeyRepository(IApiKeyRepository inner) : IApiKeyRepository
     {
         public int Lookups { get; private set; }

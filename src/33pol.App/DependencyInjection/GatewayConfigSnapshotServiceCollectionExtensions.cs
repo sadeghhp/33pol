@@ -24,9 +24,12 @@ public static class GatewayConfigSnapshotServiceCollectionExtensions
         // The initial snapshot is sourced from appsettings so there is no config gap before the first
         // database load, and so a DB-less deployment still serves its configured CORS origins. When a
         // database is present the syncer overwrites this with the DB copy (seeded from the same
-        // appsettings on first boot).
+        // appsettings on first boot). Environment CORS origins are handed to the state holder, which
+        // overlays them on the initial snapshot and on every database load, so they apply on every
+        // boot rather than only when the database was first seeded.
         var initial = BuildInitialSnapshot(configuration);
-        services.AddSingleton(new GatewayConfigState(initial));
+        var environmentOrigins = GatewayCorsEnvironmentConfiguration.ReadAllowedOriginsFromEnvironment();
+        services.AddSingleton(new GatewayConfigState(initial, environmentOrigins));
         services.AddSingleton<IGatewayConfigProvider>(sp => sp.GetRequiredService<GatewayConfigState>());
 
         var connectionString = configuration.GetConnectionString(
@@ -39,6 +42,9 @@ public static class GatewayConfigSnapshotServiceCollectionExtensions
         services
             .AddOptions<GatewayConfigSnapshotOptions>()
             .Bind(configuration.GetSection(GatewayConfigSnapshotOptions.SectionName));
+        services
+            .AddOptions<GatewayConfigSnapshotStartupOptions>()
+            .Bind(configuration.GetSection(GatewayConfigSnapshotStartupOptions.SectionName));
 
         services.AddSingleton<GatewayConfigSnapshotService>();
         services.AddSingleton<IGatewayConfigRefresher>(sp => sp.GetRequiredService<GatewayConfigSnapshotService>());

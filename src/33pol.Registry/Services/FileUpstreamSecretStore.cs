@@ -27,6 +27,12 @@ public sealed class FileUpstreamSecretStore : IUpstreamSecretStore
 
     private readonly ILogger<FileUpstreamSecretStore> _logger;
     private readonly object _lock = new();
+
+    // Serialises PersistAsync: two overlapping mutations (provisioning two models, the Api's rename
+    // migration doing Put+Delete) must not race their temp-file writes so that an older snapshot
+    // replaces a newer one on disk. The snapshot is taken inside this gate, so every write reflects
+    // at least the state that triggered it.
+    private readonly SemaphoreSlim _persistGate = new(1, 1);
     private Dictionary<string, string> _cache = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Decrypted credentials, so the hot path does not repeat AES-GCM work per request.</summary>
@@ -261,7 +267,7 @@ public sealed class FileUpstreamSecretStore : IUpstreamSecretStore
         {
             var json = File.ReadAllText(path);
             var payload = JsonSerializer.Deserialize<SecretFilePayload>(json);
-            _cache = payload?.Secrets ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            _cache = RebuildCaseInsensitive(payload?.Secrets, path);
         }
         catch (Exception ex)
         {
@@ -270,7 +276,53 @@ public sealed class FileUpstreamSecretStore : IUpstreamSecretStore
         }
     }
 
+    /// <summary>
+    /// System.Text.Json builds a fresh <see cref="Dictionary{TKey,TValue}"/> with the default ordinal
+    /// comparer when deserialising, discarding the initialiser's comparer. Every lookup in this store
+    /// is case-insensitive (model ids are matched that way everywhere else), so a secret stored as
+    /// <c>gpt-4o</c> would vanish for <c>GPT-4o</c> after a restart. Rewrap, and collapse keys that
+    /// only differ by case (the last one written wins) so the map has one entry per model.
+    /// </summary>
+    private Dictionary<string, string> RebuildCaseInsensitive(Dictionary<string, string>? loaded, string path)
+    {
+        var rebuilt = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (loaded is null)
+        {
+            return rebuilt;
+        }
+
+        foreach (var (modelId, cipher) in loaded)
+        {
+            if (rebuilt.ContainsKey(modelId))
+            {
+                _logger.LogWarning(
+                    "Upstream secrets file {Path} holds more than one entry for model {ModelId} differing only " +
+                    "by case; keeping the last one. The duplicate is dropped on the next save.",
+                    path,
+                    modelId);
+            }
+
+            rebuilt[modelId] = cipher;
+        }
+
+        return rebuilt;
+    }
+
     private async Task PersistAsync(CancellationToken cancellationToken)
+    {
+        await _persistGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await PersistLockedAsync(cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _persistGate.Release();
+        }
+    }
+
+    /// <summary>Body of <see cref="PersistAsync"/>; caller holds <see cref="_persistGate"/>.</summary>
+    private async Task PersistLockedAsync(CancellationToken cancellationToken)
     {
         var path = ResolvePath();
         var directory = Path.GetDirectoryName(path)
@@ -295,16 +347,29 @@ public sealed class FileUpstreamSecretStore : IUpstreamSecretStore
         var payload = new SecretFilePayload { Version = 1, Secrets = snapshot };
         var json = JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true });
         var tempPath = Path.Combine(directory, $".{Path.GetFileName(path)}.{Guid.NewGuid():N}.tmp");
-        await File.WriteAllTextAsync(tempPath, json, cancellationToken).ConfigureAwait(false);
-
-        // Owner-only, set on the temp file so the secrets are never world-readable even briefly.
-        if (!OperatingSystem.IsWindows())
-        {
-            File.SetUnixFileMode(tempPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
-        }
 
         try
         {
+            // Owner-only from creation (not chmod'd after the write) so the ciphertext is never
+            // world-readable even briefly under a permissive umask.
+            var streamOptions = new FileStreamOptions
+            {
+                Mode = FileMode.CreateNew,
+                Access = FileAccess.Write,
+                Share = FileShare.None,
+            };
+            if (!OperatingSystem.IsWindows())
+            {
+                streamOptions.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+            }
+
+            await using (var stream = new FileStream(tempPath, streamOptions))
+            await using (var writer = new StreamWriter(stream))
+            {
+                await writer.WriteAsync(json.AsMemory(), cancellationToken).ConfigureAwait(false);
+                await writer.FlushAsync(cancellationToken).ConfigureAwait(false);
+            }
+
             if (File.Exists(path))
             {
                 File.Replace(tempPath, path, null);

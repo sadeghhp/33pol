@@ -16,8 +16,16 @@ internal sealed class DailyUsageRollupEntityConfiguration : IEntityTypeConfigura
             .HasMaxLength(256)
             .IsRequired();
 
+        // TenantId and CostCenter are NOT NULL on purpose: SQLite treats NULLs as distinct in
+        // UNIQUE indexes, so NULL-keyed buckets (anonymous traffic, no cost centre — the common
+        // case) were not protected against duplicate rows. The mapper stores Guid.Empty / "" and
+        // turns them back into null on read.
+        builder.Property(r => r.TenantId)
+            .IsRequired();
+
         builder.Property(r => r.CostCenter)
-            .HasMaxLength(128);
+            .HasMaxLength(128)
+            .IsRequired();
 
         builder.Property(r => r.TotalCost)
             .HasPrecision(18, 6);

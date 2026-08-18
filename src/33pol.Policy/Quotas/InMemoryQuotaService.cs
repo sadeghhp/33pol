@@ -21,6 +21,9 @@ public sealed class InMemoryQuotaService(
     private readonly Queue<string> _committedRequestOrder = new();
     private readonly object _commitSync = new();
     private readonly Func<DateTimeOffset> _clock = clock ?? (static () => DateTimeOffset.UtcNow);
+    // The period whose stale predecessors have already been evicted. Stale entries can only appear
+    // when the month rolls over, so eviction runs once per rollover rather than on every commit.
+    private string? _lastEvictedPeriod;
 
     public QuotaCheckResult CheckBeforeForward(string partitionKey, string modelId)
     {
@@ -100,15 +103,30 @@ public sealed class InMemoryQuotaService(
                 ? existing with { Used = existing.Used + totalTokens }
                 : new PeriodUsage(currentPeriod, totalTokens));
 
-        EvictStalePeriods(currentPeriod);
+        EvictStalePeriodsIfRolledOver(currentPeriod);
     }
 
     /// <summary>
     /// Drops partitions whose usage belongs to a closed period, so the map does not retain an entry
     /// per tenant indefinitely.
     /// </summary>
-    private void EvictStalePeriods(string currentPeriod)
+    /// <remarks>
+    /// Runs only when <paramref name="currentPeriod"/> differs from the last period swept. It used to
+    /// run on every commit, enumerating every partition (one per tenant/key) on the single
+    /// usage-writer thread — O(partitions) per usage event for a condition that arises once a month.
+    /// </remarks>
+    private void EvictStalePeriodsIfRolledOver(string currentPeriod)
     {
+        lock (_commitSync)
+        {
+            if (string.Equals(_lastEvictedPeriod, currentPeriod, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            _lastEvictedPeriod = currentPeriod;
+        }
+
         foreach (var (key, value) in _usage)
         {
             if (!string.Equals(value.Period, currentPeriod, StringComparison.Ordinal))

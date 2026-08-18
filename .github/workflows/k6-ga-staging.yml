@@ -10,9 +10,9 @@ on:
         description: Model id in registry
         required: true
         default: gpt-local
-      api_key:
-        description: Inference API key (optional; rate-limit storm may need dedicated key)
-        required: false
+      # The inference API key is NOT an input: workflow_dispatch inputs are recorded in run metadata
+      # and visible to anyone with read access. Store it as the repository/environment secret
+      # STAGING_INFERENCE_API_KEY instead (optional; rate-limit storm may need a dedicated key).
 
 permissions:
   contents: read
@@ -35,14 +35,14 @@ jobs:
         env:
           BASE_URL: ${{ inputs.base_url }}
           MODEL: ${{ inputs.model }}
-          API_KEY: ${{ inputs.api_key }}
+          API_KEY: ${{ secrets.STAGING_INFERENCE_API_KEY }}
         run: k6 run perf/k6/scripts/inference-rps.js
 
       - name: streaming-concurrent.js
         env:
           BASE_URL: ${{ inputs.base_url }}
           MODEL: ${{ inputs.model }}
-          API_KEY: ${{ inputs.api_key }}
+          API_KEY: ${{ secrets.STAGING_INFERENCE_API_KEY }}
           STREAM_VUS: "50"
         run: k6 run perf/k6/scripts/streaming-concurrent.js
 
@@ -50,5 +50,5 @@ jobs:
         env:
           BASE_URL: ${{ inputs.base_url }}
           MODEL: ${{ inputs.model }}
-          API_KEY: ${{ inputs.api_key }}
+          API_KEY: ${{ secrets.STAGING_INFERENCE_API_KEY }}
         run: k6 run perf/k6/scripts/rate-limit-storm.js

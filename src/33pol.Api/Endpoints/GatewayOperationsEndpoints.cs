@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
+using Pol33.Api.Security;
 using Pol33.Api.Services;
 using Pol33.Core.Security;
 
@@ -23,10 +24,25 @@ public static class GatewayOperationsEndpoints
         return endpoints;
     }
 
-    private static IResult GetHealth(GatewayHealthService healthService)
+    /// <summary>
+    /// Anonymous, because probes must not need a credential — but anonymous callers get the summary
+    /// shape only. The per-backend upstream URL and probe error text name the internal topology, so
+    /// they are served only when the request carries a credential satisfying the Operator policy.
+    /// </summary>
+    private static async Task<IResult> GetHealth(
+        HttpContext httpContext,
+        GatewayHealthService healthService,
+        GatewayOperatorAccess operatorAccess,
+        CancellationToken cancellationToken)
     {
-        var (body, statusCode) = healthService.GetHealth();
-        return Results.Json(body, statusCode: statusCode);
+        if (await operatorAccess.IsOperatorAsync(httpContext, cancellationToken).ConfigureAwait(false))
+        {
+            var (full, fullStatus) = healthService.GetHealth();
+            return Results.Json(full, statusCode: fullStatus);
+        }
+
+        var (summary, summaryStatus) = healthService.GetHealthSummary();
+        return Results.Json(summary, statusCode: summaryStatus);
     }
 
     private static IResult GetReady(GatewayReadinessService readinessService)

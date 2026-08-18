@@ -73,6 +73,28 @@ public sealed class InMemoryQuotaServiceTests
         service.CheckBeforeForward("t1", "m").IsAllowed.Should().BeTrue();
     }
 
+    /// <summary>
+    /// Stale partitions from a closed month are dropped once the month rolls over — but the
+    /// eviction scan is not paid on every commit (it used to enumerate every partition per event).
+    /// </summary>
+    [Fact]
+    public void CommitUsage_AfterMonthRollover_EvictsPartitionsFromTheClosedPeriod()
+    {
+        var now = new DateTimeOffset(2026, 1, 31, 12, 0, 0, TimeSpan.Zero);
+        var service = CreateService(limit: 1000, clock: () => now);
+
+        service.CommitUsage("t-jan-only", "m", 10, "req-a");
+        service.CommitUsage("t-both", "m", 10, "req-b");
+        service.ExportUsage().Should().HaveCount(2);
+
+        now = new DateTimeOffset(2026, 2, 1, 0, 0, 0, TimeSpan.Zero);
+        service.CommitUsage("t-both", "m", 5, "req-c");
+
+        var exported = service.ExportUsage();
+        exported.Should().ContainSingle(u => u.PartitionKey == "t-both" && u.Period == "2026-02" && u.Used == 5);
+        exported.Should().NotContain(u => u.PartitionKey == "t-jan-only");
+    }
+
     private static InMemoryQuotaService CreateService(
         long limit,
         int committedRequestRetentionLimit = 100_000,

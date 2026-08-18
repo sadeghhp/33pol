@@ -114,6 +114,9 @@ install_resolve_install_config() {
     fi
   fi
 
+  # Admin key and pepper: an existing .env's values are pre-loaded into INSTALL_ADMIN_KEY /
+  # INSTALL_KEY_PEPPER by install_seed_secrets_from_existing_env (unless --rotate-secrets), so a
+  # re-run never silently rotates them. Fresh values are generated only when nothing is set.
   local admin_default
   admin_default="$(install_generate_admin_key)"
   INSTALL_ADMIN_KEY="$(install_prompt_value INSTALL_ADMIN_KEY "Admin API key" "${admin_default}" true)"
@@ -122,8 +125,8 @@ install_resolve_install_config() {
   fi
 
   # Key pepper hashes every stored API key. It must be strong and non-default in Production, and must
-  # stay STABLE across reinstalls (rotating it invalidates existing key hashes). Reuse an existing
-  # value by exporting INSTALL_KEY_PEPPER before running.
+  # stay STABLE across reinstalls (rotating it invalidates existing key hashes). An existing .env's
+  # value is reused automatically; export INSTALL_KEY_PEPPER to supply one explicitly.
   local pepper_default
   pepper_default="$(install_generate_secret)"
   INSTALL_KEY_PEPPER="$(install_prompt_value INSTALL_KEY_PEPPER "Key pepper (keep stable across reinstalls)" "${pepper_default}" true)"
@@ -131,10 +134,68 @@ install_resolve_install_config() {
     INSTALL_KEY_PEPPER="${pepper_default}"
   fi
 
+  # Non-interactive secrets: the Prometheus scrape token for /metrics and the Grafana admin password.
+  # Both are reused from an existing .env by install_seed_secrets_from_existing_env; otherwise generated.
+  INSTALL_METRICS_SCRAPE_TOKEN="${INSTALL_METRICS_SCRAPE_TOKEN:-$(install_generate_secret)}"
+  INSTALL_GRAFANA_ADMIN_PASSWORD="${INSTALL_GRAFANA_ADMIN_PASSWORD:-$(install_generate_secret)}"
+
   if [[ "${INSTALL_PROFILE}" == gpu-gateway || "${INSTALL_PROFILE}" == gpu-observability ]]; then
     INSTALL_ASPNET_ENV="${INSTALL_ASPNET_ENV:-Production}"
     install_prompt_gpu_upstream
   else
     INSTALL_ASPNET_ENV="${INSTALL_ASPNET_ENV:-Development}"
   fi
+}
+
+# Pre-load GATEWAY_KEY_PEPPER / GATEWAY_ADMIN_API_KEY from an existing .env into the INSTALL_* variables
+# (only when the caller has not exported them) so a reconfigure/re-run keeps every stored API key hash
+# valid and the seeded admin key working. Rotation is opt-in via --rotate-secrets ($2 == true).
+install_seed_secrets_from_existing_env() {
+  local install_dir="$1"
+  local rotate="${2:-false}"
+  local env_file="${install_dir}/.env"
+  local val
+  [[ -f "${env_file}" ]] || return 0
+  if [[ "${rotate}" == true ]]; then
+    log "WARNING: --rotate-secrets: generating a new key pepper and admin key. Every existing API key hash becomes invalid; re-seed the admin key with scripts/reset-admin-key.py afterwards."
+  fi
+  if [[ "${rotate}" != true && -z "${INSTALL_KEY_PEPPER:-}" ]] && val="$(install_read_env_var "${env_file}" GATEWAY_KEY_PEPPER)"; then
+    val="$(install_strip_env_quotes "${val}")"
+    if [[ -n "${val}" ]]; then
+      INSTALL_KEY_PEPPER="${val}"
+      log "Reusing GATEWAY_KEY_PEPPER from ${env_file} (pass --rotate-secrets to generate a new one)."
+    fi
+  fi
+  if [[ "${rotate}" != true && -z "${INSTALL_ADMIN_KEY:-}" ]] && val="$(install_read_env_var "${env_file}" GATEWAY_ADMIN_API_KEY)"; then
+    val="$(install_strip_env_quotes "${val}")"
+    if [[ -n "${val}" ]]; then
+      INSTALL_ADMIN_KEY="${val}"
+      log "Reusing GATEWAY_ADMIN_API_KEY from ${env_file}."
+    fi
+  fi
+  # Grafana persists its admin password in grafana-data after first start; keep the .env value in sync.
+  if [[ -z "${INSTALL_GRAFANA_ADMIN_PASSWORD:-}" ]] && val="$(install_read_env_var "${env_file}" GRAFANA_ADMIN_PASSWORD)"; then
+    val="$(install_strip_env_quotes "${val}")"
+    [[ -n "${val}" ]] && INSTALL_GRAFANA_ADMIN_PASSWORD="${val}"
+  fi
+  if [[ -z "${INSTALL_METRICS_SCRAPE_TOKEN:-}" ]] && val="$(install_read_env_var "${env_file}" GATEWAY_METRICS_SCRAPE_TOKEN)"; then
+    val="$(install_strip_env_quotes "${val}")"
+    [[ -n "${val}" ]] && INSTALL_METRICS_SCRAPE_TOKEN="${val}"
+  fi
+  return 0
+}
+
+# Strip one pair of matching surrounding quotes (the format install_env_line emits for values with
+# special characters) so the value round-trips through install_build_env_content unchanged.
+install_strip_env_quotes() {
+  local v="$1"
+  if [[ ${#v} -ge 2 && "${v}" == \"*\" ]]; then
+    v="${v:1:${#v}-2}"
+    # Undo the escaping install_env_line applies inside double quotes.
+    v="${v//\\\"/\"}"
+    v="${v//\\\\/\\}"
+  elif [[ ${#v} -ge 2 && "${v}" == \'*\' ]]; then
+    v="${v:1:${#v}-2}"
+  fi
+  printf '%s' "${v}"
 }

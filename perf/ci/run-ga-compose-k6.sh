@@ -13,7 +13,8 @@ if [[ "${COMPOSE_MODEL}" == "gpt-local" ]]; then
   COMPOSE_MODEL="mock-gpt"
 fi
 export GATEWAY_PORT="${GATEWAY_PORT:-8080}"
-ADMIN_KEY="${GATEWAY_ADMIN_API_KEY:-sk-33pol-dev-admin-key}"
+# Default matches the compose dev sentinel (deploy/docker/docker-compose.yml Gateway__Bootstrap__AdminApiKey).
+ADMIN_KEY="${GATEWAY_ADMIN_API_KEY:-sk-33pol-dev-local-unsafe}"
 
 if ! curl -sf "${BASE_URL}/health/live" >/dev/null 2>&1; then
   echo "Gateway not reachable at ${BASE_URL}. Start: docker compose up -d --build" >&2

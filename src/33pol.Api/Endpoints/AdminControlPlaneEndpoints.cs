@@ -146,8 +146,13 @@ public static class AdminControlPlaneEndpoints
     private static readonly TimeSpan LiveMinInterval = TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan LiveHeartbeat = TimeSpan.FromSeconds(15);
 
+    // Model writes are audited here, with the caller's identity, like every other admin mutation.
+    // Changing a model's upstream URL redirects tenant traffic (and the upstream credential) to a
+    // new host, and deleting one takes it out of service; neither left a trace before.
     private static async Task<IResult> AddModel(
+        HttpContext httpContext,
         AdminModelProvisioningService provisioning,
+        IAuditLogger audit,
         [FromBody] AdminModelWriteRequest? request,
         CancellationToken cancellationToken)
     {
@@ -156,12 +161,22 @@ public static class AdminControlPlaneEndpoints
             return Results.BadRequest(new { message = "Request body must include model." });
         }
 
-        var result = await provisioning.AddAsync(request, cancellationToken).ConfigureAwait(false);
+        var actor = AdminActor.FromHttpContext(httpContext);
+        var result = await provisioning.AddAsync(request, actor, cancellationToken).ConfigureAwait(false);
+        if (result.Success)
+        {
+            audit.LogAdminAction(
+                "model.create",
+                actor.ToAuditEntry(DescribeModelWrite(request.Model)));
+        }
+
         return Results.Json(result, statusCode: result.SuggestedStatusCode);
     }
 
     private static async Task<IResult> UpdateModel(
+        HttpContext httpContext,
         AdminModelProvisioningService provisioning,
+        IAuditLogger audit,
         string id,
         [FromBody] AdminModelWriteRequest? request,
         CancellationToken cancellationToken)
@@ -171,13 +186,24 @@ public static class AdminControlPlaneEndpoints
             return Results.BadRequest(new { message = "Request body must include model." });
         }
 
-        var result = await provisioning.UpdateAsync(AdminModelRouteId.Decode(id), request, cancellationToken).ConfigureAwait(false);
+        var actor = AdminActor.FromHttpContext(httpContext);
+        var routeId = AdminModelRouteId.Decode(id);
+        var result = await provisioning.UpdateAsync(routeId, request, actor, cancellationToken).ConfigureAwait(false);
+        if (result.Success)
+        {
+            audit.LogAdminAction(
+                "model.update",
+                actor.ToAuditEntry(DescribeModelWrite(request.Model, routeId)));
+        }
+
         return Results.Json(result, statusCode: result.SuggestedStatusCode);
     }
 
     private static async Task<IResult> RemoveModel(
+        HttpContext httpContext,
         IControlPlaneCommands commands,
         IRateCardAdminService pricing,
+        IAuditLogger audit,
         string id,
         CancellationToken cancellationToken)
     {
@@ -189,10 +215,31 @@ public static class AdminControlPlaneEndpoints
             // Drop pricing too, so a model later re-created under the same id does not
             // silently inherit a stale rate card.
             await pricing.ClearPricingAsync(modelId, cancellationToken).ConfigureAwait(false);
+
+            audit.LogAdminAction(
+                "model.delete",
+                AdminActor.FromHttpContext(httpContext).ToAuditEntry(new { modelId }));
         }
 
         return Results.Json(result, statusCode: result.SuggestedStatusCode);
     }
+
+    /// <summary>
+    /// The audit-worthy shape of a model write: identity, upstream, and routing surface. Never the
+    /// request's <c>apiKey</c> — the credential is audited separately as presence, not value.
+    /// </summary>
+    private static object DescribeModelWrite(ModelConfig model, string? routeId = null) => new
+    {
+        routeId,
+        modelId = model.Id,
+        url = model.Url,
+        modelType = model.ModelType,
+        aliases = model.Aliases,
+        publicAccess = model.PublicAccess,
+        upstreamAuth = model.UpstreamAuth is null
+            ? null
+            : new { type = model.UpstreamAuth.Type, envVar = model.UpstreamAuth.EnvVar, secretRef = model.UpstreamAuth.SecretRef },
+    };
 
     /// <summary>
     /// Recent gateway diagnostics, newest first. <paramref name="level"/> is a floor

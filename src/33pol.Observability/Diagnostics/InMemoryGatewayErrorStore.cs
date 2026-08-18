@@ -26,6 +26,10 @@ public sealed class InMemoryGatewayErrorStore : IGatewayErrorStore
     private readonly LinkedList<GatewayErrorRecord> _records = new();
     private readonly Dictionary<string, Aggregate> _groups = new(StringComparer.Ordinal);
     private readonly Dictionary<string, DateTimeOffset> _recentlySeen = new(StringComparer.Ordinal);
+
+    // Insertion-ordered shadow of _recentlySeen so eviction is O(evicted) instead of a full scan.
+    // Entries whose timestamp no longer matches the dictionary (key re-inserted later) are skipped.
+    private readonly Queue<(string Key, DateTimeOffset SeenAt)> _recentlySeenOrder = new();
     private readonly GatewayErrorTrackingOptions _options;
     private readonly TimeProvider _timeProvider;
     private readonly IGatewayErrorArchiveWriter? _archiveWriter;
@@ -46,6 +50,18 @@ public sealed class InMemoryGatewayErrorStore : IGatewayErrorStore
     public bool IsPersistent => false;
 
     public int Capacity => Math.Max(1, _options.HotBufferCapacity);
+
+    /// <summary>Size of the per-request dedupe map. Exposed for tests.</summary>
+    public int RecentlySeenCount
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _recentlySeen.Count;
+            }
+        }
+    }
 
     public void Record(GatewayErrorRecord record)
     {
@@ -195,6 +211,7 @@ public sealed class InMemoryGatewayErrorStore : IGatewayErrorStore
             _records.Clear();
             _groups.Clear();
             _recentlySeen.Clear();
+            _recentlySeenOrder.Clear();
             return Task.FromResult(removed);
         }
     }
@@ -260,26 +277,57 @@ public sealed class InMemoryGatewayErrorStore : IGatewayErrorStore
             return true;
         }
 
-        _recentlySeen[key] = now;
+        RememberLocked(key, now);
         if (!isLogSourced)
         {
-            _recentlySeen[richKey] = now;
+            RememberLocked(richKey, now);
         }
 
-        if (_recentlySeen.Count > Capacity * 2)
-        {
-            var stale = _recentlySeen
-                .Where(kvp => now - kvp.Value > DuplicateWindow)
-                .Select(kvp => kvp.Key)
-                .ToList();
-
-            foreach (var expired in stale)
-            {
-                _recentlySeen.Remove(expired);
-            }
-        }
-
+        PruneRecentlySeenLocked(now);
         return false;
+    }
+
+    /// <summary>Hard cap on the dedupe map: two keys per record, sized to the hot ring.</summary>
+    private int MaxRecentlySeen => Capacity * 2;
+
+    private void RememberLocked(string key, DateTimeOffset now)
+    {
+        _recentlySeen[key] = now;
+        _recentlySeenOrder.Enqueue((key, now));
+    }
+
+    private void PruneRecentlySeenLocked(DateTimeOffset now)
+    {
+        // Drop entries that fell out of the window from the front of the insertion order; stop at
+        // the first live one. Under a burst of distinct errors nothing here is stale, so this exits
+        // immediately instead of scanning the whole map on every record.
+        while (_recentlySeenOrder.TryPeek(out var oldest) && now - oldest.SeenAt > DuplicateWindow)
+        {
+            _recentlySeenOrder.Dequeue();
+            RemoveIfCurrentLocked(oldest);
+        }
+
+        // Hard cap: evict oldest by insertion order regardless of age. Dedupe degrades gracefully
+        // (a repeat may be counted twice) but memory stays proportional to Capacity, not error rate.
+        var cap = MaxRecentlySeen;
+        while (_recentlySeen.Count > cap && _recentlySeenOrder.TryDequeue(out var evicted))
+        {
+            RemoveIfCurrentLocked(evicted);
+        }
+
+        // Re-inserted keys leave superseded queue entries behind; keep the queue itself bounded too.
+        while (_recentlySeenOrder.Count > cap * 2 && _recentlySeenOrder.TryDequeue(out var superseded))
+        {
+            RemoveIfCurrentLocked(superseded);
+        }
+    }
+
+    private void RemoveIfCurrentLocked((string Key, DateTimeOffset SeenAt) entry)
+    {
+        if (_recentlySeen.TryGetValue(entry.Key, out var current) && current == entry.SeenAt)
+        {
+            _recentlySeen.Remove(entry.Key);
+        }
     }
 
     private void TrackGroupLocked(GatewayErrorRecord record)

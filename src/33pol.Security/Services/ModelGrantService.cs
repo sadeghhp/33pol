@@ -22,6 +22,13 @@ namespace Pol33.Security.Services;
 /// requests that all miss at once share one query rather than each running their own. Without that,
 /// every TTL expiry produced a burst of identical reads proportional to the concurrency at that
 /// instant.</para>
+///
+/// <para>Invalidation races a load in flight: a request may have read the old grants from the
+/// database just before an admin replaced them and called <c>Invalidate*</c>. Removing the cache
+/// entry alone would let that load then <c>Set</c> the pre-revocation list for a full TTL. Each key
+/// therefore carries an invalidation generation; a load only caches its result if the generation it
+/// observed before querying is still current, and any in-flight single-flight entry is dropped so
+/// the next caller starts a fresh read.</para>
 /// </remarks>
 public sealed class ModelGrantService : IModelGrantService
 {
@@ -29,6 +36,7 @@ public sealed class ModelGrantService : IModelGrantService
     private readonly IMemoryCache _cache;
     private readonly TimeSpan _cacheTtl;
     private readonly ConcurrentDictionary<string, Lazy<Task<object>>> _inFlightLoads = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, long> _generations = new(StringComparer.Ordinal);
 
     public ModelGrantService(
         IServiceScopeFactory scopeFactory,
@@ -51,11 +59,20 @@ public sealed class ModelGrantService : IModelGrantService
         return ModelGrantEvaluator.IsModelAllowed(tenantList, keyList, canonicalModelId);
     }
 
-    public void InvalidateTenantGrants(Guid tenantId) =>
-        _cache.Remove(TenantCacheKey(tenantId));
+    public void InvalidateTenantGrants(Guid tenantId) => Invalidate(TenantCacheKey(tenantId));
 
-    public void InvalidateApiKeyGrants(Guid apiKeyId) =>
-        _cache.Remove(ApiKeyCacheKey(apiKeyId));
+    public void InvalidateApiKeyGrants(Guid apiKeyId) => Invalidate(ApiKeyCacheKey(apiKeyId));
+
+    private void Invalidate(string key)
+    {
+        // Order matters: bump the generation first so a load that completes after this point sees
+        // the change and refuses to cache, then drop the entry and any in-flight load.
+        _generations.AddOrUpdate(key, 1, static (_, current) => current + 1);
+        _cache.Remove(key);
+        _inFlightLoads.TryRemove(key, out _);
+    }
+
+    private long GenerationOf(string key) => _generations.TryGetValue(key, out var generation) ? generation : 0;
 
     private Task<IReadOnlyList<ModelGrantRecord>> GetTenantGrantsCachedAsync(
         Guid tenantId,
@@ -119,9 +136,17 @@ public sealed class ModelGrantService : IModelGrantService
         // run under the dictionary's GetOrAdd.
         await Task.Yield();
 
+        var generation = GenerationOf(key);
         await using var scope = _scopeFactory.CreateAsyncScope();
         var value = await load(scope.ServiceProvider, id, CancellationToken.None).ConfigureAwait(false);
-        _cache.Set(key, value, _cacheTtl);
+        if (GenerationOf(key) == generation)
+        {
+            _cache.Set(key, value, _cacheTtl);
+        }
+
+        // Otherwise the grants were replaced while this read was in flight: the value is still the
+        // right answer for the callers already waiting on it (they raced the change), but it must
+        // not become the cached truth for the next TTL.
         return value;
     }
 

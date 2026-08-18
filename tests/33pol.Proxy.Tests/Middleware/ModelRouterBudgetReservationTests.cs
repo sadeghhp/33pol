@@ -30,7 +30,8 @@ public sealed class ModelRouterBudgetReservationTests
 {
     [Theory]
     [InlineData(ForwarderError.RequestTimedOut)]          // header timeout
-    [InlineData(ForwarderError.ResponseBodyDestination)]  // body idle timeout
+    [InlineData(ForwarderError.ResponseBodyCanceled)]     // body idle timeout
+    [InlineData(ForwarderError.ResponseBodyDestination)]  // upstream body failure
     [InlineData(ForwarderError.RequestCanceled)]          // client disconnect
     [InlineData(ForwarderError.Request)]                  // upstream error
     public async Task InvokeAsync_TerminalFailurePath_ReleasesReservation(ForwarderError error)

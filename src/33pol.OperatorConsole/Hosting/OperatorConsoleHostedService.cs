@@ -3,7 +3,6 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Pol33.Core.Abstractions;
-using Pol33.Core.Abstractions;
 using Pol33.Core.Configuration;
 using Pol33.OperatorConsole.Commands;
 using Spectre.Console;
@@ -31,10 +30,25 @@ public sealed class OperatorConsoleHostedService(
             return;
         }
 
+        // BackgroundService.StartAsync runs ExecuteAsync inline until its first incomplete await.
+        // Hosted services start sequentially and Kestrel is registered last, so a blocking console
+        // read here would keep the server from listening until the operator pressed Enter. Yield
+        // first so StartAsync returns immediately and the prompt loop runs on the thread pool.
+        await Task.Yield();
+
         AnsiConsole.MarkupLine("[grey]33pol operator console — type 'help' for commands.[/]");
         while (!stoppingToken.IsCancellationRequested)
         {
-            var line = AnsiConsole.Ask<string>("[green]33pol>[/]");
+            string line;
+            try
+            {
+                line = await AnsiConsole.AskAsync<string>("[green]33pol>[/]", stoppingToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                break;
+            }
+
             var intent = ConsoleCommandParser.Parse(line);
             if (intent.Kind == ConsoleCommandKind.Exit)
             {
@@ -86,8 +100,13 @@ public sealed class OperatorConsoleHostedService(
                 AnsiConsole.MarkupLine($"[cyan]Reload:[/] {Markup.Escape(reload.Status)}");
                 break;
             case ConsoleCommandKind.KeysList:
-                await CreateKeysInteractor().ListKeysAsync(cancellationToken).ConfigureAwait(false);
-                break;
+                {
+                    // IAdminKeyService / ITenantRepository are scoped (they own a DbContext); resolving
+                    // them from the root provider throws under scope validation and leaks otherwise.
+                    await using var scope = services.CreateAsyncScope();
+                    await CreateKeysInteractor(scope.ServiceProvider).ListKeysAsync(cancellationToken).ConfigureAwait(false);
+                    break;
+                }
             case ConsoleCommandKind.ModelsList:
                 RenderModels(commands.ListModels());
                 break;
@@ -118,10 +137,10 @@ public sealed class OperatorConsoleHostedService(
         }
     }
 
-    private OperatorConsoleKeysInteractor CreateKeysInteractor() =>
+    private OperatorConsoleKeysInteractor CreateKeysInteractor(IServiceProvider scopedServices) =>
         new(
-            services.GetRequiredService<IAdminKeyService>(),
-            services.GetRequiredService<ITenantRepository>(),
+            scopedServices.GetRequiredService<IAdminKeyService>(),
+            scopedServices.GetRequiredService<ITenantRepository>(),
             options);
 
     private static void RenderSummary(Core.Models.AdminSummarySnapshot summary)

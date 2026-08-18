@@ -122,6 +122,28 @@ public sealed class GatewayMetricsCollectorTests
     }
 
     [Fact]
+    public void RecordUsageEventsDropped_AddsToTheWriterDroppedCounter()
+    {
+        var collector = new GatewayMetricsCollector(new GatewayRuntimeState());
+        long observed = 0;
+        using var listener = new System.Diagnostics.Metrics.MeterListener();
+        listener.InstrumentPublished = (instrument, l) =>
+        {
+            if (ReferenceEquals(instrument, GatewayMeters.UsageWriterDropped))
+            {
+                l.EnableMeasurementEvents(instrument);
+            }
+        };
+        listener.SetMeasurementEventCallback<long>((_, value, _, _) => Interlocked.Add(ref observed, value));
+        listener.Start();
+
+        collector.RecordUsageEventsDropped(3);
+        collector.RecordUsageEventsDropped(0);
+
+        observed.Should().Be(3);
+    }
+
+    [Fact]
     public void RecordBillingReconciliation_DoesNotThrow()
     {
         var collector = new GatewayMetricsCollector(new GatewayRuntimeState());

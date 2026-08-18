@@ -127,23 +127,24 @@ public sealed class FileAuditLogger : IAuditLogger, IDisposable
 
             RollIfOversizeLocked();
 
-            var isNew = !File.Exists(_path);
-
             // ReadWrite sharing, and one open-append-close per record: replicas sharing a volume (and
             // parallel test hosts sharing a bin directory) then append instead of losing records to a
             // sharing violation. O_APPEND makes each single small write atomic, so lines never interleave.
-            using var stream = new FileStream(
-                _path,
-                FileMode.Append,
-                FileAccess.Write,
-                FileShare.ReadWrite);
-
-            if (isNew && !OperatingSystem.IsWindows())
+            // Key ids and tenant ids, not secrets — but the trail names who did what, so a new file
+            // is created 0600 at open time (not chmod'd afterwards, which would leave a window where
+            // the process umask made it world-readable, and a TOCTOU on the exists check).
+            var streamOptions = new FileStreamOptions
             {
-                // Key ids and tenant ids, not secrets — but the trail names who did what, so it is
-                // not world-readable.
-                File.SetUnixFileMode(_path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+                Mode = FileMode.Append,
+                Access = FileAccess.Write,
+                Share = FileShare.ReadWrite,
+            };
+            if (!OperatingSystem.IsWindows())
+            {
+                streamOptions.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
             }
+
+            using var stream = new FileStream(_path, streamOptions);
 
             var bytes = Encoding.UTF8.GetBytes(line + "\n");
             stream.Write(bytes, 0, bytes.Length);

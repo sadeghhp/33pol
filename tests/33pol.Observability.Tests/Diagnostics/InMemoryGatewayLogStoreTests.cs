@@ -126,6 +126,33 @@ public sealed class InMemoryGatewayLogStoreTests
             .Should().Be(InMemoryGatewayLogStore.MaxDetailLength + 1);
     }
 
+    /// <summary>
+    /// The same exception object feeds the Errors tab (scrubbed) and the Logs tab. Upstream failures
+    /// echo Authorization headers and key= query strings, so the log copy must be masked as well —
+    /// otherwise the secret is one search away in the admin UI and every log export.
+    /// </summary>
+    [Fact]
+    public void Record_ScrubsSecretsFromMessageAndDetail()
+    {
+        var store = new InMemoryGatewayLogStore();
+
+        store.Record(new GatewayLogEntry
+        {
+            Id = "log_1",
+            Level = nameof(GatewayLogLevel.Error),
+            Category = "Test",
+            Message = "Upstream rejected Authorization: Bearer sk-live-abcdefghijklmnop",
+            Detail = "System.Net.Http.HttpRequestException: GET https://user:pa55@api.example.com/v1?api_key=sk-live-zzz failed",
+        });
+
+        var entry = store.GetRecent(1)[0];
+        entry.Message.Should().NotContain("sk-live-abcdefghijklmnop");
+        entry.Message.Should().Contain("***");
+        entry.Detail.Should().NotContain("sk-live-zzz");
+        entry.Detail.Should().NotContain("pa55");
+        store.GetRecent(10, search: "sk-live").Should().BeEmpty();
+    }
+
     [Fact]
     public void Clear_EmptiesTheBuffer()
     {

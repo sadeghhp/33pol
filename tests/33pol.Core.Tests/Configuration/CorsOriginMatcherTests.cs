@@ -25,6 +25,27 @@ public sealed class CorsOriginMatcherTests
         CorsOriginMatcher.IsOriginAllowed(origin, GitHubPagesWildcard).Should().BeFalse();
     }
 
+    /// <summary>
+    /// A wildcard with a port used to validate but could never match, because the suffix was
+    /// compared against Uri.Host, which never carries the port.
+    /// </summary>
+    [Theory]
+    [InlineData("https://app.example.com:8443", true)]
+    [InlineData("https://other.example.com:8443", true)]
+    [InlineData("https://app.example.com", false)]
+    [InlineData("https://app.example.com:9443", false)]
+    [InlineData("https://example.com:8443", false)]
+    public void IsOriginAllowed_WildcardWithPort_MatchesOnlyThatPort(string origin, bool expected)
+    {
+        CorsOriginMatcher.IsOriginAllowed(origin, ["https://*.example.com:8443"]).Should().Be(expected);
+    }
+
+    [Fact]
+    public void IsOriginAllowed_WildcardWithoutPort_StillMatchesAnyPort()
+    {
+        CorsOriginMatcher.IsOriginAllowed("https://foo.github.io:8443", GitHubPagesWildcard).Should().BeTrue();
+    }
+
     [Fact]
     public void IsOriginAllowed_ExactOrigin_MatchesNormalizedOrigin()
     {

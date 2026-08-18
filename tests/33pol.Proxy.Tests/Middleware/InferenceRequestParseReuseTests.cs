@@ -89,6 +89,8 @@ public sealed class InferenceRequestParseReuseTests
     {
         var registry = Substitute.For<IModelRegistry>();
         registry.TryGetModel(Arg.Any<string>(), out Arg.Any<ModelConfig?>()).Returns(false);
+        // Detection only runs when at least one public model exists (see M10 hardening).
+        registry.GetAllModels().Returns([new ModelConfig { Id = "pub", Url = "http://backend", PublicAccess = true }]);
         return new PublicModelDetectionMiddleware(_ => Task.CompletedTask, registry);
     }
 

@@ -50,6 +50,8 @@ For **gpu-gateway only**, omit `COMPOSE_PROFILES` in `.env` (or leave it empty),
 | Grafana        | http://localhost:3000 (admin / admin) — folder **33pol**: [33pol Gateway](http://localhost:3000/d/33pol-gateway/33pol-gateway) (RED, backends), [Traffic & tokens](http://localhost:3000/d/33pol-gateway-traffic/33pol-gateway-traffic) — see [observability.md](../../docs/observability.md) |
 | Database       | embedded SQLite at `/data/gateway.db` on the `gateway-data` volume |
 
+All published ports bind to **127.0.0.1** by default (`GATEWAY_BIND`, `MOCK_UPSTREAM_BIND`, `PROMETHEUS_BIND`, `GRAFANA_BIND`); Prometheus and WireMock have no authentication, so set the `*_BIND` variables to `0.0.0.0` only deliberately. Prometheus scrapes `/metrics` with the Bearer token from `GATEWAY_METRICS_SCRAPE_TOKEN` (compose secret → `authorization.credentials_file`); the dev stack also sets `GATEWAY_METRICS_ALLOW_ANONYMOUS=true` so `curl :8080/metrics` works — set it to `false` (and a strong token) for any non-loopback deploy.
+
 Test the mock:
 
 ```bash

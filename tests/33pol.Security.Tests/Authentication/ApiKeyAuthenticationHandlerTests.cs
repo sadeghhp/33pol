@@ -200,6 +200,31 @@ public sealed class ApiKeyAuthenticationHandlerTests
         result.None.Should().BeTrue();
     }
 
+    /// <summary>
+    /// Some proxies and SDKs always emit an X-API-Key header, sometimes empty. That must not shadow
+    /// a valid bearer token on the same request and turn it into missing_api_key.
+    /// </summary>
+    [Fact]
+    public async Task HandleAuthenticateAsync_BlankXApiKeyHeader_FallsThroughToBearer()
+    {
+        var validator = Substitute.For<IApiKeyValidator>();
+        validator.ValidateAsync("sk-33pol-good", Arg.Any<CancellationToken>())
+            .Returns(ApiKeyValidationResult.Success(Guid.NewGuid(), Guid.NewGuid(), "tenant-a", null, null, ApiKeyRole.Inference));
+        var handler = CreateHandler(out var authState, out _, validator);
+        authState.IsAuthenticationRequired = true;
+
+        var context = new DefaultHttpContext();
+        context.Request.Path = "/v1/chat/completions";
+        context.Request.Headers["X-API-Key"] = "   ";
+        context.Request.Headers.Authorization = "Bearer sk-33pol-good";
+
+        await handler.InitializeAsync(new AuthenticationScheme(GatewayAuthSchemes.ApiKey, null, typeof(ApiKeyAuthenticationHandler)), context);
+        var result = await handler.AuthenticateAsync();
+
+        result.Succeeded.Should().BeTrue();
+        await validator.Received(1).ValidateAsync("sk-33pol-good", Arg.Any<CancellationToken>());
+    }
+
     private static IApiKeyValidator FailingValidator(ApiKeyValidationFailure failure)
     {
         var validator = Substitute.For<IApiKeyValidator>();

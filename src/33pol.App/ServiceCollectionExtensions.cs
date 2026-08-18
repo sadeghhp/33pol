@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Options;
 using Pol33.App.DependencyInjection;
+using Pol33.App.Metrics;
 using Pol33.Api.DependencyInjection;
 using Pol33.Core.Configuration;
 using Pol33.Core.Http;
@@ -32,6 +33,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IValidateOptions<BillingOptions>, BillingOptionsValidateOptions>();
         services.AddOptions<BillingOptions>().ValidateOnStart();
         services.AddGatewayCors(configuration, environment);
+        services.AddGatewayMetricsAccess(configuration);
         services.AddGatewayOpenTelemetry();
         services.AddGatewayObservability();
         services.AddGatewayPersistence(configuration);

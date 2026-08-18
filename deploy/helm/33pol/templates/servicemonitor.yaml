@@ -13,4 +13,13 @@ spec:
     - port: http
       path: {{ .Values.serviceMonitor.path }}
       interval: {{ .Values.serviceMonitor.interval }}
+      {{- $tokenSecret := .Values.gateway.metrics.scrapeTokenSecret | default .Values.gateway.existingSecret }}
+      {{- if and (not .Values.gateway.metrics.allowAnonymous) $tokenSecret }}
+      # /metrics requires the scrape token (or an operator key) unless gateway.metrics.allowAnonymous.
+      authorization:
+        type: Bearer
+        credentials:
+          name: {{ $tokenSecret | quote }}
+          key: {{ .Values.gateway.metrics.scrapeTokenSecretKey | default "metricsScrapeToken" | quote }}
+      {{- end }}
 {{- end }}

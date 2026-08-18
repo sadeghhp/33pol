@@ -56,7 +56,7 @@ The gateway's `mock-gpt` upstream is WireMock. It answers both streaming and non
 
 ## Staging / production-like runs
 
-`.github/workflows/k6-ga-staging.yml` (workflow_dispatch) runs `inference-rps`, `streaming-concurrent`, and `rate-limit-storm` against a supplied `base_url`, `model`, and `api_key`.
+`.github/workflows/k6-ga-staging.yml` (workflow_dispatch) runs `inference-rps`, `streaming-concurrent`, and `rate-limit-storm` against a supplied `base_url` and `model`; the inference key comes from the `STAGING_INFERENCE_API_KEY` repository/environment secret (never a dispatch input — inputs are recorded in run metadata).
 
 The soak is manual:
 

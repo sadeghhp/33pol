@@ -111,11 +111,38 @@ def copy_db_out(container: str, workdir: str) -> str:
     return local_db
 
 
-def copy_db_in(container: str, workdir: str) -> None:
-    for name in DB_FILES:
-        source = os.path.join(workdir, name)
-        if os.path.exists(source):
-            run(["docker", "cp", source, f"{container}:/data/{name}"])
+def container_image(container: str) -> str:
+    return run(["docker", "inspect", "--format", "{{.Config.Image}}", container]).stdout.strip()
+
+
+def copy_db_in(container: str, image: str, workdir: str, app_uid: str) -> None:
+    """Replace the DB file set inside the container's /data volume.
+
+    Mirrors deploy/docker/33pol-deploy.sh restore_db: ``docker cp`` would create the files as root
+    (the gateway runs as $APP_UID and could then only open the database read-only), and any stale
+    ``-wal``/``-shm`` left in the volume would replay old frames over the rewritten ``gateway.db``.
+    So a throwaway root container sharing the gateway's volumes removes the old file set, copies the
+    working copy in from a read-only bind mount, and hands the files to the app uid.
+    """
+    uid = app_uid or "1654"
+    script = (
+        "set -e; "
+        "rm -f /data/gateway.db /data/gateway.db-wal /data/gateway.db-shm; "
+        "cp /restore/gateway.db /data/gateway.db; "
+        "[ -f /restore/gateway.db-wal ] && cp /restore/gateway.db-wal /data/gateway.db-wal || true; "
+        "[ -f /restore/gateway.db-shm ] && cp /restore/gateway.db-shm /data/gateway.db-shm || true; "
+        f'chown "{uid}:{uid}" /data/gateway.db /data/gateway.db-wal /data/gateway.db-shm 2>/dev/null || true; '
+        "chmod 644 /data/gateway.db"
+    )
+    run(
+        [
+            "docker", "run", "--rm", "--user", "0",
+            "--volumes-from", container,
+            "-v", f"{workdir}:/restore:ro",
+            "--entrypoint", "sh",
+            image, "-c", script,
+        ]
+    )
 
 
 def upsert_admin_key(
@@ -212,6 +239,9 @@ def main() -> int:
 
     container = resolve_container(args.container, args.service)
     live_env = container_env(container)
+    image = container_image(container)
+    # The image runs as $APP_UID (Dockerfile USER); files copied into /data must belong to it.
+    app_uid = live_env.get("APP_UID", "").strip() or "1654"
 
     security_pepper = live_env.get("Gateway__Security__KeyPepper", "")
     bootstrap_pepper = live_env.get("Gateway__Bootstrap__KeyPepper", "")
@@ -262,7 +292,7 @@ def main() -> int:
         )
         print(f"database  : {action}")
 
-        copy_db_in(container, workdir)
+        copy_db_in(container, image, workdir, app_uid)
         print("starting gateway ...")
         run(["docker", "start", container])
     finally:

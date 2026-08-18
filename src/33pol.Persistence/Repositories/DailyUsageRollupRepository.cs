@@ -1,7 +1,7 @@
-using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Pol33.Core.Abstractions;
 using Pol33.Core.Billing;
+using Pol33.Persistence.Infrastructure;
 using Pol33.Persistence.Mapping;
 
 namespace Pol33.Persistence.Repositories;
@@ -28,7 +28,8 @@ public sealed class DailyUsageRollupRepository(GatewayDbContext dbContext) : IDa
 
         if (tenantId is not null)
         {
-            query = query.Where(r => r.TenantId == tenantId.Value);
+            var storedTenantId = DailyUsageRollupEntityMapper.ToStoredTenantId(tenantId);
+            query = query.Where(r => r.TenantId == storedTenantId);
         }
 
         var entities = await query
@@ -60,15 +61,18 @@ public sealed class DailyUsageRollupRepository(GatewayDbContext dbContext) : IDa
             query = query.Where(r => r.UsageDate <= toDate.Value);
         }
 
+        // Anonymous buckets are stored under the Guid.Empty sentinel (see the entity configuration),
+        // not NULL, so the unique index covers them.
+        var anonymous = DailyUsageRollupEntityMapper.AnonymousTenantId;
         if (scope.TenantId is Guid tenantId)
         {
             query = scope.IncludeAnonymous
-                ? query.Where(r => r.TenantId == tenantId || r.TenantId == null)
+                ? query.Where(r => r.TenantId == tenantId || r.TenantId == anonymous)
                 : query.Where(r => r.TenantId == tenantId);
         }
         else if (!scope.IncludeAnonymous)
         {
-            query = query.Where(r => r.TenantId != null);
+            query = query.Where(r => r.TenantId != anonymous);
         }
 
         var entities = await query
@@ -81,6 +85,11 @@ public sealed class DailyUsageRollupRepository(GatewayDbContext dbContext) : IDa
         return entities.Select(DailyUsageRollupEntityMapper.ToRecord).ToList();
     }
 
+    /// <summary>
+    /// Replaces the stored totals for each bucket (reconciliation). Runs under the same
+    /// <c>BEGIN IMMEDIATE</c> helper as <see cref="IncrementRollupsAsync"/>, so an overlapping
+    /// increment cannot slip between the read and the insert and create a second row for a bucket.
+    /// </summary>
     public async Task UpsertRollupsAsync(
         IReadOnlyList<DailyUsageRollupRecord> rollups,
         CancellationToken cancellationToken = default)
@@ -91,9 +100,17 @@ public sealed class DailyUsageRollupRepository(GatewayDbContext dbContext) : IDa
             return;
         }
 
+        await GatewayWriteTransaction.RunAsync(dbContext, ct => ApplyUpsertsAsync(rollups, ct), cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private async Task ApplyUpsertsAsync(
+        IReadOnlyList<DailyUsageRollupRecord> rollups,
+        CancellationToken cancellationToken)
+    {
         var now = DateTimeOffset.UtcNow;
         var dates = rollups.Select(r => r.UsageDate).Distinct().ToList();
-        var tenantIds = rollups.Select(r => r.TenantId).Distinct().ToList();
+        var tenantIds = rollups.Select(r => DailyUsageRollupEntityMapper.ToStoredTenantId(r.TenantId)).Distinct().ToList();
 
         var existing = await dbContext.DailyUsageRollups
             .Where(r => dates.Contains(r.UsageDate) && tenantIds.Contains(r.TenantId))
@@ -112,7 +129,9 @@ public sealed class DailyUsageRollupRepository(GatewayDbContext dbContext) : IDa
             }
             else
             {
-                dbContext.DailyUsageRollups.Add(DailyUsageRollupEntityMapper.ToEntity(rollup, now));
+                var created = DailyUsageRollupEntityMapper.ToEntity(rollup, now);
+                dbContext.DailyUsageRollups.Add(created);
+                existingByKey[key] = created;
             }
         }
 
@@ -123,22 +142,12 @@ public sealed class DailyUsageRollupRepository(GatewayDbContext dbContext) : IDa
     /// Applies additive deltas atomically with respect to other writers.
     /// </summary>
     /// <remarks>
-    /// The read and the write happen inside one <c>BEGIN IMMEDIATE</c> transaction, which takes
-    /// SQLite's write lock up front so a second writer blocks before it can read a stale starting
-    /// value — the failure mode that silently dropped one writer's tokens and cost when two
-    /// overlapped.
-    ///
-    /// <para>The transaction is started against the raw <see cref="SqliteConnection"/> with
-    /// <c>deferred: false</c>, deliberately. EF's
-    /// <c>BeginTransactionAsync(IsolationLevel.Serializable)</c> goes through the overload that
-    /// leaves the transaction <em>deferred</em>: the read takes only a shared lock and the write has
-    /// to upgrade it, which under WAL fails with <c>SQLITE_BUSY_SNAPSHOT</c> rather than waiting —
-    /// and <c>busy_timeout</c> does not retry that, because the snapshot is genuinely stale. The
-    /// resulting exception surfaced as a whole batch of rollups silently going missing.</para>
-    ///
-    /// The EF InMemory provider used by unit tests supports neither transactions nor row locking, so
-    /// there the deltas are applied directly; the concurrency guarantee is covered by the SQLite
-    /// integration tests.
+    /// The read and the write happen inside one <c>BEGIN IMMEDIATE</c> transaction (see
+    /// <see cref="GatewayWriteTransaction"/>), which takes SQLite's write lock up front so a second
+    /// writer blocks before it can read a stale starting value — the failure mode that silently
+    /// dropped one writer's tokens and cost when two overlapped. The EF InMemory provider used by
+    /// unit tests supports neither transactions nor row locking, so there the deltas are applied
+    /// directly; the concurrency guarantee is covered by the SQLite integration tests.
     /// </remarks>
     public async Task IncrementRollupsAsync(
         IReadOnlyList<DailyUsageRollupDelta> deltas,
@@ -150,48 +159,8 @@ public sealed class DailyUsageRollupRepository(GatewayDbContext dbContext) : IDa
             return;
         }
 
-        if (!dbContext.Database.IsRelational())
-        {
-            await ApplyDeltasAsync(deltas, cancellationToken).ConfigureAwait(false);
-            return;
-        }
-
-        if (dbContext.Database.GetDbConnection() is not SqliteConnection sqliteConnection)
-        {
-            // Non-SQLite relational provider: its own Serializable maps to real serializable
-            // isolation, so the standard path is correct there.
-            await using var providerTransaction = await dbContext.Database
-                .BeginTransactionAsync(System.Data.IsolationLevel.Serializable, cancellationToken)
-                .ConfigureAwait(false);
-
-            await ApplyDeltasAsync(deltas, cancellationToken).ConfigureAwait(false);
-            await providerTransaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-            return;
-        }
-
-        if (sqliteConnection.State != System.Data.ConnectionState.Open)
-        {
-            await sqliteConnection.OpenAsync(cancellationToken).ConfigureAwait(false);
-        }
-
-        var immediateTransaction = sqliteConnection.BeginTransaction(
-            System.Data.IsolationLevel.Serializable,
-            deferred: false);
-
-        await using (immediateTransaction.ConfigureAwait(false))
-        {
-            await dbContext.Database.UseTransactionAsync(immediateTransaction, cancellationToken)
-                .ConfigureAwait(false);
-            try
-            {
-                await ApplyDeltasAsync(deltas, cancellationToken).ConfigureAwait(false);
-                await immediateTransaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-            }
-            finally
-            {
-                await dbContext.Database.UseTransactionAsync(null, cancellationToken).ConfigureAwait(false);
-            }
-        }
+        await GatewayWriteTransaction.RunAsync(dbContext, ct => ApplyDeltasAsync(deltas, ct), cancellationToken)
+            .ConfigureAwait(false);
     }
 
     private async Task ApplyDeltasAsync(
@@ -200,7 +169,7 @@ public sealed class DailyUsageRollupRepository(GatewayDbContext dbContext) : IDa
     {
         var now = DateTimeOffset.UtcNow;
         var dates = deltas.Select(d => d.UsageDate).Distinct().ToList();
-        var tenantIds = deltas.Select(d => d.TenantId).Distinct().ToList();
+        var tenantIds = deltas.Select(d => DailyUsageRollupEntityMapper.ToStoredTenantId(d.TenantId)).Distinct().ToList();
 
         // One query for every bucket this batch touches, rather than one per delta.
         var existing = await dbContext.DailyUsageRollups

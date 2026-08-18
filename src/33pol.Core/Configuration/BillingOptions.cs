@@ -14,6 +14,19 @@ public sealed class BillingOptions
 
     public int UsageWriterFlushIntervalMs { get; set; } = 1000;
 
+    /// <summary>
+    /// How many times a batch that failed to persist is retried (on later flush ticks, with a
+    /// growing back-off) before it is dropped and counted as lost. 0 disables retries.
+    /// </summary>
+    public int UsageWriterMaxFlushRetries { get; set; } = 5;
+
+    /// <summary>
+    /// Upper bound on buffered usage events while persistence is failing. Past this the oldest
+    /// events are shed (and counted as dropped) so an outage cannot grow memory without limit.
+    /// Always at least <see cref="UsageWriterBatchSize"/>.
+    /// </summary>
+    public int UsageWriterMaxPendingEvents { get; set; } = 10_000;
+
     public int BudgetWarningTrackerRetentionLimit { get; set; } = 100_000;
 
     public int DailyWebhookTrackerRetentionLimit { get; set; } = 100_000;
@@ -37,10 +50,12 @@ public sealed class BillingOptions
     /// It must comfortably exceed the longest possible in-flight request plus the usage-flush delay:
     /// a TTL shorter than that sweeps reservations for requests that are still running, letting
     /// concurrent requests each see full headroom and collectively blow through a hard-stop budget.
-    /// <see cref="BillingReservationTtlPolicy"/> derives the safe minimum and configuration
-    /// validation rejects anything below it.
+    /// <see cref="BillingReservationTtlPolicy"/> derives the safe minimum — including the
+    /// body-scaled header allowance a maximum-size request receives — and configuration validation
+    /// rejects anything below it. With the default resilience timings (300 s base + 60 s/MB for a
+    /// 25 MB body = 1800 s for headers, 120 s streaming, 1 s flush, 60 s margin) the floor is 1981 s.
     /// </summary>
-    public int BudgetReservationTtlSeconds { get; set; } = 900;
+    public int BudgetReservationTtlSeconds { get; set; } = 2400;
 
     /// <summary>
     /// How long a model's rate card is cached. Budget enforcement prices every request before
@@ -64,8 +79,10 @@ public sealed class BillingOptions
     /// Budget enforcement previously re-read and re-summed every rollup row in the billing period on
     /// every inference request, for every hard-stop budget. Caching cannot let a tenant overshoot:
     /// spend incurred since the last read is tracked exactly by the reservation ledger and added on
-    /// top of this figure. The TTL only bounds how long after spend lands in the rollups a hard stop
-    /// can take to engage.
+    /// top of this figure, and the usage writer invalidates a tenant's cached spend the moment a
+    /// batch's cost reaches the rollups — before it releases those reservations — so there is no
+    /// window in which the cost is counted by neither. The TTL therefore only bounds staleness for
+    /// spend written by another replica.
     /// </remarks>
     public int BudgetSpendCacheTtlSeconds { get; set; } = 10;
 

@@ -9,6 +9,12 @@
 function adminApp() {
   const TABS = ['dashboard', 'usage', 'routing', 'keys', 'logs', 'errors', 'settings'];
 
+  /**
+   * Push-stream staleness budget: 3x the server's idle heartbeat interval
+   * (AdminControlPlaneEndpoints.LiveHeartbeat = 15s). See checkLiveStale().
+   */
+  const LIVE_STALE_MS = 3 * 15000;
+
   /** Time-range presets for the Errors tab, in hours. `all` drops the lower bound entirely. */
   const ERROR_RANGES = [
     ['1h', 'Last hour', 1],
@@ -108,6 +114,13 @@ function adminApp() {
     _liveRetryTimer: null,
     _liveRetryDelay: 1000,
     _liveFrames: 0,
+    /**
+     * Wall-clock time of the last byte received on the stream — data frames AND heartbeat comments —
+     * or of the connection attempt while nothing has arrived yet. The tick timer compares it against
+     * LIVE_STALE_MS: a half-open connection (proxy/NAT silently dropped it) never errors on its own,
+     * so without this the Overview would sit on "Streaming" with data that stopped updating.
+     */
+    _liveLastDataAt: 0,
     /**
      * Reactive clock, ticked twice a second while the Overview is on screen. Reading it from a
      * getter is what makes an in-flight row's elapsed time and the "updated Ns ago" line advance
@@ -221,7 +234,10 @@ function adminApp() {
       this._tickTimer = setInterval(() => {
         if (document.hidden) return;
         // Only the Overview reads the clock; ticking it elsewhere would re-render for nothing.
-        if (this.tab === 'dashboard' && this.apiKey) this._nowTick = Date.now();
+        if (this.tab === 'dashboard' && this.apiKey) {
+          this._nowTick = Date.now();
+          this.checkLiveStale();
+        }
       }, 500);
       if (this.apiKey) {
         this.store.startConnectionWatch(() => this.editModelUrl());
@@ -435,14 +451,32 @@ function adminApp() {
      * The one filter every usage call sends: range, cost centre, key and the anonymous toggle.
      * `withRange: false` drops from/to (the forecast has its own window).
      */
+    /**
+     * Frozen copy of the range + filters as they are right now. Requests are built from a snapshot
+     * taken when they start (not from the live inputs when they resolve), so a preset click while a
+     * report is in flight cannot label or page one range's rows with another range's parameters.
+     */
+    usageSnapshot() {
+      return {
+        from: this.usageFrom,
+        to: this.usageTo,
+        costCenter: (this.usageFilterCostCenter || '').trim(),
+        apiKeyId: this.usageFilterApiKeyId,
+        includeAnonymous: !!this.usageIncludeAnonymous
+      };
+    },
+
     usageParams(extra, withRange = true) {
+      return this.usageParamsFrom(this.usageSnapshot(), extra, withRange);
+    },
+
+    usageParamsFrom(snap, extra, withRange = true) {
       const q = new URLSearchParams();
-      if (withRange && this.usageFrom) q.set('from', this.usageFrom);
-      if (withRange && this.usageTo) q.set('to', this.usageTo);
-      const costCenter = (this.usageFilterCostCenter || '').trim();
-      if (costCenter) q.set('costCenter', costCenter);
-      if (this.usageFilterApiKeyId) q.set('apiKeyId', this.usageFilterApiKeyId);
-      if (this.usageIncludeAnonymous) q.set('includeAnonymous', 'true');
+      if (withRange && snap.from) q.set('from', snap.from);
+      if (withRange && snap.to) q.set('to', snap.to);
+      if (snap.costCenter) q.set('costCenter', snap.costCenter);
+      if (snap.apiKeyId) q.set('apiKeyId', snap.apiKeyId);
+      if (snap.includeAnonymous) q.set('includeAnonymous', 'true');
       for (const [k, v] of Object.entries(extra || {})) {
         if (v !== undefined && v !== null && v !== '') q.set(k, String(v));
       }
@@ -772,11 +806,18 @@ function adminApp() {
         return;
       }
       await this.runApi('auth', 'Connecting…', async () => {
-        this.store.persistApiKey(key);
+        this.clearMessages();
+        if (key !== this.apiKey) {
+          // Verify the candidate first; verifyConnection persists it only on success, so a mistyped
+          // key can never overwrite the working one in localStorage (a rejected candidate throws and
+          // runApi reports it, with the previous key and its polling left untouched).
+          await this.store.verifyConnection(this.editModelUrl(), key);
+        } else {
+          // init() re-verifying the key restored from localStorage.
+          await this.store.verifyConnection(this.editModelUrl());
+        }
         this.gateApiKey = '';
         this.headerApiKey = '';
-        this.clearMessages();
-        await this.store.verifyConnection(this.editModelUrl());
         this.store.startConnectionWatch(() => this.editModelUrl());
         this.showChangeKey = false;
         this.syncPoll();
@@ -852,13 +893,14 @@ function adminApp() {
 
     /** @param quiet true for the auto-refresh tick and filter changes, which must not flash loading. */
     async loadLogs(quiet) {
-      const fetchLogs = () => this._sequenced('_logsSeq', async () => {
-        const body = await this.apiJson('/admin/api/logs' + this.logsQuery());
-        this.logs = body?.entries ?? [];
-        this.logsTotal = Number(body?.total ?? body?.entries?.length ?? 0);
-        this.logsCapacity = Number(body?.capacity ?? 0);
-        this.logsLoadError = '';
-      });
+      const fetchLogs = () => this._sequenced('_logsSeq',
+        () => this.apiJson('/admin/api/logs' + this.logsQuery()),
+        body => {
+          this.logs = body?.entries ?? [];
+          this.logsTotal = Number(body?.total ?? body?.entries?.length ?? 0);
+          this.logsCapacity = Number(body?.capacity ?? 0);
+          this.logsLoadError = '';
+        });
       if (quiet) {
         // The quiet path must not raise the global banner, but silently leaving stale rows on
         // screen is its own trap — an operator watching an incident cannot tell a calm gateway
@@ -957,9 +999,16 @@ function adminApp() {
      * fires two requests, and without this the slower first can land last and repaint the table
      * with results for a query the operator has already moved past.
      */
-    _sequenced(key, run) {
+    _sequenced(key, run, apply) {
       const seq = (this[key] = (this[key] || 0) + 1);
-      return run().then(result => (seq === this[key] ? result : undefined));
+      // `run` only fetches and returns the body; state is mutated in `apply`, and only when this
+      // request is still the newest one for `key`. Applying inside `run` would defeat the guard —
+      // the stale response would already have repainted the table before the check ran.
+      return run().then(body => {
+        if (seq !== this[key]) return undefined;
+        if (apply) apply(body);
+        return body;
+      });
     },
 
     errorsRangeFrom() {
@@ -988,15 +1037,16 @@ function adminApp() {
 
     /** @param quiet true for the auto-refresh tick and for filter changes, which must stay silent. */
     async loadErrors(quiet) {
-      const fetchErrors = () => this._sequenced('_errorsSeq', async () => {
-        const body = await this.apiJson('/admin/api/errors/groups' + this.errorsQuery());
-        this.errorGroups = body?.groups ?? [];
-        this.errorGroupsTotal = Number(body?.total ?? 0);
-        this.errorOccurrenceTotal = Number(body?.occurrenceTotal ?? 0);
-        this.errorsStoredTotal = Number(body?.storedTotal ?? 0);
-        this.errorsPersisted = body?.persisted !== false;
-        this.errorsLoadError = '';
-      });
+      const fetchErrors = () => this._sequenced('_errorsSeq',
+        () => this.apiJson('/admin/api/errors/groups' + this.errorsQuery()),
+        body => {
+          this.errorGroups = body?.groups ?? [];
+          this.errorGroupsTotal = Number(body?.total ?? 0);
+          this.errorOccurrenceTotal = Number(body?.occurrenceTotal ?? 0);
+          this.errorsStoredTotal = Number(body?.storedTotal ?? 0);
+          this.errorsPersisted = body?.persisted !== false;
+          this.errorsLoadError = '';
+        });
 
       if (quiet) {
         // See loadLogs: quiet means "no global banner", not "fail invisibly".
@@ -1039,12 +1089,13 @@ function adminApp() {
     async loadErrorOccurrences(fingerprint) {
       if (!fingerprint) return;
       try {
-        await this._sequenced('_errorsOccSeq', async () => {
-          const body = await this.apiJson(
+        await this._sequenced('_errorsOccSeq',
+          () => this.apiJson(
             '/admin/api/errors' + this.errorsQuery({ fingerprint, limit: '20', offset: '0' })
-          );
-          this.errorOccurrences = { ...this.errorOccurrences, [fingerprint]: body?.occurrences ?? [] };
-        });
+          ),
+          body => {
+            this.errorOccurrences = { ...this.errorOccurrences, [fingerprint]: body?.occurrences ?? [] };
+          });
       } catch {
         this.errorOccurrences = { ...this.errorOccurrences, [fingerprint]: [] };
       }
@@ -1263,6 +1314,23 @@ function adminApp() {
     },
 
     /**
+     * Staleness watchdog for the push stream. The server writes a heartbeat comment every 15s when
+     * idle; if nothing at all has arrived for LIVE_STALE_MS (3x that) the connection is presumed
+     * half-open: abort it, flip to 'reconnecting' (which hands the summary/feed back to the 2s poll)
+     * and reconnect right away.
+     */
+    checkLiveStale() {
+      if (!this._liveAbort || !this._liveLastDataAt) return;
+      if (Date.now() - this._liveLastDataAt < LIVE_STALE_MS) return;
+      const controller = this._liveAbort;
+      this._liveAbort = null;
+      controller.abort();
+      this.liveMode = 'reconnecting';
+      this._liveLastDataAt = 0;
+      this.syncLive();
+    },
+
+    /**
      * Server-sent events over fetch rather than EventSource: the admin key travels in a header,
      * which EventSource cannot set. Frames are `event: update` + one JSON line; comment lines are
      * heartbeats. A drop schedules a reconnect with backoff and hands the page back to polling in
@@ -1271,6 +1339,7 @@ function adminApp() {
     async openLiveStream() {
       const controller = new AbortController();
       this._liveAbort = controller;
+      this._liveLastDataAt = Date.now();
       if (!this.liveMode) this.liveMode = 'reconnecting';
       let gotFrame = false;
       try {
@@ -1293,6 +1362,8 @@ function adminApp() {
         for (;;) {
           const { value, done } = await reader.read();
           if (done) break;
+          // Any bytes — a frame or a heartbeat comment — prove the connection is alive.
+          this._liveLastDataAt = Date.now();
           buffer += decoder.decode(value, { stream: true });
           let sep;
           while ((sep = buffer.indexOf('\n\n')) >= 0) {
@@ -2048,22 +2119,37 @@ function adminApp() {
         this.toast(this.usageRangeError, 'error');
         return;
       }
+      // Snapshot the range/filters now and tag this run; presets, filters and tab activation all
+      // fire this without awaiting each other, so three in-flight reports could otherwise interleave
+      // (rollups from "7d", events from "MTD", footer labelled with whatever the inputs held last).
+      // Responses whose seq is no longer current are dropped on the floor.
+      const snap = this.usageSnapshot();
+      const seq = (this._usageSeq = (this._usageSeq || 0) + 1);
+      const current = () => seq === this._usageSeq;
       await this.runApi('usage', 'Loading usage…', async () => {
         // Settled, not all-or-nothing: a failing forecast must not blank the tables that loaded.
         const results = await Promise.allSettled([
-          this.apiJson('/admin/api/usage?' + this.usageParams()).then(u => {
+          this.apiJson('/admin/api/usage?' + this.usageParamsFrom(snap)).then(u => {
+            if (!current()) return;
             this.usage = u;
-            this.usageLoadedFrom = this.usageFrom;
-            this.usageLoadedTo = this.usageTo;
+            this.usageLoadedFrom = snap.from;
+            this.usageLoadedTo = snap.to;
             this.usageRollupLimit = 100;
           }),
-          this.apiJson('/admin/api/usage/events?' + this.usageParams({ limit: 50 })).then(page => {
+          this.apiJson('/admin/api/usage/events?' + this.usageParamsFrom(snap, { limit: 50 })).then(page => {
+            if (!current()) return;
             this.usageEvents = page?.events ?? [];
             this.usageEventsHasMore = !!page?.hasMore;
             this.usageEventsCursor = page?.nextCursor || null;
+            // "Load more" pages with the filters these rows were fetched with, not the live inputs.
+            this._usageEventsSnapshot = snap;
           }),
-          this.apiJson('/admin/api/usage/forecast?' + this.usageParams({ days: 7 }, false)).then(f => { this.forecast = f; })
+          this.apiJson('/admin/api/usage/forecast?' + this.usageParamsFrom(snap, { days: 7 }, false)).then(f => {
+            if (!current()) return;
+            this.forecast = f;
+          })
         ]);
+        if (!current()) return;
         const failed = results.find(r => r.status === 'rejected');
         if (failed) throw failed.reason;
       });
@@ -2071,8 +2157,13 @@ function adminApp() {
 
     async loadMoreUsageEvents() {
       if (!this.usageEventsCursor) return;
+      const snap = this._usageEventsSnapshot || this.usageSnapshot();
+      const seq = this._usageSeq;
+      const cursor = this.usageEventsCursor;
       await this.runApi('usageEvents', 'Loading more events…', async () => {
-        const page = await this.apiJson('/admin/api/usage/events?' + this.usageParams({ limit: 50, cursor: this.usageEventsCursor }));
+        const page = await this.apiJson('/admin/api/usage/events?' + this.usageParamsFrom(snap, { limit: 50, cursor }));
+        // A new report started (or another page landed) meanwhile: this page belongs to old rows.
+        if (seq !== this._usageSeq || cursor !== this.usageEventsCursor) return;
         this.usageEvents = [...(this.usageEvents || []), ...(page?.events ?? [])];
         this.usageEventsHasMore = !!page?.hasMore;
         this.usageEventsCursor = page?.nextCursor || null;
@@ -3296,9 +3387,11 @@ function adminApp() {
     get selectedKeyCountText() { return this.selectedActiveKeyCount(); },
 
     get keyRows() {
-      const currency = this.forecast?.currency;
       return this.filteredKeys().map(k => {
         const cost = this.keyMtdCost(k);
+        // Per-key currency when the summary carries one, else the report currency (usage, then
+        // forecast) — not the forecast alone, which is unset until the Usage tab has been visited.
+        const currency = k.usageSummary?.currency ?? this.usageCurrency;
         return {
           key: k.id,
           keyPrefix: k.keyPrefix,

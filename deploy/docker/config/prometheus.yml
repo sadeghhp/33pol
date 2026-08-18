@@ -12,5 +12,11 @@ scrape_configs:
 
   - job_name: gateway
     metrics_path: /metrics
+    # /metrics requires an Operator/Admin API key or the configured scrape token
+    # (Gateway__Metrics__ScrapeToken) unless Gateway__Metrics__AllowAnonymous=true. The token file is
+    # the compose secret fed from GATEWAY_METRICS_SCRAPE_TOKEN (see docker-compose.yml / .env.example).
+    authorization:
+      type: Bearer
+      credentials_file: /run/secrets/gateway_metrics_scrape_token
     static_configs:
       - targets: ["gateway:8080"]

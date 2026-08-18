@@ -25,8 +25,12 @@ public sealed class GatewayErrorBatchPersistenceHandler(
 {
     private readonly object _gate = new();
 
-    // Serializes the size-triggered flush from the recording thread against the timer loop, so the
-    // two cannot interleave writes of the same batch.
+    // Only one flush runs at a time. The size trigger in Enqueue takes the gate opportunistically
+    // (Wait(0)); when a flush is already in progress the records simply stay in _pending — subject
+    // to the MaxPending trim — until the timer loop drains them. This keeps memory bounded by
+    // MaxPending: without it every size trigger during a database stall would spawn another drained
+    // batch waiting behind the semaphore, growing with error rate x stall duration instead of with
+    // the configured cap.
     private readonly SemaphoreSlim _flushGate = new(1, 1);
     private readonly List<GatewayErrorRecord> _pending = [];
     private readonly GatewayErrorTrackingOptions _options = options.Value;
@@ -34,9 +38,24 @@ public sealed class GatewayErrorBatchPersistenceHandler(
     private CancellationTokenSource? _cts;
     private long _dropped;
 
+    // Bumped by DiscardPending so a batch drained before a wipe is not written after it.
+    private long _generation;
+
     private int BatchSize => Math.Max(1, _options.WriterBatchSize);
 
     private int MaxPending => BatchSize * 10;
+
+    /// <summary>Records currently buffered and not yet handed to a flush. Exposed for tests.</summary>
+    public int PendingCount
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _pending.Count;
+            }
+        }
+    }
 
     public void Enqueue(GatewayErrorRecord record)
     {
@@ -46,6 +65,7 @@ public sealed class GatewayErrorBatchPersistenceHandler(
         }
 
         List<GatewayErrorRecord>? toFlush = null;
+        long generation = 0;
         lock (_gate)
         {
             _pending.Add(record);
@@ -57,32 +77,49 @@ public sealed class GatewayErrorBatchPersistenceHandler(
                 _dropped += overflow;
             }
 
-            if (_pending.Count >= BatchSize)
+            if (_pending.Count >= BatchSize && _flushGate.Wait(0))
             {
+                // Gate acquired: this call owns the flush and WriteBatchAndReleaseAsync releases it.
                 toFlush = DrainLocked();
+                generation = _generation;
             }
         }
 
         if (toFlush is not null)
         {
             // Fire and forget: the caller is a request thread answering a client that has already
-            // failed once. Exceptions are handled inside FlushBatchAsync.
-            _ = FlushBatchAsync(toFlush, CancellationToken.None);
+            // failed once. Exceptions are handled inside WriteBatchAndReleaseAsync.
+            _ = WriteBatchAndReleaseAsync(toFlush, generation, CancellationToken.None);
         }
     }
 
     public async Task FlushPendingAsync(CancellationToken cancellationToken = default)
     {
+        try
+        {
+            await _flushGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // Shutdown deadline hit while another flush held the gate; the records are diagnostics.
+            return;
+        }
+
         List<GatewayErrorRecord>? toFlush;
+        long generation;
         lock (_gate)
         {
             toFlush = _pending.Count == 0 ? null : DrainLocked();
+            generation = _generation;
         }
 
-        if (toFlush is not null)
+        if (toFlush is null)
         {
-            await FlushBatchAsync(toFlush, cancellationToken).ConfigureAwait(false);
+            _flushGate.Release();
+            return;
         }
+
+        await WriteBatchAndReleaseAsync(toFlush, generation, cancellationToken).ConfigureAwait(false);
     }
 
     public void DiscardPending()
@@ -90,6 +127,7 @@ public sealed class GatewayErrorBatchPersistenceHandler(
         lock (_gate)
         {
             _pending.Clear();
+            _generation++;
         }
     }
 
@@ -141,11 +179,27 @@ public sealed class GatewayErrorBatchPersistenceHandler(
         }
     }
 
-    private async Task FlushBatchAsync(List<GatewayErrorRecord> batch, CancellationToken cancellationToken)
+    /// <summary>
+    /// Writes one drained batch. The caller must already hold <see cref="_flushGate"/>; it is
+    /// released here on every path.
+    /// </summary>
+    private async Task WriteBatchAndReleaseAsync(
+        List<GatewayErrorRecord> batch,
+        long generation,
+        CancellationToken cancellationToken)
     {
-        await _flushGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            lock (_gate)
+            {
+                if (generation != _generation)
+                {
+                    // DiscardPending ran after this batch was drained: the operator wiped the
+                    // archive and these records must not land in it afterwards.
+                    return;
+                }
+            }
+
             using var scope = scopeFactory.CreateScope();
             var archive = scope.ServiceProvider.GetRequiredService<IGatewayErrorArchive>();
             await archive.AppendBatchAsync(batch, cancellationToken).ConfigureAwait(false);

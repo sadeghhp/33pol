@@ -326,22 +326,30 @@ public sealed class GatewayErrorRepository(GatewayDbContext dbContext) : IGatewa
         {
             // LIKE, unindexed, and case-insensitive only for ASCII on SQLite. It scans the filtered
             // window, which retention keeps bounded.
+            // The explicit escape character matters: SQLite LIKE has no bracket classes, so
+            // "[_]" would mean literal '[', any char, literal ']' and a search for "req_abc" (every
+            // gateway request id contains '_') could never match.
             var pattern = $"%{Escape(search)}%";
             source = source.Where(e =>
-                EF.Functions.Like(e.Message, pattern) ||
-                (e.ExceptionType != null && EF.Functions.Like(e.ExceptionType, pattern)) ||
-                (e.EventCode != null && EF.Functions.Like(e.EventCode, pattern)) ||
-                (e.ModelId != null && EF.Functions.Like(e.ModelId, pattern)) ||
-                (e.RequestId != null && EF.Functions.Like(e.RequestId, pattern)) ||
-                (e.Path != null && EF.Functions.Like(e.Path, pattern)));
+                EF.Functions.Like(e.Message, pattern, LikeEscape) ||
+                (e.ExceptionType != null && EF.Functions.Like(e.ExceptionType, pattern, LikeEscape)) ||
+                (e.EventCode != null && EF.Functions.Like(e.EventCode, pattern, LikeEscape)) ||
+                (e.ModelId != null && EF.Functions.Like(e.ModelId, pattern, LikeEscape)) ||
+                (e.RequestId != null && EF.Functions.Like(e.RequestId, pattern, LikeEscape)) ||
+                (e.Path != null && EF.Functions.Like(e.Path, pattern, LikeEscape)));
         }
 
         return source;
     }
 
-    /// <summary>Neutralizes LIKE wildcards so a search for "100%" does not match everything.</summary>
+    private const string LikeEscape = "\\";
+
+    /// <summary>
+    /// Neutralizes LIKE wildcards (and the escape character itself) with a backslash escape so a
+    /// search for "100%" or "req_abc" matches literally instead of acting as a wildcard.
+    /// </summary>
     private static string Escape(string value) =>
-        value.Replace("[", "[[]").Replace("%", "[%]").Replace("_", "[_]");
+        value.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_");
 
     private static GatewayErrorGroup ToGroup(GroupProjection projection, GatewayErrorRecord sample) => new()
     {

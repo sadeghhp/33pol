@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
@@ -81,23 +82,37 @@ public static class AdminUsageEndpoints
             cursor);
     }
 
-    private static bool TryBindFilter(
+    /// <summary>
+    /// <c>includeAnonymous</c> is honoured only for callers who satisfy the Operator policy.
+    /// </summary>
+    /// <remarks>
+    /// The group is gated by the per-tenant Admin policy. Anonymous rows (traffic to public models
+    /// sent without any key) belong to no tenant, so letting any tenant's admin opt into them
+    /// exposed the whole gateway's anonymous request volume, model ids and cost to every tenant.
+    /// A non-operator caller asking for them gets a tenant-scoped report, not an error: the flag is
+    /// forced to <c>false</c> rather than rejected so existing clients keep working.
+    /// </remarks>
+    private static async Task<(UsageFilter? Filter, IResult? Error)> TryBindFilterAsync(
         HttpContext httpContext,
+        IAuthorizationService authorization,
         DateOnly? from,
         DateOnly? to,
         string? costCenter,
         Guid? apiKeyId,
-        bool? includeAnonymous,
-        out UsageFilter filter,
-        out IResult? error)
+        bool? includeAnonymous)
     {
-        filter = null!;
-        error = null;
-
         if (!TryGetTenantId(httpContext, out var tenantId))
         {
-            error = Results.Unauthorized();
-            return false;
+            return (null, Results.Unauthorized());
+        }
+
+        var anonymousAllowed = false;
+        if (includeAnonymous == true)
+        {
+            var operatorCheck = await authorization
+                .AuthorizeAsync(httpContext.User, httpContext, GatewayAuthPolicies.Operator)
+                .ConfigureAwait(false);
+            anonymousAllowed = operatorCheck.Succeeded;
         }
 
         var toDate = to ?? DateOnly.FromDateTime(DateTime.UtcNow);
@@ -105,32 +120,30 @@ public static class AdminUsageEndpoints
 
         if (fromDate > toDate)
         {
-            error = BadRequest("invalid_range", "'from' must be on or before 'to'.");
-            return false;
+            return (null, BadRequest("invalid_range", "'from' must be on or before 'to'."));
         }
 
         if (toDate.DayNumber - fromDate.DayNumber + 1 > MaxRangeDays)
         {
-            error = BadRequest("range_too_long", $"The date range may span at most {MaxRangeDays} days.");
-            return false;
+            return (null, BadRequest("range_too_long", $"The date range may span at most {MaxRangeDays} days."));
         }
 
         var trimmed = string.IsNullOrWhiteSpace(costCenter) ? null : costCenter.Trim();
         var noCostCenter = string.Equals(trimmed, NoCostCenterSentinel, StringComparison.OrdinalIgnoreCase);
 
-        filter = new UsageFilter(
+        return (new UsageFilter(
             tenantId,
             fromDate,
             toDate,
             noCostCenter ? null : trimmed,
             noCostCenter,
             apiKeyId,
-            includeAnonymous == true);
-        return true;
+            anonymousAllowed), null);
     }
 
     private static async Task<IResult> GetUsage(
         HttpContext httpContext,
+        IAuthorizationService authorization,
         IBillingUsageService usageService,
         DateOnly? from,
         DateOnly? to,
@@ -139,7 +152,9 @@ public static class AdminUsageEndpoints
         bool? includeAnonymous,
         CancellationToken cancellationToken)
     {
-        if (!TryBindFilter(httpContext, from, to, costCenter, apiKeyId, includeAnonymous, out var filter, out var error))
+        var (filter, error) = await TryBindFilterAsync(httpContext, authorization, from, to, costCenter, apiKeyId, includeAnonymous)
+            .ConfigureAwait(false);
+        if (filter is null)
         {
             return error!;
         }
@@ -153,6 +168,7 @@ public static class AdminUsageEndpoints
 
     private static async Task<IResult> GetForecast(
         HttpContext httpContext,
+        IAuthorizationService authorization,
         IBillingForecastService forecastService,
         int? days,
         string? costCenter,
@@ -162,7 +178,9 @@ public static class AdminUsageEndpoints
     {
         // The forecast has its own window (trailing complete days + month to date), so the report's
         // from/to are deliberately not accepted here; the other filters are shared.
-        if (!TryBindFilter(httpContext, null, null, costCenter, apiKeyId, includeAnonymous, out var filter, out var error))
+        var (filter, error) = await TryBindFilterAsync(httpContext, authorization, null, null, costCenter, apiKeyId, includeAnonymous)
+            .ConfigureAwait(false);
+        if (filter is null)
         {
             return error!;
         }
@@ -185,6 +203,7 @@ public static class AdminUsageEndpoints
 
     private static async Task<IResult> GetEvents(
         HttpContext httpContext,
+        IAuthorizationService authorization,
         IBillingUsageService usageService,
         DateOnly? from,
         DateOnly? to,
@@ -195,7 +214,9 @@ public static class AdminUsageEndpoints
         string? cursor,
         CancellationToken cancellationToken)
     {
-        if (!TryBindFilter(httpContext, from, to, costCenter, apiKeyId, includeAnonymous, out var filter, out var error))
+        var (filter, error) = await TryBindFilterAsync(httpContext, authorization, from, to, costCenter, apiKeyId, includeAnonymous)
+            .ConfigureAwait(false);
+        if (filter is null)
         {
             return error!;
         }
@@ -215,6 +236,7 @@ public static class AdminUsageEndpoints
 
     private static async Task<IResult> ExportUsage(
         HttpContext httpContext,
+        IAuthorizationService authorization,
         IBillingUsageService usageService,
         DateOnly? from,
         DateOnly? to,
@@ -225,7 +247,9 @@ public static class AdminUsageEndpoints
         string? dataset,
         CancellationToken cancellationToken)
     {
-        if (!TryBindFilter(httpContext, from, to, costCenter, apiKeyId, includeAnonymous, out var filter, out var error))
+        var (filter, error) = await TryBindFilterAsync(httpContext, authorization, from, to, costCenter, apiKeyId, includeAnonymous)
+            .ConfigureAwait(false);
+        if (filter is null)
         {
             return error!;
         }

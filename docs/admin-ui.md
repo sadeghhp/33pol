@@ -50,7 +50,8 @@ directive that the evaluator could not resolve fails the build instead of the op
 1. Open **`/admin`** (redirects to `/admin/index.html`).
 2. Paste an **Admin** (or **Both**) API key on the sign-in screen. Click **Connect** (or Enter).
 3. After connect, the header shows key prefix + **Connected** / **Invalid key**. Use **Change key** or **Sign out** as needed.
-4. The key is persisted in **`localStorage`** under `33pol-admin-key`.
+4. The key is persisted in **`localStorage`** under `33pol-admin-key` — only after the gateway has accepted it. A candidate key from **Connect** / **Change key** is verified first (`GET /admin/api/config/status` with the candidate in the header); a rejected candidate is reported and the previous working key stays in place.
+5. **Invalid key** is set only by a `401`. A transient failure of the periodic session check (network blip, 5xx) marks the session *degraded* and keeps polling so the page recovers on its own.
 
 **Navigation:** Sidebar sections use URL hash (`#/dashboard`, `#/usage`, `#/routing`, `#/keys`, `#/logs`, `#/errors`, `#/settings`) and `sessionStorage` for the last tab. Legacy hashes `#/models` and `#/backends` redirect to **Routing** (Models / Backends sub-tabs). The Errors tab also accepts filters in the hash — `#/errors?model=gpt-4o&status=502&code=upstream_error&range=24h` — which is how the Overview tile and the errors-by-model bars deep-link into it.
 
@@ -96,7 +97,9 @@ buffering proxy, a dropped connection) the poll takes over and the badge beside 
 **Polling** or **Reconnecting** instead of **Streaming**; reconnects back off from 1s to 15s. The
 vitals bar still polls every 2s on other tabs. Logs and Errors quiet-poll every 10s, only while
 their tab is on screen and auto-refresh is on. All polling and streaming stops when the tab is
-hidden or the key has been rejected.
+hidden or the key has been rejected. A staleness watchdog aborts and reopens the stream when no
+bytes (frames or the server's 15s heartbeat comments) arrive for 45s, so a half-open connection
+cannot leave the Overview frozen on **Streaming**.
 
 ## Errors and feedback
 

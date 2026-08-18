@@ -48,6 +48,7 @@ public sealed class StreamingHttpTransformer : HttpTransformer
         string destinationPrefix,
         CancellationToken cancellationToken)
     {
+        // The transformer owns the outbound URI; the forwarder hands over a request without one.
         proxyRequest.RequestUri = InferenceDestinationBuilder.BuildOutboundUri(
             destinationPrefix,
             httpContext.Request.Path,
@@ -140,11 +141,32 @@ public sealed class StreamingHttpTransformer : HttpTransformer
         return true;
     }
 
+    /// <summary>
+    /// Wraps the upstream body so usage can be read off it as it streams through to the client.
+    /// </summary>
+    /// <remarks>
+    /// <para>The replacement content carries the original content headers (minus
+    /// <c>Content-Length</c>, which the wrapper cannot honour and Kestrel replaces with chunking).
+    /// Carrying only <c>Content-Type</c>, as this once did, silently dropped <c>Content-Encoding</c>,
+    /// <c>Content-Language</c> and friends on the way to the client.</para>
+    ///
+    /// <para>The gateway never sends <c>Accept-Encoding</c> upstream, but some CDNs and proxies
+    /// compress regardless. A body under a non-identity <c>Content-Encoding</c> is not JSON/SSE on
+    /// the wire, so parsing it for usage would only ever fail (and be counted as a parse failure of a
+    /// backend that did nothing wrong). It is passed through untouched and reported through the
+    /// capture's failure hook so it stays visible in metrics.</para>
+    /// </remarks>
     private async Task PrepareUsageCapturingContentAsync(
         HttpResponseMessage proxyResponse,
         CancellationToken cancellationToken)
     {
-        var contentType = proxyResponse.Content!.Headers.ContentType;
+        var originalHeaders = proxyResponse.Content!.Headers;
+
+        if (HasNonIdentityContentEncoding(originalHeaders))
+        {
+            _usageCapture!.OnBodyNotParseable();
+            return;
+        }
 
         var originalStream = await proxyResponse.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
         var capturingStream = _isStreaming
@@ -165,11 +187,32 @@ public sealed class StreamingHttpTransformer : HttpTransformer
                 isStreaming: false,
                 onCaptureFailed: _usageCapture!.OnCaptureFailed);
 
-        proxyResponse.Content = new StreamContent(capturingStream);
-        if (contentType is not null)
+        var replacement = new StreamContent(capturingStream);
+        foreach (var header in originalHeaders)
         {
-            proxyResponse.Content.Headers.ContentType = contentType;
+            if (string.Equals(header.Key, "Content-Length", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            replacement.Headers.TryAddWithoutValidation(header.Key, header.Value);
         }
+
+        proxyResponse.Content = replacement;
+    }
+
+    private static bool HasNonIdentityContentEncoding(HttpContentHeaders headers)
+    {
+        foreach (var encoding in headers.ContentEncoding)
+        {
+            if (!string.IsNullOrWhiteSpace(encoding) &&
+                !string.Equals(encoding, "identity", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>

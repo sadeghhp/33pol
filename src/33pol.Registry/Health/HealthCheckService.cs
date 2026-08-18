@@ -81,6 +81,10 @@ public sealed class HealthCheckService : BackgroundService
     public async Task CheckAllBackendsAsync(CancellationToken cancellationToken = default)
     {
         var models = _registry.GetAllModels();
+
+        // Removed or renamed models must not linger with their last status: prune first so a sweep
+        // over an emptied registry also clears the store.
+        PruneRemovedModels(models);
         if (models.Count == 0)
         {
             return;
@@ -101,6 +105,16 @@ public sealed class HealthCheckService : BackgroundService
         });
 
         await Task.WhenAll(tasks).ConfigureAwait(false);
+    }
+
+    private void PruneRemovedModels(IReadOnlyList<ModelConfig> models)
+    {
+        // IBackendHealthStore has no prune operation; only the real store accumulates entries, so
+        // fakes and always-healthy stubs are left alone.
+        if (_healthStore is BackendHealthStore store)
+        {
+            store.RetainOnly(models.Select(m => m.Id));
+        }
     }
 
     public async Task CheckBackendAsync(ModelConfig model, CancellationToken cancellationToken = default)

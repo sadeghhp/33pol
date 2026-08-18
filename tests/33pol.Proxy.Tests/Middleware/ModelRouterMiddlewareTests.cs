@@ -854,7 +854,7 @@ public sealed class ModelRouterMiddlewareTests
 
             var middleware = CreateMiddleware(
                 registry: registry,
-                forwarder: CreateForwarderReturning(ForwarderError.ResponseBodyDestination),
+                forwarder: CreateForwarderReturning(ForwarderError.ResponseBodyCanceled),
                 recentRequestStore: recentRequestStore,
                 circuitBreakers: breakers);
 
@@ -863,6 +863,50 @@ public sealed class ModelRouterMiddlewareTests
 
             breakers.GetBreaker("m1").State.Should().Be(CircuitState.Closed);
             recorded.Should().NotBeNull();
+        });
+    }
+
+    /// <summary>
+    /// An upstream that answers and then breaks the body off (reset, premature EOF) is a backend
+    /// failure, unlike a stall or a client hang-up: it counts against the breaker, lands in the
+    /// error store, and — when nothing has reached the client yet — is answered with a 502 rather
+    /// than the upstream's 200 over a truncated body.
+    /// </summary>
+    [Fact]
+    public async Task InvokeAsync_UpstreamBodyError_CountsAsFailureAndWrites502WhenNotStarted()
+    {
+        await WithSingleModelRegistryAsync(async registry =>
+        {
+            var breakers = CreateBreakerRegistry(failureThreshold: 1);
+
+            RecentRequestEntry? recorded = null;
+            var recentRequestStore = Substitute.For<IRecentRequestStore>();
+            recentRequestStore.When(x => x.Record(Arg.Any<RecentRequestEntry>()))
+                .Do(call => recorded = call.Arg<RecentRequestEntry>());
+
+            var errorRecorder = Substitute.For<IGatewayErrorRecorder>();
+
+            var middleware = CreateMiddleware(
+                registry: registry,
+                forwarder: CreateForwarderReturning(ForwarderError.ResponseBodyDestination),
+                recentRequestStore: recentRequestStore,
+                circuitBreakers: breakers,
+                errorRecorder: errorRecorder);
+
+            var context = CreateContext(
+                HttpMethods.Post, "/v1/chat/completions", """{"model":"m1","stream":false}""");
+            await middleware.InvokeAsync(context);
+
+            breakers.GetBreaker("m1").State.Should().Be(CircuitState.Open);
+            context.Response.StatusCode.Should().Be(StatusCodes.Status502BadGateway);
+            context.Response.Headers[GatewayHeaders.ErrorCode].ToString().Should().Be("upstream_error");
+
+            recorded.Should().NotBeNull();
+            recorded!.StatusCode.Should().Be(StatusCodes.Status502BadGateway);
+            recorded.ErrorCode.Should().Be("upstream_error");
+
+            errorRecorder.Received(1).Record(Arg.Is<GatewayErrorRecord>(r =>
+                r.Outcome == "upstream_body_error" && r.ModelId == "m1"));
         });
     }
 

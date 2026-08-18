@@ -8,6 +8,16 @@
 {{- if .Values.autoscaling.enabled }}
 {{- fail "33pol runs single-instance only: autoscaling.enabled must be false. Horizontal scaling would run multiple writers against one embedded SQLite file and corrupt it." }}
 {{- end }}
+{{- /*
+  Secrets guardrail. The image runs as Production, where GatewayBootstrapOptionsValidator refuses to
+  start without a strong key pepper; without a bootstrap admin key nobody can sign in to /admin.
+*/ -}}
+{{- if and (not .Values.gateway.existingSecret) (or (not .Values.gateway.keyPepper) (not .Values.gateway.adminApiKey)) }}
+{{- fail "33pol requires a key pepper and a bootstrap admin key: set gateway.existingSecret (Secret with keys keyPepper + adminApiKey) or, for dev/test only, gateway.keyPepper and gateway.adminApiKey inline. See values.yaml." }}
+{{- end }}
+{{- $secret := .Values.gateway.existingSecret }}
+{{- $metricsSecret := .Values.gateway.metrics.scrapeTokenSecret }}
+{{- $metricsSecretKey := .Values.gateway.metrics.scrapeTokenSecretKey | default "metricsScrapeToken" }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -30,16 +40,65 @@ spec:
         {{- include "33pol.selectorLabels" . | nindent 8 }}
     spec:
       terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      automountServiceAccountToken: {{ .Values.automountServiceAccountToken }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: gateway
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           ports:
             - name: http
               containerPort: 8080
           env:
             - name: ASPNETCORE_URLS
               value: http://+:8080
+            {{- if $secret }}
+            # One pepper feeds both options; they must be identical or bootstrap-seeded keys never
+            # authenticate.
+            - name: Gateway__Security__KeyPepper
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secret | quote }}
+                  key: keyPepper
+            - name: Gateway__Bootstrap__KeyPepper
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secret | quote }}
+                  key: keyPepper
+            - name: Gateway__Bootstrap__AdminApiKey
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secret | quote }}
+                  key: adminApiKey
+            {{- else }}
+            - name: Gateway__Security__KeyPepper
+              value: {{ .Values.gateway.keyPepper | quote }}
+            - name: Gateway__Bootstrap__KeyPepper
+              value: {{ .Values.gateway.keyPepper | quote }}
+            - name: Gateway__Bootstrap__AdminApiKey
+              value: {{ .Values.gateway.adminApiKey | quote }}
+            {{- end }}
+            - name: Gateway__Metrics__AllowAnonymous
+              value: {{ .Values.gateway.metrics.allowAnonymous | quote }}
+            {{- if .Values.gateway.metrics.scrapeToken }}
+            - name: Gateway__Metrics__ScrapeToken
+              value: {{ .Values.gateway.metrics.scrapeToken | quote }}
+            {{- else if or $metricsSecret $secret }}
+            - name: Gateway__Metrics__ScrapeToken
+              valueFrom:
+                secretKeyRef:
+                  name: {{ ($metricsSecret | default $secret) | quote }}
+                  key: {{ $metricsSecretKey | quote }}
+                  # Absent key => no token; /metrics then needs an operator key (or allowAnonymous).
+                  optional: true
+            {{- end }}
             - name: Gateway__ModelsConfigPath
               value: {{ .Values.gateway.modelsConfigPath | quote }}
             - name: Gateway__OperatorConsole__Enabled
@@ -65,6 +124,18 @@ spec:
           volumeMounts:
             - name: data
               mountPath: {{ .Values.persistence.mountPath }}
+            # Writable scratch space: the root filesystem is read-only (securityContext) and .NET
+            # needs a writable TMPDIR.
+            - name: tmp
+              mountPath: /tmp
+          {{- if .Values.probes.startup.enabled }}
+          startupProbe:
+            httpGet:
+              path: {{ .Values.probes.livenessPath }}
+              port: http
+            periodSeconds: {{ .Values.probes.startup.periodSeconds }}
+            failureThreshold: {{ .Values.probes.startup.failureThreshold }}
+          {{- end }}
           livenessProbe:
             httpGet:
               path: {{ .Values.probes.livenessPath }}
@@ -87,3 +158,5 @@ spec:
         {{- else }}
           emptyDir: {}
         {{- end }}
+        - name: tmp
+          emptyDir: {}

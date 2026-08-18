@@ -111,8 +111,26 @@ public sealed class ApiKeyValidator : IApiKeyValidator
             effectiveCostCenter,
             record.Role);
 
-        _cache.Set(cacheKey, success, TimeSpan.FromMinutes(_options.CacheTtlMinutes));
-        _cache.Set($"api-key-id:{record.Id}", cacheKey, TimeSpan.FromMinutes(_options.CacheTtlMinutes));
+        // A positive entry must not outlive the key: cap the TTL at the remaining lifetime so a key
+        // expiring inside the cache window stops authenticating on time rather than up to
+        // CacheTtlMinutes later.
+        var ttl = TimeSpan.FromMinutes(_options.CacheTtlMinutes);
+        if (record.ExpiresAt is { } expiresAt)
+        {
+            var remaining = expiresAt - DateTimeOffset.UtcNow;
+            if (remaining < ttl)
+            {
+                ttl = remaining;
+            }
+        }
+
+        if (ttl <= TimeSpan.Zero)
+        {
+            return success;
+        }
+
+        _cache.Set(cacheKey, success, ttl);
+        _cache.Set($"api-key-id:{record.Id}", cacheKey, ttl);
 
         return success;
     }

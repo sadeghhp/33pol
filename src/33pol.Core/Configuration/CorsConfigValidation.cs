@@ -135,6 +135,23 @@ public static class CorsConfigValidation
             return false;
         }
 
+        // An optional ":port" is matched against the origin's port by CorsOriginMatcher; anything
+        // else after a colon can never match, so refuse it here rather than accept a dead pattern.
+        var portIndex = suffix.IndexOf(':', StringComparison.Ordinal);
+        if (portIndex >= 0)
+        {
+            var port = suffix[(portIndex + 1)..];
+            if (port.Length == 0 || port.Contains(':') ||
+                !int.TryParse(port, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var parsedPort) ||
+                parsedPort is < 1 or > 65535)
+            {
+                error = $"allowedOrigins[{index}] wildcard port must be a number between 1 and 65535 (e.g. https://*.example.com:8443).";
+                return false;
+            }
+
+            suffix = suffix[..portIndex];
+        }
+
         if (!suffix.Contains('.'))
         {
             error = $"allowedOrigins[{index}] wildcard suffix must be a valid domain.";

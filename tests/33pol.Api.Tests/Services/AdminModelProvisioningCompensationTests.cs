@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using NSubstitute;
+using Pol33.Api;
 using Pol33.Api.Contracts;
 using Pol33.Api.Services;
 using Pol33.Core.Abstractions;
@@ -249,6 +250,55 @@ public sealed class AdminModelProvisioningCompensationTests
         (await secretStore.ExistsAsync("m1")).Should().BeTrue();
     }
 
+    /// <summary>
+    /// The secret-store and pricing audits used to be written with a null actor because the service
+    /// has no request context. The endpoint now hands the caller in and every entry names it.
+    /// </summary>
+    [Fact]
+    public async Task AddAsync_WithActor_StampsTheActorOnEverySideEffectAudit()
+    {
+        var commands = Substitute.For<IControlPlaneCommands>();
+        commands.AddModelAsync(Arg.Any<ModelConfig>(), Arg.Any<CancellationToken>())
+            .Returns(RegistryMutationResult.Ok("created"));
+
+        var audit = Substitute.For<IAuditLogger>();
+        var service = CreateService(commands, new FaultInjectingSecretStore(), audit);
+        var actor = new AdminActor("tenant-1", "key-1");
+        var request = NewRequest("m1", apiKey: "sk-upstream-secret");
+        request.Pricing = new ModelPricing { InputPricePerMillionTokens = 1m, OutputPricePerMillionTokens = 2m };
+
+        var result = await service.AddAsync(request, actor);
+
+        result.Success.Should().BeTrue(result.Message);
+        audit.Received().LogAdminAction(
+            "upstream_secret.updated",
+            Arg.Is<AuditLogEntry>(e => e.TenantId == "tenant-1" && e.ApiKeyId == "key-1"));
+        audit.Received().LogAdminAction(
+            "model.pricing.update",
+            Arg.Is<AuditLogEntry>(e => e.TenantId == "tenant-1" && e.ApiKeyId == "key-1"));
+        audit.DidNotReceive().LogAdminAction(
+            Arg.Any<string>(),
+            Arg.Is<AuditLogEntry>(e => e.TenantId == null || e.ApiKeyId == null));
+    }
+
+    [Fact]
+    public async Task AddAsync_WithoutActor_AuditsAsAnonymous()
+    {
+        var commands = Substitute.For<IControlPlaneCommands>();
+        commands.AddModelAsync(Arg.Any<ModelConfig>(), Arg.Any<CancellationToken>())
+            .Returns(RegistryMutationResult.Ok("created"));
+
+        var audit = Substitute.For<IAuditLogger>();
+        var service = CreateService(commands, new FaultInjectingSecretStore(), audit);
+
+        var result = await service.AddAsync(NewRequest("m1", apiKey: "sk-upstream-secret"));
+
+        result.Success.Should().BeTrue(result.Message);
+        audit.Received().LogAdminAction(
+            "upstream_secret.updated",
+            Arg.Is<AuditLogEntry>(e => e.TenantId == null && e.ApiKeyId == null));
+    }
+
     private static AdminModelWriteRequest NewRequest(string id, string? apiKey) =>
         new()
         {
@@ -264,6 +314,8 @@ public sealed class AdminModelProvisioningCompensationTests
         var pricing = Substitute.For<IRateCardAdminService>();
         pricing.GetPricingByModelAsync(Arg.Any<CancellationToken>())
             .Returns(new Dictionary<string, ModelPricing>());
+        pricing.SetPricingAsync(Arg.Any<string>(), Arg.Any<ModelPricing>(), Arg.Any<CancellationToken>())
+            .Returns(ModelPricingUpdateResult.Ok("priced"));
 
         var services = new ServiceCollection();
         services.AddSingleton(pricing);

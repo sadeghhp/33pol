@@ -17,12 +17,45 @@ public sealed class BillingReservationTtlPolicyTests
         {
             ForwardTimeoutSeconds = 300,
             StreamIdleTimeoutSeconds = 120,
+            ForwardTimeoutSecondsPerRequestMegabyte = 0,
         };
         var billing = new BillingOptions { UsageWriterFlushIntervalMs = 2_000 };
 
         var minimum = BillingReservationTtlPolicy.MinimumTtlSeconds(resilience, billing);
 
         minimum.Should().Be(300 + 120 + 2 + BillingReservationTtlPolicy.SafetyMarginSeconds);
+    }
+
+    /// <summary>
+    /// The header allowance grows per request-body megabyte up to a ceiling; a request at the body
+    /// cap can wait far longer than the base timeout, and its reservation must survive that.
+    /// </summary>
+    [Fact]
+    public void MinimumTtl_UsesTheBodyScaledHeaderAllowance_CappedAtMaxForwardTimeout()
+    {
+        var resilience = new GatewayResilienceOptions
+        {
+            ForwardTimeoutSeconds = 300,
+            ForwardTimeoutSecondsPerRequestMegabyte = 60,
+            MaxRequestBodyBytes = 25 * 1024 * 1024,
+            MaxForwardTimeoutSeconds = 3600,
+            StreamIdleTimeoutSeconds = 120,
+        };
+        var billing = new BillingOptions { UsageWriterFlushIntervalMs = 1_000 };
+
+        BillingReservationTtlPolicy.MaxHeaderWaitSeconds(resilience).Should().Be(300 + 60 * 25);
+        BillingReservationTtlPolicy.MinimumTtlSeconds(resilience, billing)
+            .Should().Be(1800 + 120 + 1 + BillingReservationTtlPolicy.SafetyMarginSeconds);
+
+        resilience.MaxForwardTimeoutSeconds = 900;
+        BillingReservationTtlPolicy.MaxHeaderWaitSeconds(resilience).Should().Be(900, "the ceiling caps the scaled allowance");
+
+        resilience.MaxForwardTimeoutSeconds = 100;
+        BillingReservationTtlPolicy.MaxHeaderWaitSeconds(resilience)
+            .Should().Be(300, "the base allowance always applies, whatever the ceiling says");
+
+        BillingReservationTtlPolicy.DescribeInsufficient(resilience, new BillingOptions { BudgetReservationTtlSeconds = 1 })
+            .Should().Contain(nameof(GatewayResilienceOptions.MaxForwardTimeoutSeconds));
     }
 
     /// <summary>
@@ -51,6 +84,8 @@ public sealed class BillingReservationTtlPolicyTests
         {
             ForwardTimeoutSeconds = -50,
             StreamIdleTimeoutSeconds = 0,
+            ForwardTimeoutSecondsPerRequestMegabyte = -60,
+            MaxRequestBodyBytes = -1,
         };
         var billing = new BillingOptions { UsageWriterFlushIntervalMs = -1 };
 
@@ -95,6 +130,7 @@ public sealed class BillingReservationTtlPolicyTests
         {
             ForwardTimeoutSeconds = 300,
             StreamIdleTimeoutSeconds = 120,
+            ForwardTimeoutSecondsPerRequestMegabyte = 0,
         };
         var generous = new GatewayResilienceOptions
         {

@@ -36,7 +36,18 @@ public static class AdminKeyEndpoints
             return Results.Unauthorized();
         }
 
-        var created = await adminKeys.CreateAsync(tenantId, request, cancellationToken).ConfigureAwait(false);
+        AdminApiKeyCreatedResponse created;
+        try
+        {
+            created = await adminKeys.CreateAsync(tenantId, request, cancellationToken).ConfigureAwait(false);
+        }
+        catch (ArgumentException ex)
+        {
+            // Input validation (a past expiry, for instance) is the caller's mistake, not an upstream
+            // failure; without this it surfaced as a 502 and an Error-level gateway error record.
+            return Results.BadRequest(new { message = ex.Message });
+        }
+
         audit.LogAdminAction(
             "api_key.create",
             new AuditLogEntry(
@@ -105,6 +116,10 @@ public static class AdminKeyEndpoints
             return Results.Forbid();
         }
         catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(new { message = ex.Message });
+        }
+        catch (ArgumentException ex)
         {
             return Results.BadRequest(new { message = ex.Message });
         }

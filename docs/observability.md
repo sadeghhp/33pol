@@ -4,6 +4,32 @@
 
 Prometheus scrape endpoint: `GET /metrics` (OpenTelemetry Prometheus exporter). Meter name: `Pol33.Gateway`.
 
+### Scrape authentication
+
+The exposition carries a `model` label on request, error, latency, stream and token series, so an anonymous scrape enumerates the model inventory and the traffic profile — the same data `/stats` is gated behind the Operator policy to protect. `/metrics` is therefore **not anonymous by default** once the gateway has API keys. A scrape is accepted when it presents any one of:
+
+| Credential | How | Configure |
+|---|---|---|
+| Scrape token | `Authorization: Bearer <token>` | `Gateway:Metrics:ScrapeToken` — env `Gateway__Metrics__ScrapeToken`; the compose stack maps `GATEWAY_METRICS_SCRAPE_TOKEN` onto it |
+| Operator API key | `X-API-Key: <key>` or `Authorization: Bearer <key>` | Any key satisfying the Operator policy (admin role in the operator tenant) |
+| Nothing | — | `Gateway:Metrics:AllowAnonymous=true` (explicit opt-in; only when the port is reachable solely from the scraper's network) |
+
+Anything else is answered `401` with the standard `invalid_api_key` error body. With no token configured and `AllowAnonymous=false` (the shipped default) only an Operator key works, and the gateway logs a startup warning saying so. A gateway with authentication disabled (no keys issued / no database) serves the scrape as it serves everything else.
+
+Prometheus side (`deploy/docker/config/prometheus.yml`):
+
+```yaml
+  - job_name: gateway
+    metrics_path: /metrics
+    authorization:
+      type: Bearer
+      credentials: ${GATEWAY_METRICS_SCRAPE_TOKEN}   # or credentials_file: /run/secrets/gateway_metrics_token
+    static_configs:
+      - targets: ["gateway:8080"]
+```
+
+`/health`, `/health/live` and `/health/ready` stay anonymous for probes. Anonymous callers of `/health` get the summary shape (status, counts, per-backend up/down); the per-backend upstream `url` and probe `error` text are included only when the request carries an Operator key.
+
 Canonical definitions live in `GatewayMeters` (`33pol.Observability`) — that file is the source of truth; this table mirrors it.
 
 **Label rules:** never label a metric with a raw API key or a full request id. `model` is the canonical model id; prefer tenant *slug* over uuid where a tenant dimension is added.

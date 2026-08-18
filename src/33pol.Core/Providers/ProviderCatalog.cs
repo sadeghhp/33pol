@@ -48,11 +48,13 @@ public static class ProviderCatalog
             "https://api.fireworks.ai/inference/v1",
             "https://api.fireworks.ai/inference/v1/models",
             "FIREWORKS_API_KEY"),
+        // No discovery URL: host.docker.internal resolves to a private address, which the guarded
+        // discovery client rightly refuses. See ProviderDefinition.SupportsDiscovery.
         new(
             "lmstudio",
             "LM Studio (local)",
             "http://host.docker.internal:1234",
-            "http://host.docker.internal:1234/v1/models",
+            string.Empty,
             string.Empty,
             RequiresUpstreamAuth: false),
         new(

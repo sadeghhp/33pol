@@ -155,7 +155,10 @@ public sealed class ApiKeyAuthenticationHandler : AuthenticationHandler<Authenti
 
     private static string? ExtractApiKey(HttpRequest request)
     {
-        if (request.Headers.TryGetValue("X-API-Key", out var headerValue))
+        // A present-but-blank X-API-Key (some proxies and SDKs always send the header) must not
+        // shadow a valid bearer token on the same request.
+        if (request.Headers.TryGetValue("X-API-Key", out var headerValue) &&
+            !string.IsNullOrWhiteSpace(headerValue.ToString()))
         {
             return headerValue.ToString();
         }

@@ -158,12 +158,18 @@ Compose auto-provisions Grafana dashboards from `deploy/grafana/dashboards/` (fo
 ## Helm
 
 ```bash
+kubectl create secret generic 33pol-gateway \
+  --from-literal=keyPepper="$(openssl rand -base64 48)" \
+  --from-literal=adminApiKey="sk-33pol-$(openssl rand -hex 24)"
 helm upgrade --install 33pol deploy/helm/33pol \
   --set image.repository=ghcr.io/<org>/33pol \
   --set image.tag=2.0.0 \
+  --set gateway.existingSecret=33pol-gateway \
   --set persistence.enabled=true \
   --set persistence.size=1Gi
 ```
+
+`gateway.existingSecret` (keys `keyPepper`, `adminApiKey`) is required: the gateway runs as Production and refuses to start without a strong key pepper. Keep the pepper stable — rotating it invalidates every stored API key.
 
 The chart deploys the gateway only (no Grafana). Scrape `/metrics` via `serviceMonitor.enabled` when Prometheus Operator is installed, then import or provision dashboards from `deploy/grafana/`. See [deploy/README.md](../deploy/README.md).
 

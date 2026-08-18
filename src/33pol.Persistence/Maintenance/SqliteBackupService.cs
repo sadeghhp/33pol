@@ -48,21 +48,31 @@ public sealed class SqliteBackupService : ISqliteBackupService
                 UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         }
 
+        // Second-resolution timestamp plus a random suffix: two calls in the same second (retry,
+        // double-click, overlapping cron) must not collide, because VACUUM INTO refuses to overwrite
+        // an existing file. Ordering by name still sorts by time for pruning.
         var timestamp = DateTimeOffset.UtcNow.ToString("yyyyMMdd'T'HHmmss'Z'");
-        var destination = Path.Combine(backupDir, $"gateway-{timestamp}.db");
+        var suffix = Guid.NewGuid().ToString("N")[..8];
+        var destination = Path.Combine(backupDir, $"gateway-{timestamp}-{suffix}.db");
+        if (File.Exists(destination))
+        {
+            File.Delete(destination);
+        }
 
         // Server-generated path, but quote-escape defensively; VACUUM INTO takes a string literal, not a parameter.
         var literal = destination.Replace("'", "''");
 
-        if (connection.State != System.Data.ConnectionState.Open)
+        // Opened through EF (fires the connection interceptor) and closed again afterwards.
+        await _dbContext.Database.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        try
         {
-            await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
-        }
-
-        await using (var vacuum = connection.CreateCommand())
-        {
+            await using var vacuum = connection.CreateCommand();
             vacuum.CommandText = $"VACUUM INTO '{literal}'";
             await vacuum.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            await _dbContext.Database.CloseConnectionAsync().ConfigureAwait(false);
         }
 
         var integrity = await CheckIntegrityAsync(destination, cancellationToken).ConfigureAwait(false);
@@ -123,7 +133,12 @@ public sealed class SqliteBackupService : ISqliteBackupService
 
     private static async Task<string> CheckIntegrityAsync(string path, CancellationToken cancellationToken)
     {
-        await using var checkConnection = new SqliteConnection($"Data Source={path};Mode=ReadOnly");
+        var connectionString = new SqliteConnectionStringBuilder
+        {
+            DataSource = path,
+            Mode = SqliteOpenMode.ReadOnly,
+        }.ToString();
+        await using var checkConnection = new SqliteConnection(connectionString);
         await checkConnection.OpenAsync(cancellationToken).ConfigureAwait(false);
         await using var command = checkConnection.CreateCommand();
         command.CommandText = "PRAGMA integrity_check";

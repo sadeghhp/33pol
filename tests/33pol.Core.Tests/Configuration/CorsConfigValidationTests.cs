@@ -54,6 +54,27 @@ public sealed class CorsConfigValidationTests
     }
 
     [Fact]
+    public void TryValidate_WildcardWithPort_IsAccepted()
+    {
+        CorsConfigValidation.TryValidate(["https://*.example.com:8443"], out var error, out var normalized)
+            .Should()
+            .BeTrue(error);
+        normalized.Should().Equal("https://*.example.com:8443");
+    }
+
+    [Theory]
+    [InlineData("https://*.example.com:")]
+    [InlineData("https://*.example.com:abc")]
+    [InlineData("https://*.example.com:0")]
+    [InlineData("https://*.example.com:70000")]
+    [InlineData("https://*.example.com:1:2")]
+    public void TryValidate_WildcardWithInvalidPort_ReturnsFalse(string pattern)
+    {
+        CorsConfigValidation.TryValidate([pattern], out var error, out _).Should().BeFalse();
+        error.Should().Contain("port");
+    }
+
+    [Fact]
     public void TryValidate_InvalidWildcardPattern_ReturnsFalse()
     {
         CorsConfigValidation.TryValidate(["https://*"], out var error, out _)

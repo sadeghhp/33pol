@@ -58,4 +58,13 @@ public interface IGatewayMetricsCollector
     /// from "the job stopped running".
     /// </remarks>
     void RecordBillingReconciliation(int discrepancyCount, double absoluteCostDrift);
+
+    /// <summary>
+    /// Usage events the batch writer gave up on (retries exhausted, or the buffer cap was hit during
+    /// an outage). Each one is a request that is NOT in the billing ledger; the Observability
+    /// implementation counts it on <c>gateway_usage_writer_dropped_total</c>.
+    /// </summary>
+    void RecordUsageEventsDropped(int count)
+    {
+    }
 }

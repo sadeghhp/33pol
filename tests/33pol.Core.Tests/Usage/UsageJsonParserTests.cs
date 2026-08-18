@@ -128,13 +128,59 @@ public sealed class UsageJsonParserTests
         parsed.TotalTokens.Should().Be(42);
     }
 
+    /// <summary>
+    /// When exactly one side and the total are reported, the other side is known exactly. Billing it
+    /// as zero under-charged some OpenAI-compatible servers that omit a zero-valued field or report
+    /// only prompt/total.
+    /// </summary>
     [Fact]
-    public void TryParseUsage_PromptAndTotalTokens_PrefersPromptTokens()
+    public void TryParseUsage_PromptAndTotalTokens_DerivesCompletionFromTotal()
     {
         var json = """{"usage":{"prompt_tokens":3,"total_tokens":99}}"""u8.ToArray();
         UsageJsonParser.TryParseUsage(json, out var prompt, out var completion).Should().BeTrue();
         prompt.Should().Be(3);
-        completion.Should().Be(0);
+        completion.Should().Be(96);
+    }
+
+    [Fact]
+    public void Parse_CompletionAndTotalTokens_DerivesPromptFromTotal()
+    {
+        var parsed = UsageJsonParser.Parse("""{"usage":{"completion_tokens":10,"total_tokens":25}}"""u8.ToArray());
+
+        parsed.Kind.Should().Be(UsageParseKind.Split);
+        parsed.PromptTokens.Should().Be(15);
+        parsed.CompletionTokens.Should().Be(10);
+    }
+
+    /// <summary>An explicit split always wins; a disagreeing total does not rewrite either side.</summary>
+    [Fact]
+    public void Parse_BothSidesAndTotal_IgnoresTheTotal()
+    {
+        var parsed = UsageJsonParser.Parse("""{"usage":{"prompt_tokens":3,"completion_tokens":4,"total_tokens":99}}"""u8.ToArray());
+
+        parsed.PromptTokens.Should().Be(3);
+        parsed.CompletionTokens.Should().Be(4);
+    }
+
+    /// <summary>A total smaller than the reported side is inconsistent; nothing is derived from it.</summary>
+    [Fact]
+    public void Parse_OneSideWithSmallerTotal_DoesNotDeriveANegativeOtherSide()
+    {
+        var parsed = UsageJsonParser.Parse("""{"usage":{"prompt_tokens":30,"total_tokens":20}}"""u8.ToArray());
+
+        parsed.Kind.Should().Be(UsageParseKind.Split);
+        parsed.PromptTokens.Should().Be(30);
+        parsed.CompletionTokens.Should().Be(0);
+    }
+
+    [Fact]
+    public void Parse_OneSideZeroWithTotal_DerivesTheOtherSide()
+    {
+        var parsed = UsageJsonParser.Parse("""{"usage":{"prompt_tokens":0,"total_tokens":7}}"""u8.ToArray());
+
+        parsed.Kind.Should().Be(UsageParseKind.Split);
+        parsed.PromptTokens.Should().Be(0);
+        parsed.CompletionTokens.Should().Be(7);
     }
 
     [Fact]

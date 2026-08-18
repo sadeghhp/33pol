@@ -44,14 +44,17 @@ public sealed class ChannelUsageRecorder : IUsageRecorder, IHostedService
 
     public bool Enqueue(UsageEvent usageEvent)
     {
-        _metricsCollector.RecordTokenUsage(
-            usageEvent.ModelId,
-            usageEvent.PromptTokens,
-            usageEvent.CompletionTokens);
-
         if (_channel.Writer.TryWrite(usageEvent))
         {
             GatewayMeters.UsageWriterQueueDepth.Add(1);
+
+            // Only after the event is accepted: a dropped event is never billed, so counting its
+            // tokens in gateway_tokens_total would make Prometheus diverge from usage exactly
+            // during overload.
+            _metricsCollector.RecordTokenUsage(
+                usageEvent.ModelId,
+                usageEvent.PromptTokens,
+                usageEvent.CompletionTokens);
             return true;
         }
 

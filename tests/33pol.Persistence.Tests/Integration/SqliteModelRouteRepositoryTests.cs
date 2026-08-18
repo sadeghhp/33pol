@@ -1,6 +1,8 @@
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Pol33.Core.Models;
+using Pol33.Persistence;
 using Pol33.Persistence.Repositories;
 using Pol33.Persistence.Tests.Infrastructure;
 
@@ -99,6 +101,83 @@ public sealed class SqliteModelRouteRepositoryTests
         version.Should().Be(3);
     }
 
+    /// <summary>
+    /// The version check only protects routes if the read and the rewrite cannot interleave. With a
+    /// deferred transaction two admins both passed the check and the loser died with
+    /// SQLITE_BUSY_SNAPSHOT (a 500), not the documented conflict. Under BEGIN IMMEDIATE the second
+    /// writer waits for the first and then sees the bumped version.
+    /// </summary>
+    [Fact]
+    public async Task ReplaceAll_ConcurrentWriters_SurfaceOnlyVersionConflicts()
+    {
+        var connectionString = NewSharedInMemoryConnectionString();
+        await using var keepAlive = await MigratedKeepAliveAsync(connectionString);
+
+        const int writers = 8;
+        var conflicts = 0;
+        var successes = 0;
+
+        await Task.WhenAll(Enumerable.Range(0, writers).Select(async i =>
+        {
+            await using var db = PersistenceTestDbContextFactory.CreateSqlite(connectionString);
+            var repository = new ModelRouteRepository(db);
+            var seen = await repository.GetVersionAsync();
+            try
+            {
+                await repository.ReplaceAllAsync([Model($"m-{i}")], expectedVersion: seen);
+                Interlocked.Increment(ref successes);
+            }
+            catch (ModelRouteVersionConflictException)
+            {
+                Interlocked.Increment(ref conflicts);
+            }
+        }));
+
+        (successes + conflicts).Should().Be(writers, "no writer may fail with anything but a version conflict");
+        successes.Should().BeGreaterThan(0);
+
+        await using var verify = PersistenceTestDbContextFactory.CreateSqlite(connectionString);
+        (await new ModelRouteRepository(verify).GetVersionAsync()).Should().Be(successes);
+    }
+
+    [Fact]
+    public async Task ReplaceAll_TakesTheWriteLockUpFront()
+    {
+        var connectionString = NewSharedInMemoryConnectionString();
+        await using var keepAlive = await MigratedKeepAliveAsync(connectionString);
+
+        var interceptor = new TransactionRecordingInterceptor();
+        var options = new DbContextOptionsBuilder<GatewayDbContext>()
+            .UseSqlite(connectionString)
+            .AddInterceptors(interceptor)
+            .Options;
+
+        await using var db = new GatewayDbContext(options);
+        await new ModelRouteRepository(db).ReplaceAllAsync([Model("a")]);
+
+        interceptor.StartedIsolationLevels
+            .Should().ContainSingle()
+            .Which.Should().Be(System.Data.IsolationLevel.Serializable);
+    }
+
+    /// <summary>
+    /// The registry resolves ids case-insensitively, so two routes that differ only in case would
+    /// leave "which one wins" to insertion order. The NOCASE unique index rejects the pair.
+    /// </summary>
+    [Fact]
+    public async Task ReplaceAll_WithIdsDifferingOnlyInCase_IsRejectedByTheIndex()
+    {
+        var connectionString = NewSharedInMemoryConnectionString();
+        await using var keepAlive = await MigratedKeepAliveAsync(connectionString);
+
+        await using var db = PersistenceTestDbContextFactory.CreateSqlite(connectionString);
+        var repository = new ModelRouteRepository(db);
+
+        var act = () => repository.ReplaceAllAsync([Model("GPT-4o"), Model("gpt-4o")]);
+
+        await act.Should().ThrowAsync<DbUpdateException>();
+    }
+
     [Fact]
     public async Task ReplaceAll_WithEmptySet_ClearsTheTable()
     {
@@ -112,5 +191,37 @@ public sealed class SqliteModelRouteRepositoryTests
         await repository.ReplaceAllAsync([], version);
 
         (await repository.ListAsync()).Should().BeEmpty();
+    }
+
+    /// <summary>Records the isolation level of every transaction EF starts or is handed on the context.</summary>
+    private sealed class TransactionRecordingInterceptor : DbTransactionInterceptor
+    {
+        private readonly List<System.Data.IsolationLevel> _levels = [];
+
+        public IReadOnlyList<System.Data.IsolationLevel> StartedIsolationLevels => _levels;
+
+        public override ValueTask<System.Data.Common.DbTransaction> TransactionStartedAsync(
+            System.Data.Common.DbConnection connection,
+            TransactionEndEventData eventData,
+            System.Data.Common.DbTransaction result,
+            CancellationToken cancellationToken = default)
+        {
+            _levels.Add(result.IsolationLevel);
+            return base.TransactionStartedAsync(connection, eventData, result, cancellationToken);
+        }
+
+        public override ValueTask<System.Data.Common.DbTransaction> TransactionUsedAsync(
+            System.Data.Common.DbConnection connection,
+            TransactionEventData eventData,
+            System.Data.Common.DbTransaction result,
+            CancellationToken cancellationToken = default)
+        {
+            if (result is not null)
+            {
+                _levels.Add(result.IsolationLevel);
+            }
+
+            return base.TransactionUsedAsync(connection, eventData, result!, cancellationToken);
+        }
     }
 }

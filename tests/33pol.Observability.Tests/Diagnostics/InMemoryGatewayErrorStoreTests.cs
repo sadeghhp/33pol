@@ -74,6 +74,30 @@ public sealed class InMemoryGatewayErrorStoreTests
         groups.Items[0].Count.Should().Be(1);
     }
 
+    /// <summary>
+    /// The dedupe map used to be scanned in full on every record once it grew past 2x capacity, and
+    /// during a burst of distinct requests nothing was ever stale, so it grew for the whole window.
+    /// It is now hard-capped by insertion order: memory stays proportional to capacity and a
+    /// repeat inside the window is still recognised for the most recent requests.
+    /// </summary>
+    [Fact]
+    public async Task Record_UnderADistinctRequestStorm_KeepsDedupeMapBoundedAndStillDedupesRecent()
+    {
+        var store = CreateStore(o => o.HotBufferCapacity = 20);
+
+        for (var i = 0; i < 5_000; i++)
+        {
+            store.Record(Error(requestId: $"req_{i}"));
+        }
+
+        store.RecentlySeenCount.Should().BeLessThanOrEqualTo(store.Capacity * 2);
+
+        // The newest request is still inside the cap: a repeat is dropped.
+        store.Record(Error(requestId: "req_4999"));
+        var groups = await store.QueryGroupsAsync(new GatewayErrorQuery());
+        groups.Items[0].Count.Should().Be(5_000);
+    }
+
     [Fact]
     public async Task Record_DropsALogSourcedCopyOfAFailureTheProxyAlreadyReported()
     {

@@ -34,13 +34,11 @@ jobs:
         run: bash build/check-coverage.sh TestResults
 
       - name: Validate Prometheus alert rules
+        # promtool is not preinstalled on ubuntu-latest; run it from the same Prometheus image the
+        # compose stack uses so the rules are actually validated (no silent skip).
         run: |
-          if command -v promtool >/dev/null 2>&1; then
-            promtool check rules deploy/prometheus/alerts/33pol.yml
-            promtool check rules deploy/prometheus/alerts/33pol-writer.yml
-          else
-            echo "promtool not installed; skipping alert rule validation"
-          fi
+          docker run --rm -v "${PWD}/deploy/prometheus/alerts:/alerts:ro" --entrypoint promtool \
+            prom/prometheus:v2.55.1 check rules /alerts/33pol.yml /alerts/33pol-writer.yml
 
       - name: Dependency vulnerability audit
         run: |

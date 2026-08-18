@@ -49,6 +49,47 @@ public sealed class AdminKeyEndpointTests
         listJson.RootElement[0].TryGetProperty("secret", out _).Should().BeFalse();
     }
 
+    /// <summary>
+    /// A past expiry is the caller's mistake. It used to escape the handler as an ArgumentException,
+    /// be recorded as a gateway error, and come back as a 502 upstream_error.
+    /// </summary>
+    [Fact]
+    public async Task PostKey_WithPastExpiry_Returns400WithMessage()
+    {
+        await using var factory = GatewayWebApplicationFactory.CreateWithInMemoryDatabase(AdminKey);
+        await GatewayWebApplicationFactory.EnsureAuthReadyAsync(factory);
+        var client = CreateAuthenticatedClient(factory, AdminKey);
+
+        var response = await client.PostAsJsonAsync(
+            "/admin/api/keys",
+            new { role = "Inference", expiresAt = DateTimeOffset.UtcNow.AddDays(-1) });
+
+        var body = await response.Content.ReadAsStringAsync();
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest, because: body);
+        body.Should().Contain("expiresAt must be in the future");
+    }
+
+    [Fact]
+    public async Task PatchKey_WithPastExpiry_Returns400WithMessage()
+    {
+        await using var factory = GatewayWebApplicationFactory.CreateWithInMemoryDatabase(AdminKey);
+        await GatewayWebApplicationFactory.EnsureAuthReadyAsync(factory);
+        var client = CreateAuthenticatedClient(factory, AdminKey);
+
+        var created = await client.PostAsJsonAsync("/admin/api/keys", new { role = "Inference" });
+        created.StatusCode.Should().Be(HttpStatusCode.Created);
+        using var createdJson = JsonDocument.Parse(await created.Content.ReadAsStringAsync());
+        var id = createdJson.RootElement.GetProperty("id").GetGuid();
+
+        var response = await client.PatchAsJsonAsync(
+            $"/admin/api/keys/{id}",
+            new { updateExpiry = true, expiresAt = DateTimeOffset.UtcNow.AddDays(-1) });
+
+        var body = await response.Content.ReadAsStringAsync();
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest, because: body);
+        body.Should().Contain("expiresAt must be in the future");
+    }
+
     [Fact]
     public async Task RevokeKey_SubsequentInference_Returns401()
     {

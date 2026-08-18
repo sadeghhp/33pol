@@ -46,6 +46,39 @@ public sealed class ProviderModelsPostEndpointTests
     }
 
     [Fact]
+    public async Task PostLmStudioModels_DiscoveryNotSupported_Returns400WithGuidance()
+    {
+        const string adminKey = "sk-33pol-post-lmstudio-admin";
+        using var factory = CreateFactory(adminKey);
+        using var client = await CreateAdminClientAsync(factory, adminKey);
+
+        var response = await client.PostAsJsonAsync(
+            "/admin/api/providers/lmstudio/models",
+            new { });
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        var json = await response.Content.ReadAsStringAsync();
+        json.Should().Contain("discovery is not available");
+        json.Should().NotContain("blocked");
+    }
+
+    [Fact]
+    public async Task GetProviders_ExposesSupportsDiscoveryFlag()
+    {
+        const string adminKey = "sk-33pol-get-providers-flag-admin";
+        using var factory = CreateFactory(adminKey);
+        using var client = await CreateAdminClientAsync(factory, adminKey);
+
+        var response = await client.GetAsync("/admin/api/providers/catalog");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var json = await response.Content.ReadAsStringAsync();
+        json.Should().Contain("\"id\":\"lmstudio\"");
+        json.Should().Contain("\"supportsDiscovery\":false");
+        json.Should().Contain("\"supportsDiscovery\":true");
+    }
+
+    [Fact]
     public async Task PostCustomModels_WithoutEnvVar_ReturnsList()
     {
         const string adminKey = "sk-33pol-post-custom-noauth-admin";
@@ -67,7 +100,7 @@ public sealed class ProviderModelsPostEndpointTests
         const string adminKey = "sk-33pol-post-custom-401-admin";
         using var factory = CreateFactory(
             adminKey,
-            settings => settings["CUSTOM_PROVIDER_KEY"] = "custom_token",
+            settings => settings["CUSTOM_PROVIDER_API_KEY"] = "custom_token",
             services => services.AddSingleton(
                 new OpenAiCompatibleProviderModelsClient(
                     new HttpClient(new UnauthorizedModelsHandler()))));
@@ -78,7 +111,7 @@ public sealed class ProviderModelsPostEndpointTests
             new
             {
                 modelsUrl = "https://api.example.com/v1/models",
-                envVar = "CUSTOM_PROVIDER_KEY",
+                envVar = "CUSTOM_PROVIDER_API_KEY",
             });
 
         response.StatusCode.Should().Be(HttpStatusCode.BadGateway);
@@ -92,7 +125,7 @@ public sealed class ProviderModelsPostEndpointTests
         const string adminKey = "sk-33pol-post-custom-admin";
         using var factory = CreateFactory(
             adminKey,
-            settings => settings["CUSTOM_PROVIDER_KEY"] = "custom_token");
+            settings => settings["CUSTOM_PROVIDER_API_KEY"] = "custom_token");
         using var client = await CreateAdminClientAsync(factory, adminKey);
 
         var response = await client.PostAsJsonAsync(
@@ -100,7 +133,7 @@ public sealed class ProviderModelsPostEndpointTests
             new
             {
                 modelsUrl = "https://api.example.com/v1/models",
-                envVar = "CUSTOM_PROVIDER_KEY"
+                envVar = "CUSTOM_PROVIDER_API_KEY"
             });
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);

@@ -72,6 +72,22 @@ public static class CorsOriginMatcher
             return false;
         }
 
+        // "*.example.com:8443" — the suffix is compared against the host, the port against the
+        // origin's port. Uri.Host never carries the port, so without splitting it the pattern was
+        // accepted by validation and then silently matched nothing.
+        var portIndex = domainSuffix.IndexOf(':', StringComparison.Ordinal);
+        if (portIndex >= 0)
+        {
+            if (!int.TryParse(domainSuffix[(portIndex + 1)..], System.Globalization.NumberStyles.None,
+                    System.Globalization.CultureInfo.InvariantCulture, out var patternPort) ||
+                originUri.Port != patternPort)
+            {
+                return false;
+            }
+
+            domainSuffix = domainSuffix[..portIndex];
+        }
+
         var host = originUri.Host;
         if (!host.EndsWith('.' + domainSuffix, StringComparison.OrdinalIgnoreCase))
         {

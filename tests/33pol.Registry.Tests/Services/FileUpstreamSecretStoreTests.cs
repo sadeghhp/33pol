@@ -129,6 +129,85 @@ public sealed class FileUpstreamSecretStoreTests
         }
     }
 
+    /// <summary>
+    /// System.Text.Json rebuilds the secrets dictionary with the ordinal comparer, so after a restart
+    /// a credential stored as <c>gpt-4o</c> was invisible to <c>GPT-4o</c>, and case-variant keys
+    /// could pile up. The store rewraps the map case-insensitively on load.
+    /// </summary>
+    [Fact]
+    public async Task Reload_KeepsCaseInsensitiveLookupAndCollapsesCaseVariants()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"33pol-secrets-{Guid.NewGuid():N}.enc");
+        try
+        {
+            await CreateStore(path).PutAsync("gpt-4o", "sk-first");
+
+            // Simulate a file written by an older build with two case variants of the same id.
+            var text = File.ReadAllText(path);
+            using var doc = System.Text.Json.JsonDocument.Parse(text);
+            var cipher = doc.RootElement.GetProperty("Secrets").GetProperty("gpt-4o").GetString();
+            var payload = new { Version = 1, Secrets = new Dictionary<string, string> { ["gpt-4o"] = cipher!, ["GPT-4O"] = cipher! } };
+            File.WriteAllText(path, System.Text.Json.JsonSerializer.Serialize(payload));
+
+            var reloaded = CreateStore(path);
+
+            reloaded.TryGet("GPT-4o", out var secret).Should().BeTrue();
+            secret.Should().Be("sk-first");
+            (await reloaded.ExistsAsync("Gpt-4O")).Should().BeTrue();
+            reloaded.VerifyStoredSecrets().Should().Be((1, 0), "case variants collapse to a single entry");
+
+            await reloaded.DeleteAsync("GPT-4O");
+            reloaded.TryGet("gpt-4o", out _).Should().BeFalse();
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task ConcurrentPuts_AllLandOnDisk()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"33pol-secrets-{Guid.NewGuid():N}.enc");
+        try
+        {
+            var store = CreateStore(path);
+            await Task.WhenAll(Enumerable.Range(0, 20).Select(i => store.PutAsync($"model-{i}", $"sk-{i}")));
+
+            var reloaded = CreateStore(path);
+            for (var i = 0; i < 20; i++)
+            {
+                reloaded.TryGet($"model-{i}", out var secret).Should().BeTrue($"model-{i} must survive concurrent persistence");
+                secret.Should().Be($"sk-{i}");
+            }
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task Persist_CreatesTheFileOwnerReadWriteOnly()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var path = Path.Combine(Path.GetTempPath(), $"33pol-secrets-{Guid.NewGuid():N}.enc");
+        try
+        {
+            await CreateStore(path).PutAsync("model-a", "sk-test");
+
+            File.GetUnixFileMode(path).Should().Be(UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
     private static FileUpstreamSecretStore CreateStore(
         string secretsPath,
         string? pepper = "test-pepper",

@@ -23,8 +23,11 @@ internal sealed class BillingEventEntityConfiguration : IEntityTypeConfiguration
             .HasMaxLength(256)
             .IsRequired();
 
+        // NOCASE so cost-centre filters are case-insensitive without wrapping the column in
+        // lower(), which would defeat the (CostCenter, RecordedAt) index.
         builder.Property(e => e.CostCenter)
-            .HasMaxLength(128);
+            .HasMaxLength(128)
+            .UseCollation("NOCASE");
 
         builder.Property(e => e.InputCost)
             .HasPrecision(18, 6);

@@ -45,6 +45,21 @@ public sealed class FileAuditLoggerTests : IDisposable
     }
 
     [Fact]
+    public void LogAdminAction_CreatesTheFileOwnerReadWriteOnly()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var sut = Create();
+
+        sut.LogAdminAction("config.reload", new AuditLogEntry(null, null, new { Status = "ok" }));
+
+        File.GetUnixFileMode(sut.AuditLogPath).Should().Be(UnixFileMode.UserRead | UnixFileMode.UserWrite);
+    }
+
+    [Fact]
     public void LogAdminAction_CreatesTheDirectoryWhenMissing()
     {
         using var sut = Create(fileName: Path.Combine("nested", "audit-log.jsonl"));

@@ -101,7 +101,15 @@ public static partial class RateLimitConfigValidation
             return false;
         }
 
-        var trimmed = slug.Trim();
+        // Callers persist the key exactly as received, so validating a trimmed copy let " pro" through
+        // and it then never matched a tenant whose plan is "pro".
+        if (slug.Length != slug.Trim().Length)
+        {
+            error = $"plan slug '{slug}' must not have leading or trailing whitespace.";
+            return false;
+        }
+
+        var trimmed = slug;
         if (trimmed.Length > MaxPlanSlugLength)
         {
             error = $"plan slug '{trimmed}' exceeds {MaxPlanSlugLength} characters.";

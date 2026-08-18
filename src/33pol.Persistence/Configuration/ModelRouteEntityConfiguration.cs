@@ -12,8 +12,11 @@ internal sealed class ModelRouteEntityConfiguration : IEntityTypeConfiguration<M
 
         builder.HasKey(m => m.Id);
 
+        // NOCASE: the registry resolves model ids case-insensitively, so "GPT-4o" and "gpt-4o"
+        // must not be two routes (same fix as RateCardEntity.ModelId).
         builder.Property(m => m.ModelId)
             .HasMaxLength(256)
+            .UseCollation("NOCASE")
             .IsRequired();
 
         builder.HasIndex(m => m.ModelId).IsUnique();

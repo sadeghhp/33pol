@@ -4,6 +4,7 @@ using NSubstitute;
 using Pol33.Core.Abstractions;
 using Pol33.Core.Models;
 using Pol33.Proxy.Middleware;
+using Pol33.Proxy.Parsing;
 
 namespace Pol33.Proxy.Tests.Middleware;
 
@@ -25,6 +26,7 @@ public sealed class PublicModelDetectionMiddlewareTests
                 };
                 return true;
             });
+        registry.GetAllModels().Returns([new ModelConfig { Id = "canonical", Url = "http://backend", PublicAccess = true }]);
 
         var nextCalled = false;
         var middleware = new PublicModelDetectionMiddleware(
@@ -62,6 +64,40 @@ public sealed class PublicModelDetectionMiddlewareTests
         await middleware.InvokeAsync(context);
 
         context.Items.ContainsKey(PublicModelAccessKeys.IsPublicInference).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task InvokeAsync_NoPublicModelsRegistered_DoesNotReadBodyOrCacheParse()
+    {
+        var registry = Substitute.For<IModelRegistry>();
+        registry.GetAllModels().Returns([new ModelConfig { Id = "m1", Url = "http://backend" }]);
+
+        var middleware = new PublicModelDetectionMiddleware(_ => Task.CompletedTask, registry);
+        var context = CreatePostContext("""{"model":"m1"}""");
+        var body = new ThrowOnReadStream();
+        context.Request.Body = body;
+
+        await middleware.InvokeAsync(context);
+
+        registry.DidNotReceive().TryGetModel(Arg.Any<string>(), out Arg.Any<ModelConfig?>());
+        InferenceRequestParseCache.TryGet(context, out _).Should().BeFalse();
+        context.Items.ContainsKey(PublicModelAccessKeys.CanonicalModelId).Should().BeFalse();
+    }
+
+    private sealed class ThrowOnReadStream : Stream
+    {
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => 0; set => throw new NotSupportedException(); }
+        public override void Flush() { }
+        public override int Read(byte[] buffer, int offset, int count) => throw new InvalidOperationException("body must not be read");
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) => throw new InvalidOperationException("body must not be read");
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default) => throw new InvalidOperationException("body must not be read");
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 
     [Fact]

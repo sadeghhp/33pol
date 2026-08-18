@@ -63,7 +63,8 @@ Helm:
 ```bash
 helm upgrade --install 33pol deploy/helm/33pol \
   --set image.repository=ghcr.io/<owner>/33pol \
-  --set image.tag=2.0.0
+  --set image.tag=2.0.0 \
+  --set gateway.existingSecret=33pol-gateway   # Secret with keyPepper + adminApiKey (required)
 ```
 
 ## Rollback

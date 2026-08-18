@@ -29,7 +29,8 @@ public sealed class BillingEventRepository(GatewayDbContext dbContext) : IBillin
             return false;
         }
 
-        dbContext.BillingEvents.Add(BillingEntityMapper.ToEntity(record));
+        var entity = BillingEntityMapper.ToEntity(record);
+        dbContext.BillingEvents.Add(entity);
 
         try
         {
@@ -38,6 +39,10 @@ public sealed class BillingEventRepository(GatewayDbContext dbContext) : IBillin
         }
         catch (DbUpdateException ex) when (IsDuplicateRequestId(ex))
         {
+            // EF leaves the failed row in Added state; detach it so the next SaveChanges on this
+            // scoped context (rollups, last-used touches, the rest of a batch) does not retry the
+            // duplicate INSERT and fail again.
+            dbContext.Entry(entity).State = EntityState.Detached;
             return false;
         }
     }
@@ -173,7 +178,7 @@ public sealed class BillingEventRepository(GatewayDbContext dbContext) : IBillin
         return await BucketAsync(rows, cancellationToken).ConfigureAwait(false);
     }
 
-    private static IQueryable<Entities.BillingEventEntity> ApplyFilter(
+    private IQueryable<Entities.BillingEventEntity> ApplyFilter(
         IQueryable<Entities.BillingEventEntity> dbQuery,
         BillingEventQuery query)
     {
@@ -201,9 +206,15 @@ public sealed class BillingEventRepository(GatewayDbContext dbContext) : IBillin
         else if (!string.IsNullOrWhiteSpace(query.CostCenter))
         {
             // Case-insensitive: cost centres are free text typed by operators, and "Engineering"
-            // vs "engineering" silently returning nothing was a recurring support question.
-            var costCenter = query.CostCenter.Trim().ToLowerInvariant();
-            dbQuery = dbQuery.Where(e => e.CostCenter != null && e.CostCenter.ToLower() == costCenter);
+            // vs "engineering" silently returning nothing was a recurring support question. The
+            // column carries the NOCASE collation, so a plain equality is case-insensitive on SQLite
+            // and, unlike lower(CostCenter), still uses the (CostCenter, RecordedAt) index. On the
+            // InMemory provider (unit tests) collations are ignored, so the trimmed value is matched
+            // there with an explicit case-insensitive comparison for parity.
+            var costCenter = query.CostCenter.Trim();
+            dbQuery = dbContext.Database.IsRelational()
+                ? dbQuery.Where(e => e.CostCenter == costCenter)
+                : dbQuery.Where(e => e.CostCenter != null && e.CostCenter.ToLower() == costCenter.ToLower());
         }
 
         if (query.FromDate is not null)

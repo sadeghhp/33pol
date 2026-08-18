@@ -23,6 +23,7 @@ document.addEventListener('alpine:init', () => {
     toasts: [],
     _toastId: 0,
     _connectionTimer: null,
+    _focusHandler: null,
     _loadingDepth: {},
 
     clearMessages() {
@@ -168,7 +169,9 @@ document.addEventListener('alpine:init', () => {
       a.href = objectUrl;
       a.download = this.filenameFromDisposition(res.headers.get('Content-Disposition')) || fallbackFilename;
       a.click();
-      URL.revokeObjectURL(objectUrl);
+      // Revoke on the next tick: revoking synchronously after a programmatic click can abort the
+      // download in Safari / older Firefox before the navigation has started.
+      setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
       return res;
     },
 
@@ -192,40 +195,77 @@ document.addEventListener('alpine:init', () => {
       return k.slice(0, 4) + '…' + k.slice(-4);
     },
 
-    async verifyConnection(editModelUrl) {
-      if (!this.apiKey) {
+    /**
+     * Probes the control plane with the current key, or with `candidateKey` when given.
+     *
+     * Current key: only a 401 marks the connection `fail` (which halts polling and the live stream
+     * until the key is changed or the watchdog re-checks); any other failure — a network blip, a
+     * 5xx, a proxy hiccup — is `degraded` and polling keeps running so the page recovers on its own.
+     *
+     * Candidate key: the probe runs with the candidate in the header override, and the key is
+     * persisted ONLY when the probe succeeds, so a mistyped key never replaces a working one in
+     * localStorage. On failure the previous connection state is restored and the error is rethrown
+     * for the caller (saveKey) to report.
+     */
+    async verifyConnection(editModelUrl, candidateKey) {
+      const candidate = (candidateKey || '').trim();
+      if (!candidate && !this.apiKey) {
         this.connectionStatus = '';
         this.connectionDegraded = false;
         return false;
       }
+      const prevStatus = this.connectionStatus;
+      const prevDegraded = this.connectionDegraded;
       try {
-        await this.apiJson('/admin/api/config/status', {}, editModelUrl);
+        const options = candidate ? { headers: { 'X-API-Key': candidate } } : {};
+        await this.apiJson('/admin/api/config/status', options, editModelUrl);
+        if (candidate) this.persistApiKey(candidate);
         this.connectionStatus = 'ok';
         this.connectionDegraded = false;
         return true;
-      } catch {
-        this.connectionStatus = 'fail';
-        this.connectionDegraded = true;
-        if (this.errorTitle === 'Authentication failed') this.clearMessages();
+      } catch (e) {
+        if (candidate) {
+          // classifyAndThrow may have flagged a 401 for the candidate; that says nothing about the
+          // key that is still in use, so put the previous state back and let the caller report.
+          this.connectionStatus = prevStatus;
+          this.connectionDegraded = prevDegraded;
+          throw e;
+        }
+        if (e && e.title === 'Authentication failed') {
+          this.connectionStatus = 'fail';
+          this.connectionDegraded = true;
+          // The dedicated "key rejected" banner takes over from the generic error alert.
+          if (this.errorTitle === 'Authentication failed') this.clearMessages();
+        } else {
+          // Transient: keep the last known status, flag degraded, keep polling.
+          this.connectionDegraded = true;
+        }
         return false;
       }
     },
 
     startConnectionWatch(editModelUrl) {
-      if (this._connectionTimer) clearInterval(this._connectionTimer);
+      this.stopConnectionWatch();
       this._connectionTimer = setInterval(() => {
         if (document.hidden || !this.apiKey) return;
-        this.verifyConnection(editModelUrl);
+        this.verifyConnection(editModelUrl).catch(() => {});
       }, 5 * 60 * 1000);
-      window.addEventListener('focus', () => {
-        if (this.apiKey) this.verifyConnection(editModelUrl);
-      });
+      // Exactly one focus listener, tracked so stopConnectionWatch can remove it (each Connect /
+      // Change-key used to add another one that fired for the rest of the session).
+      this._focusHandler = () => {
+        if (this.apiKey) this.verifyConnection(editModelUrl).catch(() => {});
+      };
+      window.addEventListener('focus', this._focusHandler);
     },
 
     stopConnectionWatch() {
       if (this._connectionTimer) {
         clearInterval(this._connectionTimer);
         this._connectionTimer = null;
+      }
+      if (this._focusHandler) {
+        window.removeEventListener('focus', this._focusHandler);
+        this._focusHandler = null;
       }
     }
   });

@@ -48,8 +48,40 @@ serviceMonitor:
   enabled: false
   interval: 30s
   path: /metrics
+  # The ServiceMonitor sends the scrape token from gateway.existingSecret / gateway.metrics.scrapeTokenSecret
+  # as a Bearer credential unless gateway.metrics.allowAnonymous is true (the Secret must live in the
+  # ServiceMonitor's namespace).
 
 gateway:
+  # --- Required secrets ------------------------------------------------------------------------
+  # The image runs as ASP.NET Core Production. GatewayBootstrapOptionsValidator refuses to start when
+  # the key pepper is empty or weak, so the chart REQUIRES either an existing Secret or inline values
+  # (it fails at render time otherwise). Prefer existingSecret; never commit inline secrets.
+  #
+  # existingSecret must carry these keys:
+  #   keyPepper    -> Gateway__Security__KeyPepper AND Gateway__Bootstrap__KeyPepper (must be identical;
+  #                   >= 32 chars, e.g. `openssl rand -base64 48`). Rotating it invalidates every stored
+  #                   API key hash — keep it stable for the lifetime of the database.
+  #   adminApiKey  -> Gateway__Bootstrap__AdminApiKey, seeded on FIRST boot only (the seeder is a no-op
+  #                   once tenants exist). Use it to sign in to /admin and mint real keys.
+  #   metricsScrapeToken (optional) -> Gateway__Metrics__ScrapeToken, see gateway.metrics below.
+  #
+  #   kubectl create secret generic 33pol-gateway   #     --from-literal=keyPepper="$(openssl rand -base64 48)"   #     --from-literal=adminApiKey="sk-33pol-$(openssl rand -hex 24)"
+  existingSecret: ""
+  # Inline fallback for dev/test clusters only (values end up in the release manifest).
+  keyPepper: ""
+  adminApiKey: ""
+  # /metrics is protected: callers need an Operator/Admin key or the scrape token
+  # (`Authorization: Bearer <token>`), unless allowAnonymous is true. When existingSecret carries a
+  # metricsScrapeToken key it is wired automatically (set scrapeToken to use an inline value instead).
+  metrics:
+    allowAnonymous: false
+    scrapeToken: ""
+    # Set when existingSecret does NOT contain a metricsScrapeToken key but you still want to reference
+    # a different secret/key for the scrape token.
+    scrapeTokenSecret: ""
+    scrapeTokenSecretKey: metricsScrapeToken
+  # -------------------------------------------------------------------------------------------
   modelsConfigPath: /app/config/models.json
   operatorConsole:
     enabled: false
@@ -94,5 +126,31 @@ persistence:
 probes:
   livenessPath: /health/live
   readinessPath: /health/ready
+  # startupProbe gives the first boot (EF migrations, model catalog load) up to
+  # failureThreshold * periodSeconds before liveness kicks in.
+  startup:
+    enabled: true
+    failureThreshold: 30
+    periodSeconds: 5
 
 terminationGracePeriodSeconds: 60
+
+# Hardened by default so the pod is admitted under the "restricted" Pod Security Standard. The image
+# already runs as uid 1654 (APP_UID) and only writes to /data (persistence) and /tmp (emptyDir below).
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1654
+  runAsGroup: 1654
+  fsGroup: 1654
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+# The pod never talks to the Kubernetes API.
+automountServiceAccountToken: false

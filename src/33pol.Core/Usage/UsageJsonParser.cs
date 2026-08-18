@@ -48,6 +48,22 @@ public static class UsageJsonParser
     {
         var hasPrompt = TryReadTokenCount(usage, "prompt_tokens", out var promptTokens);
         var hasCompletion = TryReadTokenCount(usage, "completion_tokens", out var completionTokens);
+        var hasTotal = TryReadTokenCount(usage, "total_tokens", out var totalTokens);
+
+        // Exactly one side plus a total: the other side is known exactly (total - present). Some
+        // OpenAI-compatible servers omit a zero-valued field or report only prompt/total, and
+        // billing the missing side as zero under-charged when it was derivable.
+        if (hasPrompt != hasCompletion && hasTotal)
+        {
+            if (hasPrompt && totalTokens >= promptTokens)
+            {
+                completionTokens = totalTokens - promptTokens;
+            }
+            else if (hasCompletion && totalTokens >= completionTokens)
+            {
+                promptTokens = totalTokens - completionTokens;
+            }
+        }
 
         if ((hasPrompt || hasCompletion) && (promptTokens > 0 || completionTokens > 0))
         {
@@ -56,7 +72,7 @@ public static class UsageJsonParser
 
         // Only a combined total. Deliberately NOT folded into prompt tokens: the split is
         // genuinely unknown and pricing must be told so.
-        if (TryReadTokenCount(usage, "total_tokens", out var totalTokens) && totalTokens > 0)
+        if (hasTotal && totalTokens > 0)
         {
             return ParsedUsage.TotalOnly(totalTokens);
         }

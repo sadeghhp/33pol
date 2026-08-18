@@ -25,6 +25,31 @@ public sealed class HealthCheckServiceTests
         handler.RequestedPaths.Should().BeEmpty();
     }
 
+    /// <summary>
+    /// The store used to keep the last status of deleted or renamed models forever: stale rows in the
+    /// backends view, strict-mode answers for ids that no longer exist, unbounded growth over
+    /// add/rename/delete cycles. Each sweep now prunes to the current registry.
+    /// </summary>
+    [Fact]
+    public async Task CheckAllBackendsAsync_ForgetsModelsRemovedFromTheRegistry()
+    {
+        var handler = new SequenceHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK));
+        var healthStore = new BackendHealthStore(Options.Create(new GatewayOptions()));
+        healthStore.SetHealth(new BackendHealth("gone", "http://gone:8000", false, 503, "old", DateTimeOffset.UtcNow));
+        var registry = Substitute.For<IModelRegistry>();
+        registry.GetAllModels().Returns([new ModelConfig { Id = "a", Url = "http://a:8000" }]);
+        var service = CreateService(handler, healthStore, registry);
+
+        await service.CheckAllBackendsAsync();
+
+        healthStore.GetAllHealth().Keys.Should().BeEquivalentTo("a");
+
+        registry.GetAllModels().Returns([]);
+        await service.CheckAllBackendsAsync();
+
+        healthStore.GetAllHealth().Should().BeEmpty();
+    }
+
     [Fact]
     public async Task CheckAllBackendsAsync_WithModels_ProbesEachBackend()
     {

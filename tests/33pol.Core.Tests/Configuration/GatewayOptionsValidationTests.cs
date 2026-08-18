@@ -66,6 +66,65 @@ public sealed class GatewayOptionsValidationTests
         errors.Should().HaveCountGreaterThanOrEqualTo(5);
     }
 
+    /// <summary>
+    /// The breaker window and ratio were never validated: a ratio typo such as 1.5 (or 50 meaning
+    /// percent) can never be reached and silently disables the breaker; 0 makes it count-only.
+    /// </summary>
+    [Theory]
+    [InlineData(1.5)]
+    [InlineData(50)]
+    [InlineData(0)]
+    [InlineData(-0.1)]
+    [InlineData(double.NaN)]
+    public void Validate_CircuitBreakerFailureRatioOutOfRange_ReturnsError(double ratio)
+    {
+        var options = new GatewayOptions
+        {
+            Resilience = new GatewayResilienceOptions { CircuitBreakerFailureRatioThreshold = ratio },
+        };
+
+        GatewayOptionsValidation.Validate(options)
+            .Should().ContainSingle(e => e.Contains(nameof(GatewayResilienceOptions.CircuitBreakerFailureRatioThreshold), StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData(0.01)]
+    [InlineData(0.5)]
+    [InlineData(1.0)]
+    public void Validate_CircuitBreakerFailureRatioInRange_IsAccepted(double ratio)
+    {
+        var options = new GatewayOptions
+        {
+            Resilience = new GatewayResilienceOptions { CircuitBreakerFailureRatioThreshold = ratio },
+        };
+
+        GatewayOptionsValidation.Validate(options).Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Validate_CircuitBreakerSamplingWindowBelowOneSecond_ReturnsError()
+    {
+        var options = new GatewayOptions
+        {
+            Resilience = new GatewayResilienceOptions { CircuitBreakerSamplingWindowSeconds = 0 },
+        };
+
+        GatewayOptionsValidation.Validate(options)
+            .Should().ContainSingle(e => e.Contains(nameof(GatewayResilienceOptions.CircuitBreakerSamplingWindowSeconds), StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Validate_NegativeShutdownDrain_ReturnsError()
+    {
+        var options = new GatewayOptions
+        {
+            Resilience = new GatewayResilienceOptions { ShutdownDrainSeconds = -1 },
+        };
+
+        GatewayOptionsValidation.Validate(options)
+            .Should().ContainSingle(e => e.Contains(nameof(GatewayResilienceOptions.ShutdownDrainSeconds), StringComparison.Ordinal));
+    }
+
     [Fact]
     public void Bind_FromConfigurationDictionary_BindsGatewaySection()
     {

@@ -1,3 +1,4 @@
+using Pol33.Api.Contracts;
 using Pol33.Core.Abstractions;
 using Pol33.Core.Models;
 
@@ -8,6 +9,13 @@ public sealed class GatewayHealthService(
     IBackendHealthStore healthStore,
     GatewayProcessClock processClock)
 {
+    /// <summary>The full report: per-backend upstream URL and probe error included.</summary>
+    /// <remarks>
+    /// For operator callers only. The URL is the internal upstream address and the error is
+    /// free text from the prober (exception messages, hostnames), so <c>/health</c> serves this
+    /// shape only when the caller satisfies the Operator policy; everyone else gets
+    /// <see cref="GetHealthSummary"/>.
+    /// </remarks>
     public (GatewayHealthResponse Body, int StatusCode) GetHealth()
     {
         var models = registry.GetAllModels();
@@ -33,9 +41,7 @@ public sealed class GatewayHealthService(
             });
         }
 
-        var unhealthyCount = models.Count - healthyCount;
-        var status = healthyCount > 0 ? "healthy" : "degraded";
-        var statusCode = healthyCount > 0 ? 200 : 503;
+        var (status, statusCode) = Classify(healthyCount);
 
         return (new GatewayHealthResponse
         {
@@ -43,8 +49,51 @@ public sealed class GatewayHealthService(
             Uptime = processClock.StartedUtc,
             TotalBackends = models.Count,
             HealthyBackends = healthyCount,
-            UnhealthyBackends = unhealthyCount,
+            UnhealthyBackends = models.Count - healthyCount,
             Backends = backends,
         }, statusCode);
     }
+
+    /// <summary>
+    /// The anonymous shape of <c>/health</c>: overall status, counts, and per-backend up/down with
+    /// no upstream URL and no probe error text.
+    /// </summary>
+    public (GatewayHealthSummaryResponse Body, int StatusCode) GetHealthSummary()
+    {
+        var models = registry.GetAllModels();
+        var backends = new List<GatewayBackendHealthSummaryEntry>(models.Count);
+        var healthyCount = 0;
+
+        foreach (var model in models)
+        {
+            var isHealthy = healthStore.IsBackendHealthy(model.Id);
+            if (isHealthy)
+            {
+                healthyCount++;
+            }
+
+            var probe = healthStore.GetHealth(model.Id);
+            backends.Add(new GatewayBackendHealthSummaryEntry
+            {
+                ModelId = model.Id,
+                IsHealthy = isHealthy,
+                LastChecked = probe?.LastCheckedUtc,
+            });
+        }
+
+        var (status, statusCode) = Classify(healthyCount);
+
+        return (new GatewayHealthSummaryResponse
+        {
+            Status = status,
+            Uptime = processClock.StartedUtc,
+            TotalBackends = models.Count,
+            HealthyBackends = healthyCount,
+            UnhealthyBackends = models.Count - healthyCount,
+            Backends = backends,
+        }, statusCode);
+    }
+
+    private static (string Status, int StatusCode) Classify(int healthyCount) =>
+        healthyCount > 0 ? ("healthy", 200) : ("degraded", 503);
 }

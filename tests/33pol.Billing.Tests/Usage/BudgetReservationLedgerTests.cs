@@ -127,6 +127,55 @@ public sealed class BudgetReservationLedgerTests
         ledger.TryReserve("req-new", tenant, amount: 90m, headroom: 100m).Should().BeTrue();
     }
 
+    /// <summary>
+    /// The sweep is gated on the earliest expiry, so reservations taken at different times must
+    /// still each be reclaimed exactly when their own TTL elapses — neither early nor late.
+    /// </summary>
+    [Fact]
+    public void ExpiredReservations_WithStaggeredExpiries_AreSweptIndividually()
+    {
+        var now = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var ledger = new BudgetReservationLedger(TimeSpan.FromSeconds(60), () => now);
+        var tenant = Guid.NewGuid();
+
+        ledger.TryReserve("req-1", tenant, amount: 10m, headroom: 100m).Should().BeTrue();
+        now = now.AddSeconds(30);
+        ledger.TryReserve("req-2", tenant, amount: 20m, headroom: 100m).Should().BeTrue();
+        ledger.GetOutstanding(tenant).Should().Be(30m);
+
+        now = now.AddSeconds(31); // req-1 (61s old) expired; req-2 (31s old) still live
+        ledger.GetOutstanding(tenant).Should().Be(20m);
+
+        now = now.AddSeconds(30); // req-2 now 61s old
+        ledger.GetOutstanding(tenant).Should().Be(0m);
+
+        // The ledger keeps working after being emptied by the sweep.
+        ledger.TryReserve("req-3", tenant, amount: 90m, headroom: 100m).Should().BeTrue();
+        ledger.GetOutstanding(tenant).Should().Be(90m);
+        now = now.AddSeconds(61);
+        ledger.GetOutstanding(tenant).Should().Be(0m);
+    }
+
+    /// <summary>
+    /// A later reservation released before an earlier one must not stop the earlier one from being
+    /// swept when its own TTL elapses.
+    /// </summary>
+    [Fact]
+    public void ReleaseOfALaterReservation_DoesNotSuppressSweepOfAnEarlierOne()
+    {
+        var now = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var ledger = new BudgetReservationLedger(TimeSpan.FromSeconds(60), () => now);
+        var tenant = Guid.NewGuid();
+
+        ledger.TryReserve("req-early", tenant, amount: 10m, headroom: 100m).Should().BeTrue();
+        now = now.AddSeconds(10);
+        ledger.TryReserve("req-late", tenant, amount: 20m, headroom: 100m).Should().BeTrue();
+        ledger.Release("req-late");
+
+        now = now.AddSeconds(51);
+        ledger.GetOutstanding(tenant).Should().Be(0m);
+    }
+
     [Fact]
     public void TryReserve_ZeroAmount_AlwaysSucceeds_WithoutConsumingHeadroom()
     {

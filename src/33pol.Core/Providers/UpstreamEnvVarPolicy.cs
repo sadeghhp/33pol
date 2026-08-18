@@ -13,9 +13,14 @@ namespace Pol33.Core.Providers;
 /// therefore checked against a policy rather than passed straight to the configuration lookup.
 ///
 /// <para>The default policy accepts the built-in providers' variables plus the documented
-/// <c>*_API_KEY</c> / <c>*_TOKEN</c> convention for self-hosted upstreams, and always refuses names
-/// that address the gateway's own secrets. Operators whose variable does not fit the convention add
-/// it to <c>Gateway:UpstreamEnvVarAllowList</c>.</para>
+/// <c>*_API_KEY</c> / <c>*_APIKEY</c> / <c>*_TOKEN</c> convention for self-hosted upstreams, and
+/// always refuses names that address the gateway's own secrets or that look like signing, private,
+/// session or generic secret material (<c>SECRET</c>, <c>SIGNING</c>, <c>PRIVATE</c>, <c>PEPPER</c>,
+/// <c>PASSWORD</c>, …). A bare <c>*_KEY</c> suffix is deliberately <em>not</em> accepted: it matches
+/// far too many unrelated host secrets (<c>STRIPE_SECRET_KEY</c>, <c>JWT_SIGNING_KEY</c>,
+/// <c>ENCRYPTION_KEY</c>, <c>AZURE_STORAGE_KEY</c>, <c>SSH_KEY</c>, …). Operators whose variable does
+/// not fit the convention add it to <c>Gateway:UpstreamEnvVarAllowList</c>; the explicit allow-list
+/// wins over the fragment deny-list.</para>
 /// </remarks>
 public sealed class UpstreamEnvVarPolicy
 {
@@ -28,12 +33,13 @@ public sealed class UpstreamEnvVarPolicy
 
     private static readonly string[] DeniedFragments =
     [
-        "PEPPER", "PASSWORD", "CONNECTIONSTRING", "PRIVATE_KEY", "SECRET_ACCESS", "SESSION_TOKEN",
+        "PEPPER", "PASSWORD", "CONNECTIONSTRING", "SECRET", "SIGNING", "PRIVATE", "SESSION_TOKEN",
     ];
 
+    // No bare "_KEY": see the class remarks.
     private static readonly string[] AllowedSuffixes =
     [
-        "_API_KEY", "_APIKEY", "_KEY", "_TOKEN",
+        "_API_KEY", "_APIKEY", "_TOKEN",
     ];
 
     private readonly HashSet<string> _allowList;

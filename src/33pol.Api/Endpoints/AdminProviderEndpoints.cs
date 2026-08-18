@@ -59,6 +59,7 @@ public static class AdminProviderEndpoints
         modelsListUrl = p.ModelsListUrl,
         defaultEnvVar = p.DefaultEnvVar,
         requiresUpstreamAuth = p.RequiresUpstreamAuth,
+        supportsDiscovery = p.SupportsDiscovery,
     };
 
     private static Task<IResult> PostProviderModels(
@@ -90,6 +91,14 @@ public static class AdminProviderEndpoints
             return Results.Problem(
                 detail: $"Unknown provider '{providerId}'.",
                 statusCode: StatusCodes.Status404NotFound);
+        }
+
+        if (!definition.SupportsDiscovery)
+        {
+            return Results.Problem(
+                detail: $"Model discovery is not available for local provider '{definition.DisplayName}'; "
+                    + $"add models by id using upstream base URL {definition.UpstreamBaseUrl}.",
+                statusCode: StatusCodes.Status400BadRequest);
         }
 
         string? resolvedEnvVar;

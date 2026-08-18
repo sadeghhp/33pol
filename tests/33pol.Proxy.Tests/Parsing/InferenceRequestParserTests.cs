@@ -77,16 +77,39 @@ public sealed class InferenceRequestParserTests
         info.Stream.Should().BeFalse();
     }
 
-    /// <summary>First occurrence wins, mirroring the JsonElement.TryGetProperty this replaced.</summary>
+    /// <summary>
+    /// The gateway authorises and bills on the parsed value but forwards the raw bytes, and most
+    /// upstreams are last-key-wins. A duplicate routed key is therefore rejected outright rather than
+    /// letting the checked value diverge from the served one.
+    /// </summary>
+    [Theory]
+    [InlineData("""{"model":"first","model":"second"}""")]
+    [InlineData("""{"model":"same","model":"same"}""")]
+    [InlineData("""{"model":"gpt","stream":false,"stream":true}""")]
+    [InlineData("""{"model":"gpt","max_tokens":1,"max_tokens":100000}""")]
+    [InlineData("""{"model":"gpt","max_completion_tokens":1,"max_completion_tokens":2}""")]
+    // A first occurrence of the wrong kind still counts as seen.
+    [InlineData("""{"model":1,"model":"second"}""")]
+    [InlineData("""{"model":"gpt","stream":"yes","stream":true}""")]
+    public async Task ParseAsync_DuplicateTopLevelRoutedProperties_AreRejected(string json)
+    {
+        await using var body = new MemoryStream(Encoding.UTF8.GetBytes(json));
+
+        var act = () => InferenceRequestParser.ParseAsync(body, CancellationToken.None);
+
+        (await act.Should().ThrowAsync<JsonException>()).WithMessage("*Duplicate top-level*");
+    }
+
+    /// <summary>Only the routed keys are policed; other duplicates are the upstream's business.</summary>
     [Fact]
-    public async Task ParseAsync_DuplicateTopLevelProperties_UsesTheFirst()
+    public async Task ParseAsync_DuplicateUnroutedProperties_AreTolerated()
     {
         await using var body = new MemoryStream(Encoding.UTF8.GetBytes(
-            """{"model":"first","model":"second"}"""));
+            """{"temperature":1,"model":"gpt","temperature":2,"messages":[{"model":"a"},{"model":"b"}]}"""));
 
         var info = await InferenceRequestParser.ParseAsync(body, CancellationToken.None);
 
-        info.Model.Should().Be("first");
+        info.Model.Should().Be("gpt");
     }
 
     [Theory]

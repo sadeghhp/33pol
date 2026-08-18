@@ -73,6 +73,43 @@ public sealed class UsageExportFormatterTests
         result.Body.Should().Contain("\"cost\"\"center\"");
     }
 
+    /// <summary>
+    /// Cost centres, model ids and request ids are tenant/client-influenced; a leading formula
+    /// character would execute in the spreadsheet of the operator who opens the export.
+    /// </summary>
+    [Theory]
+    [InlineData("=1+1", "'=1+1")]
+    [InlineData("+cmd", "'+cmd")]
+    [InlineData("-2+3", "'-2+3")]
+    [InlineData("@SUM(A1)", "'@SUM(A1)")]
+    [InlineData("\tfoo", "'\tfoo")]
+    [InlineData("gpt-4o", "gpt-4o")]
+    [InlineData("eng-team", "eng-team")]
+    public void EscapeCsv_NeutralisesLeadingFormulaCharacters(string input, string expected)
+    {
+        UsageExportFormatter.EscapeCsv(input).Should().Be(expected);
+    }
+
+    [Fact]
+    public void EscapeCsv_FormulaWithComma_IsPrefixedThenQuoted()
+    {
+        UsageExportFormatter.EscapeCsv("=HYPERLINK(\"http://x\",\"y\")")
+            .Should().Be("\"'=HYPERLINK(\"\"http://x\"\",\"\"y\"\")\"");
+    }
+
+    [Fact]
+    public void Format_Csv_NeutralisesFormulaInjectionInCostCenter()
+    {
+        var rollups = new[]
+        {
+            new DailyUsageRollupRecord(new DateOnly(2026, 5, 26), Guid.NewGuid(), "=cmd|' /C calc'!A0", "@eng", 1, 1, 0m, 1),
+        };
+
+        var result = UsageExportFormatter.Format(rollups, "csv");
+
+        result.Body.Should().Contain(",'=cmd|' /C calc'!A0,'@eng,");
+    }
+
     [Fact]
     public void Format_UnknownFormat_DefaultsToJson()
     {

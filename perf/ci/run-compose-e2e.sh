@@ -6,7 +6,8 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "${ROOT}"
 
 GATEWAY_PORT="${GATEWAY_PORT:-8080}"
-ADMIN_KEY="${GATEWAY_ADMIN_API_KEY:-sk-33pol-dev-admin-key}"
+# Default matches the compose dev sentinel (deploy/docker/docker-compose.yml Gateway__Bootstrap__AdminApiKey).
+ADMIN_KEY="${GATEWAY_ADMIN_API_KEY:-sk-33pol-dev-local-unsafe}"
 MODEL="${MODEL:-mock-gpt}"
 BASE="http://127.0.0.1:${GATEWAY_PORT}"
 

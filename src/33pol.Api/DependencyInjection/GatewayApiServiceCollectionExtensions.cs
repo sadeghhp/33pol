@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Pol33.Api.Middleware;
+using Pol33.Api.Security;
 using Pol33.Api.Services;
 using Pol33.Core.Abstractions;
 using Pol33.Core.Errors;
@@ -16,6 +17,7 @@ public static class GatewayApiServiceCollectionExtensions
         services.AddSingleton<GatewayProcessClock>();
         services.AddScoped<ModelsApiService>();
         services.AddSingleton<GatewayHealthService>();
+        services.AddScoped<GatewayOperatorAccess>();
         services.AddSingleton<GatewayReadinessService>();
         services.AddSingleton<GatewayStatsService>();
         // TryAdd: the registry module registers this too, because the bearer-token resolver enforces

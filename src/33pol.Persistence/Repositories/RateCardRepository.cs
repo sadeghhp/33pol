@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using Pol33.Core.Abstractions;
 using Pol33.Core.Billing;
 using Pol33.Persistence.Entities;
+using Pol33.Persistence.Infrastructure;
 using Pol33.Persistence.Mapping;
 
 namespace Pol33.Persistence.Repositories;
@@ -64,11 +65,28 @@ public sealed class RateCardRepository(GatewayDbContext dbContext) : IRateCardRe
         return result;
     }
 
+    /// <summary>
+    /// Updates the active rate card for a model or inserts one. Runs under
+    /// <see cref="GatewayWriteTransaction"/> so two concurrent upserts for a new model cannot both
+    /// pass the "no active card" probe and insert twice (or collide on the slug's unique index).
+    /// </summary>
     public async Task UpsertForModelAsync(
         string modelId,
         decimal inputPricePerMillionTokens,
         decimal outputPricePerMillionTokens,
         CancellationToken cancellationToken = default)
+    {
+        await GatewayWriteTransaction.RunAsync(
+            dbContext,
+            ct => ApplyUpsertForModelAsync(modelId, inputPricePerMillionTokens, outputPricePerMillionTokens, ct),
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task ApplyUpsertForModelAsync(
+        string modelId,
+        decimal inputPricePerMillionTokens,
+        decimal outputPricePerMillionTokens,
+        CancellationToken cancellationToken)
     {
         var now = DateTimeOffset.UtcNow;
 

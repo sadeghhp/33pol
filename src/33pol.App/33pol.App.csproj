@@ -16,6 +16,9 @@
     <PackageReference Include="OpenTelemetry.Instrumentation.Runtime" />
   </ItemGroup>
   <ItemGroup>
+    <InternalsVisibleTo Include="33pol.Integration.Tests" />
+  </ItemGroup>
+  <ItemGroup>
     <None Include="..\..\config\models.json" Link="config\models.json" CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\..\config\models.ci.json" Link="config/models.ci.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>

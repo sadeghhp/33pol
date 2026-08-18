@@ -52,7 +52,17 @@ public sealed class ModelRegistryService : IModelRegistry
 
         lock (_lock)
         {
-            return _lookup.TryGetValue(name, out model);
+            if (!_lookup.TryGetValue(name, out var found))
+            {
+                model = null;
+                return false;
+            }
+
+            // A copy, like GetAllModels: ModelConfig is mutable (Url, Aliases, UpstreamAuth) and a
+            // caller normalising the result must not edit the live routing table behind the
+            // writer's back.
+            model = ModelRegistryPersistence.CloneModel(found);
+            return true;
         }
     }
 

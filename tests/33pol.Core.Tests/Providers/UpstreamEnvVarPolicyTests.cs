@@ -29,6 +29,15 @@ public sealed class UpstreamEnvVarPolicyTests
     [InlineData("AWS_SECRET_ACCESS_KEY")]
     [InlineData("AWS_SESSION_TOKEN")]
     [InlineData("HOME")]
+    [InlineData("STRIPE_SECRET_KEY")]
+    [InlineData("JWT_SIGNING_KEY")]
+    [InlineData("ENCRYPTION_KEY")]
+    [InlineData("AZURE_STORAGE_KEY")]
+    [InlineData("SSH_KEY")]
+    [InlineData("MASTER_KEY")]
+    [InlineData("SSH_PRIVATE_KEY")]
+    [InlineData("MY_SECRET_TOKEN")]
+    [InlineData("SIGNING_TOKEN")]
     public void IsAllowed_GatewayAndHostSecrets_AreRefused(string envVar)
     {
         var policy = new UpstreamEnvVarPolicy();
@@ -46,7 +55,19 @@ public sealed class UpstreamEnvVarPolicyTests
         policy.IsAllowed("my_odd_upstream_cred", out _).Should().BeTrue("names are matched case-insensitively");
     }
 
-    /// <summary>The allow-list is an operator decision, but it must not re-open the gateway's own secrets.</summary>
+    /// <summary>
+    /// A bare *_KEY suffix used to be accepted, which matched a large family of unrelated host
+    /// secrets. Such names now need the explicit allow-list.
+    /// </summary>
+    [Fact]
+    public void IsAllowed_BareKeySuffix_RequiresExplicitAllowList()
+    {
+        new UpstreamEnvVarPolicy().IsAllowed("MY_UPSTREAM_KEY", out var error).Should().BeFalse();
+        error.Should().Contain(UpstreamEnvVarPolicy.AllowListSettingKey);
+
+        new UpstreamEnvVarPolicy(["MY_UPSTREAM_KEY"]).IsAllowed("MY_UPSTREAM_KEY", out _).Should().BeTrue();
+    }
+
     [Fact]
     public void IsAllowed_EmptyOrMissingName_IsRefused()
     {

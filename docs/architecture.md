@@ -24,7 +24,7 @@ Clients (SDKs) ──► 33pol.App (Kestrel)
 |-------|-------|------|
 | **Inference** | `/v1/chat/completions`, `/v1/completions`, `/v1/embeddings`, `GET /v1/models` | Inference or Admin API key when DB/bootstrap enabled |
 | **Control** | `/admin/api/*`, `/admin` UI | Admin API key |
-| **Ops** | `/health`, `/health/live`, `/health/ready`, `/metrics` | Public (probes / scrape) |
+| **Ops** | `/health`, `/health/live`, `/health/ready`, `/metrics` | Probes public; `/health` detail and `/metrics` need scrape token / Operator key (see [security.md](./security.md)) |
 | **Ops (privileged)** | `/stats` | Admin API key — the snapshot names every model that served traffic and its error count |
 
 ## Projects
