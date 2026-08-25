@@ -6,6 +6,7 @@ namespace Pol33.Core.Errors;
 public enum GatewayErrorCode
 {
     InvalidJson,
+    RequestIncomplete,
     MissingModel,
     ModelNotAllowed,
     RequestTooLarge,

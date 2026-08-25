@@ -35,6 +35,7 @@ Every code below is implemented. `Phase` in `GatewayErrorDefinition` records whi
 | HTTP | `type` | `code` |
 |------|--------|--------|
 | 400 | `invalid_request_error` | `invalid_json` |
+| 400 | `invalid_request_error` | `request_incomplete` |
 | 400 | `invalid_request_error` | `missing_model` |
 | 400 | `invalid_request_error` | `model_not_allowed` |
 | 400 | `invalid_request_error` | `request_too_large` |

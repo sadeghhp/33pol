@@ -35,11 +35,12 @@ public sealed class GatewayErrorTrackingOptions
     public int PruneIntervalMinutes { get; set; } = 60;
 
     /// <summary>
-    /// Buffers small upstream error bodies so the console can show what the model server actually
-    /// said. Off by default: it is the one option here that touches the client-visible response
-    /// path.
+    /// Buffers the first <see cref="UpstreamBodySnippetBytes"/> of an upstream error (4xx/5xx) body
+    /// so the console can show what the model server actually said. Only error responses are
+    /// copied; the body still reaches the client unchanged. On by default because without it an
+    /// upstream 400 is undiagnosable from the gateway alone.
     /// </summary>
-    public bool CaptureUpstreamBodySnippet { get; set; }
+    public bool CaptureUpstreamBodySnippet { get; set; } = true;
 
     public int UpstreamBodySnippetBytes { get; set; } = 2048;
 

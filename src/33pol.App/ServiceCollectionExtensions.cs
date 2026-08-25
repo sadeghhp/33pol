@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Options;
 using Pol33.App.DependencyInjection;
+using Pol33.App.Health;
 using Pol33.App.Metrics;
 using Pol33.Api.DependencyInjection;
 using Pol33.Core.Configuration;
@@ -104,7 +105,8 @@ public static class ServiceCollectionExtensions
 
     public static IServiceCollection AddGatewayHealthChecks(this IServiceCollection services)
     {
-        services.AddHealthChecks();
+        services.AddHealthChecks()
+            .AddCheck<UpstreamSecretsHealthCheck>("upstream-secrets");
         return services;
     }
 }

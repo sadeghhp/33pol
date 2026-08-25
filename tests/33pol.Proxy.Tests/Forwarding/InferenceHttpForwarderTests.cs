@@ -3,7 +3,10 @@ using System.Net.Http.Headers;
 using System.Text;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using Pol33.Core.Abstractions;
+using Pol33.Core.Configuration;
+using Pol33.Core.Errors;
 using Pol33.Core.Forwarding;
 using Pol33.Proxy.Forwarding;
 using Yarp.ReverseProxy.Forwarder;
@@ -579,6 +582,79 @@ public sealed class InferenceHttpForwarderTests
         context.Response.Headers["x-ratelimit-remaining-requests"].ToString().Should().Be("41");
     }
 
+    /// <summary>
+    /// The upstream's error body is the only thing that says why a model rejected a call. It is
+    /// stashed for the error store while still reaching the client byte-for-byte.
+    /// </summary>
+    [Fact]
+    public async Task SendAsync_Upstream400_StashesBodySnippetAndForwardsBody()
+    {
+        var handler = new StatusUpstreamHandler(HttpStatusCode.BadRequest, StatusUpstreamHandler.ErrorBody);
+        var forwarder = new InferenceHttpForwarder(
+            new SingleHandlerClientFactory(handler),
+            NoOpGatewayMetricsCollector.Instance,
+            NullLogger<InferenceHttpForwarder>.Instance,
+            Options.Create(new GatewayErrorTrackingOptions()));
+
+        var context = CreatePostContext("""{"model":"gpt","stream":false}""");
+        var transformer = new StreamingHttpTransformer(
+            isStreaming: false,
+            clientModelName: "gpt",
+            canonicalModelId: "gpt");
+
+        var error = await forwarder.SendAsync(
+            context, "http://backend:8000", null, transformer, isStreaming: false, TestTimeouts, CancellationToken.None);
+
+        error.Should().Be(ForwarderError.None);
+        context.Response.StatusCode.Should().Be((int)HttpStatusCode.BadRequest);
+        context.Items[GatewayErrorContextKeys.UpstreamBodySnippet].Should().Be(StatusUpstreamHandler.ErrorBody);
+        context.Response.Body.Position = 0;
+        (await new StreamReader(context.Response.Body).ReadToEndAsync()).Should().Be(StatusUpstreamHandler.ErrorBody);
+    }
+
+    [Fact]
+    public async Task SendAsync_Upstream400_TruncatesSnippetToConfiguredBytes()
+    {
+        var handler = new StatusUpstreamHandler(HttpStatusCode.BadRequest, new string('x', 5000));
+        var forwarder = new InferenceHttpForwarder(
+            new SingleHandlerClientFactory(handler),
+            NoOpGatewayMetricsCollector.Instance,
+            NullLogger<InferenceHttpForwarder>.Instance,
+            Options.Create(new GatewayErrorTrackingOptions { UpstreamBodySnippetBytes = 64 }));
+
+        var context = CreatePostContext("""{"model":"gpt","stream":false}""");
+        var transformer = new StreamingHttpTransformer(isStreaming: false, clientModelName: "gpt", canonicalModelId: "gpt");
+
+        await forwarder.SendAsync(
+            context, "http://backend:8000", null, transformer, isStreaming: false, TestTimeouts, CancellationToken.None);
+
+        ((string)context.Items[GatewayErrorContextKeys.UpstreamBodySnippet]!).Length.Should().Be(64);
+        context.Response.Body.Length.Should().Be(5000, "the client must still receive the whole body");
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task SendAsync_SuccessOrCaptureDisabled_DoesNotStashSnippet(bool captureEnabled)
+    {
+        var handler = new StatusUpstreamHandler(
+            captureEnabled ? HttpStatusCode.OK : HttpStatusCode.BadRequest,
+            StatusUpstreamHandler.ErrorBody);
+        var forwarder = new InferenceHttpForwarder(
+            new SingleHandlerClientFactory(handler),
+            NoOpGatewayMetricsCollector.Instance,
+            NullLogger<InferenceHttpForwarder>.Instance,
+            Options.Create(new GatewayErrorTrackingOptions { CaptureUpstreamBodySnippet = captureEnabled }));
+
+        var context = CreatePostContext("""{"model":"gpt","stream":false}""");
+        var transformer = new StreamingHttpTransformer(isStreaming: false, clientModelName: "gpt", canonicalModelId: "gpt");
+
+        await forwarder.SendAsync(
+            context, "http://backend:8000", null, transformer, isStreaming: false, TestTimeouts, CancellationToken.None);
+
+        context.Items.ContainsKey(GatewayErrorContextKeys.UpstreamBodySnippet).Should().BeFalse();
+    }
+
     private static DefaultHttpContext CreatePostContext(string jsonBody)
     {
         var bodyBytes = Encoding.UTF8.GetBytes(jsonBody);
@@ -810,6 +886,19 @@ public sealed class InferenceHttpForwarderTests
             _written = true;
             return base.WriteAsync(buffer, cancellationToken);
         }
+    }
+
+    private sealed class StatusUpstreamHandler(HttpStatusCode status, string body) : HttpMessageHandler
+    {
+        public const string ErrorBody = """{"error":{"message":"'system' role is not supported by this model","type":"invalid_request_error"}}""";
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(new HttpResponseMessage(status)
+            {
+                Content = new StringContent(body, Encoding.UTF8, "application/json"),
+            });
     }
 
     private sealed class ImmediateJsonUpstreamHandler : HttpMessageHandler

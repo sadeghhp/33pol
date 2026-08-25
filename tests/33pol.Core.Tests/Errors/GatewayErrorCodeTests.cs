@@ -8,6 +8,7 @@ public sealed class GatewayErrorCodeTests
     public static TheoryData<GatewayErrorCode, string> AllCodes { get; } = new()
     {
         { GatewayErrorCode.InvalidJson, "invalid_json" },
+        { GatewayErrorCode.RequestIncomplete, "request_incomplete" },
         { GatewayErrorCode.MissingModel, "missing_model" },
         { GatewayErrorCode.ModelNotAllowed, "model_not_allowed" },
         { GatewayErrorCode.RequestTooLarge, "request_too_large" },

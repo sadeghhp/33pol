@@ -3,7 +3,10 @@ using System.Net.Http.Headers;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Pol33.Core.Abstractions;
+using Pol33.Core.Configuration;
+using Pol33.Core.Errors;
 using Pol33.Core.Forwarding;
 using Pol33.Proxy.Routing;
 using Yarp.ReverseProxy.Forwarder;
@@ -55,7 +58,8 @@ public interface IInferenceHttpForwarder
 public sealed class InferenceHttpForwarder(
     IHttpClientFactory httpClientFactory,
     IGatewayMetricsCollector metricsCollector,
-    ILogger<InferenceHttpForwarder> logger) : IInferenceHttpForwarder
+    ILogger<InferenceHttpForwarder> logger,
+    IOptions<GatewayErrorTrackingOptions>? errorTracking = null) : IInferenceHttpForwarder
 {
     public const string HttpClientName = Core.Http.UpstreamHttpClientNames.Inference;
 
@@ -177,11 +181,18 @@ public sealed class InferenceHttpForwarder(
                     .ReadAsStreamAsync(idleCts.Token)
                     .ConfigureAwait(false);
 
+                // An upstream error body is the only thing that says *why* a model rejected a call
+                // (unsupported parameter, context length, wrong role...). Without it every 400 in the
+                // Errors tab read as "check your config". Only error responses are tee'd, capped at
+                // the configured snippet size, so the success and streaming paths are untouched.
+                var snippet = CreateSnippetBufferIfErrorResponse(responseMessage);
+
                 try
                 {
                     await CopyStreamWithFlushAsync(
                             upstreamBody,
                             context.Response.Body,
+                            snippet,
                             // Time to first token is a streaming notion; a buffered response has no
                             // meaningful first-token moment to report.
                             onFirstByteWritten: isStreaming
@@ -191,6 +202,7 @@ public sealed class InferenceHttpForwarder(
                             flushEachChunk: isStreaming,
                             idleCts.Token)
                         .ConfigureAwait(false);
+                    StashSnippet(context, snippet);
                 }
                 catch (OperationCanceledException) when (idleCts.IsCancellationRequested &&
                                                         !cancellationToken.IsCancellationRequested)
@@ -285,6 +297,55 @@ public sealed class InferenceHttpForwarder(
         }
 
         return copied;
+    }
+
+    private ErrorBodySnippet? CreateSnippetBufferIfErrorResponse(HttpResponseMessage response)
+    {
+        var options = errorTracking?.Value;
+        if (options is null
+            || !options.CaptureUpstreamBodySnippet
+            || options.UpstreamBodySnippetBytes <= 0
+            || (int)response.StatusCode < StatusCodes.Status400BadRequest)
+        {
+            return null;
+        }
+
+        return new ErrorBodySnippet(options.UpstreamBodySnippetBytes);
+    }
+
+    private static void StashSnippet(HttpContext context, ErrorBodySnippet? snippet)
+    {
+        var text = snippet?.ToText();
+        if (!string.IsNullOrWhiteSpace(text))
+        {
+            context.Items[GatewayErrorContextKeys.UpstreamBodySnippet] = text;
+        }
+    }
+
+    /// <summary>
+    /// Fixed-capacity copy of the first bytes of an upstream error body. Bytes past the cap are
+    /// dropped, so a runaway error page costs at most the configured snippet size.
+    /// </summary>
+    private sealed class ErrorBodySnippet(int capacity)
+    {
+        private readonly byte[] _bytes = new byte[capacity];
+        private int _length;
+
+        public void Append(ReadOnlySpan<byte> chunk)
+        {
+            var room = _bytes.Length - _length;
+            if (room <= 0)
+            {
+                return;
+            }
+
+            var take = Math.Min(room, chunk.Length);
+            chunk[..take].CopyTo(_bytes.AsSpan(_length));
+            _length += take;
+        }
+
+        public string ToText() =>
+            _length == 0 ? string.Empty : System.Text.Encoding.UTF8.GetString(_bytes, 0, _length);
     }
 
     /// <summary>
@@ -389,6 +450,7 @@ public sealed class InferenceHttpForwarder(
     private static async Task CopyStreamWithFlushAsync(
         Stream source,
         Stream destination,
+        ErrorBodySnippet? snippet,
         Action? onFirstByteWritten,
         Action? onChunkForwarded,
         bool flushEachChunk,
@@ -417,6 +479,7 @@ public sealed class InferenceHttpForwarder(
                     break;
                 }
 
+                snippet?.Append(buffer.AsSpan(0, read));
                 await destination.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
                 if (flushEachChunk)
                 {

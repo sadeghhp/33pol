@@ -5,6 +5,7 @@ public static class GatewayErrorCodeExtensions
     public static string ToCodeString(this GatewayErrorCode code) => code switch
     {
         GatewayErrorCode.InvalidJson => "invalid_json",
+        GatewayErrorCode.RequestIncomplete => "request_incomplete",
         GatewayErrorCode.MissingModel => "missing_model",
         GatewayErrorCode.ModelNotAllowed => "model_not_allowed",
         GatewayErrorCode.RequestTooLarge => "request_too_large",

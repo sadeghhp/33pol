@@ -21,12 +21,19 @@ public sealed class UpstreamSecretVerificationHostedServiceTests
             await writer.PutAsync("model-a", "sk-secret");
 
             var reader = CreateStore(path, pepper: "rotated-pepper");
+            var state = new UpstreamSecretVerificationState();
             var service = new UpstreamSecretVerificationHostedService(
                 reader,
-                NullLogger<UpstreamSecretVerificationHostedService>.Instance);
+                NullLogger<UpstreamSecretVerificationHostedService>.Instance,
+                state);
 
             var act = async () => await service.StartAsync(CancellationToken.None);
             await act.Should().NotThrowAsync();
+
+            // The health endpoint reads this; a pepper mismatch must not stay a startup log line.
+            state.HasRun.Should().BeTrue();
+            state.Total.Should().Be(1);
+            state.Undecryptable.Should().Be(1);
 
             await service.StopAsync(CancellationToken.None);
         }

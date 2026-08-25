@@ -8,6 +8,7 @@ public sealed class Phase3ErrorGoldenTests
     public static TheoryData<GatewayErrorCode> Phase3Codes { get; } = new()
     {
         GatewayErrorCode.InvalidJson,
+        GatewayErrorCode.RequestIncomplete,
         GatewayErrorCode.MissingModel,
         GatewayErrorCode.ModelNotAllowed,
         GatewayErrorCode.RequestTooLarge,

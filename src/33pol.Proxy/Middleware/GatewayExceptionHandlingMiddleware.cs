@@ -42,9 +42,7 @@ public sealed class GatewayExceptionHandlingMiddleware(
         }
         catch (BadHttpRequestException ex)
         {
-            var code = ex.StatusCode == StatusCodes.Status413PayloadTooLarge
-                ? GatewayErrorCode.RequestTooLarge
-                : GatewayErrorCode.InvalidJson;
+            var code = ClassifyBadRequest(ex);
 
             logger.LogWarning(
                 "Rejected malformed request for {Method} {Path}: {Reason}",
@@ -125,6 +123,29 @@ public sealed class GatewayExceptionHandlingMiddleware(
         });
 
         context.Items[GatewayErrorContextKeys.ErrorCaptured] = true;
+    }
+
+    /// <summary>
+    /// Kestrel raises the same exception type for a body that never parsed and for one that never
+    /// fully arrived. Reporting the latter as <c>invalid_json</c> sent operators hunting for a
+    /// serialization bug when the client had simply hung up mid-upload or stalled below
+    /// <c>MinRequestBodyDataRate</c>.
+    /// </summary>
+    private static GatewayErrorCode ClassifyBadRequest(BadHttpRequestException ex)
+    {
+        if (ex.StatusCode == StatusCodes.Status413PayloadTooLarge)
+        {
+            return GatewayErrorCode.RequestTooLarge;
+        }
+
+        if (ex.StatusCode == StatusCodes.Status408RequestTimeout
+            || ex.Message.Contains("Unexpected end of request content", StringComparison.OrdinalIgnoreCase)
+            || ex.Message.Contains("arriving too slowly", StringComparison.OrdinalIgnoreCase))
+        {
+            return GatewayErrorCode.RequestIncomplete;
+        }
+
+        return GatewayErrorCode.InvalidJson;
     }
 
     private static int StatusCodeFor(GatewayErrorCode code) =>

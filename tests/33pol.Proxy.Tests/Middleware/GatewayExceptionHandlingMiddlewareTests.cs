@@ -39,11 +39,30 @@ public sealed class GatewayExceptionHandlingMiddlewareTests
         var context = CreateContext();
 
         await CreateMiddleware(_ => throw new BadHttpRequestException(
-                "Unexpected end of request content.",
+                "Invalid request line.",
                 StatusCodes.Status400BadRequest))
             .InvokeAsync(context);
 
         (await ReadErrorCodeAsync(context)).Should().Be("invalid_json");
+    }
+
+    /// <summary>
+    /// A client that declares a Content-Length and hangs up early, or trickles the body below the
+    /// minimum data rate, sent nothing malformed. Labelling it invalid_json pointed the
+    /// investigation at serialization instead of at the client's connection handling.
+    /// </summary>
+    [Theory]
+    [InlineData("Unexpected end of request content.", StatusCodes.Status400BadRequest)]
+    [InlineData("Reading the request body timed out due to data arriving too slowly. See MinRequestBodyDataRate.", StatusCodes.Status408RequestTimeout)]
+    public async Task InvokeAsync_TruncatedOrStalledBody_WritesRequestIncomplete(string reason, int kestrelStatus)
+    {
+        var context = CreateContext();
+
+        await CreateMiddleware(_ => throw new BadHttpRequestException(reason, kestrelStatus))
+            .InvokeAsync(context);
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        (await ReadErrorCodeAsync(context)).Should().Be("request_incomplete");
     }
 
     [Fact]

@@ -29,6 +29,7 @@ public static class RegistryServiceCollectionExtensions
         services.AddSingleton<IModelRegistryWriter>(sp => sp.GetRequiredService<ModelRegistryWriter>());
         services.AddSingleton<BackendHealthStore>();
         services.AddSingleton<IBackendHealthStore>(sp => sp.GetRequiredService<BackendHealthStore>());
+        services.AddSingleton<UpstreamSecretVerificationState>();
         services.AddHostedService<UpstreamSecretVerificationHostedService>();
         services.AddHostedService<HealthCheckService>();
         services.AddSingleton<ModelRegistryLoader>();

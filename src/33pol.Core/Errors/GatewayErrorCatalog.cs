@@ -17,6 +17,11 @@ public static class GatewayErrorCatalog
                 "invalid_request_error",
                 "Invalid JSON in request body.",
                 Phase: 3),
+            [GatewayErrorCode.RequestIncomplete] = new(
+                400,
+                "invalid_request_error",
+                "Request body ended before the declared Content-Length was received, or arrived too slowly.",
+                Phase: 3),
             [GatewayErrorCode.MissingModel] = new(
                 400,
                 "invalid_request_error",

@@ -8,6 +8,7 @@ public sealed class GatewayErrorCatalogTests
     public static TheoryData<GatewayErrorCode, int, string, int> Phase3Definitions { get; } = new()
     {
         { GatewayErrorCode.InvalidJson, 400, "invalid_request_error", 3 },
+        { GatewayErrorCode.RequestIncomplete, 400, "invalid_request_error", 3 },
         { GatewayErrorCode.MissingModel, 400, "invalid_request_error", 3 },
         { GatewayErrorCode.ModelNotAllowed, 400, "invalid_request_error", 3 },
         { GatewayErrorCode.RequestTooLarge, 400, "invalid_request_error", 3 },
