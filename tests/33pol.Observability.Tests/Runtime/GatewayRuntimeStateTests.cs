@@ -169,6 +169,43 @@ public sealed class GatewayRuntimeStateTests
         runtime.GetRequestsPerModel()["m1"].Should().Be(1);
     }
 
+    [Fact]
+    public void RecordRequestCanceled_CountsDisconnectSeparatelyFromErrors()
+    {
+        var runtime = new GatewayRuntimeState();
+        runtime.RecordRequestStart("m1", isStreaming: false);
+        runtime.RecordRequestCanceled("m1", durationMs: 40, wasStreaming: false, tenantId: null);
+
+        var (total, errors, avgMs, _, _, _) = runtime.GetStats();
+        total.Should().Be(1);
+        errors.Should().Be(0);
+        avgMs.Should().Be(40);
+        runtime.GetClientDisconnects().Should().Be(1);
+        runtime.GetActiveRequests().Should().Be(0);
+        runtime.Export().ClientDisconnects.Should().Be(1);
+    }
+
+    [Fact]
+    public void ResetErrors_ZeroesClientDisconnectsToo()
+    {
+        var runtime = new GatewayRuntimeState();
+        runtime.RecordRequestStart("m1", isStreaming: false);
+        runtime.RecordRequestCanceled("m1", durationMs: 1, wasStreaming: false, tenantId: null);
+
+        runtime.ResetErrors();
+
+        runtime.GetClientDisconnects().Should().Be(0);
+    }
+
+    [Fact]
+    public void Hydrate_RestoresClientDisconnects()
+    {
+        var runtime = new GatewayRuntimeState();
+        runtime.Hydrate(new GatewayRuntimeSnapshot { ClientDisconnects = 7 });
+
+        runtime.GetClientDisconnects().Should().Be(7);
+    }
+
     /// <summary>In-flight entries are transient process state and must never reach the durable snapshot.</summary>
     [Fact]
     public void Export_OmitsInFlightEntries()

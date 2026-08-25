@@ -12,6 +12,9 @@ public sealed record GatewayRuntimeSnapshot
 
     public long TotalErrors { get; init; }
 
+    /// <summary>Requests whose client disconnected mid-response. Kept apart from <see cref="TotalErrors"/>.</summary>
+    public long ClientDisconnects { get; init; }
+
     public long TotalLatencyMs { get; init; }
 
     public long RateLimitRejections { get; init; }

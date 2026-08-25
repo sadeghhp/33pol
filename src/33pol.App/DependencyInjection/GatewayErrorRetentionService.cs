@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Pol33.Core.Abstractions;
 using Pol33.Core.Configuration;
+using Pol33.Core.Models;
 
 namespace Pol33.App.DependencyInjection;
 
@@ -59,13 +60,33 @@ internal sealed class GatewayErrorRetentionService(
             await using var scope = scopeFactory.CreateAsyncScope();
             var archive = scope.ServiceProvider.GetRequiredService<IGatewayErrorArchive>();
 
-            var cutoff = DateTimeOffset.UtcNow - TimeSpan.FromDays(Math.Max(1, settings.RetentionDays));
+            var now = DateTimeOffset.UtcNow;
+            var cutoff = now - TimeSpan.FromDays(Math.Max(1, settings.RetentionDays));
             var removed = await archive.PruneAsync(cutoff, settings.MaxRows, cancellationToken)
                 .ConfigureAwait(false);
 
             if (removed > 0)
             {
                 logger.LogInformation("Pruned {Count} error records past the retention window.", removed);
+            }
+
+            // Recorded every pass, not only when rows went: the cutoff is what tells the Errors tab
+            // how far back its data can possibly reach.
+            var state = scope.ServiceProvider.GetService<IMaintenanceStateStore>();
+            if (state is not null)
+            {
+                var previous = await state
+                    .GetAsync<GatewayErrorRetentionState>(MaintenanceStateKeys.ErrorRetention, cancellationToken)
+                    .ConfigureAwait(false);
+                await state.SetAsync(
+                    MaintenanceStateKeys.ErrorRetention,
+                    new GatewayErrorRetentionState
+                    {
+                        PrunedTotal = (previous?.PrunedTotal ?? 0) + removed,
+                        LastPrunedAtUtc = now,
+                        RetainedSinceUtc = cutoff,
+                    },
+                    cancellationToken).ConfigureAwait(false);
             }
         }
         catch (Exception ex) when (ex is not OperationCanceledException)

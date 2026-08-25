@@ -13,6 +13,8 @@ public sealed class GatewayStatsSnapshotEntity
 
     public long TotalErrors { get; set; }
 
+    public long ClientDisconnects { get; set; }
+
     public long TotalLatencyMs { get; set; }
 
     public long RateLimitRejections { get; set; }

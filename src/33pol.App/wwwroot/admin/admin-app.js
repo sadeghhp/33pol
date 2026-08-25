@@ -179,6 +179,11 @@ function adminApp() {
     errorGroupsTotal: 0,
     errorOccurrenceTotal: 0,
     errorsStoredTotal: 0,
+    errorsDroppedTotal: 0,
+    errorsPersistFailedTotal: 0,
+    errorsPrunedTotal: 0,
+    errorsRetainedSince: null,
+    errorsDegraded: false,
     errorsPersisted: true,
     errorsFacets: null,
     errorsRange: '24h',
@@ -1172,6 +1177,11 @@ function adminApp() {
           this.errorGroupsTotal = Number(body?.total ?? 0);
           this.errorOccurrenceTotal = Number(body?.occurrenceTotal ?? 0);
           this.errorsStoredTotal = Number(body?.storedTotal ?? 0);
+          this.errorsDroppedTotal = Number(body?.droppedTotal ?? 0);
+          this.errorsPersistFailedTotal = Number(body?.persistFailedTotal ?? 0);
+          this.errorsPrunedTotal = Number(body?.prunedTotal ?? 0);
+          this.errorsRetainedSince = body?.retainedSinceUtc ?? null;
+          this.errorsDegraded = body?.degraded === true;
           this.errorsPersisted = body?.persisted !== false;
           this.errorsLoadError = '';
         });
@@ -3005,6 +3015,9 @@ function adminApp() {
 
     get hasActiveModelChips() { return this.activeModelChips.length > 0; },
     get totalErrorsCount() { return Number(this.summary?.totalErrors ?? 0); },
+    get clientDisconnectsCount() { return Number(this.summary?.clientDisconnects ?? 0); },
+    get hasClientDisconnects() { return this.clientDisconnectsCount > 0; },
+    get clientDisconnectsText() { return this.formatNum(this.clientDisconnectsCount); },
     get hasErrors() { return !!this.summary && this.totalErrorsCount > 0; },
 
     // ---- deep links ----
@@ -4665,10 +4678,32 @@ function adminApp() {
      * by-design divergence rather than a fault, and none of them is guessable from the two numbers.
      */
     get errorsCounterNote() {
-      return 'That counter is a cumulative lifetime total restored across restarts, and it also '
-        + 'counts client disconnects, which are deliberately not stored here. Records are only kept '
-        + 'from the point this gateway began capturing them, and are pruned on the retention '
-        + 'schedule. New failures appear here as they happen — use Clear all to rebase both to zero.';
+      return 'That counter is a cumulative lifetime total restored across restarts, while records '
+        + 'are only kept from the point this gateway began capturing them and are pruned on the '
+        + 'retention schedule. Failures in background jobs are stored here but not counted there. '
+        + 'New failures appear here as they happen — use Clear all to rebase both to zero.';
+    },
+
+    /**
+     * Records this page cannot show, as numbers. Empty when nothing was lost and nothing pruned,
+     * so the line only appears when the operator needs to know the count is a floor.
+     */
+    get errorsCoverageNote() {
+      const parts = [];
+      if (this.errorsDegraded) {
+        parts.push('The database is unreachable; showing the in-memory buffer, whose counts are lifetime totals rather than stored rows.');
+      }
+      if (this.errorsPersistFailedTotal > 0) {
+        parts.push(`${this.formatNum(this.errorsPersistFailedTotal)} records failed to persist and are missing here.`);
+      }
+      if (this.errorsDroppedTotal > 0) {
+        parts.push(`${this.formatNum(this.errorsDroppedTotal)} records were dropped before persistence because the write buffer was full.`);
+      }
+      if (this.errorsPrunedTotal > 0) {
+        const since = this.errorsRetainedSince ? ` Nothing older than ${this.formatTime(this.errorsRetainedSince)} is kept.` : '';
+        parts.push(`${this.formatNum(this.errorsPrunedTotal)} records have been pruned by retention.${since}`);
+      }
+      return parts.join(' ');
     },
 
     /** Only worth saying when the grid has rows — the empty state already explains itself in full. */
@@ -4703,7 +4738,7 @@ function adminApp() {
      */
     get errorsStorageNote() {
       return this.errorsPersisted
-        ? 'Stored in the database and kept across restarts. Client disconnects are excluded, so this can read lower than the Overview error counter.'
+        ? 'Stored in the database and kept across restarts. Client disconnects are counted separately on the Overview and are not errors.'
         : 'No database configured, so these are held in memory only and will be lost on restart.';
     },
 

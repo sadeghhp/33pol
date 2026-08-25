@@ -35,8 +35,28 @@ public sealed class DatabaseGatewayErrorStore(
         GatewayErrorQuery query,
         CancellationToken cancellationToken = default) =>
         ReadAsync(
-            archive => archive.QueryGroupsAsync(query, cancellationToken),
-            () => hotStore.QueryGroupsAsync(query, cancellationToken),
+            async (archive, services) =>
+            {
+                var page = await archive.QueryGroupsAsync(query, cancellationToken).ConfigureAwait(false);
+                var retention = await ReadRetentionAsync(services, cancellationToken).ConfigureAwait(false);
+                return page with
+                {
+                    DroppedTotal = writer.DroppedTotal,
+                    PersistFailedTotal = writer.PersistFailedTotal,
+                    PrunedTotal = retention?.PrunedTotal ?? 0,
+                    RetainedSinceUtc = retention?.RetainedSinceUtc,
+                };
+            },
+            async () =>
+            {
+                var page = await hotStore.QueryGroupsAsync(query, cancellationToken).ConfigureAwait(false);
+                return page with
+                {
+                    Degraded = true,
+                    DroppedTotal = writer.DroppedTotal,
+                    PersistFailedTotal = writer.PersistFailedTotal,
+                };
+            },
             cancellationToken);
 
     public Task<GatewayErrorPage> QueryAsync(
@@ -73,11 +93,38 @@ public sealed class DatabaseGatewayErrorStore(
         var archive = scope.ServiceProvider.GetRequiredService<IGatewayErrorArchive>();
         var deleted = await archive.DeleteAllAsync(cancellationToken).ConfigureAwait(false);
 
+        // The wipe rebases the archive, so the retention ledger starts over with it.
+        var state = scope.ServiceProvider.GetService<IMaintenanceStateStore>();
+        if (state is not null)
+        {
+            await state.SetAsync(
+                MaintenanceStateKeys.ErrorRetention,
+                new GatewayErrorRetentionState(),
+                cancellationToken).ConfigureAwait(false);
+        }
+
         return Math.Max(removed, deleted);
     }
 
-    private async Task<T> ReadAsync<T>(
+    private static async Task<GatewayErrorRetentionState?> ReadRetentionAsync(
+        IServiceProvider services,
+        CancellationToken cancellationToken)
+    {
+        var state = services.GetService<IMaintenanceStateStore>();
+        return state is null
+            ? null
+            : await state.GetAsync<GatewayErrorRetentionState>(MaintenanceStateKeys.ErrorRetention, cancellationToken)
+                .ConfigureAwait(false);
+    }
+
+    private Task<T> ReadAsync<T>(
         Func<IGatewayErrorArchive, Task<T>> read,
+        Func<Task<T>> fallback,
+        CancellationToken cancellationToken) =>
+        ReadAsync((archive, _) => read(archive), fallback, cancellationToken);
+
+    private async Task<T> ReadAsync<T>(
+        Func<IGatewayErrorArchive, IServiceProvider, Task<T>> read,
         Func<Task<T>> fallback,
         CancellationToken cancellationToken)
     {
@@ -87,7 +134,7 @@ public sealed class DatabaseGatewayErrorStore(
 
             using var scope = scopeFactory.CreateScope();
             var archive = scope.ServiceProvider.GetRequiredService<IGatewayErrorArchive>();
-            return await read(archive).ConfigureAwait(false);
+            return await read(archive, scope.ServiceProvider).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {

@@ -53,6 +53,31 @@ public sealed class GatewayRequestTrackerTests
         runtime.GetErrorsPerModel()["gpt-4o"].Should().Be(1);
     }
 
+    /// <summary>
+    /// A caller hanging up is not a gateway failure. It must count as a request (it consumed
+    /// capacity) and as a disconnect, and leave the error total — which the Errors tab is
+    /// reconciled against — untouched.
+    /// </summary>
+    [Fact]
+    public void SetClientCanceled_CountsARequestAndADisconnectButNotAnError()
+    {
+        var runtime = new GatewayRuntimeState();
+        var tracker = new GatewayRequestTracker(runtime);
+
+        using (var scope = tracker.BeginInferenceRequest("gpt-4o", isStreaming: true))
+        {
+            scope.SetClientCanceled();
+        }
+
+        var (total, errors, _, activeStreams, _, _) = runtime.GetStats();
+        total.Should().Be(1);
+        errors.Should().Be(0);
+        activeStreams.Should().Be(0);
+        runtime.GetClientDisconnects().Should().Be(1);
+        runtime.GetErrorsPerModel().Should().NotContainKey("gpt-4o");
+        runtime.GetRequestsPerModel()["gpt-4o"].Should().Be(1);
+    }
+
     [Theory]
     [InlineData("bulkhead_full", "bulkhead")]
     [InlineData("circuit_open", "circuit_open")]

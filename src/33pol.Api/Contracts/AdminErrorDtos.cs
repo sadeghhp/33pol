@@ -168,6 +168,21 @@ public sealed class AdminErrorGroupListResponse
     /// </summary>
     public long StoredTotal { get; init; }
 
+    /// <summary>Records dropped before persistence because the write buffer was full.</summary>
+    public long DroppedTotal { get; init; }
+
+    /// <summary>Records that failed to persist after a retry.</summary>
+    public long PersistFailedTotal { get; init; }
+
+    /// <summary>Records deleted by retention since the last clear.</summary>
+    public long PrunedTotal { get; init; }
+
+    /// <summary>Age cutoff of the last retention pass; nothing older is stored.</summary>
+    public DateTimeOffset? RetainedSinceUtc { get; init; }
+
+    /// <summary>True when the archive was unreachable and this page came from the in-memory buffer.</summary>
+    public bool Degraded { get; init; }
+
     public int Limit { get; init; }
 
     public int Offset { get; init; }
@@ -192,6 +207,11 @@ public sealed class AdminErrorGroupListResponse
         Total = page.Total,
         OccurrenceTotal = page.OccurrenceTotal,
         StoredTotal = page.StoredTotal,
+        DroppedTotal = page.DroppedTotal,
+        PersistFailedTotal = page.PersistFailedTotal,
+        PrunedTotal = page.PrunedTotal,
+        RetainedSinceUtc = page.RetainedSinceUtc,
+        Degraded = page.Degraded,
         Limit = page.Limit,
         Offset = page.Offset,
         Source = page.Source,

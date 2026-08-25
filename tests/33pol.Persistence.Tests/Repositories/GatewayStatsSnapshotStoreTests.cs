@@ -38,6 +38,7 @@ public sealed class GatewayStatsSnapshotStoreTests
         {
             TotalRequests = 42,
             TotalErrors = 5,
+            ClientDisconnects = 3,
             TotalLatencyMs = 8400,
             RateLimitRejections = 2,
             QuotaRejections = 1,
@@ -58,6 +59,7 @@ public sealed class GatewayStatsSnapshotStoreTests
             loaded.Should().NotBeNull();
             loaded!.TotalRequests.Should().Be(42);
             loaded.TotalErrors.Should().Be(5);
+            loaded.ClientDisconnects.Should().Be(3);
             loaded.TotalLatencyMs.Should().Be(8400);
             loaded.RateLimitRejections.Should().Be(2);
             loaded.QuotaRejections.Should().Be(1);
