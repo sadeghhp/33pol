@@ -82,10 +82,15 @@ public sealed class AdminLogEndpointTests
         var body = await client.GetStringAsync("/admin/api/errors");
 
         using var json = JsonDocument.Parse(body);
-        // Exactly one: the proxy's detailed record. Serilog's request-completion line and the
-        // router's own warning restate the same failure and must not appear beside it.
-        json.RootElement.GetProperty("total").GetInt64().Should().Be(1, because: body);
-        var occurrence = json.RootElement.GetProperty("occurrences")[0];
+        // Exactly one request-path record: the proxy's. Serilog's request-completion line and the
+        // router's own warning restate the same failure and must not appear beside it. Background
+        // health probes of the same closed port record their own 'health' errors and are not part
+        // of this request.
+        var requestScoped = json.RootElement.GetProperty("occurrences").EnumerateArray()
+            .Where(o => o.GetProperty("source").GetString() != "health")
+            .ToList();
+        requestScoped.Should().ContainSingle(because: body);
+        var occurrence = requestScoped[0];
         occurrence.GetProperty("source").GetString().Should().Be("proxy");
         occurrence.GetProperty("outcome").GetString().Should().Be("upstream_error");
         occurrence.GetProperty("upstreamTarget").GetString().Should().Be("http://localhost:8080");

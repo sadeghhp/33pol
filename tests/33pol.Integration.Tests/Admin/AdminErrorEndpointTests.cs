@@ -56,12 +56,16 @@ public sealed class AdminErrorEndpointTests
         response.StatusCode.Should().Be(HttpStatusCode.OK, because: body);
         using var json = JsonDocument.Parse(body);
         var root = json.RootElement;
-        root.GetProperty("total").GetInt64().Should().Be(1);
-        root.GetProperty("occurrenceTotal").GetInt64().Should().Be(2);
+        // Background health probes may add 'health' groups of their own; the seeded proxy group is
+        // the one under test.
+        var seeded = root.GetProperty("groups").EnumerateArray()
+            .Where(g => g.GetProperty("source").GetString() != "health")
+            .ToList();
+        seeded.Should().ContainSingle(because: body);
         root.GetProperty("persisted").GetBoolean().Should().BeTrue();
         root.GetProperty("source").GetString().Should().Be("database");
 
-        var group = root.GetProperty("groups")[0];
+        var group = seeded[0];
         group.GetProperty("count").GetInt64().Should().Be(2);
         group.GetProperty("modelId").GetString().Should().Be("gpt-4o");
         group.GetProperty("statusCode").GetInt32().Should().Be(502);
