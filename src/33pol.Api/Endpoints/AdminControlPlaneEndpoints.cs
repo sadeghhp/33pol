@@ -30,6 +30,8 @@ public static class AdminControlPlaneEndpoints
         group.MapPost("/models", AddModel);
         group.MapPatch("/models/{id}", UpdateModel);
         group.MapDelete("/models/{id}", RemoveModel);
+        group.MapPost("/models/{id}/stop", StopModel);
+        group.MapPost("/models/{id}/start", StartModel);
         group.MapPost("/models/{id}/test", TestModel);
         group.MapGet("/logs", ListLogs);
         group.MapDelete("/logs", ClearLogs);
@@ -225,6 +227,56 @@ public static class AdminControlPlaneEndpoints
     }
 
     /// <summary>
+    /// Takes a route out of service: it stays registered — with its aliases, credential, pricing and
+    /// grants — but disappears from <c>GET /v1/models</c> and its inference requests are refused.
+    /// </summary>
+    /// <remarks>
+    /// Separate from <c>DELETE</c> because it is the reversible half of the same operator intent
+    /// ("stop sending traffic here"), and separate from <c>PATCH</c> because it must not carry, and
+    /// therefore must not overwrite, the rest of the model.
+    /// </remarks>
+    private static Task<IResult> StopModel(
+        HttpContext httpContext,
+        IControlPlaneCommands commands,
+        IAuditLogger audit,
+        string id,
+        CancellationToken cancellationToken) =>
+        SetModelStateAsync(httpContext, commands, audit, id, ModelRouteStates.Stopped, cancellationToken);
+
+    /// <summary>Puts a stopped route back in service.</summary>
+    private static Task<IResult> StartModel(
+        HttpContext httpContext,
+        IControlPlaneCommands commands,
+        IAuditLogger audit,
+        string id,
+        CancellationToken cancellationToken) =>
+        SetModelStateAsync(httpContext, commands, audit, id, ModelRouteStates.Serving, cancellationToken);
+
+    private static async Task<IResult> SetModelStateAsync(
+        HttpContext httpContext,
+        IControlPlaneCommands commands,
+        IAuditLogger audit,
+        string id,
+        string state,
+        CancellationToken cancellationToken)
+    {
+        var modelId = AdminModelRouteId.Decode(id);
+        var result = await commands.SetModelStateAsync(modelId, state, cancellationToken).ConfigureAwait(false);
+
+        if (result.Success)
+        {
+            // Audited like every other model mutation: taking a model out of service changes what
+            // the whole gateway will serve, and an operator investigating "why did this model stop
+            // answering" needs to find who did it and when.
+            audit.LogAdminAction(
+                state == ModelRouteStates.Stopped ? "model.stop" : "model.start",
+                AdminActor.FromHttpContext(httpContext).ToAuditEntry(new { modelId, state }));
+        }
+
+        return Results.Json(result, statusCode: result.SuggestedStatusCode);
+    }
+
+    /// <summary>
     /// The audit-worthy shape of a model write: identity, upstream, and routing surface. Never the
     /// request's <c>apiKey</c> — the credential is audited separately as presence, not value.
     /// </summary>
@@ -234,6 +286,7 @@ public static class AdminControlPlaneEndpoints
         modelId = model.Id,
         url = model.Url,
         modelType = model.ModelType,
+        state = model.State,
         aliases = model.Aliases,
         publicAccess = model.PublicAccess,
         upstreamAuth = model.UpstreamAuth is null

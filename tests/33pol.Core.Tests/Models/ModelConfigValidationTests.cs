@@ -125,4 +125,23 @@ public sealed class ModelConfigValidationTests
             out var error).Should().BeTrue();
         error.Should().BeNull();
     }
+
+    [Fact]
+    public void TryValidate_UnknownState_IsRejected()
+    {
+        var model = new ModelConfig { Id = "m", Url = "http://upstream", State = "paused" };
+
+        ModelConfigValidation.TryValidate(model, out var error).Should().BeFalse();
+        error.Should().Contain("state");
+    }
+
+    [Theory]
+    [InlineData(ModelRouteStates.Serving)]
+    [InlineData(ModelRouteStates.Stopped)]
+    public void TryValidate_EitherKnownState_IsAccepted(string state)
+    {
+        var model = new ModelConfig { Id = "m", Url = "http://upstream", State = state };
+
+        ModelConfigValidation.TryValidate(model, out var error).Should().BeTrue(error);
+    }
 }

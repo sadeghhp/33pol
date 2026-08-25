@@ -102,6 +102,39 @@ public sealed class AdminModelAuditTests
         audit.Entries.Should().NotContain(e => e.Action == "model.create");
     }
 
+    /// <summary>
+    /// Taking a route out of service changes what the whole gateway will serve; an operator asking
+    /// "why did this model stop answering" has to be able to find who did it.
+    /// </summary>
+    [Fact]
+    public async Task ModelStopAndStart_AreAuditedWithTheCallersIdentity()
+    {
+        var audit = new RecordingAuditLogger();
+        await using var factory = GatewayWebApplicationFactory.CreateWithInMemoryDatabase(AdminKey)
+            .WithWebHostBuilder(builder => builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IAuditLogger>();
+                services.AddSingleton<IAuditLogger>(audit);
+            }));
+        await GatewayWebApplicationFactory.EnsureAuthReadyAsync(factory);
+
+        using var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", AdminKey);
+
+        const string id = "local-mock";
+        (await client.PostAsync($"/admin/api/models/{id}/stop", content: null)).EnsureSuccessStatusCode();
+        (await client.PostAsync($"/admin/api/models/{id}/start", content: null)).EnsureSuccessStatusCode();
+
+        audit.Entries.Select(e => e.Action).Should().Contain(["model.stop", "model.start"]);
+
+        var stopped = audit.Entries.Single(e => e.Action == "model.stop");
+        var details = JsonSerializer.SerializeToElement(stopped.Entry.Details);
+        details.GetProperty("modelId").GetString().Should().Be(id);
+        details.GetProperty("state").GetString().Should().Be("stopped");
+        stopped.Entry.TenantId.Should().NotBeNullOrEmpty();
+        stopped.Entry.ApiKeyId.Should().NotBeNullOrEmpty();
+    }
+
     private sealed class RecordingAuditLogger : IAuditLogger
     {
         private readonly ConcurrentQueue<(string Action, AuditLogEntry Entry)> _entries = new();

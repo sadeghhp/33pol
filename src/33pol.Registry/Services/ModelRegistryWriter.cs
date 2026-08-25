@@ -186,6 +186,62 @@ public sealed class ModelRegistryWriter(
         return result;
     }
 
+    public async Task<RegistryMutationResult> SetModelStateAsync(
+        string id,
+        string state,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(id);
+
+        if (!ModelRouteStates.TryNormalize(state, out var targetState, out var stateError) ||
+            string.IsNullOrWhiteSpace(state))
+        {
+            // Blank normalizes to "serving" on the write paths that treat it as "unspecified";
+            // here the state *is* the request, so an absent one is a caller error, not a default.
+            return RegistryMutationResult.Fail(
+                stateError ?? $"state is required and must be one of: {string.Join(", ", ModelRouteStates.All)}.",
+                400);
+        }
+
+        string? targetId = null;
+        var alreadyInState = false;
+
+        return await MutateAsync(
+            current =>
+            {
+                var existing = TryFindById(current, id) ?? FindAliasOwner(current, id);
+                if (existing is null)
+                {
+                    return MutationPlan.Rejected($"Model '{id}' was not found.", 404);
+                }
+
+                targetId = existing.Id;
+
+                // Idempotent: stopping an already-stopped route is not an error, and rewriting the
+                // whole table for a no-op change would bump the route version for every replica.
+                if (string.Equals(existing.State, targetState, StringComparison.OrdinalIgnoreCase))
+                {
+                    alreadyInState = true;
+                    return MutationPlan.NoChange();
+                }
+
+                var updated = ModelRegistryPersistence.CloneModel(existing);
+                updated.State = targetState;
+
+                return MutationPlan.Ok(
+                    current
+                        .Select(m => string.Equals(m.Id, existing.Id, StringComparison.OrdinalIgnoreCase) ? updated : m)
+                        .ToList());
+            },
+            () => alreadyInState
+                ? $"Model '{targetId}' is already {targetState}."
+                : targetState == ModelRouteStates.Stopped
+                    ? $"Model '{targetId}' stopped; it no longer appears in /v1/models and requests for it are rejected."
+                    : $"Model '{targetId}' is serving again.",
+            targetState == ModelRouteStates.Stopped ? "stop model" : "start model",
+            cancellationToken).ConfigureAwait(false);
+    }
+
     public async Task<RegistryMutationResult> ReplaceAllAsync(
         IReadOnlyList<ModelConfig> models,
         CancellationToken cancellationToken = default)
@@ -262,6 +318,14 @@ public sealed class ModelRegistryWriter(
                 return planned.Failure!;
             }
 
+            // A plan that changes nothing must not be persisted. Rewriting the identical route set
+            // still bumps the route version, which every other replica polls and reacts to — an
+            // idempotent no-op would fan out a pointless reload across the fleet.
+            if (planned.Unchanged)
+            {
+                return RegistryMutationResult.Ok(successMessage());
+            }
+
             // The candidate set must be loadable before it is durable. This is the guard that keeps a
             // rejected write out of the database.
             (Dictionary<string, ModelConfig> Lookup, List<ModelConfig> Models) snapshot;
@@ -327,9 +391,16 @@ public sealed class ModelRegistryWriter(
             m => m.Aliases.Any(alias => string.Equals(alias, trimmed, StringComparison.OrdinalIgnoreCase)));
     }
 
-    private sealed record MutationPlan(bool Success, List<ModelConfig>? Models, RegistryMutationResult? Failure)
+    private sealed record MutationPlan(
+        bool Success,
+        List<ModelConfig>? Models,
+        RegistryMutationResult? Failure,
+        bool Unchanged = false)
     {
         public static MutationPlan Ok(List<ModelConfig> models) => new(true, models, null);
+
+        /// <summary>The request was valid and the registry already satisfies it; nothing to write.</summary>
+        public static MutationPlan NoChange() => new(true, null, null, Unchanged: true);
 
         public static MutationPlan Rejected(string message, int statusCode) =>
             new(false, null, RegistryMutationResult.Fail(message, statusCode));

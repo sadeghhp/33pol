@@ -21,4 +21,13 @@ public interface IControlPlaneCommands
     Task<RegistryMutationResult> UpdateModelAsync(string id, ModelConfig model, CancellationToken cancellationToken = default);
 
     Task<RegistryMutationResult> RemoveModelAsync(string id, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Takes a model route out of service (<c>stopped</c>) or puts it back (<c>serving</c>).
+    /// See <see cref="ModelRouteStates"/>.
+    /// </summary>
+    Task<RegistryMutationResult> SetModelStateAsync(
+        string id,
+        string state,
+        CancellationToken cancellationToken = default);
 }

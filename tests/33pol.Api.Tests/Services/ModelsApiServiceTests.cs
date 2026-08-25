@@ -227,4 +227,164 @@ public sealed class ModelsApiServiceTests
         response.Should().BeNull();
         error!.Error.Code.Should().Be("model_not_found");
     }
+
+    /// <summary>
+    /// A stopped route is invisible to callers even though the backend behind it is perfectly
+    /// healthy — the exclusion is the operator's decision, not a health verdict.
+    /// </summary>
+    [Fact]
+    public void ListHealthyModels_ExcludesStoppedModels()
+    {
+        var registry = Substitute.For<IModelRegistry>();
+        registry.GetAllModels().Returns(
+        [
+            new ModelConfig { Id = "serving-a", Url = "http://a" },
+            new ModelConfig { Id = "stopped-b", Url = "http://b", State = ModelRouteStates.Stopped },
+        ]);
+
+        var health = Substitute.For<IBackendHealthStore>();
+        health.IsBackendHealthy(Arg.Any<string>()).Returns(true);
+
+        var service = new ModelsApiService(registry, health, Substitute.For<IModelGrantService>());
+
+        service.ListHealthyModels().Data.Select(m => m.Id).Should().BeEquivalentTo(["serving-a"]);
+    }
+
+    [Fact]
+    public async Task ListHealthyModelsAsync_ExcludesStoppedModels_EvenWhenGranted()
+    {
+        var registry = Substitute.For<IModelRegistry>();
+        registry.GetAllModels().Returns(
+        [
+            new ModelConfig { Id = "serving-a", Url = "http://a" },
+            new ModelConfig { Id = "stopped-b", Url = "http://b", State = ModelRouteStates.Stopped },
+        ]);
+
+        var health = Substitute.For<IBackendHealthStore>();
+        health.IsBackendHealthy(Arg.Any<string>()).Returns(true);
+
+        var grants = Substitute.For<IModelGrantService>();
+        grants.IsModelAllowedAsync(Arg.Any<Guid>(), Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+
+        var service = new ModelsApiService(registry, health, grants);
+        var list = await service.ListHealthyModelsAsync(Guid.NewGuid(), Guid.NewGuid());
+
+        list.Data.Select(m => m.Id).Should().BeEquivalentTo(["serving-a"]);
+    }
+
+    [Fact]
+    public void ListAnonymousHealthyModels_OmitsStoppedModelsFromBothViews()
+    {
+        var registry = Substitute.For<IModelRegistry>();
+        registry.GetAllModels().Returns(
+        [
+            new ModelConfig { Id = "public-a", Url = "http://a", PublicAccess = true },
+            new ModelConfig
+            {
+                Id = "stopped-public-b",
+                Url = "http://b",
+                PublicAccess = true,
+                State = ModelRouteStates.Stopped,
+            },
+        ]);
+
+        var health = Substitute.For<IBackendHealthStore>();
+        health.IsBackendHealthy(Arg.Any<string>()).Returns(true);
+
+        var service = new ModelsApiService(registry, health, Substitute.For<IModelGrantService>());
+        var list = service.ListAnonymousHealthyModels();
+
+        list.Data.Select(m => m.Id).Should().BeEquivalentTo(["public-a"]);
+        // The inventory view exists to say "this model needs a key", not to advertise routes the
+        // gateway will refuse; a stopped model must not appear there either.
+        list.Models!.Select(m => m.Id).Should().BeEquivalentTo(["public-a"]);
+    }
+
+    [Theory]
+    [InlineData("stopped-b")]
+    [InlineData("stopped-alias")]
+    public void TryGetModel_Stopped_ReturnsNotFound_ByIdAndAlias(string name)
+    {
+        var model = new ModelConfig
+        {
+            Id = "stopped-b",
+            Url = "http://b",
+            Aliases = ["stopped-alias"],
+            State = ModelRouteStates.Stopped,
+        };
+
+        var registry = Substitute.For<IModelRegistry>();
+        registry.TryGetModel(name, out Arg.Any<ModelConfig?>())
+            .Returns(call =>
+            {
+                call[1] = model;
+                return true;
+            });
+
+        var health = Substitute.For<IBackendHealthStore>();
+        health.IsBackendHealthy("stopped-b").Returns(true);
+
+        var service = new ModelsApiService(registry, health, Substitute.For<IModelGrantService>());
+        var (response, error) = service.TryGetModel(name);
+
+        response.Should().BeNull();
+        error!.Error.Code.Should().Be("model_not_found");
+    }
+
+    [Fact]
+    public async Task TryGetModelAsync_Stopped_ReturnsNotFound()
+    {
+        var model = new ModelConfig { Id = "stopped-b", Url = "http://b", State = ModelRouteStates.Stopped };
+
+        var registry = Substitute.For<IModelRegistry>();
+        registry.TryGetModel("stopped-b", out Arg.Any<ModelConfig?>())
+            .Returns(call =>
+            {
+                call[1] = model;
+                return true;
+            });
+
+        var health = Substitute.For<IBackendHealthStore>();
+        health.IsBackendHealthy("stopped-b").Returns(true);
+
+        var grants = Substitute.For<IModelGrantService>();
+        grants.IsModelAllowedAsync(Arg.Any<Guid>(), Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+
+        var service = new ModelsApiService(registry, health, grants);
+        var (response, error) = await service.TryGetModelAsync("stopped-b", Guid.NewGuid(), Guid.NewGuid());
+
+        response.Should().BeNull();
+        error!.Error.Code.Should().Be("model_not_found");
+    }
+
+    [Fact]
+    public void TryGetPublicModel_Stopped_ReturnsNotFound()
+    {
+        var model = new ModelConfig
+        {
+            Id = "stopped-public",
+            Url = "http://b",
+            PublicAccess = true,
+            State = ModelRouteStates.Stopped,
+        };
+
+        var registry = Substitute.For<IModelRegistry>();
+        registry.TryGetModel("stopped-public", out Arg.Any<ModelConfig?>())
+            .Returns(call =>
+            {
+                call[1] = model;
+                return true;
+            });
+
+        var health = Substitute.For<IBackendHealthStore>();
+        health.IsBackendHealthy("stopped-public").Returns(true);
+
+        var service = new ModelsApiService(registry, health, Substitute.For<IModelGrantService>());
+        var (response, error) = service.TryGetPublicModel("stopped-public");
+
+        response.Should().BeNull();
+        error!.Error.Code.Should().Be("model_not_found");
+    }
 }

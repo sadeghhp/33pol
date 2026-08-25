@@ -29,6 +29,11 @@ public static class ModelConfigValidation
             return false;
         }
 
+        if (!ModelRouteStates.TryNormalize(model.State, out _, out error))
+        {
+            return false;
+        }
+
         if (model.UpstreamAuth is null)
         {
             return true;

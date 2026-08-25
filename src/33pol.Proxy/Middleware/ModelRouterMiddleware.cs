@@ -154,6 +154,25 @@ public sealed class ModelRouterMiddleware
             return;
         }
 
+        // Checked before grants, health and every other admission control: an operator has taken
+        // this route out of service, so nothing downstream is entitled to admit it. Answered as
+        // model_not_found, which is what GET /v1/models already says about it — a stopped model is
+        // absent from the listing, so an OpenAI-compatible client that fails over on 404 does the
+        // right thing. The message names the real cause so an operator is not left guessing.
+        if (modelConfig.IsStopped())
+        {
+            _metricsCollector.RecordModelResolve("stopped", requestInfo.Model);
+            await RejectAtAdmissionAsync(
+                context,
+                modelConfig.Id,
+                requestInfo.Stream,
+                _errors.Write(
+                    GatewayErrorCode.ModelNotFound,
+                    message: $"Model '{requestInfo.Model}' has been stopped by an administrator."),
+                outcome: "model_stopped").ConfigureAwait(false);
+            return;
+        }
+
         _metricsCollector.RecordModelResolve(
             string.Equals(requestInfo.Model, modelConfig.Id, StringComparison.OrdinalIgnoreCase)
                 ? "resolved"

@@ -50,6 +50,51 @@ public sealed class HealthCheckServiceTests
         healthStore.GetAllHealth().Should().BeEmpty();
     }
 
+    /// <summary>
+    /// A stopped route is not probed. Probing one would spend a connection per sweep on a backend
+    /// the gateway will not forward to, and — because the sweep records faults — would raise errors
+    /// and attention items for a model an operator deliberately took out of service.
+    /// </summary>
+    [Fact]
+    public async Task CheckAllBackendsAsync_SkipsStoppedModels()
+    {
+        var handler = new SequenceHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK));
+        var registry = Substitute.For<IModelRegistry>();
+        registry.GetAllModels().Returns(
+        [
+            new ModelConfig { Id = "serving", Url = "http://serving:8000" },
+            new ModelConfig { Id = "stopped", Url = "http://stopped:8000", State = ModelRouteStates.Stopped },
+        ]);
+        var service = CreateService(handler, registry: registry);
+
+        await service.CheckAllBackendsAsync();
+
+        handler.RequestedPaths.Where(p => p == "/v1/models").Should().HaveCount(1);
+    }
+
+    /// <summary>
+    /// Stopping a model clears its health row too, so the backends view does not keep showing a
+    /// verdict from the last sweep that ran while it was still serving.
+    /// </summary>
+    [Fact]
+    public async Task CheckAllBackendsAsync_StoppingAModel_ForgetsItsLastHealthVerdict()
+    {
+        var handler = new SequenceHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK));
+        var healthStore = new BackendHealthStore(Options.Create(new GatewayOptions()));
+        var registry = Substitute.For<IModelRegistry>();
+        registry.GetAllModels().Returns([new ModelConfig { Id = "a", Url = "http://a:8000" }]);
+        var service = CreateService(handler, healthStore, registry);
+
+        await service.CheckAllBackendsAsync();
+        healthStore.GetAllHealth().Keys.Should().BeEquivalentTo("a");
+
+        registry.GetAllModels().Returns(
+            [new ModelConfig { Id = "a", Url = "http://a:8000", State = ModelRouteStates.Stopped }]);
+        await service.CheckAllBackendsAsync();
+
+        healthStore.GetAllHealth().Should().BeEmpty();
+    }
+
     [Fact]
     public async Task CheckAllBackendsAsync_WithModels_ProbesEachBackend()
     {

@@ -90,10 +90,14 @@ public sealed class HealthCheckService : BackgroundService
 
     public async Task CheckAllBackendsAsync(CancellationToken cancellationToken = default)
     {
-        var models = _registry.GetAllModels();
+        // Stopped routes are not probed: the gateway will not forward to them, so a probe would
+        // cost a connection per sweep and — worse — record an error and raise an attention item for
+        // a backend an operator deliberately took out of service. They are excluded from the prune
+        // set too, so a stopped model's last verdict does not sit frozen in the backends view.
+        var models = _registry.GetAllModels().Where(m => m.IsServing()).ToList();
 
-        // Removed or renamed models must not linger with their last status: prune first so a sweep
-        // over an emptied registry also clears the store.
+        // Removed, renamed or stopped models must not linger with their last status: prune first so
+        // a sweep over an emptied registry also clears the store.
         PruneRemovedModels(models);
         if (models.Count == 0)
         {

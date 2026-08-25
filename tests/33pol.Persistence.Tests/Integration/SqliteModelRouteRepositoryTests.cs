@@ -53,6 +53,31 @@ public sealed class SqliteModelRouteRepositoryTests
         (await repository.ListAsync()).Select(m => m.Id).Should().BeEquivalentTo(["a"]);
     }
 
+    /// <summary>
+    /// State is durable, not a runtime flag: a route stopped before a restart must still be stopped
+    /// after one, or restarting the gateway would silently put every stopped model back in service.
+    /// </summary>
+    [Fact]
+    public async Task ReplaceAll_RoundTripsRouteState()
+    {
+        var connectionString = NewSharedInMemoryConnectionString();
+        await using var keepAlive = await MigratedKeepAliveAsync(connectionString);
+
+        await using (var db = PersistenceTestDbContextFactory.CreateSqlite(connectionString))
+        {
+            var stopped = Model("stopped");
+            stopped.State = ModelRouteStates.Stopped;
+            await new ModelRouteRepository(db).ReplaceAllAsync([Model("serving"), stopped]);
+        }
+
+        // A fresh context, as a restarted process would use.
+        await using var reread = PersistenceTestDbContextFactory.CreateSqlite(connectionString);
+        var routes = await new ModelRouteRepository(reread).ListAsync();
+
+        routes.Single(m => m.Id == "stopped").IsStopped().Should().BeTrue();
+        routes.Single(m => m.Id == "serving").IsServing().Should().BeTrue();
+    }
+
     [Fact]
     public async Task ReplaceAll_WithStaleExpectedVersion_ThrowsAndKeepsTheOtherWritersRoutes()
     {

@@ -23,6 +23,12 @@ public sealed class ModelRouteEntity
 
     public bool PublicAccess { get; set; }
 
+    /// <summary>
+    /// Whether the route is in service (<c>ModelRouteStates</c>). Rows written before this column
+    /// existed are backfilled to <c>serving</c> by the migration, which is what they were.
+    /// </summary>
+    public string State { get; set; } = "serving";
+
     /// <summary>Serialized <c>UpstreamAuthConfig</c> (JSON), or null when the model has no upstream auth.</summary>
     public string? UpstreamAuthJson { get; set; }
 

@@ -46,6 +46,7 @@ public sealed class GatewayRequestTracker(GatewayRuntimeState runtimeState) : IR
         "backend_unhealthy" => RejectionReason.BackendUnhealthy,
         "circuit_open" => RejectionReason.CircuitOpen,
         "insufficient_scope" => RejectionReason.GrantDenied,
+        "model_stopped" => RejectionReason.ModelStopped,
         _ => null,
     };
 

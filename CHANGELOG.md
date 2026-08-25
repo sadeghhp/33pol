@@ -4,6 +4,14 @@ All notable changes to this project are documented here. Version tags follow [Se
 
 ## [Unreleased]
 
+### Added — stop a model route from the admin panel
+
+- **Model routes carry a state.** `ModelConfig.state` is `serving` or `stopped` (`ModelRouteStates`), persisted in a new `model_routes.State` column (migration `ModelRouteState`, existing rows backfilled to `serving`). A registry entry without the field — every `models.json` and every row written before this — loads as `serving`.
+- **Stop / start endpoints.** `POST /admin/api/models/{id}/stop` and `POST /admin/api/models/{id}/start` (Operator-only, accept an id or an alias, idempotent, audited as `model.stop` / `model.start`). They are a dedicated mutation rather than a `PATCH`, so taking a model out of service cannot race with — or overwrite — a concurrent edit of its URL, aliases or credential. Saving the model drawer never changes state, so an unrelated edit cannot put a stopped route back into service.
+- **A stopped route is not served.** It is excluded from `GET /v1/models` (every listing view, including the anonymous inventory) and answers `404` on `GET /v1/models/{id}` by id and by alias; inference for it is refused at admission with `404 model_not_found` naming the stop, so nothing reaches the upstream. Refusals are counted under a new `model_stopped` rejection reason.
+- **A stopped route is not probed.** The health sweep skips it and forgets its last verdict, so it neither burns a connection per interval nor raises errors and attention items for a backend an operator deliberately took out of service. `GET /admin/api/backends` gains `state`, and the Backends table reads *Stopped* rather than a frozen verdict.
+- **Admin panel.** Routing → Models gains a **State** column and per-row **Stop** (behind a confirm dialog) / **Start** actions. Stopping keeps the route's aliases, upstream credential, pricing and per-key grants — the reversible alternative to **Remove**.
+
 ### Added — admin Overview: windows, attention, health, FinOps, policy, wallboard
 
 - **Trailing windows and percentiles.** The Overview's vitals now read from an in-memory windowed store (`1m`/`5m`/`1h`/`24h`, picker in the header, `#/dashboard?window=5m`): requests and throughput, error rate, **latency p95** (p50/p99) instead of the lifetime mean, and a new **TTFT p95** tile. Sparklines come from a server-side per-minute series (`summary.series`) so they survive a reload. Lifetime counters are unchanged; an older gateway falls back to them labelled *lifetime*. (`Gateway:Overview:WindowedStats`)

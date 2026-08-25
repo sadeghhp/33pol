@@ -23,7 +23,7 @@ public sealed class ModelsApiService(
     public OpenAiModelListResponse ListAnonymousHealthyModels()
     {
         var healthy = registry.GetAllModels()
-            .Where(model => healthStore.IsBackendHealthy(model.Id))
+            .Where(model => model.IsServing() && healthStore.IsBackendHealthy(model.Id))
             .ToList();
 
         return new OpenAiModelListResponse
@@ -50,7 +50,7 @@ public sealed class ModelsApiService(
         var allowed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var model in registry.GetAllModels())
         {
-            if (!healthStore.IsBackendHealthy(model.Id))
+            if (!model.IsServing() || !healthStore.IsBackendHealthy(model.Id))
             {
                 continue;
             }
@@ -76,7 +76,7 @@ public sealed class ModelsApiService(
 
     public (OpenAiModelResponse? Model, ErrorResult? Error) TryGetPublicModel(string name)
     {
-        if (!registry.TryGetModel(name, out var model) || model is null || !model.AllowsPublicGatewayAccess())
+        if (!registry.TryGetModel(name, out var model) || model is null || model.IsStopped() || !model.AllowsPublicGatewayAccess())
         {
             return (null, ErrorResult.FromCode(
                 GatewayErrorCode.ModelNotFound,
@@ -93,7 +93,7 @@ public sealed class ModelsApiService(
         Guid apiKeyId,
         CancellationToken cancellationToken = default)
     {
-        if (!registry.TryGetModel(name, out var model) || model is null)
+        if (!registry.TryGetModel(name, out var model) || model is null || model.IsStopped())
         {
             return (null, ErrorResult.FromCode(
                 GatewayErrorCode.ModelNotFound,
@@ -117,7 +117,7 @@ public sealed class ModelsApiService(
     private OpenAiModelListResponse ListHealthyModelsCore(Func<ModelConfig, bool> includeModel)
     {
         var data = registry.GetAllModels()
-            .Where(model => healthStore.IsBackendHealthy(model.Id) && includeModel(model))
+            .Where(model => model.IsServing() && healthStore.IsBackendHealthy(model.Id) && includeModel(model))
             .Select(model => OpenAiModelMapper.ToResponse(model, available: true))
             .ToList();
 
@@ -128,7 +128,10 @@ public sealed class ModelsApiService(
         string name,
         Func<string, bool> includeModel)
     {
-        if (!registry.TryGetModel(name, out var model) || model is null)
+        // A stopped route is invisible here for the same reason it is absent from the listing: the
+        // gateway will not forward to it, so reporting it as an available model would hand callers a
+        // model id that answers 404 on first use.
+        if (!registry.TryGetModel(name, out var model) || model is null || model.IsStopped())
         {
             return (null, ErrorResult.FromCode(
                 GatewayErrorCode.ModelNotFound,

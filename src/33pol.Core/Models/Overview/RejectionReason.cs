@@ -16,6 +16,7 @@ public enum RejectionReason
     ModelNotFound = 6,
     BackendUnhealthy = 7,
     CircuitOpen = 8,
+    ModelStopped = 9,
 }
 
 public static class RejectionReasonExtensions
@@ -32,6 +33,7 @@ public static class RejectionReasonExtensions
         RejectionReason.ModelNotFound => "model_not_found",
         RejectionReason.BackendUnhealthy => "backend_unhealthy",
         RejectionReason.CircuitOpen => "circuit_open",
+        RejectionReason.ModelStopped => "model_stopped",
         _ => reason.ToString().ToLowerInvariant(),
     };
 }

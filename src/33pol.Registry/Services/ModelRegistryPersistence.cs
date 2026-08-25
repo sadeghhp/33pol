@@ -147,5 +147,9 @@ internal static class ModelRegistryPersistence
             PublicAccess = model.PublicAccess,
             Capabilities = [.. model.Capabilities],
             ModelType = model.ModelType,
+            // Normalized on every clone, so a route persisted before this field existed (or by a
+            // build that wrote something this one does not recognise) loads as serving rather than
+            // as a route with an unresolvable state.
+            State = ModelRouteStates.Normalize(model.State),
         };
 }

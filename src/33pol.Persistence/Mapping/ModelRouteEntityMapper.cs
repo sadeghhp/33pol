@@ -17,6 +17,7 @@ internal static class ModelRouteEntityMapper
         Aliases = [.. entity.Aliases],
         Capabilities = [.. entity.Capabilities],
         ModelType = entity.ModelType,
+        State = ModelRouteStates.Normalize(entity.State),
         PublicAccess = entity.PublicAccess,
         UpstreamAuth = string.IsNullOrWhiteSpace(entity.UpstreamAuthJson)
             ? null
@@ -32,6 +33,7 @@ internal static class ModelRouteEntityMapper
         Aliases = [.. model.Aliases],
         Capabilities = [.. model.Capabilities],
         ModelType = model.ModelType,
+        State = ModelRouteStates.Normalize(model.State),
         PublicAccess = model.PublicAccess,
         UpstreamAuthJson = model.UpstreamAuth is null
             ? null

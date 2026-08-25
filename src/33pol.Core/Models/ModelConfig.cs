@@ -41,6 +41,15 @@ public sealed class ModelConfig
     [JsonPropertyName("modelType")]
     public string? ModelType { get; set; }
 
+    /// <summary>
+    /// Whether the route is in service (see <see cref="ModelRouteStates"/>). A stopped route is
+    /// still registered but is hidden from <c>GET /v1/models</c> and refused at admission, so
+    /// stopping a model is reversible where deleting it is not. Routes written before this field
+    /// existed deserialize to <see cref="ModelRouteStates.Serving"/>, which is what they were.
+    /// </summary>
+    [JsonPropertyName("state")]
+    public string State { get; set; } = ModelRouteStates.Serving;
+
     public bool HasCapability(string capability) =>
         Capabilities.Count == 0 ||
         Capabilities.Contains(capability, StringComparer.OrdinalIgnoreCase);

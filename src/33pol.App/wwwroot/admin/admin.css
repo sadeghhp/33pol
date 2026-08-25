@@ -505,6 +505,8 @@ h1, h2, h3, h4 { font-family: var(--font-display); }
 .health-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
 .health-dot.dot-ok   { background: var(--live); }
 .health-dot.dot-fail { background: var(--error); }
+/* Stopped is neither healthy nor failing — the route is simply not being probed. */
+.health-dot.dot-idle { background: var(--text-tertiary); }
 
 /* ================================================================
    7. PAGE CONTENT / HEADERS

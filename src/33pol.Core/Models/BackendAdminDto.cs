@@ -8,6 +8,12 @@ public sealed class BackendAdminDto
 
     public bool IsHealthy { get; init; }
 
+    /// <summary>
+    /// Whether an operator has this route in service (<see cref="ModelRouteStates"/>). A stopped
+    /// route is not probed, so this is what tells an operator why its health looks frozen.
+    /// </summary>
+    public string State { get; init; } = ModelRouteStates.Serving;
+
     public string? Alias { get; init; }
 
     /// <summary>HTTP status of the last probe, when it got a response.</summary>

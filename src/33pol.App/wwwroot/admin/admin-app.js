@@ -2627,6 +2627,37 @@ function adminApp() {
       }
     },
 
+    confirmStopModel(id) {
+      this.openConfirm({
+        title: 'Stop model?',
+        message: '“' + id + '” stops serving: it disappears from /v1/models and requests for it are '
+          + 'rejected. Its aliases, credential, pricing and grants are kept, so you can start it again.',
+        confirmLabel: 'Stop',
+        danger: true,
+        onConfirm: () => this.setModelState(id, 'stop')
+      });
+    },
+
+    async setModelState(id, action) {
+      const failed = action === 'stop' ? 'Could not stop model.' : 'Could not start model.';
+      try {
+        await this.runApi('routingModels', action === 'stop' ? 'Stopping…' : 'Starting…', async () => {
+          const body = await this.apiJson(
+            '/admin/api/models/' + encodeURIComponent(id) + '/' + action,
+            { method: 'POST' });
+          if (body?.success === false) {
+            this.toast(body.message || failed, 'error');
+            return;
+          }
+          this.toast(body?.message || (action === 'stop' ? 'Model stopped.' : 'Model started.'));
+          await this.fetchModels();
+          await this.fetchBackends();
+        }, { localOnly: true });
+      } catch (e) {
+        this.toast(e.message || failed, 'error');
+      }
+    },
+
     confirmRemoveModel(id) {
       this.openConfirm({
         title: 'Remove model?',
@@ -3531,7 +3562,8 @@ function adminApp() {
         grant_denied: ['Model not granted', 'insufficient_scope'],
         model_not_found: ['Unknown model', 'model_not_found'],
         backend_unhealthy: ['Backend unhealthy', 'backend_unhealthy'],
-        circuit_open: ['Circuit open', 'circuit_open']
+        circuit_open: ['Circuit open', 'circuit_open'],
+        model_stopped: ['Model stopped', 'model_not_found']
       };
       return meta[key] || [key, ''];
     },
@@ -4479,6 +4511,7 @@ function adminApp() {
     get modelRows() {
       return this.filteredModelsList().map(m => {
         const testing = this.isLoading('modelTest') && this.modelTestDialog?.modelId === m.id;
+        const stopped = this.isModelStopped(m);
         return {
           key: m.id,
           id: m.id,
@@ -4491,29 +4524,48 @@ function adminApp() {
           accessText: m.publicAccess ? 'Public' : 'Key required',
           hasCredential: !!m.hasUpstreamCredential,
           noCredential: !m.hasUpstreamCredential,
+          isStopped: stopped,
+          isServing: !stopped,
+          stateClass: stopped ? 'fail' : 'ok',
+          stateText: stopped ? 'Stopped' : 'Serving',
+          stateTitle: stopped
+            ? 'Stopped by an operator — hidden from /v1/models and requests for it are rejected.'
+            : 'In service — listed in /v1/models and accepting requests.',
+          stateChanging: this.isLoading('routingModels'),
           testing,
           copyId: () => this.copyText(m.id, 'ID copied.'),
           copyUrl: () => this.copyText(m.url, 'URL copied.'),
           test: () => this.testModel(m.id),
+          stop: () => this.confirmStopModel(m.id),
+          start: () => this.setModelState(m.id, 'start'),
           edit: () => this.openModelDrawer(m),
           remove: () => this.confirmRemoveModel(m.id)
         };
       });
     },
 
+    /** A route with no state at all predates the field and is serving, same as the server reads it. */
+    isModelStopped(m) { return String(m?.state ?? 'serving').toLowerCase() === 'stopped'; },
+
     get hasModelRows() { return this.modelRows.length > 0; },
     get modelsEmpty() { return !this.isLoading('routingModels') && this.modelRows.length === 0; },
 
     get backendRows() {
-      return this.filteredBackends().map(b => ({
-        key: b.modelId + (b.alias || ''),
-        modelId: b.modelId,
-        url: b.url,
-        alias: b.alias ?? '—',
-        healthClass: b.isHealthy ? 'dot-ok' : 'dot-fail',
-        healthText: b.isHealthy ? 'Healthy' : 'Unhealthy',
-        edit: () => this.editModelFromBackend(b.modelId)
-      }));
+      return this.filteredBackends().map(b => {
+        // A stopped route is never probed, so reporting it as "Unhealthy" would blame the backend
+        // for a decision the operator made.
+        const stopped = String(b.state ?? 'serving').toLowerCase() === 'stopped';
+        return {
+          key: b.modelId + (b.alias || ''),
+          modelId: b.modelId,
+          url: b.url,
+          alias: b.alias ?? '—',
+          healthClass: stopped ? 'dot-idle' : (b.isHealthy ? 'dot-ok' : 'dot-fail'),
+          healthText: stopped ? 'Stopped' : (b.isHealthy ? 'Healthy' : 'Unhealthy'),
+          healthTitle: stopped ? 'Stopped by an operator — not probed.' : '',
+          edit: () => this.editModelFromBackend(b.modelId)
+        };
+      });
     },
 
     get hasBackendRows() { return this.backendRows.length > 0; },

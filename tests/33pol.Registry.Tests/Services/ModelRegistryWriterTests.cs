@@ -428,6 +428,131 @@ public sealed class ModelRegistryWriterTests
         registry.ModelExists("concurrent").Should().BeTrue();
     }
 
+    [Fact]
+    public async Task SetModelStateAsync_Stop_MarksStoppedAndPersists()
+    {
+        var (writer, registry, repo) = CreateWriter(
+            new ModelConfig { Id = "stop-me", Url = "http://stop", Aliases = [] },
+            new ModelConfig { Id = "leave-me", Url = "http://leave", Aliases = [] });
+
+        var result = await writer.SetModelStateAsync("stop-me", ModelRouteStates.Stopped);
+
+        result.Success.Should().BeTrue();
+
+        // The route is still registered — stopping is not deleting.
+        registry.ModelExists("stop-me").Should().BeTrue();
+        registry.TryGetModel("stop-me", out var stopped).Should().BeTrue();
+        stopped!.IsStopped().Should().BeTrue();
+
+        registry.TryGetModel("leave-me", out var untouched).Should().BeTrue();
+        untouched!.IsServing().Should().BeTrue("stopping one route must not disturb another");
+
+        repo.Saved.Single(m => m.Id == "stop-me").State.Should().Be(ModelRouteStates.Stopped);
+    }
+
+    [Fact]
+    public async Task SetModelStateAsync_Stop_KeepsEverythingElseAboutTheRoute()
+    {
+        var (writer, registry, _) = CreateWriter(new ModelConfig
+        {
+            Id = "rich",
+            Url = "http://rich",
+            Aliases = ["rich-alias"],
+            MaxContextLength = 32768,
+            PublicAccess = true,
+            ModelType = ModelTypes.Embedding,
+            UpstreamAuth = new UpstreamAuthConfig { Type = "bearer", SecretRef = "file:model:rich" },
+        });
+
+        (await writer.SetModelStateAsync("rich", ModelRouteStates.Stopped)).Success.Should().BeTrue();
+
+        registry.TryGetModel("rich", out var model).Should().BeTrue();
+        model!.State.Should().Be(ModelRouteStates.Stopped);
+        model.Url.Should().Be("http://rich");
+        model.Aliases.Should().BeEquivalentTo(["rich-alias"]);
+        model.MaxContextLength.Should().Be(32768);
+        model.PublicAccess.Should().BeTrue();
+        model.ModelType.Should().Be(ModelTypes.Embedding);
+        model.UpstreamAuth!.SecretRef.Should().Be("file:model:rich");
+    }
+
+    /// <summary>
+    /// Stopping is reversible: the whole point of it over delete is that the route comes back
+    /// without re-provisioning.
+    /// </summary>
+    [Fact]
+    public async Task SetModelStateAsync_StopThenStart_ServesAgain()
+    {
+        var (writer, registry, _) = CreateWriterWithSeed();
+
+        (await writer.SetModelStateAsync("seed", ModelRouteStates.Stopped)).Success.Should().BeTrue();
+        (await writer.SetModelStateAsync("seed", ModelRouteStates.Serving)).Success.Should().BeTrue();
+
+        registry.TryGetModel("seed", out var model).Should().BeTrue();
+        model!.IsServing().Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task SetModelStateAsync_ByAlias_StopsTheOwningRoute()
+    {
+        var (writer, registry, _) = CreateWriter(
+            new ModelConfig { Id = "canonical", Url = "http://c", Aliases = ["nickname"] });
+
+        var result = await writer.SetModelStateAsync("nickname", ModelRouteStates.Stopped);
+
+        result.Success.Should().BeTrue();
+        registry.TryGetModel("canonical", out var model).Should().BeTrue();
+        model!.IsStopped().Should().BeTrue();
+    }
+
+    /// <summary>
+    /// Stopping an already-stopped route is a no-op, not an error — and it must not rewrite the
+    /// route table, which would bump the version every other replica is watching.
+    /// </summary>
+    [Fact]
+    public async Task SetModelStateAsync_AlreadyInState_SucceedsWithoutRewriting()
+    {
+        var (writer, _, repo) = CreateWriterWithSeed();
+
+        (await writer.SetModelStateAsync("seed", ModelRouteStates.Stopped)).Success.Should().BeTrue();
+        var writesAfterStop = repo.WriteCount;
+
+        var again = await writer.SetModelStateAsync("seed", ModelRouteStates.Stopped);
+
+        again.Success.Should().BeTrue();
+        again.Message.Should().Contain("already");
+        repo.WriteCount.Should().Be(writesAfterStop);
+    }
+
+    [Fact]
+    public async Task SetModelStateAsync_UnknownId_Returns404()
+    {
+        var (writer, _, _) = CreateWriterWithSeed();
+
+        var result = await writer.SetModelStateAsync("missing", ModelRouteStates.Stopped);
+
+        result.Success.Should().BeFalse();
+        result.SuggestedStatusCode.Should().Be(404);
+    }
+
+    [Theory]
+    [InlineData("paused")]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task SetModelStateAsync_UnusableState_Returns400_AndLeavesTheRouteServing(string state)
+    {
+        var (writer, registry, repo) = CreateWriterWithSeed();
+        var writesBefore = repo.WriteCount;
+
+        var result = await writer.SetModelStateAsync("seed", state);
+
+        result.Success.Should().BeFalse();
+        result.SuggestedStatusCode.Should().Be(400);
+        repo.WriteCount.Should().Be(writesBefore);
+        registry.TryGetModel("seed", out var model).Should().BeTrue();
+        model!.IsServing().Should().BeTrue();
+    }
+
     private static (ModelRegistryWriter Writer, ModelRegistryService Registry, FakeModelRouteRepository Repo) CreateWriterWithSeed() =>
         CreateWriter(new ModelConfig { Id = "seed", Url = "http://seed", Aliases = [] });
 

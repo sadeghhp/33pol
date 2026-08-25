@@ -1072,14 +1072,14 @@
             <div class="table-wrap">
               <table class="t-models" x-show="hasModelRows">
                 <colgroup>
-                  <col style="width:16%" /><col style="width:20%" /><col style="width:10%" /><col style="width:10%" />
-                  <col style="width:7%" /><col style="width:10%" /><col style="width:9%" /><col style="width:7%" />
-                  <col style="width:11%" />
+                  <col style="width:14%" /><col style="width:17%" /><col style="width:9%" /><col style="width:9%" />
+                  <col style="width:6%" /><col style="width:10%" /><col style="width:8%" /><col style="width:7%" />
+                  <col style="width:8%" /><col style="width:12%" />
                 </colgroup>
                 <thead>
                   <tr>
                     <th class="sortable" @click="sortBy.modelsId">ID<span x-html="sortIcon.modelsId"></span></th>
-                    <th>Upstream URL</th><th>Type</th><th>Aliases</th><th class="num">Context</th><th class="num">Price in/out (1M)</th><th>Access</th><th>Credential</th>
+                    <th>Upstream URL</th><th>Type</th><th>Aliases</th><th class="num">Context</th><th class="num">Price in/out (1M)</th><th>Access</th><th>Credential</th><th>State</th>
                     <th class="cell-actions"><span class="sr-only">Actions</span></th>
                   </tr>
                 </thead>
@@ -1104,11 +1104,18 @@
                       <td class="num" x-text="m.price"></td>
                       <td><span class="status-chip" :class="m.accessClass" x-text="m.accessText"></span></td>
                       <td><span class="tag" x-show="m.hasCredential">stored</span><span x-show="m.noCredential" class="muted">—</span></td>
+                      <td><span class="status-chip" :class="m.stateClass" :title="m.stateTitle" x-text="m.stateText"></span></td>
                       <td class="cell-actions">
                         <span class="row-actions">
                           <button type="button" class="icon-btn" @click="m.test"
                             :disabled="m.testing" :aria-busy="m.testing"
                             title="Test model" aria-label="Test model"><span class="icon" x-html="icons.play"></span></button>
+                          <button type="button" class="icon-btn" @click="m.stop" x-show="m.isServing"
+                            :disabled="m.stateChanging" :aria-busy="m.stateChanging"
+                            title="Stop model" aria-label="Stop model"><span class="icon" x-html="icons.pause"></span></button>
+                          <button type="button" class="icon-btn" @click="m.start" x-show="m.isStopped"
+                            :disabled="m.stateChanging" :aria-busy="m.stateChanging"
+                            title="Start model" aria-label="Start model"><span class="icon" x-html="icons.play-circle"></span></button>
                           <button type="button" class="icon-btn" @click="m.edit" title="Edit model" aria-label="Edit model"><span class="icon" x-html="icons.edit"></span></button>
                           <button type="button" class="icon-btn danger" @click="m.remove" title="Remove model" aria-label="Remove model"><span class="icon" x-html="icons.trash"></span></button>
                         </span>
@@ -1159,7 +1166,7 @@
                       <td>
                         <span class="cell-health-inner">
                           <span class="health-dot" :class="b.healthClass"></span>
-                          <span x-text="b.healthText"></span>
+                          <span :title="b.healthTitle" x-text="b.healthText"></span>
                         </span>
                       </td>
                       <td class="cell-actions"><button type="button" class="action ghost sm" @click="b.edit"><span class="icon" x-html="icons.edit"></span> Edit</button></td>

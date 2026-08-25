@@ -200,7 +200,7 @@ GET requests retry once on network failure. Usage export uses `downloadBlob` wit
 |---------|-----------|
 | Overview | `GET /admin/api/live?limit=25` (SSE; falls back to `GET /admin/api/summary` + `GET /admin/api/requests?limit=25`), `GET /health/live`, `GET /health/ready`; slow sections every 30s: `GET /admin/api/overview/finops`, `/policy`, `/control-plane`, `/activity?limit=20`, `/tenants` (all Operator; `?refresh=true` bypasses the 15s server memo; `204` when the gateway has no such data) |
 | Usage | `GET /admin/api/usage?costCenter=`, `/usage/events?apiKeyId=&costCenter=`, `/usage/forecast`, `GET /usage/export` |
-| Routing — Models | `GET/POST/PATCH/DELETE /admin/api/models` (write body: `{ model, apiKey?, clearApiKey? }`; GET returns `{ model, hasUpstreamCredential }`), `POST /admin/api/models/{id}/test` (type-specific health check) |
+| Routing — Models | `GET/POST/PATCH/DELETE /admin/api/models` (write body: `{ model, apiKey?, clearApiKey? }`; GET returns `{ model, hasUpstreamCredential }`), `POST /admin/api/models/{id}/stop` and `/start` (take a route out of service / put it back), `POST /admin/api/models/{id}/test` (type-specific health check) |
 | Routing — Backends | `GET /admin/api/backends` |
 | API keys | `GET/POST /admin/api/keys`, `PATCH …/keys/{id}`, `GET …/keys/{id}/usage`, `POST …/revoke`, `GET/PUT …/keys/{id}/model-grants` |
 | Tenant model access | `GET/PUT /admin/api/tenant/model-grants` (optional ceiling; empty = all registry models) |
@@ -232,6 +232,28 @@ After adding or editing a model, verify **`GET /v1/models`** (link on Routing �
 4. On edit, **Credential stored** means a secret exists; enter a **new API key** to rotate, or check **Remove stored API key** to clear it.
 
 **URL presets** in the drawer only fill the upstream URL (OpenRouter, Together, Groq, LM Studio, vLLM).
+
+## Stopping a model (taking a route out of service)
+
+Each route carries a **state** — `serving` or `stopped` (`state` in the registry) — shown in its own
+column on Routing → Models. The row's **Stop** button (pause icon, behind a confirm dialog) moves a
+route to `stopped`; **Start** (play-circle icon) puts it back.
+
+While a route is stopped:
+
+- it is **absent from `GET /v1/models`** and from `GET /v1/models/{id}` (404), by id and by alias;
+- inference for it is **refused at admission** with `404 model_not_found` and a message naming the
+  stop, so nothing reaches the upstream;
+- it is **not health-probed**, and its row in Routing → Backends reads **Stopped** rather than a
+  frozen verdict from the last sweep;
+- everything else about it — aliases, upstream credential, pricing and per-key grants — is **kept**.
+
+That last point is the difference from **Remove**: stopping is reversible without re-provisioning,
+deleting is not. Both are audited (`model.stop` / `model.start` / `model.delete`) with the operator's
+identity.
+
+State moves **only** through Stop/Start. Saving the model drawer never changes it, so an unrelated
+edit (a URL fix, a new alias) cannot quietly put a stopped route back into service.
 
 ### Model type and the Test button
 
@@ -319,6 +341,8 @@ When the gateway runs in Docker, upstream URLs must use `http://host.docker.inte
 - [ ] **Routing:** Edit → rotate API key → upstream still works
 - [ ] **Routing:** Edit → remove stored key → `hasUpstreamCredential` false
 - [ ] **Models:** remove uses confirm dialog (not `confirm()`)
+- [ ] **Routing:** Stop a model → State reads **Stopped**, `GET /v1/models` drops it, inference 404s
+- [ ] **Routing:** Start it again → State reads **Serving** and both come back
 - [ ] **Backends:** unhealthy first; **Edit model** jumps to Models
 - [ ] **API keys:** create drawer → copy → acknowledge saved; revoke modal
 - [ ] **Settings:** config status; reload with confirm

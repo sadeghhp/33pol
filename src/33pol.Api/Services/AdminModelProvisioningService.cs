@@ -42,7 +42,13 @@ public sealed class AdminModelProvisioningService(
         ArgumentNullException.ThrowIfNull(actor);
         var model = request.Model ?? throw new ArgumentException("Model is required.");
 
-        var prep = PrepareModel(model, request.ApiKey, request.ClearApiKey, isUpdate: false, previousId: null);
+        var prep = PrepareModel(
+            model,
+            request.ApiKey,
+            request.ClearApiKey,
+            isUpdate: false,
+            previousId: null,
+            previousState: null);
         if (!prep.Success)
         {
             return RegistryMutationResult.Fail(prep.Error!);
@@ -101,7 +107,13 @@ public sealed class AdminModelProvisioningService(
         // canonical id.
         var existing = ResolveRegisteredModel(id);
 
-        var prep = PrepareModel(model, request.ApiKey, request.ClearApiKey, isUpdate: true, previousId: existing?.Id);
+        var prep = PrepareModel(
+            model,
+            request.ApiKey,
+            request.ClearApiKey,
+            isUpdate: true,
+            previousId: existing?.Id,
+            previousState: existing?.State);
         if (!prep.Success)
         {
             return RegistryMutationResult.Fail(prep.Error!);
@@ -339,11 +351,24 @@ public sealed class AdminModelProvisioningService(
         string? apiKey,
         bool clearApiKey,
         bool isUpdate,
-        string? previousId)
+        string? previousId,
+        string? previousState)
     {
         if (!ModelTypes.TryNormalize(model.ModelType, out var modelType, out var modelTypeError))
         {
             return PrepResult.Fail(modelTypeError!);
+        }
+
+        // An update never changes the route's state, however the body spells it: state moves only
+        // through the dedicated stop/start endpoints. ModelConfig.State defaults to "serving", so a
+        // body that simply omits the field — which is every write the admin drawer makes — is
+        // indistinguishable from one that asks for "serving". Honouring it would put a stopped route
+        // back into service on any unrelated edit (a url fix, a new alias). On create there is no
+        // prior state to protect, so an explicit one is taken at face value.
+        var requestedState = isUpdate ? previousState : model.State;
+        if (!ModelRouteStates.TryNormalize(requestedState, out var state, out var stateError))
+        {
+            return PrepResult.Fail(stateError!);
         }
 
         var normalized = new ModelConfig
@@ -355,6 +380,7 @@ public sealed class AdminModelProvisioningService(
             PublicAccess = model.PublicAccess,
             Capabilities = model.Capabilities ?? [],
             ModelType = modelType,
+            State = state,
         };
 
         if (string.IsNullOrWhiteSpace(normalized.Id) || string.IsNullOrWhiteSpace(normalized.Url))
