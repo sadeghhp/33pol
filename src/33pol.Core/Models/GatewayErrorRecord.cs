@@ -17,6 +17,9 @@ public static class GatewayErrorSourceNames
 
     /// <summary>The admin model-test probe.</summary>
     public const string ModelTest = "modeltest";
+
+    /// <summary>Background health: a backend probe transitioning to unhealthy, or a credential that no longer decrypts.</summary>
+    public const string Health = "health";
 }
 
 /// <summary>

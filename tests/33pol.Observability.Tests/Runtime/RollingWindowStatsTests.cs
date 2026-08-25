@@ -9,6 +9,25 @@ public sealed class RollingWindowStatsTests
     private static readonly DateTimeOffset Start = new(2026, 8, 25, 12, 0, 0, TimeSpan.Zero);
 
     [Fact]
+    public void ResetErrors_ZeroesErrorsAndRejectionsButKeepsRequests()
+    {
+        var clock = new FakeTimeProvider(Start);
+        var stats = new RollingWindowStats(clock);
+        stats.RecordCompletion("gpt-local", 100, success: true, isStreaming: false);
+        stats.RecordCompletion("gpt-local", 300, success: false, isStreaming: false);
+        stats.RecordRejection("gpt-local", RejectionReason.Bulkhead);
+
+        stats.ResetErrors();
+
+        var window = stats.GetWindow(TimeSpan.FromMinutes(5), "5m");
+        window.Requests.Should().Be(3);
+        window.Errors.Should().Be(0);
+        window.ErrorRate.Should().Be(0);
+        window.PerModel[0].Errors.Should().Be(0);
+        window.RejectionsByReason.Should().BeEmpty();
+    }
+
+    [Fact]
     public void GetWindow_AfterCompletions_ReportsCountsAndErrorRate()
     {
         var clock = new FakeTimeProvider(Start);

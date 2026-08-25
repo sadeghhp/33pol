@@ -6,6 +6,12 @@ public sealed record GatewayErrorClearResult
     /// <summary>Error records removed from the buffer and, when configured, the database.</summary>
     public int RecordsDeleted { get; init; }
 
+    /// <summary>
+    /// False when the stored records could not be deleted (the database was unreachable). The
+    /// counters were still reset, so the two views disagree until the operator retries.
+    /// </summary>
+    public bool ArchiveCleared { get; init; } = true;
+
     /// <summary>Failed rows dropped from the Recent requests feed.</summary>
     public int RecentRequestRowsRemoved { get; init; }
 

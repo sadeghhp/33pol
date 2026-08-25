@@ -731,6 +731,34 @@ public sealed class InferenceHttpForwarderTests
         }
     }
 
+    [Fact]
+    public async Task SendAsync_WhenTheUpstreamRefusesTheConnection_StashesTheExceptionForTheErrorRecord()
+    {
+        var handler = new ThrowingUpstreamHandler(new HttpRequestException(
+            "Connection refused",
+            new System.Net.Sockets.SocketException((int)System.Net.Sockets.SocketError.ConnectionRefused)));
+        var forwarder = new InferenceHttpForwarder(
+            new SingleHandlerClientFactory(handler),
+            NoOpGatewayMetricsCollector.Instance,
+            NullLogger<InferenceHttpForwarder>.Instance);
+
+        var context = CreatePostContext("""{"model":"gpt","stream":false}""");
+        var transformer = new StreamingHttpTransformer(false, "gpt", "gpt");
+
+        var error = await forwarder.SendAsync(
+            context, "http://backend:8000", upstreamBearerToken: null, transformer, isStreaming: false, TestTimeouts, CancellationToken.None);
+
+        error.Should().Be(ForwarderError.Request);
+        context.Items[GatewayErrorContextKeys.UpstreamException].Should().BeOfType<HttpRequestException>()
+            .Which.InnerException.Should().BeOfType<System.Net.Sockets.SocketException>();
+    }
+
+    private sealed class ThrowingUpstreamHandler(Exception exception) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            throw exception;
+    }
+
     private sealed class SingleHandlerClientFactory(HttpMessageHandler handler) : IHttpClientFactory
     {
         public HttpClient CreateClient(string name) => new(handler, disposeHandler: false);

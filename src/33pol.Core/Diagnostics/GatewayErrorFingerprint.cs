@@ -49,7 +49,9 @@ public static partial class GatewayErrorFingerprint
 
     /// <summary>
     /// Strips the parts of a message that differ between occurrences of one fault: request ids,
-    /// GUIDs, numbers, and the variable tail of absolute URLs.
+    /// GUIDs, free-standing numbers, and the variable tail of absolute URLs. Digits that are part of
+    /// a name (<c>gpt-4o</c>, <c>Qwen3</c>, <c>x86</c>) are kept — they identify <em>which</em>
+    /// model or component failed, and collapsing them merged unrelated faults into one group.
     /// </summary>
     public static string NormalizeMessage(string? message)
     {
@@ -89,11 +91,24 @@ public static partial class GatewayErrorFingerprint
             var match = OwnedFramePattern().Match(line);
             if (match.Success)
             {
-                return match.Groups[1].Value;
+                return StripCompilerNames(match.Groups[1].Value);
             }
         }
 
         return None;
+    }
+
+    /// <summary>
+    /// <c>Ns.Type.&lt;&gt;c__DisplayClass3_0.&lt;Method&gt;b__0</c> and
+    /// <c>Ns.Type.&lt;Method&gt;d__12.MoveNext</c> both become <c>Ns.Type.Method</c>. The numbers in
+    /// those names move whenever a lambda or await is added anywhere in the type, which silently
+    /// re-keyed every existing group on release.
+    /// </summary>
+    private static string StripCompilerNames(string frame)
+    {
+        var stripped = DisplayClassPattern().Replace(frame, string.Empty);
+        stripped = StateMachinePattern().Replace(stripped, "$1");
+        return stripped;
     }
 
     private static void Append(StringBuilder builder, string? component)
@@ -115,8 +130,17 @@ public static partial class GatewayErrorFingerprint
     [GeneratedRegex(@"\b(https?)://([^/\s""']+)[^\s""']*", RegexOptions.None, 100)]
     private static partial Regex UrlPattern();
 
-    [GeneratedRegex(@"\d+", RegexOptions.None, 100)]
+    // A digit run not glued to a letter (optionally through a hyphen): "HTTP 401" and "after 30s"
+    // normalize, "gpt-4o" and "Qwen3" do not.
+    [GeneratedRegex(@"(?<![A-Za-z]-?)\d+", RegexOptions.None, 100)]
     private static partial Regex NumberPattern();
+
+    [GeneratedRegex(@"<>c__DisplayClass\d+_\d+\.", RegexOptions.None, 100)]
+    private static partial Regex DisplayClassPattern();
+
+    // "<Method>d__12.MoveNext" / "<Method>b__0" -> "Method"
+    [GeneratedRegex(@"<([A-Za-z0-9_]+)>[a-z]__\d+(?:_\d+)?(?:\.MoveNext)?", RegexOptions.None, 100)]
+    private static partial Regex StateMachinePattern();
 
     [GeneratedRegex(@"\s+", RegexOptions.None, 100)]
     private static partial Regex WhitespacePattern();

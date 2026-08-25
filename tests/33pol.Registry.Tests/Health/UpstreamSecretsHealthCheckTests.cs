@@ -1,3 +1,6 @@
+using Pol33.Core.Models;
+using Pol33.Core.Abstractions;
+using NSubstitute;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
@@ -23,11 +26,17 @@ public sealed class UpstreamSecretsHealthCheckTests
 
             // Pepper rotated: the stored credential no longer decrypts.
             var store = CreateStore(path, pepper: "rotated-pepper");
-            var check = new UpstreamSecretsHealthCheck(store);
+            var recorder = Substitute.For<IGatewayErrorRecorder>();
+            var check = new UpstreamSecretsHealthCheck(store, recorder);
 
             var degraded = await check.CheckHealthAsync(new HealthCheckContext());
             degraded.Status.Should().Be(HealthStatus.Degraded);
             degraded.Description.Should().Contain("1 of 1").And.Contain("KeyPepper");
+
+            // Recorded once for the Errors tab, not once per probe.
+            await check.CheckHealthAsync(new HealthCheckContext());
+            recorder.Received(1).Record(Arg.Is<GatewayErrorRecord>(r =>
+                r.Source == GatewayErrorSourceNames.Health && r.Level == "Critical" && r.EventCode == "secrets_undecryptable"));
 
             // The operator re-enters the key under the current pepper; the very next probe must
             // recover without a restart, which a startup-cached verdict could not do.

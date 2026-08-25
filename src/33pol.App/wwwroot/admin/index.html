@@ -1385,6 +1385,7 @@
               <p class="page-sub" x-show="showErrorsCounterMismatch" x-text="errorsCounterMismatchText"></p>
               <!-- Loss and retention are numbers, not prose: the page states how incomplete it is. -->
               <p class="page-sub" x-show="errorsCoverageNote" x-text="errorsCoverageNote"></p>
+              <p class="page-sub" x-show="errorsFacetsError">The model and status filter lists could not be loaded; free-text search still works.</p>
             </div>
           </div>
 
@@ -1514,6 +1515,9 @@
                         <button type="button" class="action secondary" @click="r.copyRequestId" x-show="r.hasRequestId">
                           <span class="icon" x-html="icons.copy"></span> Copy request ID
                         </button>
+                        <button type="button" class="action secondary" @click="r.openLogs" x-show="r.hasRequestId">
+                          <span class="icon" x-html="icons.activity"></span> View in Logs
+                        </button>
                         <button type="button" class="action secondary" @click="r.filterModel" x-show="r.hasModel">
                           <span class="icon" x-html="icons.filter"></span> Only this model
                         </button>
@@ -1533,8 +1537,10 @@
                         <thead>
                           <tr><th>Time</th><th>Request ID</th><th>Status</th><th>Duration</th><th>Tenant</th><th></th></tr>
                         </thead>
-                        <tbody>
-                          <template x-for="o in r.occurrences" :key="o.key">
+                        <!-- One tbody per occurrence: x-for needs a single root, and the detail row
+                             (stack trace and upstream body for that occurrence) lives under it. -->
+                        <template x-for="o in r.occurrences" :key="o.key">
+                          <tbody>
                             <tr>
                               <td x-text="o.time"></td>
                               <td><code x-text="o.requestId"></code></td>
@@ -1545,10 +1551,22 @@
                                 <button type="button" class="icon-btn" @click.stop="o.copyId" aria-label="Copy request ID">
                                   <span class="icon" x-html="icons.copy"></span>
                                 </button>
+                                <button type="button" class="icon-btn" x-show="o.hasDetail" @click.stop="o.toggle"
+                                  :aria-expanded="o.ariaExpanded" aria-label="Show this occurrence's stack trace and upstream body">
+                                  <span class="icon" x-html="o.chevronIcon"></span>
+                                </button>
                               </td>
                             </tr>
-                          </template>
-                        </tbody>
+                            <tr x-show="o.expanded">
+                              <td colspan="6">
+                                <p x-show="o.hasStackTrace" style="margin-bottom:0"><strong>Stack trace</strong></p>
+                                <pre class="model-test-content stack-trace" x-show="o.hasStackTrace" x-text="o.stackTrace"></pre>
+                                <p x-show="o.hasBodySnippet" style="margin-bottom:0"><strong>Upstream response (redacted)</strong></p>
+                                <pre class="model-test-content" x-show="o.hasBodySnippet" x-text="o.bodySnippet"></pre>
+                              </td>
+                            </tr>
+                          </tbody>
+                        </template>
                       </table>
                     </td>
                   </tr>

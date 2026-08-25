@@ -136,17 +136,35 @@ public sealed class InMemoryGatewayErrorStore : IGatewayErrorStore
 
         lock (_sync)
         {
-            // Filter on the aggregate's sample: every field the filters touch is part of the
-            // fingerprint, so the sample is representative of the whole group by construction.
-            var matched = _groups.Values
-                .Where(a => MatchesGroup(a, clamped))
-                .ToList();
+            // Windowed queries group the occurrences that actually fall in the window, exactly as
+            // the database does, so "last hour" never shows a fortnight's count. Only the unbounded
+            // view uses the running aggregates, whose whole point is to outlive ring eviction.
+            var windowed = clamped.From is not null || clamped.To is not null;
+            List<Aggregate> matched = windowed
+                ? _records
+                    .Where(r => Matches(r, clamped))
+                    .GroupBy(r => r.Fingerprint, StringComparer.Ordinal)
+                    .Select(g => Aggregate.FromOccurrences(g))
+                    .ToList()
+                : _groups.Values
+                    // Filter on the aggregate's sample: every field the filters touch is part of
+                    // the fingerprint, so the sample is representative of the whole group.
+                    .Where(a => MatchesGroup(a, clamped))
+                    .ToList();
 
+            // Fingerprint tiebreak keeps paging stable when two groups share a timestamp.
             var sorted = clamped.Sort switch
             {
-                GatewayErrorSort.Count => matched.OrderByDescending(a => a.Count).ThenByDescending(a => a.LastSeen),
-                GatewayErrorSort.FirstSeen => matched.OrderByDescending(a => a.FirstSeen),
-                _ => matched.OrderByDescending(a => a.LastSeen),
+                GatewayErrorSort.Count => matched
+                    .OrderByDescending(a => a.Count)
+                    .ThenByDescending(a => a.LastSeen)
+                    .ThenBy(a => a.Sample.Fingerprint, StringComparer.Ordinal),
+                GatewayErrorSort.FirstSeen => matched
+                    .OrderByDescending(a => a.FirstSeen)
+                    .ThenBy(a => a.Sample.Fingerprint, StringComparer.Ordinal),
+                _ => matched
+                    .OrderByDescending(a => a.LastSeen)
+                    .ThenBy(a => a.Sample.Fingerprint, StringComparer.Ordinal),
             };
 
             var page = sorted
@@ -220,16 +238,25 @@ public sealed class InMemoryGatewayErrorStore : IGatewayErrorStore
     {
         var occurredAt = record.OccurredAt == default ? _timeProvider.GetUtcNow() : record.OccurredAt;
 
+        // Caps match the archive's declared column widths. SQLite does not enforce them, but a
+        // length-enforcing provider rejects the whole batch for one over-long value, and the
+        // scrubber's ellipsis counts toward the width.
         var normalized = record with
         {
             Id = string.IsNullOrWhiteSpace(record.Id) ? $"err_{Guid.NewGuid():N}" : record.Id,
             OccurredAt = occurredAt,
-            Message = GatewayErrorRedactor.Scrub(record.Message, _options.MaxMessageLength) ?? record.Message,
-            StackTrace = GatewayErrorRedactor.Scrub(record.StackTrace, _options.MaxStackTraceLength),
+            Category = Cap(record.Category, 128) ?? record.Category,
+            EventCode = Cap(record.EventCode, 64),
+            Message = GatewayErrorRedactor.Scrub(record.Message, _options.MaxMessageLength - 1) ?? record.Message,
+            ExceptionType = Cap(record.ExceptionType, 256),
+            StackTrace = GatewayErrorRedactor.Scrub(record.StackTrace, _options.MaxStackTraceLength - 1),
+            Path = Cap(record.Path, 512),
             UpstreamBodySnippet = GatewayErrorRedactor.Scrub(
                 record.UpstreamBodySnippet,
-                _options.UpstreamBodySnippetBytes),
-            UpstreamTarget = GatewayErrorRedactor.ScrubUrl(record.UpstreamTarget),
+                _options.UpstreamBodySnippetBytes - 1),
+            UpstreamTarget = Cap(GatewayErrorRedactor.ScrubUrl(record.UpstreamTarget), 512),
+            Outcome = Cap(record.Outcome, 48),
+            Hint = Cap(record.Hint, 512),
         };
 
         // Fingerprint last, over the redacted text: a masked secret must not shatter a group the
@@ -286,6 +313,9 @@ public sealed class InMemoryGatewayErrorStore : IGatewayErrorStore
         PruneRecentlySeenLocked(now);
         return false;
     }
+
+    private static string? Cap(string? value, int max) =>
+        value is null || value.Length <= max ? value : value[..max];
 
     /// <summary>Hard cap on the dedupe map: two keys per record, sized to the hot ring.</summary>
     private int MaxRecentlySeen => Capacity * 2;
@@ -356,11 +386,12 @@ public sealed class InMemoryGatewayErrorStore : IGatewayErrorStore
         (query.From is null || record.OccurredAt >= query.From) &&
         (query.To is null || record.OccurredAt <= query.To) &&
         (query.MinimumLevel is not { } floor || GatewayLogLevels.Parse(record.Level) >= floor) &&
-        (query.ModelId is null || string.Equals(record.ModelId, query.ModelId, StringComparison.OrdinalIgnoreCase)) &&
+        // Ordinal, like the database: the same filter must select the same rows from either store.
+        (query.ModelId is null || string.Equals(record.ModelId, query.ModelId, StringComparison.Ordinal)) &&
         (query.StatusCode is null || record.StatusCode == query.StatusCode) &&
-        (query.EventCode is null || string.Equals(record.EventCode, query.EventCode, StringComparison.OrdinalIgnoreCase)) &&
-        (query.TenantId is null || string.Equals(record.TenantId, query.TenantId, StringComparison.OrdinalIgnoreCase)) &&
-        (query.RequestId is null || string.Equals(record.RequestId, query.RequestId, StringComparison.OrdinalIgnoreCase)) &&
+        (query.EventCode is null || string.Equals(record.EventCode, query.EventCode, StringComparison.Ordinal)) &&
+        (query.TenantId is null || string.Equals(record.TenantId, query.TenantId, StringComparison.Ordinal)) &&
+        (query.RequestId is null || string.Equals(record.RequestId, query.RequestId, StringComparison.Ordinal)) &&
         (query.Fingerprint is null || string.Equals(record.Fingerprint, query.Fingerprint, StringComparison.Ordinal)) &&
         (query.Search is null || MatchesSearch(record, query.Search));
 
@@ -426,6 +457,25 @@ public sealed class InMemoryGatewayErrorStore : IGatewayErrorStore
             LastSeen = record.OccurredAt,
             LastTouched = sequence,
         };
+
+        /// <summary>A window-scoped group built from the occurrences that fell inside it.</summary>
+        public static Aggregate FromOccurrences(IEnumerable<GatewayErrorRecord> occurrences)
+        {
+            Aggregate? aggregate = null;
+            foreach (var record in occurrences)
+            {
+                if (aggregate is null)
+                {
+                    aggregate = From(record, 0);
+                }
+                else
+                {
+                    aggregate.Add(record, 0);
+                }
+            }
+
+            return aggregate!;
+        }
 
         public void Add(GatewayErrorRecord record, long sequence)
         {

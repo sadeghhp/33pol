@@ -14,7 +14,8 @@ public sealed class AdminModelTestService(
     IModelRegistry registry,
     IUpstreamBearerTokenResolver tokenResolver,
     IHttpClientFactory httpClientFactory,
-    IGatewayLogStore logStore)
+    IGatewayLogStore logStore,
+    IGatewayErrorRecorder? errorRecorder = null)
 {
     public const string LogCategory = "ModelTest";
 
@@ -259,6 +260,7 @@ public sealed class AdminModelTestService(
             ? null
             : (requestUri is null ? rawBody : $"POST {requestUri}\n\n{rawBody}");
 
+        var message = BuildLogMessage(response);
         logStore.Record(new GatewayLogEntry
         {
             Id = $"log_{Guid.NewGuid():N}",
@@ -266,10 +268,30 @@ public sealed class AdminModelTestService(
             Level = GatewayLogLevel.Error.ToString(),
             Category = LogCategory,
             EventCode = eventCode,
-            Message = BuildLogMessage(response),
+            Message = message,
             Detail = detail ?? (requestUri is null ? null : $"POST {requestUri}"),
             Hint = response.Hint,
             ModelId = response.ModelId,
+        });
+
+        // The operator ran this probe to find out what is wrong; the answer belongs with the other
+        // failures for that model, not only in the volatile log tail.
+        errorRecorder?.Record(new GatewayErrorRecord
+        {
+            Id = $"err_{Guid.NewGuid():N}",
+            Fingerprint = string.Empty,
+            OccurredAt = DateTimeOffset.UtcNow,
+            Level = GatewayLogLevel.Error.ToString(),
+            Source = GatewayErrorSourceNames.ModelTest,
+            Category = LogCategory,
+            EventCode = eventCode,
+            Message = message,
+            StatusCode = response.StatusCode ?? 0,
+            ModelId = response.ModelId,
+            UpstreamTarget = requestUri?.GetLeftPart(UriPartial.Path),
+            Outcome = eventCode,
+            UpstreamBodySnippet = rawBody,
+            Hint = response.Hint,
         });
 
         return response;

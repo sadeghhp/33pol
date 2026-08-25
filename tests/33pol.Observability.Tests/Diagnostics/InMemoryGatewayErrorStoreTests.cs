@@ -312,6 +312,33 @@ public sealed class InMemoryGatewayErrorStoreTests
         await act.Should().NotThrowAsync();
     }
 
+    /// <summary>
+    /// The same query must mean the same thing from either store. The database groups the
+    /// occurrences inside the window; so must the memory store, or a fallback silently turns
+    /// "3 in the last hour" into "4,000 since Tuesday".
+    /// </summary>
+    [Fact]
+    public async Task QueryGroupsAsync_WithAWindow_CountsOnlyOccurrencesInsideIt()
+    {
+        var store = CreateStore();
+        var now = DateTimeOffset.UtcNow;
+        store.Record(Error(requestId: "req_a") with { OccurredAt = now.AddHours(-3) });
+        store.Record(Error(requestId: "req_b") with { OccurredAt = now.AddMinutes(-30) });
+        store.Record(Error(requestId: "req_c") with { OccurredAt = now.AddMinutes(-5) });
+
+        var lastHour = await store.QueryGroupsAsync(new GatewayErrorQuery { From = now.AddHours(-1) });
+        var allTime = await store.QueryGroupsAsync(new GatewayErrorQuery());
+
+        var group = lastHour.Items.Should().ContainSingle().Subject;
+        group.Count.Should().Be(2);
+        group.FirstSeen.Should().Be(now.AddMinutes(-30));
+        group.LastRequestId.Should().Be("req_c");
+        lastHour.OccurrenceTotal.Should().Be(2);
+        lastHour.StoredTotal.Should().Be(3, "stored is unfiltered");
+
+        allTime.Items.Should().ContainSingle().Which.Count.Should().Be(3);
+    }
+
     private static InMemoryGatewayErrorStore CreateStore(Action<GatewayErrorTrackingOptions>? configure = null)
     {
         var options = new GatewayErrorTrackingOptions();

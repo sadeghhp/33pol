@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Pol33.Core.Abstractions;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Pol33.Core.Models;
 using Pol33.Core.Models.Overview;
 using Pol33.Core.Security;
@@ -46,8 +47,12 @@ public static class MaintenanceAdminEndpoints
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                // The backup itself is the deliverable; failing to note it must not turn a good backup into an error.
-                _ = ex;
+                // The backup itself is the deliverable; failing to note it must not fail the
+                // request — but it must not vanish either, or the Overview keeps saying "no
+                // backup has been taken" with nothing to explain why.
+                httpContext.RequestServices.GetRequiredService<ILoggerFactory>()
+                    .CreateLogger(nameof(MaintenanceAdminEndpoints))
+                    .LogError(ex, "Backup succeeded but its result could not be recorded in maintenance state.");
             }
         }
 

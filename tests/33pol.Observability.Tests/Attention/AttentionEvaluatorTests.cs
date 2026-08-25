@@ -201,6 +201,22 @@ public sealed class AttentionEvaluatorTests
         items[1].Title.Should().Contain("10 days old");
     }
 
+    /// <summary>
+    /// The health store knows when the backend went down; the item must say that, not when this
+    /// process first happened to evaluate it — and a fault older than the hold time lists at once.
+    /// </summary>
+    [Fact]
+    public void Evaluate_UnhealthyBackend_IsDatedFromTheHealthStoreTransition()
+    {
+        var sut = Create(o => o.BackendUnhealthyForSeconds = 60);
+        var down = Backend("a", healthy: false) with { LastTransitionUtc = Now.AddHours(-2) };
+
+        var item = sut.Evaluate(new AttentionInputs { Now = Now, Backends = [down] }).Should().ContainSingle().Subject;
+
+        item.Code.Should().Be("backend_unhealthy");
+        item.SinceUtc.Should().Be(Now.AddHours(-2));
+    }
+
     [Fact]
     public void Evaluate_Disabled_ReturnsNothing()
     {

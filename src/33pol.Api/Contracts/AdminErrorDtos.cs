@@ -234,6 +234,9 @@ public sealed class AdminErrorListResponse
 
     public bool Persisted { get; init; }
 
+    /// <summary>True when the archive was unreachable and this page came from the in-memory buffer.</summary>
+    public bool Degraded { get; init; }
+
     public static AdminErrorListResponse From(GatewayErrorPage page, bool persisted) => new()
     {
         Occurrences = [.. page.Items.Select(AdminErrorOccurrenceDto.From)],
@@ -242,6 +245,7 @@ public sealed class AdminErrorListResponse
         Offset = page.Offset,
         Source = page.Source,
         Persisted = persisted && page.Source == GatewayErrorSources.Database,
+        Degraded = page.Degraded,
     };
 }
 
@@ -285,6 +289,9 @@ public sealed class AdminErrorClearResponse
 
     public int RecordsDeleted { get; init; }
 
+    /// <summary>False when the stored records could not be deleted; the counters were reset regardless.</summary>
+    public bool ArchiveCleared { get; init; }
+
     public int RecentRequestRowsRemoved { get; init; }
 
     public long TotalErrorsCleared { get; init; }
@@ -300,11 +307,14 @@ public sealed class AdminErrorClearResponse
 
     public static AdminErrorClearResponse From(GatewayErrorClearResult result) => new()
     {
-        Success = true,
-        Message = result.DatabaseAvailable
-            ? "Errors cleared and the persisted counter snapshot was rewritten."
-            : "Errors cleared from memory. No database is configured, so nothing was persisted.",
+        Success = result.ArchiveCleared,
+        Message = !result.ArchiveCleared
+            ? "Error counters were reset, but the stored error records could not be deleted. Retry once the database is reachable."
+            : result.DatabaseAvailable
+                ? "Errors cleared and the persisted counter snapshot was rewritten."
+                : "Errors cleared from memory. No database is configured, so nothing was persisted.",
         RecordsDeleted = result.RecordsDeleted,
+        ArchiveCleared = result.ArchiveCleared,
         RecentRequestRowsRemoved = result.RecentRequestRowsRemoved,
         TotalErrorsCleared = result.TotalErrorsCleared,
         SnapshotRewritten = result.SnapshotRewritten,

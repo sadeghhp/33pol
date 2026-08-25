@@ -34,16 +34,27 @@ internal sealed class GatewayErrorAdminService(
     {
         using var _ = await flushCoordinator.AcquireAsync(cancellationToken).ConfigureAwait(false);
 
-        var recordsDeleted = await errorStore.ClearAsync(cancellationToken).ConfigureAwait(false);
-
-        // The in-memory counters are the source the snapshot is written from, so they have to be
-        // reset before it is saved. Writing a zeroed row while memory still held the old totals
-        // would last exactly until the next periodic flush overwrote it — the same resurrection
-        // this whole operation exists to prevent.
+        // Counters first, store second. The in-memory counters are the source the snapshot is
+        // written from, so they have to be reset before it is saved — and resetting them before
+        // the store means a failure to delete stored rows leaves "counter 0, rows present", which
+        // the response reports, rather than "rows gone, counter intact" thrown as a 500 with the
+        // in-memory buffer already wiped.
         var (totalErrorsCleared, recentRowsRemoved) = runtimeState.ResetErrors();
         if (scope == GatewayErrorClearScope.AllCounters)
         {
             runtimeState.ResetAll();
+        }
+
+        var recordsDeleted = 0;
+        var archiveCleared = true;
+        try
+        {
+            recordsDeleted = await errorStore.ClearAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            archiveCleared = false;
+            logger.LogError(ex, "Reset the error counters but failed to delete the stored error records.");
         }
 
         var snapshotRewritten = false;
@@ -87,6 +98,7 @@ internal sealed class GatewayErrorAdminService(
         return new GatewayErrorClearResult
         {
             RecordsDeleted = recordsDeleted,
+            ArchiveCleared = archiveCleared,
             RecentRequestRowsRemoved = recentRowsRemoved,
             TotalErrorsCleared = totalErrorsCleared,
             SnapshotRewritten = snapshotRewritten,

@@ -64,7 +64,11 @@ public sealed class DatabaseGatewayErrorStore(
         CancellationToken cancellationToken = default) =>
         ReadAsync(
             archive => archive.QueryAsync(query, cancellationToken),
-            () => hotStore.QueryAsync(query, cancellationToken),
+            async () =>
+            {
+                var page = await hotStore.QueryAsync(query, cancellationToken).ConfigureAwait(false);
+                return page with { Degraded = true };
+            },
             cancellationToken);
 
     public Task<GatewayErrorRecord?> GetAsync(string id, CancellationToken cancellationToken = default) =>
