@@ -9,7 +9,10 @@ public sealed record GatewayErrorGroup
 {
     public required string Fingerprint { get; init; }
 
-    /// <summary>Total occurrences within the queried window.</summary>
+    /// <summary>
+    /// Occurrences within the queried window. With no window, the store's running total for the
+    /// group — which, for the in-memory store, outlives the individual occurrences it evicted.
+    /// </summary>
     public long Count { get; init; }
 
     public DateTimeOffset FirstSeen { get; init; }

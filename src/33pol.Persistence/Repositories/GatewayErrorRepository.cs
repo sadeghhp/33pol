@@ -91,11 +91,20 @@ public sealed class GatewayErrorRepository(GatewayDbContext dbContext) : IGatewa
             .LongCountAsync(cancellationToken)
             .ConfigureAwait(false);
 
+        // NewestId is unique per group, so it makes every ordering total: groups that share a
+        // timestamp to the tick cannot swap places between one page and the next.
         var ordered = clamped.Sort switch
         {
-            GatewayErrorSort.Count => grouped.OrderByDescending(g => g.Count).ThenByDescending(g => g.LastSeen),
-            GatewayErrorSort.FirstSeen => grouped.OrderByDescending(g => g.FirstSeen),
-            _ => grouped.OrderByDescending(g => g.LastSeen),
+            GatewayErrorSort.Count => grouped
+                .OrderByDescending(g => g.Count)
+                .ThenByDescending(g => g.LastSeen)
+                .ThenByDescending(g => g.NewestId),
+            GatewayErrorSort.FirstSeen => grouped
+                .OrderByDescending(g => g.FirstSeen)
+                .ThenByDescending(g => g.NewestId),
+            _ => grouped
+                .OrderByDescending(g => g.LastSeen)
+                .ThenByDescending(g => g.NewestId),
         };
 
         var page = await ordered
@@ -336,7 +345,9 @@ public sealed class GatewayErrorRepository(GatewayDbContext dbContext) : IGatewa
                 (e.EventCode != null && EF.Functions.Like(e.EventCode, pattern, LikeEscape)) ||
                 (e.ModelId != null && EF.Functions.Like(e.ModelId, pattern, LikeEscape)) ||
                 (e.RequestId != null && EF.Functions.Like(e.RequestId, pattern, LikeEscape)) ||
-                (e.Path != null && EF.Functions.Like(e.Path, pattern, LikeEscape)));
+                (e.Path != null && EF.Functions.Like(e.Path, pattern, LikeEscape)) ||
+                (e.Hint != null && EF.Functions.Like(e.Hint, pattern, LikeEscape)) ||
+                (e.StackTrace != null && EF.Functions.Like(e.StackTrace, pattern, LikeEscape)));
         }
 
         return source;

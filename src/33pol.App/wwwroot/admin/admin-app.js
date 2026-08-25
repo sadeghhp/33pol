@@ -184,6 +184,8 @@ function adminApp() {
     errorsPrunedTotal: 0,
     errorsRetainedSince: null,
     errorsDegraded: false,
+    errorsFacetsError: false,
+    expandedOccurrenceKey: null,
     errorsPersisted: true,
     errorsFacets: null,
     errorsRange: '24h',
@@ -1025,6 +1027,14 @@ function adminApp() {
     },
 
     /** @param quiet true for the auto-refresh tick and filter changes, which must not flash loading. */
+    /** The Logs tab is the other half of the story for a request id: what was logged around the failure. */
+    openLogsFromError(requestId) {
+      if (!requestId) return;
+      this.logsSearch = requestId;
+      this.setTab('logs');
+      return this.loadLogs();
+    },
+
     async loadLogs(quiet) {
       const fetchLogs = () => this._sequenced('_logsSeq',
         () => this.apiJson('/admin/api/logs' + this.logsQuery()),
@@ -1173,7 +1183,10 @@ function adminApp() {
       const fetchErrors = () => this._sequenced('_errorsSeq',
         () => this.apiJson('/admin/api/errors/groups' + this.errorsQuery()),
         body => {
-          this.errorGroups = body?.groups ?? [];
+          // An empty 200 is a failure, not a clean gateway: rendering it as "no errors" is the one
+          // outcome this page must never produce by accident.
+          if (!body || !Array.isArray(body.groups)) throw new Error('The errors API returned no data.');
+          this.errorGroups = body.groups;
           this.errorGroupsTotal = Number(body?.total ?? 0);
           this.errorOccurrenceTotal = Number(body?.occurrenceTotal ?? 0);
           this.errorsStoredTotal = Number(body?.storedTotal ?? 0);
@@ -1218,9 +1231,12 @@ function adminApp() {
         if (from) params.set('from', from);
         const query = params.toString();
         this.errorsFacets = await this.apiJson('/admin/api/errors/facets' + (query ? '?' + query : ''));
+        this.errorsFacetsError = false;
       } catch {
-        // Facets are a convenience; the free-text search still works without them.
+        // Facets are a convenience; the free-text search still works without them — but say so,
+        // or an empty model dropdown reads as "no models have errors".
         this.errorsFacets = null;
+        this.errorsFacetsError = true;
       }
     },
 
@@ -1380,7 +1396,7 @@ function adminApp() {
 
     async clearErrors() {
       await this.runApi('errors', 'Clearing…', async () => {
-        await this.apiJson('/admin/api/errors?confirm=true', { method: 'DELETE' });
+        const result = await this.apiJson('/admin/api/errors?confirm=true', { method: 'DELETE' });
         this.errorGroups = [];
         this.errorGroupsTotal = 0;
         this.errorOccurrenceTotal = 0;
@@ -1398,7 +1414,14 @@ function adminApp() {
         // `requests` is deliberately left alone: the live tail is a separate buffer.
         await this.loadSummary();
         await this.loadErrorFacets();
-        this.toast('All recorded errors cleared.');
+        // Re-read rather than assume empty: if the archive delete failed the rows are still there
+        // and the response says so.
+        await this.loadErrors(true);
+        if (result && result.archiveCleared === false) {
+          this.toast(result.message || 'Counters reset, but stored error records could not be deleted.', 'error');
+        } else {
+          this.toast('All recorded errors cleared.');
+        }
       });
     },
 
@@ -4830,12 +4853,24 @@ function adminApp() {
             durationText: o.durationMs == null ? '—' : this.formatNum(Math.round(o.durationMs)) + ' ms',
             tenant: o.tenantId || '—',
             source: o.source,
+            // Each occurrence keeps its own stack and upstream body; the group's sample is only the
+            // newest one, and the one an operator is chasing is often not the newest.
+            stackTrace: o.stackTrace || '',
+            hasStackTrace: !!o.stackTrace,
+            bodySnippet: o.upstreamBodySnippet || '',
+            hasBodySnippet: !!o.upstreamBodySnippet,
+            hasDetail: !!(o.stackTrace || o.upstreamBodySnippet),
+            expanded: this.expandedOccurrenceKey === o.id,
+            ariaExpanded: this.expandedOccurrenceKey === o.id ? 'true' : 'false',
+            chevronIcon: this.icon(this.expandedOccurrenceKey === o.id ? 'chevron-up' : 'chevron-down'),
+            toggle: () => { this.expandedOccurrenceKey = this.expandedOccurrenceKey === o.id ? null : o.id; },
             copyId: () => this.copyText(o.requestId, 'Request ID copied.')
           })),
           toggle: () => this.toggleErrorDetails(g.fingerprint),
           copy: () => this.copyText(this.formatErrorForCopy(g), 'Error copied.'),
           copyRequestId: () => this.copyText(g.lastRequestId, 'Request ID copied.'),
           openRequest: () => this.openRequestFromError(g.lastRequestId),
+          openLogs: () => this.openLogsFromError(g.lastRequestId),
           filterModel: () => this.openErrorsForModel(g.modelId)
         };
       });

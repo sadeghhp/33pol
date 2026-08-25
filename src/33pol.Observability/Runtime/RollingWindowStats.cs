@@ -126,6 +126,20 @@ public sealed class RollingWindowStats
         _perModel.Clear();
     }
 
+    /// <summary>
+    /// Zeroes error and rejection counts in every bucket while leaving requests, latency and tokens
+    /// in place — the windowed counterpart of clearing the lifetime error counter, so the error-rate
+    /// vital and the error-rate attention rule agree with a freshly cleared Errors tab.
+    /// </summary>
+    public void ResetErrors()
+    {
+        _global.ClearErrors();
+        foreach (var ring in _perModel.Values)
+        {
+            ring.ClearErrors();
+        }
+    }
+
     /// <summary>Drops rings for models no longer in the registry.</summary>
     public void RetainOnly(IReadOnlySet<string> knownModelIds)
     {
@@ -403,6 +417,24 @@ public sealed class RollingWindowStats
             for (var i = 0; i < _seconds.Length; i++)
             {
                 _seconds[i] = new Bucket();
+            }
+        }
+
+        public void ClearErrors()
+        {
+            lock (_sync)
+            {
+                foreach (var bucket in _minutes)
+                {
+                    bucket.Errors = 0;
+                    Array.Clear(bucket.Rejections);
+                }
+
+                foreach (var bucket in _seconds)
+                {
+                    bucket.Errors = 0;
+                    Array.Clear(bucket.Rejections);
+                }
             }
         }
 

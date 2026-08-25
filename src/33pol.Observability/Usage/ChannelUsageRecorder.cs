@@ -151,7 +151,8 @@ public sealed class ChannelUsageRecorder : IUsageRecorder, IHostedService, IUsag
             {
                 // A single failing event must not tear down the writer loop (which would silently stop
                 // all usage persistence until process restart). Log and continue to the next event.
-                _logger.LogError(ex, "Failed to persist usage event for request {RequestId}", usage.RequestId);
+                // Named with the scope key so the admin log sink attributes the line to the request.
+                _logger.LogError(ex, "Failed to persist usage event for request {GatewayRequestId}", usage.RequestId);
             }
         }
     }

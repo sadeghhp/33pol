@@ -23,6 +23,9 @@ public sealed record GatewayErrorPage
     public int Offset { get; init; }
 
     public string Source { get; init; } = GatewayErrorSources.Memory;
+
+    /// <summary>True when a database-backed store served this page from its in-memory buffer.</summary>
+    public bool Degraded { get; init; }
 }
 
 /// <summary>A page of grouped errors.</summary>

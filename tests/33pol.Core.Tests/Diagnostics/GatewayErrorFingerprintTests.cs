@@ -101,6 +101,42 @@ public sealed class GatewayErrorFingerprintTests
         GatewayErrorFingerprint.Compute(Record()).Should().MatchRegex("^[0-9a-f]{16}$");
     }
 
+    /// <summary>Digits that name something are identity; digits that count something are noise.</summary>
+    [Fact]
+    public void NormalizeMessage_KeepsDigitsInsideNamesButNotFreeStandingNumbers()
+    {
+        GatewayErrorFingerprint.NormalizeMessage("Model gpt-4o not found")
+            .Should().NotBe(GatewayErrorFingerprint.NormalizeMessage("Model gpt-5 not found"));
+        GatewayErrorFingerprint.NormalizeMessage("Qwen3-VL-8B timed out after 30s")
+            .Should().Be(GatewayErrorFingerprint.NormalizeMessage("Qwen3-VL-8B timed out after 300s"));
+        GatewayErrorFingerprint.NormalizeMessage("Upstream returned HTTP 401")
+            .Should().Be(GatewayErrorFingerprint.NormalizeMessage("Upstream returned HTTP 403"));
+    }
+
+    /// <summary>
+    /// Compiler-generated names carry numbers that shift whenever a lambda or await is added
+    /// anywhere in the type; they must not re-key every existing group on release.
+    /// </summary>
+    [Fact]
+    public void Compute_IgnoresCompilerGeneratedFrameNames()
+    {
+        var before = Record() with
+        {
+            StackTrace = "   at Pol33.Proxy.Middleware.ModelRouterMiddleware.<InvokeAsync>d__12.MoveNext()",
+        };
+        var after = Record() with
+        {
+            StackTrace = "   at Pol33.Proxy.Middleware.ModelRouterMiddleware.<InvokeAsync>d__14.MoveNext()",
+        };
+        var lambda = Record() with
+        {
+            StackTrace = "   at Pol33.Proxy.Middleware.ModelRouterMiddleware.<>c__DisplayClass3_0.<InvokeAsync>b__0()",
+        };
+
+        GatewayErrorFingerprint.Compute(before).Should().Be(GatewayErrorFingerprint.Compute(after));
+        GatewayErrorFingerprint.Compute(before).Should().Be(GatewayErrorFingerprint.Compute(lambda));
+    }
+
     [Fact]
     public void NormalizeMessage_HandlesBlankInput()
     {

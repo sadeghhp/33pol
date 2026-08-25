@@ -101,14 +101,13 @@ public sealed class GatewayRuntimeState
             if (!success)
             {
                 _totalErrors++;
+                // Under the same lock as the total so ResetErrors cannot clear one and miss the
+                // other, leaving the per-model sum disagreeing with the pill.
+                _errorsPerModel.AddOrUpdate(modelId, 1, static (_, count) => count + 1);
             }
         }
 
         _requestsPerModel.AddOrUpdate(modelId, 1, static (_, count) => count + 1);
-        if (!success)
-        {
-            _errorsPerModel.AddOrUpdate(modelId, 1, static (_, count) => count + 1);
-        }
 
         Windows.RecordCompletion(modelId, durationMs, success, wasStreaming);
 
@@ -199,10 +198,10 @@ public sealed class GatewayRuntimeState
         {
             _totalRequests++;
             _totalErrors++;
+            _errorsPerModel.AddOrUpdate(modelId, 1, static (_, count) => count + 1);
         }
 
         _requestsPerModel.AddOrUpdate(modelId, 1, static (_, count) => count + 1);
-        _errorsPerModel.AddOrUpdate(modelId, 1, static (_, count) => count + 1);
         Windows.RecordRejection(modelId, reason, countAsFailedRequest: true);
         Touch();
     }
@@ -259,6 +258,7 @@ public sealed class GatewayRuntimeState
             _totalErrors = 0;
             _clientDisconnects = 0;
             _errorsPerModel.Clear();
+            Windows.ResetErrors();
 
             // Drain and re-enqueue rather than filter in place: ConcurrentQueue has no removal, and
             // the feed's ordering is load-bearing for the dashboard's newest-first read.

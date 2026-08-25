@@ -84,7 +84,7 @@ public sealed class AdminLogEndpointTests
         using var json = JsonDocument.Parse(body);
         // Exactly one: the proxy's detailed record. Serilog's request-completion line and the
         // router's own warning restate the same failure and must not appear beside it.
-        json.RootElement.GetProperty("total").GetInt64().Should().Be(1);
+        json.RootElement.GetProperty("total").GetInt64().Should().Be(1, because: body);
         var occurrence = json.RootElement.GetProperty("occurrences")[0];
         occurrence.GetProperty("source").GetString().Should().Be("proxy");
         occurrence.GetProperty("outcome").GetString().Should().Be("upstream_error");
@@ -169,7 +169,7 @@ public sealed class AdminLogEndpointTests
     /// bootstrap admin key carries the Admin role only, so it is rejected before it ever reaches
     /// the router.
     /// </summary>
-    private static async Task SendFailingInferenceAsync(
+    internal static async Task SendFailingInferenceAsync(
         WebApplicationFactory<Program> factory,
         HttpClient adminClient)
     {
@@ -209,7 +209,7 @@ public sealed class AdminLogEndpointTests
         ((int)inference.StatusCode).Should().BeGreaterThanOrEqualTo(500, because: inferenceBody);
     }
 
-    private static HttpClient CreateAuthenticatedClient(WebApplicationFactory<Program> factory)
+    internal static HttpClient CreateAuthenticatedClient(WebApplicationFactory<Program> factory)
     {
         var client = factory.CreateClient();
         client.DefaultRequestHeaders.Add("X-API-Key", AdminKey);

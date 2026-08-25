@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Http.Headers;
 using Microsoft.Extensions.Hosting;
@@ -34,6 +35,11 @@ public sealed class HealthCheckService : BackgroundService
     private readonly HttpClient _httpClient;
     private readonly bool _ownsHttpClient;
     private readonly IGatewayErrorRecorder? _errorRecorder;
+
+    // This service's own memory of each backend's last verdict. Transition detection cannot lean
+    // on the store: a stub store (or one that was just pruned) answers "unknown" every sweep, which
+    // would turn a standing outage into one error record per interval.
+    private readonly ConcurrentDictionary<string, bool> _lastVerdict = new(StringComparer.OrdinalIgnoreCase);
 
     public HealthCheckService(
         IModelRegistry registry,
@@ -131,9 +137,6 @@ public sealed class HealthCheckService : BackgroundService
         var (isHealthy, statusCode, error) = await ProbeBackendAsync(model.Url, bearerToken, cancellationToken)
             .ConfigureAwait(false);
 
-        // Read before the write so this sweep can tell a transition from a repeat.
-        var wasHealthy = _healthStore.GetHealth(model.Id)?.IsHealthy ?? true;
-
         _healthStore.SetHealth(new BackendHealth(
             model.Id,
             model.Url,
@@ -154,6 +157,7 @@ public sealed class HealthCheckService : BackgroundService
             // One record per transition, not per sweep: an outage is one fault however many
             // probes observe it, and a repeat every interval would bury everything else. The
             // attention item shows the live state; this is the durable history of it.
+            var wasHealthy = !_lastVerdict.TryGetValue(model.Id, out var last) || last;
             if (wasHealthy)
             {
                 _errorRecorder?.Record(new GatewayErrorRecord
@@ -174,6 +178,8 @@ public sealed class HealthCheckService : BackgroundService
                 });
             }
         }
+
+        _lastVerdict[model.Id] = isHealthy;
     }
 
     private string? ResolveBearerTokenSafely(ModelConfig model)

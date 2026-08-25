@@ -62,11 +62,14 @@ public static class GatewayHostBuilderExtensions
         // Inside request logging so Serilog records the status this handler settled on rather than
         // the exception, and outside everything else so no unhandled failure can reach Kestrel and be
         // answered with a bare status line instead of the documented error body.
+        // The request id goes on first, so the exception handler's own log line and the error
+        // record it writes carry the same id as everything else on the request — including
+        // failures thrown by the middleware that used to sit between the two.
+        app.UseGatewayRequestId();
         app.UseGatewayExceptionHandling();
 
         app.UseRouting();
         app.UseCors();
-        app.UseGatewayRequestId();
 
         // Ahead of PublicModelDetection, which is the first thing to call EnableBuffering() and
         // parse the body. Registered after it, this middleware's own body-size cap could never fire

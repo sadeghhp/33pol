@@ -125,6 +125,44 @@ public sealed class GatewayErrorRepositoryTests
     }
 
     [Fact]
+    public async Task QueryGroupsAsync_PagesStablyWhenGroupsShareATimestamp()
+    {
+        await using var db = PersistenceTestDbContextFactory.CreateInMemory(nameof(QueryGroupsAsync_PagesStablyWhenGroupsShareATimestamp));
+        var sut = new GatewayErrorRepository(db);
+        await sut.AppendBatchAsync(Enumerable.Range(0, 120)
+            .Select(i => Error($"err_{i:D3}", $"fp-{i:D3}", Base))
+            .ToList());
+
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        for (var offset = 0; offset < 120; offset += 50)
+        {
+            var page = await sut.QueryGroupsAsync(new GatewayErrorQuery { Limit = 50, Offset = offset });
+            foreach (var group in page.Items)
+            {
+                seen.Add(group.Fingerprint).Should().BeTrue($"{group.Fingerprint} appeared on two pages");
+            }
+        }
+
+        seen.Should().HaveCount(120, "no group may vanish between pages");
+    }
+
+    [Fact]
+    public async Task QueryAsync_SearchMatchesHintAndStackTrace()
+    {
+        await using var db = PersistenceTestDbContextFactory.CreateInMemory(nameof(QueryAsync_SearchMatchesHintAndStackTrace));
+        var sut = new GatewayErrorRepository(db);
+        await sut.AppendBatchAsync(
+        [
+            Error("err_1", "fp-a", Base) with { Hint = "Nothing is listening on the model's URL." },
+            Error("err_2", "fp-b", Base) with { StackTrace = "at Pol33.Proxy.Forwarding.InferenceHttpForwarder.SendAsync" },
+            Error("err_3", "fp-c", Base),
+        ]);
+
+        (await sut.QueryAsync(new GatewayErrorQuery { Search = "listening" })).Total.Should().Be(1);
+        (await sut.QueryAsync(new GatewayErrorQuery { Search = "InferenceHttpForwarder" })).Total.Should().Be(1);
+    }
+
+    [Fact]
     public async Task QueryGroupsAsync_AggregatesByFingerprintWithTheNewestSample()
     {
         await using var db = PersistenceTestDbContextFactory.CreateInMemory(nameof(QueryGroupsAsync_AggregatesByFingerprintWithTheNewestSample));

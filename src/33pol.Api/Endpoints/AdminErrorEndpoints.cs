@@ -144,6 +144,7 @@ public static class AdminErrorEndpoints
                 {
                     scope = clearScope.ToString(),
                     result.RecordsDeleted,
+                    result.ArchiveCleared,
                     result.RecentRequestRowsRemoved,
                     result.TotalErrorsCleared,
                     result.SnapshotRewritten,

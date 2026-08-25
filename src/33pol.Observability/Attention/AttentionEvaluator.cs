@@ -55,7 +55,10 @@ public sealed class AttentionEvaluator(IOptions<GatewayOptions>? options = null)
         var items = new List<AttentionItem>();
         foreach (var (key, candidate) in active)
         {
-            var since = _firstSeen.GetOrAdd(key, now);
+            // A condition with a known start (a health-store transition, a breaker opening) is
+            // dated from there, so "since" survives a restart and does not read as "1m ago" for
+            // an outage that began at midnight. Anything else is dated from first observation.
+            var since = candidate.Since ?? _firstSeen.GetOrAdd(key, now);
             if (now - since < candidate.For)
             {
                 continue;
@@ -83,10 +86,15 @@ public sealed class AttentionEvaluator(IOptions<GatewayOptions>? options = null)
         _ => 2,
     };
 
-    private readonly record struct Candidate(AttentionItem Item, TimeSpan For);
+    private readonly record struct Candidate(AttentionItem Item, TimeSpan For, DateTimeOffset? Since = null);
 
-    private static void Add(Dictionary<string, Candidate> active, string key, AttentionItem item, TimeSpan @for) =>
-        active[key] = new Candidate(item, @for);
+    private static void Add(
+        Dictionary<string, Candidate> active,
+        string key,
+        AttentionItem item,
+        TimeSpan @for,
+        DateTimeOffset? since = null) =>
+        active[key] = new Candidate(item, @for, since);
 
     private static AttentionLink Link(string tab, params (string Key, string Value)[] parameters) =>
         new(tab, parameters.Length == 0 ? null : parameters.ToDictionary(p => p.Key, p => p.Value, StringComparer.Ordinal));
@@ -144,7 +152,7 @@ public sealed class AttentionEvaluator(IOptions<GatewayOptions>? options = null)
                     Detail = string.IsNullOrEmpty(b.Error) ? $"Last probe of {b.Url} failed." : $"{b.Error} ({b.Url})",
                     ModelId = b.ModelId,
                     Link = Link("routing", ("sub", "backends"), ("model", b.ModelId)),
-                }, TimeSpan.FromSeconds(_options.BackendUnhealthyForSeconds));
+                }, TimeSpan.FromSeconds(_options.BackendUnhealthyForSeconds), b.LastTransitionUtc);
             }
 
             if (b.CircuitState == "open")
@@ -157,7 +165,7 @@ public sealed class AttentionEvaluator(IOptions<GatewayOptions>? options = null)
                     Detail = "Requests are being rejected until a probe succeeds; the upstream failed repeatedly.",
                     ModelId = b.ModelId,
                     Link = Link("routing", ("sub", "backends"), ("model", b.ModelId)),
-                }, TimeSpan.FromSeconds(_options.CircuitOpenForSeconds));
+                }, TimeSpan.FromSeconds(_options.CircuitOpenForSeconds), b.CircuitOpenedAt ?? b.CircuitLastTransitionUtc);
             }
 
             if (b.MaxConcurrent > 0 && b.InFlight >= b.MaxConcurrent && (b.Queued > 0 || b.MaxQueued == 0))
