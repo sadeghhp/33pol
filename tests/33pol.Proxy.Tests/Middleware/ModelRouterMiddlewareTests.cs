@@ -436,6 +436,45 @@ public sealed class ModelRouterMiddlewareTests
     }
 
     /// <summary>
+    /// The forwarder stashes the transport exception; the proxy record must carry it, with the
+    /// exception-derived hint, so "connection refused" is readable from the Errors tab.
+    /// </summary>
+    [Fact]
+    public async Task InvokeAsync_ForwardFailure_RecordsTheUpstreamExceptionOnTheErrorRecord()
+    {
+        await WithSingleModelRegistryAsync(async registry =>
+        {
+            var refused = new HttpRequestException(
+                "Connection refused",
+                new System.Net.Sockets.SocketException((int)System.Net.Sockets.SocketError.ConnectionRefused));
+            var forwarder = Substitute.For<IInferenceHttpForwarder>();
+            forwarder.SendAsync(
+                    Arg.Any<HttpContext>(),
+                    Arg.Any<string>(),
+                    Arg.Any<string?>(),
+                    Arg.Any<StreamingHttpTransformer>(),
+                    Arg.Any<bool>(),
+                    Arg.Any<InferenceForwardTimeouts>(),
+                    Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    call.Arg<HttpContext>().Items[GatewayErrorContextKeys.UpstreamException] = refused;
+                    return ForwarderError.Request;
+                });
+
+            var errorRecorder = Substitute.For<IGatewayErrorRecorder>();
+            var middleware = CreateMiddleware(registry: registry, forwarder: forwarder, errorRecorder: errorRecorder);
+
+            await middleware.InvokeAsync(CreateContext(HttpMethods.Post, "/v1/chat/completions", """{"model":"m1"}"""));
+
+            errorRecorder.Received(1).Record(Arg.Is<GatewayErrorRecord>(r =>
+                r.ExceptionType == typeof(HttpRequestException).FullName
+                && r.StackTrace!.Contains("Connection refused")
+                && r.Hint!.Contains("Nothing is listening")));
+        });
+    }
+
+    /// <summary>
     /// An exception escaping the forward reaches the client as a 502 from the terminal handler. The
     /// inference scope must record it as a failure, not default to success on dispose — otherwise
     /// the Errors tab stores a record the Overview error count never saw.

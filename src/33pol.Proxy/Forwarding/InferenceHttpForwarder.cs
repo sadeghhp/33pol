@@ -130,11 +130,14 @@ public sealed class InferenceHttpForwarder(
                 timeouts.HeaderTimeout.TotalSeconds,
                 requestMessage.Method,
                 requestMessage.RequestUri);
+            StashException(context, new TimeoutException(
+                $"Upstream did not return response headers within {timeouts.HeaderTimeout.TotalSeconds}s."));
             return ForwarderError.RequestTimedOut;
         }
         catch (HttpRequestException ex)
         {
             logger.LogWarning(ex, "Upstream HTTP request failed for {Method} {Uri}", requestMessage.Method, requestMessage.RequestUri);
+            StashException(context, ex);
             return ForwarderError.Request;
         }
 
@@ -212,6 +215,8 @@ public sealed class InferenceHttpForwarder(
                         timeouts.StreamIdleTimeout.TotalSeconds,
                         requestMessage.RequestUri);
                     RemoveCopiedHeadersIfNotStarted(context, copiedHeaderNames);
+                    StashException(context, new TimeoutException(
+                        $"Upstream stalled for more than {timeouts.StreamIdleTimeout.TotalSeconds}s while sending the response body."));
                     return ForwarderError.ResponseBodyCanceled;
                 }
                 catch (UpstreamBodyReadException ex) when (!cancellationToken.IsCancellationRequested)
@@ -227,6 +232,7 @@ public sealed class InferenceHttpForwarder(
                         requestMessage.Method,
                         requestMessage.RequestUri);
                     RemoveCopiedHeadersIfNotStarted(context, copiedHeaderNames);
+                    StashException(context, ex.InnerException ?? ex);
                     return ForwarderError.ResponseBodyDestination;
                 }
             }
@@ -334,6 +340,14 @@ public sealed class InferenceHttpForwarder(
 
         return false;
     }
+
+    /// <summary>
+    /// Keeps the exception behind an outcome for the error record. The outcome alone says "upstream
+    /// error"; the exception says "connection refused on 172.26.81.2:2216", which is what an
+    /// operator needs.
+    /// </summary>
+    private static void StashException(HttpContext context, Exception exception) =>
+        context.Items[GatewayErrorContextKeys.UpstreamException] = exception;
 
     private static void StashSnippet(HttpContext context, ErrorBodySnippet? snippet)
     {

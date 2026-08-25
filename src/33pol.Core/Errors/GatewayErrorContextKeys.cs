@@ -13,6 +13,12 @@ public static class GatewayErrorContextKeys
     public const string UpstreamTarget = "GatewayUpstreamTarget";
 
     /// <summary>
+    /// The transport-level exception behind a forwarder outcome, stashed by the forwarder so the
+    /// error record carries the real cause ("connection refused") and not only the outcome name.
+    /// </summary>
+    public const string UpstreamException = "GatewayUpstreamException";
+
+    /// <summary>
     /// Set once a capture point has recorded this request's failure, so the terminal exception
     /// handler does not record it a second time under a different source.
     /// </summary>

@@ -862,6 +862,9 @@ public sealed class ModelRouterMiddleware
         }
 
         var path = context.Request.Path;
+        var upstreamException = context.Items.TryGetValue(GatewayErrorContextKeys.UpstreamException, out var stashed)
+            ? stashed as Exception
+            : null;
 
         _errorRecorder.Record(new GatewayErrorRecord
         {
@@ -873,6 +876,8 @@ public sealed class ModelRouterMiddleware
             Category = nameof(ModelRouterMiddleware),
             EventCode = errorCode ?? outcome,
             Message = BuildErrorMessage(modelId, statusCode, outcome),
+            ExceptionType = upstreamException?.GetType().FullName,
+            StackTrace = upstreamException?.ToString(),
             Method = context.Request.Method,
             Path = path.Value,
             RouteKind = ClassifyRoute(path),
@@ -889,7 +894,10 @@ public sealed class ModelRouterMiddleware
                 out var snippet)
                 ? snippet as string
                 : null,
-            Hint = GatewayLogHints.ForUpstreamStatus(statusCode, upstreamUrl, path.Value, modelId),
+            // The transport hint ("nothing is listening on the model's URL") beats the status hint
+            // whenever there is an exception to read it from.
+            Hint = GatewayLogHints.ForException(upstreamException)
+                ?? GatewayLogHints.ForUpstreamStatus(statusCode, upstreamUrl, path.Value, modelId),
         });
 
         // Tells the terminal exception handler this failure is already accounted for.
