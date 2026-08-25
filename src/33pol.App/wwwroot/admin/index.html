@@ -17,11 +17,11 @@
        is that no expression below may contain an operator, a ternary or a call with arguments:
        every value comes from a getter, a zero-argument method, or a {get,set} pair on adminApp. -->
   <link rel="stylesheet" href="vendor/fonts.css?v=1" />
-  <link rel="stylesheet" href="admin.css?v=19" />
-  <script defer src="admin-icons.js?v=10"></script>
+  <link rel="stylesheet" href="admin.css?v=23" />
+  <script defer src="admin-icons.js?v=11"></script>
   <script defer src="admin-errors.js?v=7"></script>
   <script defer src="admin-store.js?v=10"></script>
-  <script defer src="admin-app.js?v=32"></script>
+  <script defer src="admin-app.js?v=36"></script>
   <script defer src="vendor/alpine-csp-3.14.9.min.js"></script>
 </head>
 <body x-data="adminApp" x-cloak @keydown.window="onModalKeydown">
@@ -161,7 +161,7 @@
       <main class="page-content" role="main">
 
         <!-- ============================ OVERVIEW ============================ -->
-        <section x-show="isDashboard" role="tabpanel" aria-labelledby="tab-dashboard" id="panel-dashboard">
+        <section x-show="isDashboard" role="tabpanel" aria-labelledby="tab-dashboard" id="panel-dashboard" @keydown.escape.window="exitWallboard">
           <div class="page-header">
             <div class="titles">
               <span class="eyebrow">Telemetry</span>
@@ -189,6 +189,22 @@
               <button type="button" class="action secondary" @click="loadOverviewData" :disabled="loadingOverview" title="Refresh">
                 <span class="icon" x-html="icons.refresh"></span> Refresh
               </button>
+              <button type="button" class="action secondary wallboard-toggle" @click="toggleWallboard" :title="wallboardButtonText">
+                <span class="icon" x-html="wallboardButtonIcon"></span> <span x-text="wallboardButtonText"></span>
+              </button>
+            </div>
+          </div>
+
+          <!-- First-run: nothing has ever been routed, so show how to send a request instead of empty cards. -->
+          <div class="empty-state onboarding" x-show="showOnboarding">
+            <span class="empty-state-icon icon" x-html="icons.zap"></span>
+            <h3>No traffic yet</h3>
+            <p>Point any OpenAI SDK at this gateway and send one request — this page lights up the moment it arrives.</p>
+            <pre class="onboarding-snippet mono" x-text="onboardingCurlText"></pre>
+            <div class="onboarding-actions">
+              <button type="button" class="action" @click="copyOnboardingCurl"><span class="icon" x-html="icons.copy"></span> Copy curl</button>
+              <button type="button" class="action secondary" @click="openRoutingModels" x-show="onboardingNoModels">Add a model</button>
+              <button type="button" class="action secondary" @click="openKeys">Create an inference key</button>
             </div>
           </div>
 
@@ -228,7 +244,7 @@
           </p>
 
           <!-- Primary vitals -->
-          <div class="vitals-grid vitals-5" x-show="summary">
+          <div class="vitals-grid vitals-5" x-show="showOverviewBody">
             <article class="vital" :title="sparkSourceText">
               <div class="vital-head"><span class="vital-label">Requests</span><span class="icon" x-html="icons.activity"></span></div>
               <strong class="vital-value" x-text="requestsValueText"></strong>
@@ -324,10 +340,18 @@
           </div>
 
           <!-- Secondary stats -->
-          <div class="mini-stats" x-show="summary">
-            <span class="mini-stat"><span class="ms-label">Uptime</span><span class="ms-value" x-text="uptimeText"></span></span>
-            <span class="mini-stat" :class="rateLimitedClass"><span class="ms-label">Rate-limited</span><span class="ms-value" x-text="rateLimitedText"></span></span>
-            <span class="mini-stat" :class="quotaBlockedClass"><span class="ms-label">Quota-blocked</span><span class="ms-value" x-text="quotaBlockedText"></span></span>
+          <!-- Control-plane strip: uptime, config, secrets, backup, database, process, usage writer.
+               Each chip opens the page that fixes it. -->
+          <div class="mini-stats cp-strip" x-show="showOverviewBody">
+            <template x-for="c in controlPlaneChips" :key="c.key">
+              <button type="button" :class="c.cls" :title="c.title" @click="c.open">
+                <span class="ms-label" x-text="c.label"></span><span class="ms-value" x-text="c.value"></span>
+              </button>
+            </template>
+            <!-- Rate-limited / quota-blocked lifetime totals moved into the Policy card when the
+                 gateway provides one; kept here for older gateways. -->
+            <span class="mini-stat" :class="rateLimitedClass" x-show="noPolicySection"><span class="ms-label">Rate-limited</span><span class="ms-value" x-text="rateLimitedText"></span></span>
+            <span class="mini-stat" :class="quotaBlockedClass" x-show="noPolicySection"><span class="ms-label">Quota-blocked</span><span class="ms-value" x-text="quotaBlockedText"></span></span>
           </div>
 
           <!-- Routing health: probe result, circuit breaker and bulkhead occupancy per model. -->
@@ -364,24 +388,173 @@
                 </button>
               </div>
             </div>
+
+            <!-- Policy pressure: which control is refusing requests, for whom. The in-memory part
+                 (rejections by reason / tenant / model) rides in the summary; quota consumption
+                 comes from the slow policy endpoint. -->
+            <div class="card policy-card" x-show="hasPolicy">
+              <div class="card-title-row">
+                <div><span class="eyebrow">Policy</span><h3>Pressure</h3></div>
+                <span class="mini-stats policy-totals">
+                  <span class="mini-stat" :class="rateLimitedClass" title="Rate-limit rejections since the counters were last reset"><span class="ms-label">Rate-limited</span><span class="ms-value" x-text="rateLimitedText"></span></span>
+                  <span class="mini-stat" :class="quotaBlockedClass" title="Quota and budget rejections since the counters were last reset"><span class="ms-label">Quota-blocked</span><span class="ms-value" x-text="quotaBlockedText"></span></span>
+                </span>
+              </div>
+              <div class="policy-section" x-show="hasPolicyRejectionBars">
+                <span class="eyebrow">Rejections by reason · <span x-text="policyWindowText"></span></span>
+                <div class="hbars">
+                  <template x-for="row in policyRejectionBars" :key="row.key">
+                    <button type="button" class="hbar is-error is-clickable" @click="row.open">
+                      <span class="hbar-label" x-text="row.modelId" :title="row.modelId"></span>
+                      <span class="hbar-track"><span class="hbar-fill" :style="row.style"></span></span>
+                      <span class="hbar-value" x-text="row.countText"></span>
+                    </button>
+                  </template>
+                </div>
+              </div>
+              <div class="policy-columns">
+                <div class="policy-section" x-show="hasPolicyTenantBars">
+                  <span class="eyebrow">By tenant</span>
+                  <div class="hbars">
+                    <template x-for="row in policyTenantBars" :key="row.key">
+                      <div class="hbar" :title="row.key">
+                        <span class="hbar-label" x-text="row.modelId"></span>
+                        <span class="hbar-track"><span class="hbar-fill" :style="row.style"></span></span>
+                        <span class="hbar-value" x-text="row.countText"></span>
+                      </div>
+                    </template>
+                  </div>
+                </div>
+                <div class="policy-section" x-show="hasPolicyModelBars">
+                  <span class="eyebrow">By model</span>
+                  <div class="hbars">
+                    <template x-for="row in policyModelBars" :key="row.key">
+                      <button type="button" class="hbar is-clickable" @click="row.open">
+                        <span class="hbar-label" x-text="row.modelId" :title="row.modelId"></span>
+                        <span class="hbar-track"><span class="hbar-fill" :style="row.style"></span></span>
+                        <span class="hbar-value" x-text="row.countText"></span>
+                      </button>
+                    </template>
+                  </div>
+                </div>
+              </div>
+              <div class="policy-section" x-show="hasQuotaRows">
+                <span class="eyebrow">Monthly token quota</span>
+                <div class="quota-rows">
+                  <template x-for="q in quotaRows" :key="q.key">
+                    <button type="button" class="budget-row" @click="q.open" :title="q.title">
+                      <span class="budget-name">
+                        <span x-text="q.who"></span>
+                        <span class="tag muted" x-show="q.hasPlan" x-text="q.plan"></span>
+                      </span>
+                      <span class="load-track"><span :class="q.ratioClass" :style="q.ratioStyle"></span></span>
+                      <span :class="q.tagClass" x-text="q.pctText"></span>
+                      <span class="budget-spend mono" x-text="q.usedText"></span>
+                    </button>
+                  </template>
+                </div>
+              </div>
+              <div class="policy-columns">
+                <div class="policy-section" x-show="hasUnknownModels">
+                  <span class="eyebrow">Unknown models requested</span>
+                  <div class="hbars">
+                    <template x-for="row in unknownModelRows" :key="row.key">
+                      <button type="button" class="hbar is-clickable" @click="row.open">
+                        <span class="hbar-label mono" x-text="row.modelId" :title="row.modelId"></span>
+                        <span class="hbar-track"><span class="hbar-fill" :style="row.style"></span></span>
+                        <span class="hbar-value" x-text="row.countText"></span>
+                      </button>
+                    </template>
+                  </div>
+                </div>
+                <div class="policy-section" x-show="hasGrantDenials">
+                  <span class="eyebrow">Keys denied a model</span>
+                  <div class="hbars">
+                    <template x-for="row in grantDenialRows" :key="row.key">
+                      <button type="button" class="hbar is-clickable" @click="row.open">
+                        <span class="hbar-label mono" x-text="row.modelId" :title="row.modelId"></span>
+                        <span class="hbar-track"><span class="hbar-fill" :style="row.style"></span></span>
+                        <span class="hbar-value" x-text="row.countText"></span>
+                      </button>
+                    </template>
+                  </div>
+                </div>
+              </div>
+              <p class="hint healthy" x-show="policyQuiet">No rejections in the last hour and every quota has headroom.</p>
+              <p class="notice warn" x-show="hasPolicyError" x-text="policyError"></p>
+            </div>
           </div>
 
-          <!-- Model breakdown charts -->
-          <div class="chart-row" x-show="summary">
-            <div class="card">
-              <span class="eyebrow">Traffic</span>
-              <h3>Requests by model</h3>
-              <div class="hbars" x-show="hasRequestModelBars">
-                <template x-for="row in requestModelBars" :key="row.key">
-                  <div class="hbar">
-                    <span class="hbar-label" x-text="row.modelId" :title="row.modelId"></span>
-                    <span class="hbar-track"><span class="hbar-fill" :style="row.style"></span></span>
-                    <span class="hbar-value" x-text="row.countText"></span>
-                  </div>
+          <!-- FinOps + reliability. The FinOps card is gateway-wide (every tenant, anonymous
+               included) and comes from the slow section endpoint; it hides itself when the gateway
+               has no billing database. "Requests by model" moved into the per-model table below. -->
+          <div class="chart-row" x-show="showOverviewBody">
+            <div class="card finops-card" x-show="hasFinops">
+              <div class="card-title-row">
+                <div><span class="eyebrow">FinOps</span><h3>Spend</h3></div>
+                <button type="button" class="action secondary" @click="openUsage">
+                  <span class="icon" x-html="icons.bar-chart"></span> Usage &amp; cost
+                </button>
+              </div>
+              <div class="finops-tiles">
+                <template x-for="t in finopsTiles" :key="t.key">
+                  <span :class="t.cls" :title="t.foot">
+                    <span class="ms-label" x-text="t.label"></span>
+                    <span class="ms-value" x-text="t.value"></span>
+                    <span class="ms-foot" x-text="t.foot"></span>
+                  </span>
                 </template>
               </div>
-              <p class="hint" x-show="noRequestModelBars">No traffic recorded yet.</p>
+              <div class="finops-bars" x-show="hasFinopsModelBars">
+                <span class="eyebrow">By model · month to date</span>
+                <div class="hbars">
+                  <template x-for="row in finopsModelBars" :key="row.key">
+                    <div class="hbar" :title="row.title">
+                      <span class="hbar-label" x-text="row.modelId" :title="row.modelId"></span>
+                      <span class="hbar-track"><span class="hbar-fill" :style="row.style"></span></span>
+                      <span class="hbar-value" x-text="row.countText"></span>
+                    </div>
+                  </template>
+                </div>
+              </div>
+              <div class="finops-bars" x-show="hasFinopsCostCenterBars">
+                <span class="eyebrow">By cost center · month to date</span>
+                <div class="hbars">
+                  <template x-for="row in finopsCostCenterBars" :key="row.key">
+                    <button type="button" class="hbar is-clickable" @click="row.open" :title="row.title">
+                      <span class="hbar-label" x-text="row.modelId" :title="row.modelId"></span>
+                      <span class="hbar-track"><span class="hbar-fill" :style="row.style"></span></span>
+                      <span class="hbar-value" x-text="row.countText"></span>
+                    </button>
+                  </template>
+                </div>
+              </div>
+              <p class="hint" x-show="noFinopsSpend">No priced spend this month yet.</p>
+              <div class="finops-budgets" x-show="hasFinopsBudgets">
+                <span class="eyebrow">Budgets · this period</span>
+                <template x-for="bg in finopsBudgetRows" :key="bg.key">
+                  <button type="button" class="budget-row" @click="bg.open">
+                    <span class="budget-name">
+                      <span x-text="bg.name"></span>
+                      <span class="muted" x-text="bg.who"></span>
+                      <span class="tag" x-show="bg.hardStop" title="Hard stop: requests are refused once the limit is reached">HARD</span>
+                    </span>
+                    <span class="load-track"><span :class="bg.ratioClass" :style="bg.ratioStyle"></span></span>
+                    <span :class="bg.tagClass" x-text="bg.pctText"></span>
+                    <span class="budget-spend mono" x-text="bg.spendText"></span>
+                    <span class="budget-breach" x-show="bg.hasBreach" x-text="bg.breachText"></span>
+                  </button>
+                </template>
+              </div>
+              <p :class="finopsCoverageClass" x-text="finopsCoverageText"></p>
+              <p class="notice warn" x-show="hasFinopsUnpriced">
+                <span x-text="finopsUnpricedText"></span>
+                <button type="button" class="link-btn" @click="openRoutingModels">Set prices</button>
+              </p>
+              <p :class="finopsReconClass" x-text="finopsReconText"></p>
+              <p :class="finopsPipelineClass" x-show="hasFinopsPipeline" x-text="finopsPipelineText"></p>
             </div>
+            <p class="notice warn" x-show="hasFinopsError" x-text="finopsError"></p>
             <div class="card">
               <span class="eyebrow">Reliability</span>
               <h3>Errors by model</h3>
@@ -407,12 +580,146 @@
             </div>
           </div>
 
+          <!-- Per-model performance for the selected window. Replaces the old "Requests by model"
+               bars: same ranking, plus error rate, p95, TTFT and priced cost per model. -->
+          <div class="card model-perf-card" x-show="showOverviewBody">
+            <div class="card-title-row">
+              <div><span class="eyebrow">Traffic</span><h3 x-text="modelPerfTitleText"></h3></div>
+              <span class="icon muted" x-html="icons.layers"></span>
+            </div>
+            <div class="table-wrap" x-show="hasModelPerfRows">
+              <table class="model-perf-table">
+                <thead>
+                  <tr>
+                    <th>Model</th><th class="num">Requests</th><th>Share</th><th class="num" title="Errors ÷ requests">Errors</th>
+                    <th class="num" x-show="modelPerfHasLatency">p95</th><th class="num" x-show="modelPerfHasLatency">TTFT p95</th>
+                    <th class="num" title="Priced spend in the window">Cost</th><th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <template x-for="m in modelPerfRows" :key="m.key">
+                    <tr>
+                      <td class="col-truncate mono" x-text="m.modelId" :title="m.modelId"></td>
+                      <td class="num" x-text="m.requestsText"></td>
+                      <td><span class="hbar-track"><span class="hbar-fill" :style="m.shareStyle"></span></span></td>
+                      <td :class="m.errorRateClass" x-text="m.errorRateText" :title="m.errorRateTitle"></td>
+                      <td class="num" x-show="modelPerfHasLatency" x-text="m.p95Text"></td>
+                      <td class="num" x-show="modelPerfHasLatency" x-text="m.ttftText"></td>
+                      <td class="num" x-text="m.costText"></td>
+                      <td class="row-actions">
+                        <button type="button" class="icon-btn" @click="m.openErrors" title="Errors for this model"><span class="icon" x-html="icons.bug"></span></button>
+                        <button type="button" class="icon-btn" @click="m.openRouting" title="Routing"><span class="icon" x-html="icons.git-branch"></span></button>
+                      </td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+            </div>
+            <p class="hint" x-show="noModelPerfRows">No traffic in this window.</p>
+          </div>
+
+          <!-- Recent admin activity, read back from the audit trail. -->
+          <div class="chart-row" x-show="hasActivitySection">
+            <div class="card activity-card">
+              <div class="card-title-row">
+                <div><span class="eyebrow">Control plane</span><h3>Recent activity</h3></div>
+                <span class="icon muted" x-html="icons.history"></span>
+              </div>
+              <div class="table-wrap" x-show="hasActivity">
+                <table class="t-activity">
+                  <colgroup><col style="width:14%" /><col style="width:24%" /><col style="width:22%" /><col style="width:40%" /></colgroup>
+                  <thead><tr><th>Time</th><th>Action</th><th>By</th><th>Details</th></tr></thead>
+                  <tbody>
+                    <template x-for="ev in activityRows" :key="ev.key">
+                      <tr>
+                        <td class="cell-time" x-text="ev.ago" :title="ev.time"></td>
+                        <td><span :class="ev.actionClass" x-text="ev.action"></span></td>
+                        <td class="col-truncate" x-text="ev.actor"></td>
+                        <td class="col-truncate mono" x-text="ev.details" :title="ev.detailsTitle"></td>
+                      </tr>
+                    </template>
+                  </tbody>
+                </table>
+              </div>
+              <p class="hint" x-show="hasActivityNote" x-text="activityEmptyText"></p>
+              <p class="notice warn" x-show="hasActivityError" x-text="activityError"></p>
+            </div>
+
+            <!-- Tenants & keys: who is using the gateway, and credentials that need attention. -->
+            <div class="card tenants-card" x-show="hasTenants">
+              <div class="card-title-row">
+                <div><span class="eyebrow">Tenants &amp; keys</span><h3 x-text="tenantsSummaryText"></h3></div>
+                <button type="button" class="action secondary" @click="openKeys"><span class="icon" x-html="icons.key"></span> API keys</button>
+              </div>
+              <div class="policy-section" x-show="hasTopConsumers">
+                <span class="eyebrow">Top consumers · month to date</span>
+                <div class="consumer-rows">
+                  <template x-for="tc in topConsumerRows" :key="tc.key">
+                    <button type="button" class="consumer-row" @click="tc.open">
+                      <span class="consumer-who"><span x-text="tc.who"></span><span class="tag muted" x-show="tc.hasPlan" x-text="tc.plan"></span></span>
+                      <span class="num" x-text="tc.requestsText" title="Requests this month"></span>
+                      <span class="num muted" x-text="tc.tokensText" title="Tokens this month"></span>
+                      <span class="num" x-text="tc.costText" title="Priced spend this month"></span>
+                      <span class="consumer-recent muted" x-text="tc.recentText"></span>
+                    </button>
+                  </template>
+                </div>
+              </div>
+              <div class="policy-columns">
+                <div class="policy-section" x-show="hasExpiringKeys">
+                  <span class="eyebrow">Expiring soon</span>
+                  <template x-for="k in expiringKeyRows" :key="k.key">
+                    <button type="button" class="key-row" @click="k.open">
+                      <span class="key-row-label" x-text="k.label"></span>
+                      <span class="muted" x-text="k.tenant"></span>
+                      <span class="key-row-when" x-text="k.whenText"></span>
+                    </button>
+                  </template>
+                </div>
+                <div class="policy-section" x-show="hasIdleKeys">
+                  <span class="eyebrow">Idle keys</span>
+                  <template x-for="k in idleKeyRows" :key="k.key">
+                    <button type="button" class="key-row" @click="k.open">
+                      <span class="key-row-label" x-text="k.label"></span>
+                      <span class="muted" x-text="k.tenant"></span>
+                      <span class="key-row-when" x-text="k.whenText"></span>
+                    </button>
+                  </template>
+                </div>
+              </div>
+              <p class="hint" x-show="hasAnonymousShare" x-text="anonymousShareText"></p>
+              <p class="hint healthy" x-show="tenantsQuiet">No spend recorded this month and every key is in use.</p>
+              <p class="notice warn" x-show="hasTenantsError" x-text="tenantsError"></p>
+            </div>
+          </div>
+
           <!-- Recent requests -->
           <div class="section-header">
             <div><span class="eyebrow">Live tail</span><h3>Recent requests</h3></div>
-            <label class="checkbox field-inline">
-              <input type="checkbox" x-model="mdl.requestsErrorsOnly" /> Errors only
-            </label>
+            <div class="tail-filters">
+              <select class="inline-select" x-model="mdl.requestsModelFilter" aria-label="Model">
+                <option value="">All models</option>
+                <template x-for="o in requestsModelOptions" :key="o.key"><option :value="o.value" x-text="o.label"></option></template>
+              </select>
+              <select class="inline-select" x-model="mdl.requestsTenantFilter" aria-label="Tenant">
+                <option value="">All tenants</option>
+                <template x-for="o in requestsTenantOptions" :key="o.key"><option :value="o.value" x-text="o.label"></option></template>
+              </select>
+              <select class="inline-select" x-model="mdl.requestsStatusClass" aria-label="Status">
+                <option value="">Any status</option>
+                <template x-for="o in requestsStatusOptions" :key="o.key"><option :value="o.value" x-text="o.label"></option></template>
+              </select>
+              <label class="checkbox field-inline" title="Slower than twice the window's p95 (or 5 s)">
+                <input type="checkbox" x-model="mdl.requestsSlowOnly" /> Slow
+              </label>
+              <label class="checkbox field-inline">
+                <input type="checkbox" x-model="mdl.requestsErrorsOnly" /> Errors only
+              </label>
+              <button type="button" class="action secondary" @click="clearRequestFilters" x-show="hasRequestFilters">Clear</button>
+              <button type="button" :class="requestsPausedClass" @click="toggleRequestsPause" title="Freeze the feed so rows stop moving; new requests wait until you resume">
+                <span class="icon" x-html="pauseButtonIcon"></span> <span x-text="pauseButtonText"></span>
+              </button>
+            </div>
           </div>
           <!-- What the tail adds up to right now: rows in flight, errors, priced spend and tokens
                across the visible window, so the operator reads the feed as a whole before the rows. -->
@@ -429,12 +736,13 @@
               <!-- Column shares drive the fixed table layout: the wide free-text columns
                    (route, model) absorb the space, the rest stay at their natural size. -->
               <colgroup>
-                <col style="width:7%" /><col style="width:11%" /><col style="width:16%" />
-                <col style="width:12%" /><col style="width:11%" /><col style="width:13%" />
-                <col style="width:10%" /><col style="width:11%" /><col style="width:9%" />
+                <col style="width:3%" /><col style="width:6%" /><col style="width:9%" /><col style="width:14%" />
+                <col style="width:11%" /><col style="width:9%" /><col style="width:11%" />
+                <col style="width:9%" /><col style="width:9%" /><col style="width:6%" /><col style="width:5%" /><col style="width:8%" />
               </colgroup>
               <thead>
                 <tr>
+                  <th aria-label="Pin"></th>
                   <th class="sortable" @click="sortBy.requestsTime">Time<span x-html="sortIcon.requestsTime"></span></th>
                   <th>Request ID</th>
                   <th>Route</th>
@@ -443,6 +751,8 @@
                   <th class="sortable" @click="sortBy.requestsStatus">Status<span x-html="sortIcon.requestsStatus"></span></th>
                   <th class="num" title="Prompt → completion tokens">Tokens</th>
                   <th class="num" title="Input + output cost from the model's rate card">Cost</th>
+                  <th class="num" title="Time to first token (streaming)">TTFT</th>
+                  <th class="num" title="Completion tokens per second">tok/s</th>
                   <th class="num">Duration</th>
                 </tr>
               </thead>
@@ -457,6 +767,11 @@
                     @click="r.toggle"
                     @keydown.enter.prevent="r.toggle"
                     @keydown.space.prevent="r.toggle">
+                    <td class="cell-pin" @click.stop>
+                      <button type="button" :class="r.pinClass" @click="r.pin" :title="r.pinTitle" aria-label="Pin request">
+                        <span class="icon" x-html="icons.pin"></span>
+                      </button>
+                    </td>
                     <td class="cell-time" x-text="r.clock" :title="r.time"></td>
                     <td class="cell-code" @click.stop>
                       <span class="cell-code-inner">
@@ -481,10 +796,12 @@
                     </td>
                     <td class="num" x-text="r.tokensText" :title="r.tokensTitle"></td>
                     <td class="num" :class="r.costClass" x-text="r.costText" :title="r.costTitle"></td>
+                    <td class="num" x-text="r.ttftText" :title="r.ttftTitle"></td>
+                    <td class="num" x-text="r.tokPerSecText" title="Completion tokens per second"></td>
                     <td class="num" x-text="r.durationText"></td>
                   </tr>
                   <tr x-show="r.expanded" class="request-detail-row">
-                    <td colspan="9">
+                    <td colspan="12">
                       <dl class="request-detail-list">
                         <div><dt>Request ID</dt><dd><code x-text="r.requestId"></code></dd></div>
                         <div><dt>Started</dt><dd x-text="r.time"></dd></div>
@@ -512,7 +829,7 @@
               </template>
             </table>
             <table x-show="requestsSkeleton">
-              <tbody><tr class="skeleton-row"><td colspan="9"></td></tr><tr class="skeleton-row"><td colspan="9"></td></tr><tr class="skeleton-row"><td colspan="9"></td></tr></tbody>
+              <tbody><tr class="skeleton-row"><td colspan="12"></td></tr><tr class="skeleton-row"><td colspan="12"></td></tr><tr class="skeleton-row"><td colspan="12"></td></tr></tbody>
             </table>
           </div>
           <div class="empty-state" x-show="requestsEmpty">

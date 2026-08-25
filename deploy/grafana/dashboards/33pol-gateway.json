@@ -712,7 +712,7 @@
           "legendFormat": "{{model}} {{code}}"
         }
       ],
-      "description": "`code` is the error-catalog code. `upstream_error` and `request_too_large` also arrive here from GatewayExceptionHandlingMiddleware, the pipeline's terminal handler."
+      "description": "`code` is the error-catalog code. `upstream_error`, `request_too_large` and `request_incomplete` also arrive here from GatewayExceptionHandlingMiddleware, the pipeline's terminal handler."
     },
     {
       "id": 12,

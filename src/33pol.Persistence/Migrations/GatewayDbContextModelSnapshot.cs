@@ -456,6 +456,24 @@ namespace Pol33.Persistence.Migrations
                     b.ToTable("gateway_stats_snapshot", (string)null);
                 });
 
+            modelBuilder.Entity("Pol33.Persistence.Entities.MaintenanceStateEntity", b =>
+                {
+                    b.Property<string>("Key")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("UpdatedAt")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("ValueJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Key");
+
+                    b.ToTable("maintenance_state", (string)null);
+                });
+
             modelBuilder.Entity("Pol33.Persistence.Entities.ModelGrantEntity", b =>
                 {
                     b.Property<Guid>("Id")

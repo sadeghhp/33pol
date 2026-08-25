@@ -44,7 +44,7 @@ public sealed class InMemoryQuotaService(
 
         if (used >= limit)
         {
-            metricsCollector.RecordQuotaRejection();
+            metricsCollector.RecordQuotaRejection(partitionKey, string.IsNullOrEmpty(modelId) ? null : modelId);
             return QuotaCheckResult.HardExceeded;
         }
 

@@ -2,7 +2,9 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Pol33.Core.Abstractions;
+using Microsoft.Extensions.DependencyInjection;
 using Pol33.Core.Models;
+using Pol33.Core.Models.Overview;
 using Pol33.Core.Security;
 
 namespace Pol33.Api.Endpoints;
@@ -22,7 +24,32 @@ public static class MaintenanceAdminEndpoints
         IAuditLogger audit,
         CancellationToken cancellationToken)
     {
+        var attemptedAt = DateTimeOffset.UtcNow;
         var result = await backupService.CreateBackupAsync(cancellationToken).ConfigureAwait(false);
+
+        // Remembered so the Overview can say when the last backup was and whether it verified;
+        // best-effort, and only where a database exists to remember it in.
+        var state = httpContext.RequestServices.GetService<IMaintenanceStateStore>();
+        if (state is not null)
+        {
+            try
+            {
+                await state.SetAsync(MaintenanceStateKeys.LastBackup, new BackupStatus
+                {
+                    AttemptedAtUtc = attemptedAt,
+                    Succeeded = result.Succeeded,
+                    Path = result.Path,
+                    SizeBytes = result.SizeBytes,
+                    IntegrityCheck = result.IntegrityCheck,
+                    Error = result.Error,
+                }, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // The backup itself is the deliverable; failing to note it must not turn a good backup into an error.
+                _ = ex;
+            }
+        }
 
         audit.LogAdminAction(
             "maintenance.backup",

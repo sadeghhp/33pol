@@ -1,9 +1,11 @@
 using Pol33.Core.Abstractions;
+using Pol33.Core.Models.Overview;
+using Pol33.Observability.Policy;
 using Pol33.Observability.Runtime;
 
 namespace Pol33.Observability.Metrics;
 
-public sealed class GatewayMetricsCollector(GatewayRuntimeState runtimeState) : IGatewayMetricsCollector, IUsageQualityCounters
+public sealed class GatewayMetricsCollector(GatewayRuntimeState runtimeState, PolicyPressureTracker? policy = null) : IGatewayMetricsCollector, IUsageQualityCounters
 {
     private long _parseFailures;
     private long _estimatedUsage;
@@ -18,18 +20,54 @@ public sealed class GatewayMetricsCollector(GatewayRuntimeState runtimeState) : 
 
     public long DroppedEvents => Interlocked.Read(ref _droppedEvents);
 
-    public void RecordRateLimitRejection(string reason)
+    public void RecordRateLimitRejection(string reason) => RecordRateLimitRejection(reason, tenantId: null, modelId: null);
+
+    public void RecordRateLimitRejection(string reason, string? tenantId, string? modelId)
     {
-        runtimeState.RecordRateLimitRejection();
+        var kind = reason.Contains("stream", StringComparison.OrdinalIgnoreCase)
+            ? RejectionReason.StreamConcurrency
+            : RejectionReason.RateLimit;
+        runtimeState.RecordRateLimitRejection(kind, modelId);
+        policy?.RecordRejection(kind, tenantId, modelId);
         GatewayMeters.RateLimitRejections.Add(
             1,
             new KeyValuePair<string, object?>("reason", reason));
     }
 
-    public void RecordQuotaRejection()
+    public void RecordQuotaRejection() => RecordQuotaRejection(tenantId: null, modelId: null);
+
+    public void RecordQuotaRejection(string? tenantId, string? modelId)
     {
-        runtimeState.RecordQuotaRejection();
+        runtimeState.RecordQuotaRejection(RejectionReason.Quota, modelId);
+        policy?.RecordRejection(RejectionReason.Quota, tenantId, modelId);
         GatewayMeters.QuotaRejections.Add(1);
+    }
+
+    public void RecordBudgetRejection(string? tenantId, string? budgetName, string modelId)
+    {
+        // The request itself completes as a failed inference (the scope's outcome), so only the
+        // reason breakdown and the quota-blocked counter see it — never a second request.
+        runtimeState.RecordQuotaRejection(RejectionReason.Budget, modelId);
+        policy?.RecordBudgetRejection(tenantId, budgetName, modelId);
+    }
+
+    public void RecordGrantDenial(string? tenantId, string modelId)
+    {
+        policy?.RecordGrantDenial(tenantId, modelId);
+    }
+
+    public void RecordModelResolve(string result, string? requestedModel)
+    {
+        if (result == "not_found")
+        {
+            runtimeState.RecordReasonOnly(RejectionReason.ModelNotFound, modelId: null);
+            if (requestedModel is not null)
+            {
+                policy?.RecordUnknownModel(requestedModel);
+            }
+        }
+
+        RecordModelResolve(result);
     }
 
     public void RecordTokenUsage(string modelId, long promptTokens, long completionTokens) =>

@@ -408,10 +408,12 @@ public sealed class ModelRouterMiddlewareTests
         var authState = Substitute.For<IGatewayAuthenticationState>();
         authState.IsAuthenticationRequired.Returns(true);
 
+        var requestTracker = Substitute.For<IRequestTracker>();
         var middleware = CreateMiddleware(
             registry: registry,
             scopeFactory: scopeFactory,
-            authState: authState);
+            authState: authState,
+            requestTracker: requestTracker);
 
         var context = CreateContext(
             HttpMethods.Post,
@@ -424,6 +426,8 @@ public sealed class ModelRouterMiddlewareTests
         context.Response.StatusCode.Should().Be(StatusCodes.Status403Forbidden);
         var body = await ReadResponseBodyAsync(context);
         body.Should().Contain("insufficient_scope");
+        // The refusal is counted like the other admission rejections so it reaches the Overview.
+        requestTracker.Received(1).RecordRejectedRequest("m1", "insufficient_scope");
     }
 
     [Fact]
@@ -512,7 +516,7 @@ public sealed class ModelRouterMiddlewareTests
             });
 
         var requestTracker = Substitute.For<IRequestTracker>();
-        requestTracker.BeginInferenceRequest(Arg.Any<string>(), Arg.Any<bool>())
+        requestTracker.BeginInferenceRequest(Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<string?>())
             .Returns(_ => Substitute.For<IInferenceRequestScope>());
 
         var middleware = CreateMiddleware(registry: registry, requestTracker: requestTracker);
@@ -523,7 +527,7 @@ public sealed class ModelRouterMiddlewareTests
 
         await middleware.InvokeAsync(context);
 
-        requestTracker.Received(1).BeginInferenceRequest("local-mock", false);
+        requestTracker.Received(1).BeginInferenceRequest("local-mock", false, Arg.Any<string?>());
     }
 
     [Fact]
@@ -1140,7 +1144,7 @@ public sealed class ModelRouterMiddlewareTests
     private static IRequestTracker CreateTrackerReturning(IInferenceRequestScope scope)
     {
         var tracker = Substitute.For<IRequestTracker>();
-        tracker.BeginInferenceRequest(Arg.Any<string>(), Arg.Any<bool>()).Returns(scope);
+        tracker.BeginInferenceRequest(Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<string?>()).Returns(scope);
         return tracker;
     }
 
@@ -1292,7 +1296,7 @@ public sealed class ModelRouterMiddlewareTests
             // Only the default gets the throwaway-scope stub: re-stubbing a caller-supplied tracker
             // would silently discard the scope a test set up to assert its outcome on.
             var defaultTracker = Substitute.For<IRequestTracker>();
-            defaultTracker.BeginInferenceRequest(Arg.Any<string>(), Arg.Any<bool>())
+            defaultTracker.BeginInferenceRequest(Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<string?>())
                 .Returns(_ => Substitute.For<IInferenceRequestScope>());
             requestTracker = defaultTracker;
         }

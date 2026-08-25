@@ -143,4 +143,34 @@ public sealed class ApiKeyRepository : IApiKeyRepository
 
     private static string? NormalizeOptional(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    public async Task<IReadOnlyList<ApiKeyRecord>> ListExpiringAsync(DateTimeOffset before, CancellationToken cancellationToken = default)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var entities = await _db.ApiKeys
+            .AsNoTracking()
+            .Where(k => k.RevokedAt == null && k.ExpiresAt != null && k.ExpiresAt <= before && k.ExpiresAt > now)
+            .OrderBy(k => k.ExpiresAt)
+            .Take(100)
+            .ToListAsync(cancellationToken);
+        return entities.Select(IdentityEntityMapper.ToRecord).ToList();
+    }
+
+    public async Task<IReadOnlyList<ApiKeyRecord>> ListIdleAsync(DateTimeOffset idleSince, CancellationToken cancellationToken = default)
+    {
+        var entities = await _db.ApiKeys
+            .AsNoTracking()
+            .Where(k => k.RevokedAt == null && (k.LastUsedAt ?? k.CreatedAt) <= idleSince)
+            .OrderBy(k => k.LastUsedAt ?? k.CreatedAt)
+            .Take(100)
+            .ToListAsync(cancellationToken);
+        return entities.Select(IdentityEntityMapper.ToRecord).ToList();
+    }
+
+    public async Task<(int Total, int Revoked)> CountAsync(CancellationToken cancellationToken = default)
+    {
+        var total = await _db.ApiKeys.CountAsync(cancellationToken);
+        var revoked = await _db.ApiKeys.CountAsync(k => k.RevokedAt != null, cancellationToken);
+        return (total, revoked);
+    }
 }

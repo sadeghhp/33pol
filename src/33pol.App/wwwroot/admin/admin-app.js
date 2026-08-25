@@ -32,6 +32,8 @@ function adminApp() {
   ];
   const DEFAULT_OVERVIEW_WINDOW = '5m';
   const WINDOW_STORAGE_KEY = '33pol-admin-overview-window';
+  /** Snapshots of pinned request rows, so a pinned request survives its eviction from the 25-row feed. */
+  const PINNED_REQUESTS = new Map();
   const LEGACY = {
     backends: { tab: 'routing', routingSubTab: 'backends' },
     models: { tab: 'routing', routingSubTab: 'models' }
@@ -78,6 +80,25 @@ function adminApp() {
     /** Attention keys (code + subject) the operator dismissed this session; kept in sessionStorage. */
     attentionDismissed: [],
     attentionCollapsed: false,
+    /** Database-backed Overview sections, polled every ~30s; null until loaded or when the gateway has no such data. */
+    overviewFinops: null,
+    overviewPolicy: null,
+    overviewControlPlane: null,
+    overviewActivity: null,
+    overviewTenants: null,
+    /** Per-section load failure text ('' when fine), keyed finops|policy|controlPlane|activity|tenants. */
+    overviewSectionErrors: { finops: '', policy: '', controlPlane: '', activity: '', tenants: '' },
+    overviewSlowLoadedAt: null,
+    /** Wallboard mode: chrome hidden, vitals scaled up (`#dashboard?wall=1`). */
+    wallboard: false,
+    /** Live tail filters, pause and pins. */
+    requestsModelFilter: '',
+    requestsTenantFilter: '',
+    requestsStatusClass: '',
+    requestsSlowOnly: false,
+    requestsPaused: false,
+    _pausedFrame: null,
+    pinnedRequestIds: [],
     usage: null,
     usageEvents: null,
     usageEventsHasMore: false,
@@ -323,12 +344,31 @@ function adminApp() {
       if (!params) return;
       const w = params.get('window');
       if (w && OVERVIEW_WINDOWS.some(([id]) => id === w)) this.setOverviewWindow(w, false);
+      if (params.has('wall')) this.setWallboard(params.get('wall') === '1', false);
     },
 
-    /** The Overview's hash, carrying the selected window so the view is linkable and survives back/forward. */
+    /** The Overview's hash, carrying the selected window (and wallboard) so the view is linkable and survives back/forward. */
     dashboardHash() {
-      return '#dashboard?window=' + this.overviewWindow;
+      return '#dashboard?window=' + this.overviewWindow + (this.wallboard ? '&wall=1' : '');
     },
+
+    setWallboard(on, updateHash = true) {
+      const next = !!on;
+      if (next === this.wallboard) return;
+      this.wallboard = next;
+      this.applyWallboard();
+      if (updateHash && this.tab === 'dashboard') {
+        const hash = this.dashboardHash();
+        if (location.hash !== hash) location.hash = hash;
+      }
+    },
+    applyWallboard() {
+      document.documentElement.classList.toggle('wallboard', this.wallboard && this.tab === 'dashboard');
+    },
+    toggleWallboard() { this.setWallboard(!this.wallboard); },
+    exitWallboard() { if (this.wallboard) this.setWallboard(false); },
+    get wallboardButtonText() { return this.wallboard ? 'Exit wallboard' : 'Wallboard'; },
+    get wallboardButtonIcon() { return this.icon(this.wallboard ? 'minimize' : 'maximize'); },
 
     setOverviewWindow(id, updateHash = true) {
       if (!OVERVIEW_WINDOWS.some(([key]) => key === id)) return;
@@ -351,6 +391,7 @@ function adminApp() {
       }
       sessionStorage.setItem('33pol-admin-tab', name);
       sessionStorage.setItem('33pol-admin-routing-sub', this.routingSubTab);
+      this.applyWallboard();
       if (updateHash) {
         const next = name === 'dashboard' ? this.dashboardHash() : '#' + name;
         if (location.hash !== next) location.hash = next;
@@ -668,6 +709,8 @@ function adminApp() {
         // page never appeared until you clicked Refresh.
         if (this.tab === 'dashboard' && !streaming) this.loadRequests(true);
         if (this._pollTick % 5 === 0) this.loadHealth();
+        // The database-backed cards move slowly and are memoised server-side; every 15th tick (30s).
+        if (this.tab === 'dashboard' && this._pollTick > 0 && this._pollTick % 15 === 0) this.loadOverviewSlow(true).catch(() => {});
         // Every 5th tick (10s) — the log buffer does not move fast enough to justify 2s polling,
         // and only while the tab is actually on screen.
         if (this.logsAutoRefresh && this.tab === 'logs' && this._pollTick % 5 === 0) this.loadLogs(true);
@@ -1375,6 +1418,53 @@ function adminApp() {
         this.pollFailCount = 0;
         this.overviewStale = false;
       });
+      // Not awaited: the vitals must never wait on the database-backed cards.
+      this.loadOverviewSlow(true).catch(() => {});
+    },
+
+    /**
+     * Loads the slow Overview sections together. Each one fails on its own — a FinOps query error
+     * leaves the backends and policy cards intact — and a 204 (the gateway has no such data) hides
+     * the card rather than warning about it.
+     */
+    async loadOverviewSlow(quiet) {
+      const results = await Promise.allSettled([
+        this.loadOverviewFinops(),
+        this.loadOverviewPolicy(),
+        this.loadOverviewControlPlane(),
+        this.loadOverviewActivity(),
+        this.loadOverviewTenants()
+      ]);
+      this.overviewSlowLoadedAt = Date.now();
+      if (!quiet && results.every(r => r.status === 'rejected')) {
+        throw results[0].reason;
+      }
+    },
+
+    _loadOverviewSection(name, url, seqKey, assign) {
+      return this._sequenced(seqKey, () => this.apiJson(url), body => {
+        assign(body ?? null);
+        this.overviewSectionErrors[name] = '';
+      }).catch(e => {
+        this.overviewSectionErrors[name] = this.describeLoadFailure(e);
+        throw e;
+      });
+    },
+
+    loadOverviewFinops() {
+      return this._loadOverviewSection('finops', '/admin/api/overview/finops', '_finopsSeq', body => { this.overviewFinops = body; });
+    },
+    loadOverviewPolicy() {
+      return this._loadOverviewSection('policy', '/admin/api/overview/policy', '_policySeq', body => { this.overviewPolicy = body; });
+    },
+    loadOverviewControlPlane() {
+      return this._loadOverviewSection('controlPlane', '/admin/api/overview/control-plane', '_cpSeq', body => { this.overviewControlPlane = body; });
+    },
+    loadOverviewActivity() {
+      return this._loadOverviewSection('activity', '/admin/api/overview/activity?limit=20', '_activitySeq', body => { this.overviewActivity = body; });
+    },
+    loadOverviewTenants() {
+      return this._loadOverviewSection('tenants', '/admin/api/overview/tenants', '_tenantsSeq', body => { this.overviewTenants = body; });
     },
 
     // ---- live push stream (Overview) ----
@@ -1491,6 +1581,12 @@ function adminApp() {
 
     applyLiveFrame(frame) {
       if (!frame || typeof frame !== 'object') return;
+      // Paused: the summary keeps flowing (vitals stay honest) but the rows are parked until Resume,
+      // so an operator can actually click into a request without the feed running away.
+      if (this.requestsPaused && Array.isArray(frame.requests)) {
+        this._pausedFrame = frame.requests;
+        frame = { ...frame, requests: undefined };
+      }
       this._liveFrames++;
       this._liveRetryDelay = 1000;
       this.liveMode = 'stream';
@@ -1621,16 +1717,99 @@ function adminApp() {
       return this.selectedActiveKeyIds().length;
     },
 
-    sortedRequests() {
-      let list = this.requests || [];
-      if (this.requestsErrorsOnly) {
-        list = list.filter(r => Number(r.statusCode) >= 400 || r.errorCode);
+    /** The feed plus any pinned rows the feed has since evicted; a live copy always wins over the snapshot. */
+    requestsWithPinned() {
+      const live = this.requests || [];
+      if (!this.pinnedRequestIds.length) return live;
+      const seen = new Set(live.map(r => r.requestId));
+      for (const r of live) if (PINNED_REQUESTS.has(r.requestId)) PINNED_REQUESTS.set(r.requestId, r);
+      const extra = this.pinnedRequestIds.filter(id => !seen.has(id) && PINNED_REQUESTS.has(id)).map(id => PINNED_REQUESTS.get(id));
+      return extra.length ? live.concat(extra) : live;
+    },
+
+    requestsSlowThresholdMs() {
+      const p95 = this.windowStats.p95Ms;
+      return p95 && p95 > 0 ? Math.max(1000, p95 * 2) : 5000;
+    },
+
+    matchesRequestFilters(r) {
+      if (this.requestsErrorsOnly && !(Number(r.statusCode) >= 400 || r.errorCode)) return false;
+      if (this.requestsModelFilter && r.modelId !== this.requestsModelFilter) return false;
+      if (this.requestsTenantFilter && (r.tenantId || '') !== this.requestsTenantFilter) return false;
+      const cls = this.requestsStatusClass;
+      if (cls) {
+        const code = Number(r.statusCode);
+        if (cls === 'inflight' && !r.isInFlight) return false;
+        if (cls === '2xx' && !(code >= 200 && code < 300)) return false;
+        if (cls === '4xx' && !(code >= 400 && code < 500)) return false;
+        if (cls === '5xx' && !(code >= 500)) return false;
       }
-      // Whatever the sort, work in progress stays on top: it is the part of the feed that is
-      // changing, and a request that started 40s ago should not sink under ones that finished since.
+      if (this.requestsSlowOnly && !(this.requestElapsedMs(r) >= this.requestsSlowThresholdMs())) return false;
+      return true;
+    },
+
+    sortedRequests() {
+      const list = this.requestsWithPinned().filter(r => this.matchesRequestFilters(r));
+      // Whatever the sort, pinned rows stay on top, then work in progress: it is the part of the
+      // feed that is changing, and a request that started 40s ago should not sink under ones that
+      // finished since.
       const sorted = this.sortedList(list, 'requests');
-      const running = sorted.filter(r => r.isInFlight);
-      return running.length ? running.concat(sorted.filter(r => !r.isInFlight)) : sorted;
+      const pinned = sorted.filter(r => this.pinnedRequestIds.includes(r.requestId));
+      const rest = sorted.filter(r => !this.pinnedRequestIds.includes(r.requestId));
+      const running = rest.filter(r => r.isInFlight);
+      return pinned.concat(running, rest.filter(r => !r.isInFlight));
+    },
+
+    togglePinRequest(id) {
+      if (!id) return;
+      if (this.pinnedRequestIds.includes(id)) {
+        this.pinnedRequestIds = this.pinnedRequestIds.filter(x => x !== id);
+        PINNED_REQUESTS.delete(id);
+        return;
+      }
+      const row = (this.requests || []).find(r => r.requestId === id);
+      if (row) PINNED_REQUESTS.set(id, row);
+      this.pinnedRequestIds = [...this.pinnedRequestIds, id];
+    },
+
+    toggleRequestsPause() {
+      this.requestsPaused = !this.requestsPaused;
+      if (!this.requestsPaused && Array.isArray(this._pausedFrame)) {
+        this.requests = this._pausedFrame;
+        this._pausedFrame = null;
+      }
+    },
+    get pauseButtonText() { return this.requestsPaused ? 'Resume' : 'Pause'; },
+    get pauseButtonIcon() { return this.icon(this.requestsPaused ? 'play' : 'pause'); },
+    get requestsPausedClass() { return this.requestsPaused ? 'action secondary is-paused' : 'action secondary'; },
+    get pausedPendingCount() {
+      if (!this.requestsPaused || !Array.isArray(this._pausedFrame)) return 0;
+      const shown = new Set((this.requests || []).map(r => r.requestId));
+      return this._pausedFrame.filter(r => !shown.has(r.requestId)).length;
+    },
+
+    clearRequestFilters() {
+      this.requestsErrorsOnly = false;
+      this.requestsModelFilter = '';
+      this.requestsTenantFilter = '';
+      this.requestsStatusClass = '';
+      this.requestsSlowOnly = false;
+    },
+    get hasRequestFilters() {
+      return !!(this.requestsErrorsOnly || this.requestsModelFilter || this.requestsTenantFilter || this.requestsStatusClass || this.requestsSlowOnly);
+    },
+    _optionsFrom(values, emptyLabel) {
+      const set = new Set(values.filter(Boolean));
+      return Array.from(set).sort().map(v => ({ key: v, value: v, label: v }));
+    },
+    get requestsModelOptions() {
+      const fromRows = (this.requests || []).map(r => r.modelId);
+      const fromSummary = Object.keys(this.summary?.requestsPerModel || {});
+      return this._optionsFrom(fromRows.concat(fromSummary));
+    },
+    get requestsTenantOptions() { return this._optionsFrom((this.requests || []).map(r => r.tenantId)); },
+    get requestsStatusOptions() {
+      return [['2xx', '2xx'], ['4xx', '4xx'], ['5xx', '5xx'], ['inflight', 'In flight']].map(([value, label]) => ({ key: value, value, label }));
     },
 
     urlLooksLocalhost() {
@@ -2190,7 +2369,9 @@ function adminApp() {
     /** @param quiet true for the 2s poll tick, which must not flash the loading state or raise a banner. */
     async loadRequests(quiet) {
       const fetchRequests = async () => {
-        this.requests = (await this.apiJson('/admin/api/requests?limit=25')) ?? [];
+        const rows = (await this.apiJson('/admin/api/requests?limit=25')) ?? [];
+        if (this.requestsPaused) this._pausedFrame = rows;
+        else this.requests = rows;
       };
       if (quiet) {
         try { await fetchRequests(); } catch { /* a transient blip is already reported by the summary poll */ }
@@ -2579,6 +2760,10 @@ function adminApp() {
         gateApiKey: b('gateApiKey'),
         headerApiKey: b('headerApiKey'),
         requestsErrorsOnly: b('requestsErrorsOnly'),
+        requestsModelFilter: b('requestsModelFilter'),
+        requestsTenantFilter: b('requestsTenantFilter'),
+        requestsStatusClass: b('requestsStatusClass'),
+        requestsSlowOnly: b('requestsSlowOnly'),
         usageFrom: b('usageFrom'),
         usageTo: b('usageTo'),
         usageFilterCostCenter: b('usageFilterCostCenter'),
@@ -3023,6 +3208,508 @@ function adminApp() {
       return rows.reduce((sum, b) => sum + Number(b.queued ?? 0), 0);
     },
 
+    // ---- tenants card ----
+
+    get hasTenants() { return !!this.overviewTenants; },
+    get tenantsError() { return this.overviewSectionErrors.tenants || ''; },
+    get hasTenantsError() { return !!this.overviewSectionErrors.tenants && !this.overviewTenants; },
+    get tenantsSummaryText() {
+      const t = this.overviewTenants;
+      if (!t) return '';
+      return this.formatNum(t.tenantCount ?? 0) + (t.tenantCount === 1 ? ' tenant · ' : ' tenants · ')
+        + this.formatNum(t.keyCount ?? 0) + ' keys' + (Number(t.revokedKeyCount ?? 0) > 0 ? ' (' + this.formatNum(t.revokedKeyCount) + ' revoked)' : '');
+    },
+    get topConsumerRows() {
+      const list = this.overviewTenants?.topConsumersMonthToDate || [];
+      const cur = this.overviewTenants?.currency || 'USD';
+      return list.map(c => ({
+        key: c.tenantId || 'anonymous',
+        who: c.tenantSlug || (c.tenantId ? String(c.tenantId).slice(0, 8) : 'anonymous'),
+        plan: c.planSlug || '',
+        hasPlan: !!c.planSlug,
+        requestsText: this.formatNum(c.requests ?? 0),
+        recentText: Number(c.requests24h ?? 0) > 0 ? this.formatNum(c.requests24h) + ' in 24h' : '',
+        tokensText: this.formatCompact(Number(c.promptTokens ?? 0) + Number(c.completionTokens ?? 0)),
+        costText: this.formatCost(c.cost, cur),
+        open: () => this.openLink({ tab: 'usage' })
+      }));
+    },
+    get hasTopConsumers() { return this.topConsumerRows.length > 0; },
+    _keyRows(list, when) {
+      return (list || []).map(k => ({
+        key: k.id || k.keyPrefix,
+        label: k.label || k.keyPrefix,
+        prefix: k.keyPrefix,
+        tenant: k.tenantSlug || '',
+        whenText: when(k),
+        open: () => this.openLink({ tab: 'keys', params: { q: k.keyPrefix } })
+      }));
+    },
+    get expiringKeyRows() {
+      return this._keyRows(this.overviewTenants?.expiringKeys, k => k.expiresAt ? 'expires ' + new Date(k.expiresAt).toLocaleDateString() : '');
+    },
+    get hasExpiringKeys() { return this.expiringKeyRows.length > 0; },
+    get idleKeyRows() {
+      return this._keyRows(this.overviewTenants?.idleKeys, k => k.lastUsedAt ? 'last used ' + this.relativeTimeText(k.lastUsedAt) : 'never used');
+    },
+    get hasIdleKeys() { return this.idleKeyRows.length > 0; },
+    get anonymousShareText() {
+      const share = Number(this.overviewTenants?.anonymousRequestShare ?? 0);
+      if (!(share > 0)) return '';
+      return (share * 100).toFixed(share < 0.1 ? 1 : 0) + '% of this month\'s requests were anonymous (public models, no key)';
+    },
+    get hasAnonymousShare() { return !!this.anonymousShareText; },
+    get tenantsQuiet() { return this.hasTenants && !this.hasTopConsumers && !this.hasExpiringKeys && !this.hasIdleKeys; },
+
+    // ---- per-model table ----
+
+    get modelPerfHasLatency() { return !this.isLifetimeStats; },
+    get modelPerfTitleText() { return 'Models · ' + this.windowLabel; },
+    get modelPerfRows() {
+      const w = this.windowStats;
+      let rows;
+      if (w.perModel) {
+        rows = w.perModel.map(m => ({
+          modelId: m.modelId,
+          requests: Number(m.requests ?? 0),
+          errors: Number(m.errors ?? 0),
+          errorRate: Number(m.errorRate ?? 0),
+          p95Ms: m.latencyP95Ms,
+          ttftP95Ms: m.ttftP95Ms,
+          cost: m.pricedCost
+        }));
+      } else {
+        const errs = Object.fromEntries(this.errorsByModelRows().map(r => [r.modelId, r.count]));
+        rows = this.requestsByModelRows().map(r => ({
+          modelId: r.modelId,
+          requests: Number(r.count ?? 0),
+          errors: Number(errs[r.modelId] ?? 0),
+          errorRate: r.count > 0 ? Number(errs[r.modelId] ?? 0) / r.count : 0,
+          p95Ms: null, ttftP95Ms: null, cost: null
+        }));
+      }
+      rows.sort((a, b) => b.requests - a.requests);
+      const max = Math.max(...rows.map(r => r.requests), 1);
+      const cur = this.finopsCurrency;
+      return rows.map(r => ({
+        key: r.modelId,
+        modelId: r.modelId,
+        requestsText: this.formatNum(r.requests),
+        shareStyle: 'width:' + Math.max(2, Math.round((r.requests / max) * 100)) + '%',
+        errorRateText: (r.errorRate * 100).toFixed(1) + '%',
+        errorRateTitle: this.formatNum(r.errors) + ' errors',
+        errorRateClass: r.errorRate > 0.05 ? 'num is-error' : (r.errorRate > 0.01 ? 'num is-warn' : 'num'),
+        p95Text: r.p95Ms == null ? '—' : this.formatMsShort(r.p95Ms),
+        ttftText: r.ttftP95Ms == null ? '—' : this.formatMsShort(r.ttftP95Ms),
+        costText: r.cost == null ? '—' : this.formatRequestCost(r.cost, cur),
+        openErrors: () => this.openErrorsForModel(r.modelId),
+        openRouting: () => this.openLink({ tab: 'routing', params: { sub: 'models', model: r.modelId } })
+      }));
+    },
+    get hasModelPerfRows() { return this.modelPerfRows.length > 0; },
+    get noModelPerfRows() { return !!this.summary && this.modelPerfRows.length === 0; },
+
+    // ---- onboarding ----
+
+    /** A gateway that has never routed a request gets a "send your first request" panel instead of empty cards. */
+    get showOnboarding() {
+      return !!this.summary && Number(this.summary.totalInferenceRequests ?? 0) === 0
+        && (this.requests || []).length === 0 && !this.isLoading('overview');
+    },
+    get showOverviewBody() { return !!this.summary && !this.showOnboarding; },
+    get onboardingModelId() {
+      const fromBackends = this.summary?.backends?.[0]?.modelId;
+      const fromModels = this.models?.[0]?.id;
+      return fromBackends || fromModels || 'your-model-id';
+    },
+    get onboardingNoModels() { return this.hasBackendsSection && this.summary.backends.length === 0; },
+    get onboardingCurlText() {
+      const origin = (typeof location !== 'undefined' && location.origin) ? location.origin : 'http://localhost:8080';
+      return "curl -s " + origin + "/v1/chat/completions \\\n"
+        + "  -H 'Authorization: Bearer <inference-key>' \\\n"
+        + "  -H 'Content-Type: application/json' \\\n"
+        + "  -d '{\"model\":\"" + this.onboardingModelId + "\",\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}]}'";
+    },
+    copyOnboardingCurl() { this.copyText(this.onboardingCurlText, 'curl command copied.'); },
+
+    // ---- control-plane strip ----
+
+    formatBytes(n) {
+      const x = Number(n);
+      if (!Number.isFinite(x) || x < 0) return '—';
+      if (x < 1024) return x + ' B';
+      const units = ['KB', 'MB', 'GB', 'TB'];
+      let v = x / 1024;
+      let i = 0;
+      while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+      return v.toFixed(v < 10 ? 1 : 0) + ' ' + units[i];
+    },
+
+    get hasControlPlane() { return !!this.overviewControlPlane || !!this.summary?.controlPlane; },
+
+    /**
+     * Uptime · Config · Secrets · Backup · DB · Process · Usage writer, each a chip that opens the
+     * page that fixes it. Chips whose data the gateway does not provide are simply absent.
+     */
+    get controlPlaneChips() {
+      const live = this.summary?.controlPlane;
+      const slow = this.overviewControlPlane;
+      const chips = [];
+      chips.push({ key: 'uptime', label: 'Uptime', value: this.uptimeText, cls: 'mini-stat', title: 'Since the gateway process started', open: () => {} });
+
+      const lastReload = live?.configLastReloadUtc ?? slow?.configLastReloadUtc;
+      if (live || slow) {
+        chips.push({
+          key: 'config',
+          label: 'Config',
+          value: lastReload ? 'loaded ' + this.relativeTimeText(lastReload) : 'not loaded',
+          cls: lastReload ? 'mini-stat is-clickable' : 'mini-stat warn is-clickable',
+          title: (live?.modelCount ?? slow?.modelCount ?? 0) + ' models in the registry' + (lastReload ? ' · last reload ' + new Date(lastReload).toLocaleString() : ''),
+          open: () => this.openSettingsRuntime()
+        });
+      }
+
+      if (slow?.secrets) {
+        const sec = slow.secrets;
+        const bad = Number(sec.undecryptable ?? 0);
+        chips.push({
+          key: 'secrets',
+          label: 'Secrets',
+          value: !sec.hasRun ? 'unverified' : (bad > 0 ? bad + ' undecryptable' : (Number(sec.total ?? 0) + ' ok')),
+          cls: bad > 0 ? 'mini-stat error is-clickable' : 'mini-stat is-clickable',
+          title: bad > 0 ? 'Stored upstream credentials that no longer decrypt under Gateway:Security:KeyPepper' : 'Stored upstream credentials verified',
+          open: () => this.openLink({ tab: 'routing', params: { sub: 'models' } })
+        });
+      }
+
+      if (slow?.database) {
+        const db = slow.database;
+        if (db.configured) {
+          const b = slow.lastBackup;
+          chips.push({
+            key: 'backup',
+            label: 'Backup',
+            value: !b ? 'never' : (b.succeeded ? this.relativeTimeText(b.attemptedAtUtc) : 'failed ' + this.relativeTimeText(b.attemptedAtUtc)),
+            cls: !b ? 'mini-stat warn is-clickable' : (b.succeeded ? 'mini-stat is-clickable' : 'mini-stat error is-clickable'),
+            title: !b ? 'No backup recorded — POST /admin/api/maintenance/backup' : (b.succeeded ? (b.path || '') + ' · ' + this.formatBytes(b.sizeBytes) + ' · integrity ' + (b.integrityCheck || '?') + (slow.backupCount ? ' · ' + slow.backupCount + ' kept' : '') : (b.error || 'Backup failed')),
+            open: () => this.openSettingsRuntime()
+          });
+          chips.push({
+            key: 'database',
+            label: 'Database',
+            value: this.formatBytes(db.sizeBytes),
+            cls: 'mini-stat',
+            title: (db.path || '') + (db.journalMode ? ' · journal ' + db.journalMode : ''),
+            open: () => {}
+          });
+        } else {
+          chips.push({ key: 'database', label: 'Database', value: 'none', cls: 'mini-stat', title: 'No SQLite file is configured; counters and keys live in memory only', open: () => {} });
+        }
+      }
+
+      if (live) {
+        const pending = Number(live.threadPoolPendingWorkItems ?? 0);
+        chips.push({
+          key: 'process',
+          label: 'Process',
+          value: this.formatBytes(live.workingSetBytes) + (pending > 0 ? ' · ' + pending + ' queued' : ''),
+          cls: pending > 100 ? 'mini-stat warn' : 'mini-stat',
+          title: 'GC heap ' + this.formatBytes(live.gcHeapBytes) + ' · committed ' + this.formatBytes(live.gcCommittedBytes)
+            + ' · gen2 ' + this.formatNum(live.gen2Collections ?? 0) + ' · pause ' + Number(live.gcPauseTimePercent ?? 0).toFixed(1) + '%'
+            + ' · ' + (live.threadPoolThreads ?? 0) + ' pool threads · ' + (live.processorCount ?? '?') + ' cores',
+          open: () => {}
+        });
+      }
+
+      const p = this.summary?.pipeline;
+      if (p) {
+        const depth = Number(p.usageWriterQueueDepth ?? -1);
+        const dropped = Number(p.usageWriterDropped ?? 0);
+        chips.push({
+          key: 'writer',
+          label: 'Usage writer',
+          value: (depth < 0 ? '?' : this.formatNum(depth)) + '/' + this.formatNum(p.usageWriterCapacity ?? 0) + (dropped > 0 ? ' · ' + this.formatNum(dropped) + ' dropped' : ''),
+          cls: dropped > 0 ? 'mini-stat error is-clickable' : (depth > 5000 ? 'mini-stat warn is-clickable' : 'mini-stat is-clickable'),
+          title: 'Usage events waiting for the billing writer' + (Number(p.usageParseFailures ?? 0) > 0 ? ' · ' + this.formatNum(p.usageParseFailures) + ' unparsed usage frames' : ''),
+          open: () => this.openLink({ tab: 'settings', params: { sub: 'observability' } })
+        });
+      }
+
+      if (slow?.auditLastEntryUtc) {
+        chips.push({ key: 'audit', label: 'Audit', value: 'last ' + this.relativeTimeText(slow.auditLastEntryUtc), cls: 'mini-stat', title: 'Most recent admin action in the audit trail', open: () => {} });
+      }
+      return chips;
+    },
+
+    // ---- activity card ----
+
+    get hasActivitySection() { return !!this.overviewActivity && this.overviewActivity.available !== false; },
+    get activityRows() {
+      const list = this.overviewActivity?.entries || [];
+      const dangerous = /(delete|revoke|clear|rollback|failed)/i;
+      return list.map((e, i) => {
+        const t = e.timestampUtc ? new Date(e.timestampUtc) : null;
+        let details = e.details || '';
+        if (details.length > 140) details = details.slice(0, 137) + '…';
+        return {
+          key: (e.timestampUtc || '') + '|' + e.action + '|' + i,
+          clock: t ? t.toLocaleTimeString() : '—',
+          time: t ? t.toLocaleString() : '',
+          ago: this.relativeTimeText(e.timestampUtc),
+          action: e.action,
+          actionClass: dangerous.test(e.action) ? 'tag level-warning' : 'tag',
+          actor: [e.tenantSlug || (e.tenantId ? String(e.tenantId).slice(0, 8) : ''), e.apiKeyLabel || (e.apiKeyId ? String(e.apiKeyId).slice(0, 8) : '')].filter(Boolean).join(' · ') || '—',
+          details,
+          detailsTitle: e.details || ''
+        };
+      });
+    },
+    get hasActivity() { return this.activityRows.length > 0; },
+    get activityEmptyText() {
+      if (!this.overviewActivity) return '';
+      if (this.overviewActivity.available === false) return 'No audit trail yet — it starts with the first admin action.';
+      const errors = Number(this.overviewActivity.parseErrors ?? 0);
+      return this.activityRows.length ? (errors ? errors + ' unreadable audit lines were skipped.' : '') : 'No admin actions recorded yet.';
+    },
+    get hasActivityNote() { return !!this.activityEmptyText; },
+    get activityError() { return this.overviewSectionErrors.activity || ''; },
+    get hasActivityError() { return !!this.overviewSectionErrors.activity && !this.overviewActivity; },
+
+    // ---- policy card ----
+
+    /** True when the gateway ships the in-memory policy section on the summary. */
+    get hasPolicyLive() { return !!this.summary?.policy; },
+    get hasPolicySlow() { return !!this.overviewPolicy; },
+    get hasPolicy() { return this.hasPolicyLive || this.hasPolicySlow; },
+    get policyError() { return this.overviewSectionErrors.policy || ''; },
+    get hasPolicyError() { return !!this.overviewSectionErrors.policy && !this.overviewPolicy; },
+
+    /** Human labels for the server's rejection reasons, and the Errors-tab code each maps to. */
+    _reasonMeta(key) {
+      const meta = {
+        rate_limit: ['Rate limit', 'rate_limit_exceeded'],
+        quota: ['Token quota', 'quota_exceeded'],
+        budget: ['Budget hard stop', 'quota_exceeded'],
+        bulkhead: ['Concurrency (bulkhead)', 'concurrency_limit_exceeded'],
+        stream_concurrency: ['Stream cap', 'concurrency_limit_exceeded'],
+        grant_denied: ['Model not granted', 'insufficient_scope'],
+        model_not_found: ['Unknown model', 'model_not_found'],
+        backend_unhealthy: ['Backend unhealthy', 'backend_unhealthy'],
+        circuit_open: ['Circuit open', 'circuit_open']
+      };
+      return meta[key] || [key, ''];
+    },
+
+    _countBars(rows, labelOf, open) {
+      const list = Array.isArray(rows) ? rows : [];
+      const max = Math.max(...list.map(r => Number(r.count ?? 0)), 1);
+      return list.map(r => ({
+        key: r.key,
+        modelId: labelOf ? labelOf(r.key) : r.key,
+        countText: this.formatNum(r.count ?? 0),
+        style: 'width:' + Math.max(2, Math.round((Number(r.count ?? 0) / max) * 100)) + '%',
+        open: open ? () => open(r.key) : () => {}
+      }));
+    },
+
+    get policyRejectionBars() {
+      return this._countBars(
+        this.summary?.policy?.rejectionsByReason1h,
+        key => this._reasonMeta(key)[0],
+        key => {
+          const code = this._reasonMeta(key)[1];
+          this.openLink({ tab: 'errors', params: code ? { code, range: '1h' } : { range: '1h' } });
+        });
+    },
+    get hasPolicyRejectionBars() { return this.policyRejectionBars.length > 0; },
+    get policyTenantBars() {
+      return this._countBars(this.summary?.policy?.rejectionsByTenant1h, key => key.startsWith('anon:') ? 'anonymous ' + key.slice(5) : key);
+    },
+    get hasPolicyTenantBars() { return this.policyTenantBars.length > 0; },
+    get policyModelBars() {
+      return this._countBars(this.summary?.policy?.rejectionsByModel1h, null, id => this.openErrorsForModel(id));
+    },
+    get hasPolicyModelBars() { return this.policyModelBars.length > 0; },
+    get unknownModelRows() {
+      const rows = this.summary?.policy?.unknownModels1h?.length
+        ? this.summary.policy.unknownModels1h
+        : (this.overviewPolicy?.unknownModels || []);
+      return this._countBars(rows, null, () => this.openLink({ tab: 'errors', params: { code: 'model_not_found', range: '24h' } }));
+    },
+    get hasUnknownModels() { return this.unknownModelRows.length > 0; },
+    get grantDenialRows() {
+      const rows = this.summary?.policy?.grantDenials1h?.length
+        ? this.summary.policy.grantDenials1h
+        : (this.overviewPolicy?.grantDenials || []);
+      return this._countBars(rows, key => key.replace('|', ' → '), () => this.openLink({ tab: 'keys' }));
+    },
+    get hasGrantDenials() { return this.grantDenialRows.length > 0; },
+
+    /** Monthly token quota consumption per tenant, worst first. */
+    get quotaRows() {
+      const list = this.overviewPolicy?.quotas || [];
+      return list.map(q => {
+        const ratio = Number(q.ratio ?? 0);
+        const pct = Math.min(100, Math.round(ratio * 100));
+        const who = q.tenantSlug || (String(q.partitionKey || '').startsWith('anon:') ? 'anonymous ' + String(q.partitionKey).slice(5) : String(q.partitionKey || '').slice(0, 8));
+        return {
+          key: q.partitionKey,
+          who,
+          plan: q.planSlug || '',
+          hasPlan: !!q.planSlug,
+          usedText: this.formatCompact(q.used ?? 0) + ' / ' + (Number(q.limit ?? 0) > 0 ? this.formatCompact(q.limit) : '∞'),
+          pctText: Number(q.limit ?? 0) > 0 ? Math.round(ratio * 100) + '%' : '—',
+          ratioStyle: 'width:' + pct + '%',
+          ratioClass: 'load-fill' + (q.exceeded ? ' is-over' : (q.nearLimit ? ' is-hot' : '')),
+          tagClass: q.exceeded ? 'tag level-critical' : (q.nearLimit ? 'tag level-warning' : 'tag'),
+          title: this.formatNum(q.used ?? 0) + ' of ' + this.formatNum(q.limit ?? 0) + ' tokens in ' + (q.period || 'this month'),
+          open: () => this.openLink({ tab: 'settings', params: { sub: 'limits' } })
+        };
+      });
+    },
+    get hasQuotaRows() { return this.quotaRows.length > 0; },
+    get policyQuiet() {
+      return this.hasPolicy && !this.hasPolicyRejectionBars && !this.hasQuotaRows && !this.hasUnknownModels && !this.hasGrantDenials;
+    },
+    get policyWindowText() { return 'last hour'; },
+    get noPolicySection() { return !this.hasPolicy; },
+
+    // ---- finops card ----
+
+    get hasFinops() { return !!this.overviewFinops; },
+    get finopsError() { return this.overviewSectionErrors.finops || ''; },
+    get hasFinopsError() { return !!this.overviewSectionErrors.finops && !this.overviewFinops; },
+    get finopsCurrency() { return this.overviewFinops?.currency || 'USD'; },
+
+    /** Today / month-to-date / projected / average daily — the FinOps headline. */
+    get finopsTiles() {
+      const f = this.overviewFinops;
+      if (!f) return [];
+      const cur = this.finopsCurrency;
+      const today = Number(f.todayCost ?? 0);
+      const yesterday = Number(f.yesterdayCost ?? 0);
+      let delta = '';
+      if (yesterday > 0) {
+        const pct = ((today - yesterday) / yesterday) * 100;
+        delta = (pct >= 0 ? '+' : '') + pct.toFixed(0) + '% vs yesterday';
+      } else if (today > 0) {
+        delta = 'nothing yesterday';
+      }
+      return [
+        { key: 'today', label: 'Today', value: this.formatCost(today, cur), foot: delta || this.formatNum(f.todayRequests ?? 0) + ' requests', cls: 'mini-stat' },
+        { key: 'mtd', label: 'Month to date', value: this.formatCost(f.monthToDateCost, cur), foot: this.formatNum(f.monthToDateRequests ?? 0) + ' requests', cls: 'mini-stat' },
+        { key: 'projected', label: 'Projected month', value: this.formatCost(f.projectedMonthlyCost, cur), foot: 'at ' + this.formatCost(f.averageDailyCost, cur) + '/day', cls: 'mini-stat' },
+        { key: 'tokens', label: 'Tokens today', value: this.formatCompact(Number(f.todayPromptTokens ?? 0) + Number(f.todayCompletionTokens ?? 0)), foot: this.formatCompact(f.todayPromptTokens ?? 0) + ' in · ' + this.formatCompact(f.todayCompletionTokens ?? 0) + ' out', cls: 'mini-stat' }
+      ];
+    },
+
+    _costBars(rows, open) {
+      const list = Array.isArray(rows) ? rows : [];
+      const max = Math.max(...list.map(r => Number(r.cost ?? 0)), 1e-9);
+      return list.map(r => ({
+        key: r.key,
+        modelId: r.key,
+        countText: this.formatCost(r.cost, this.finopsCurrency),
+        style: 'width:' + Math.max(2, Math.round((Number(r.cost ?? 0) / max) * 100)) + '%',
+        title: this.formatNum(r.requests ?? 0) + ' requests',
+        open: open ? () => open(r.key) : () => {}
+      }));
+    },
+    get finopsModelBars() { return this._costBars(this.overviewFinops?.topModelsMonthToDate); },
+    get hasFinopsModelBars() { return this.finopsModelBars.length > 0; },
+    get finopsCostCenterBars() {
+      return this._costBars(this.overviewFinops?.topCostCentersMonthToDate, key => this.openLink({ tab: 'usage', params: { costCenter: key } }));
+    },
+    get hasFinopsCostCenterBars() { return this.finopsCostCenterBars.length > 0; },
+    get noFinopsSpend() { return this.hasFinops && this.finopsModelBars.length === 0; },
+
+    get finopsCoverageText() {
+      const f = this.overviewFinops;
+      if (!f) return '';
+      const total = Number(f.registeredModelCount ?? 0);
+      const priced = Number(f.pricedModelCount ?? 0);
+      if (total === 0) return 'no models registered';
+      return priced + ' of ' + total + ' models priced';
+    },
+    get finopsCoverageClass() {
+      const f = this.overviewFinops;
+      if (!f || Number(f.registeredModelCount ?? 0) === 0) return 'hint';
+      return Number(f.pricedModelCount ?? 0) < Number(f.registeredModelCount ?? 0) ? 'hint is-warn' : 'hint healthy';
+    },
+    get hasFinopsUnpriced() { return (this.overviewFinops?.unpricedModelIds || []).length > 0; },
+    get finopsUnpricedText() {
+      const list = this.overviewFinops?.unpricedModelIds || [];
+      if (!list.length) return '';
+      return (list.length === 1 ? '1 model has' : list.length + ' models have')
+        + ' no rate card, so their spend is recorded as ' + this.formatCost(0, this.finopsCurrency)
+        + ': ' + list.slice(0, 6).join(', ') + (list.length > 6 ? ', …' : '') + '.';
+    },
+
+    get finopsReconText() {
+      const r = this.overviewFinops?.reconciliation;
+      if (!r) return 'reconciliation not available';
+      if (!r.enabled) return 'reconciliation disabled';
+      if (!r.lastRunUtc) return 'reconciliation has not run yet';
+      const when = this.relativeTimeText(r.lastRunUtc);
+      if (Number(r.discrepancyCount ?? 0) === 0) return 'ledger balanced · checked ' + when;
+      return this.formatNum(r.discrepancyCount) + (r.discrepancyCount === 1 ? ' discrepancy' : ' discrepancies')
+        + ' · ' + this.formatCost(r.absoluteCostDrift, this.finopsCurrency) + ' drift · checked ' + when;
+    },
+    get finopsReconClass() {
+      const r = this.overviewFinops?.reconciliation;
+      if (!r || !r.enabled || !r.lastRunUtc) return 'finops-line muted';
+      return Number(r.discrepancyCount ?? 0) === 0 ? 'finops-line healthy' : 'finops-line is-warn';
+    },
+    get finopsPipelineText() {
+      const p = this.summary?.pipeline;
+      if (!p) return '';
+      const depth = Number(p.usageWriterQueueDepth ?? -1);
+      const parts = [];
+      parts.push(depth < 0 ? 'writer queue unknown' : 'writer queue ' + this.formatNum(depth) + '/' + this.formatNum(p.usageWriterCapacity ?? 0));
+      if (Number(p.usageWriterDropped ?? 0) > 0) parts.push(this.formatNum(p.usageWriterDropped) + ' dropped');
+      if (Number(p.usageParseFailures ?? 0) > 0) parts.push(this.formatNum(p.usageParseFailures) + ' unparsed');
+      if (Number(p.estimatedUsage ?? 0) > 0) parts.push(this.formatNum(p.estimatedUsage) + ' estimated');
+      if (Number(p.unsplitUsage ?? 0) > 0) parts.push(this.formatNum(p.unsplitUsage) + ' unsplit');
+      return parts.join(' · ');
+    },
+    get finopsPipelineClass() {
+      const p = this.summary?.pipeline;
+      if (!p) return 'finops-line muted';
+      if (Number(p.usageWriterDropped ?? 0) > 0) return 'finops-line is-error';
+      if (Number(p.usageWriterQueueDepth ?? 0) > 5000 || Number(p.usageParseFailures ?? 0) > 0) return 'finops-line is-warn';
+      return 'finops-line muted';
+    },
+    get hasFinopsPipeline() { return !!this.summary?.pipeline; },
+
+    /** Budgets from the FinOps section, worst ratio first, as meter rows. */
+    get finopsBudgetRows() {
+      const list = this.overviewFinops?.budgets || [];
+      return list.map(b => {
+        const ratio = Number(b.ratio ?? 0);
+        const pct = Math.min(100, Math.round(ratio * 100));
+        const warn = Number(b.warningRatio ?? 0.8);
+        let cls = 'load-fill';
+        if (ratio >= 1) cls += ' is-over';
+        else if (ratio >= warn) cls += ' is-hot';
+        const who = b.tenantSlug || (b.tenantId ? String(b.tenantId).slice(0, 8) : '');
+        return {
+          key: b.budgetId || (b.tenantId + '|' + b.name),
+          name: b.name,
+          who,
+          spendText: this.formatCost(b.spent, b.currency || this.finopsCurrency) + ' / ' + this.formatCost(b.limit, b.currency || this.finopsCurrency),
+          pctText: Math.round(ratio * 100) + '%',
+          ratioStyle: 'width:' + pct + '%',
+          ratioClass: cls,
+          breachText: b.projectedBreachDate ? 'runs out ~' + b.projectedBreachDate : '',
+          hasBreach: !!b.projectedBreachDate,
+          hardStop: !!b.hardStopEnabled,
+          tagClass: ratio >= 1 ? 'tag level-critical' : (ratio >= warn ? 'tag level-warning' : 'tag'),
+          open: () => this.openLink({ tab: 'usage' })
+        };
+      });
+    },
+    get hasFinopsBudgets() { return this.finopsBudgetRows.length > 0; },
+
     // ---- overview ----
 
     get showStaleNotice() { return this.overviewStale && this.connectionStatus !== 'fail'; },
@@ -3362,10 +4049,20 @@ function adminApp() {
         const completion = Number(r.completionTokens ?? 0);
         const tokensPerSec = !inFlight && completion > 0 && elapsed > 0 ? completion / (elapsed / 1000) : null;
         const arrived = this.isRecentArrival(r.requestId);
-        const rowClass = this.requestRowClass(r) + (arrived ? ' row-enter' : '');
+        const rowClass = this.requestRowClass(r) + (arrived ? ' row-enter' : '') + (this.pinnedRequestIds.includes(r.requestId) ? ' is-pinned' : '');
         const costText = this.requestCostText(r);
+        const pinned = this.pinnedRequestIds.includes(r.requestId);
+        const ttft = r.timeToFirstTokenMs ?? r.ttftMs;
         return {
           key: r.requestId,
+          pinned,
+          pinClass: pinned ? 'icon-btn is-on' : 'icon-btn',
+          pinTitle: pinned ? 'Unpin' : 'Pin to the top of the feed',
+          pin: () => this.togglePinRequest(r.requestId),
+          ttftText: ttft != null ? this.formatDurationMs(ttft) : (inFlight ? '…' : '—'),
+          ttftTitle: ttft != null ? 'Time to first token' : (r.isStreaming ? 'No first-token timing recorded' : 'Buffered response'),
+          tokPerSecText: tokensPerSec != null ? tokensPerSec.toFixed(tokensPerSec < 10 ? 1 : 0) : (inFlight ? '…' : '—'),
+          isSlow: !inFlight && elapsed >= this.requestsSlowThresholdMs(),
           requestId: r.requestId ?? '—',
           shortId: this.shortRequestId(r.requestId),
           time: this.formatTime(r.timestampUtc),
@@ -3456,6 +4153,10 @@ function adminApp() {
         cls: f.errors > 0 ? 'feed-stat is-error' : 'feed-stat',
         live: false
       });
+      if (this.requestsPaused) {
+        const n = this.pausedPendingCount;
+        items.push({ key: 'paused', text: 'paused' + (n ? ' · ' + n + ' new' : ''), cls: 'feed-stat is-warn', live: false });
+      }
       items.push({ key: 'spend', text: this.feedSpendText, cls: 'feed-stat is-cost', live: false });
       items.push({ key: 'tokens', text: this.formatCompact(f.tokens) + ' tokens', cls: 'feed-stat', live: false });
       items.push({

@@ -71,7 +71,9 @@ public static class SecurityServiceCollectionExtensions
         // grants, CORS, rate limits, config reload, database backup — used to be recorded only as an
         // ILogger Information event, so whether it survived depended entirely on the deployed Serilog
         // configuration (console sink only, by default) and it could not be reviewed from the console.
-        services.AddSingleton<IAuditLogger, FileAuditLogger>();
+        services.AddSingleton<FileAuditLogger>();
+        services.AddSingleton<IAuditLogger>(sp => sp.GetRequiredService<FileAuditLogger>());
+        services.AddSingleton<IAuditLogReader, FileAuditLogReader>();
 
         if (string.IsNullOrWhiteSpace(connectionString))
         {

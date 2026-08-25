@@ -1,4 +1,5 @@
 using Pol33.Core.Abstractions;
+using Pol33.Core.Models.Overview;
 using Pol33.Observability.Metrics;
 using Pol33.Observability.Runtime;
 
@@ -6,7 +7,10 @@ namespace Pol33.Observability.Tracking;
 
 public sealed class GatewayRequestTracker(GatewayRuntimeState runtimeState) : IRequestTracker
 {
-    public IInferenceRequestScope BeginInferenceRequest(string modelId, bool isStreaming)
+    public IInferenceRequestScope BeginInferenceRequest(string modelId, bool isStreaming) =>
+        BeginInferenceRequest(modelId, isStreaming, tenantId: null);
+
+    public IInferenceRequestScope BeginInferenceRequest(string modelId, bool isStreaming, string? tenantId)
     {
         runtimeState.RecordRequestStart(modelId, isStreaming);
         GatewayMeters.ActiveRequests.Add(1, new KeyValuePair<string, object?>("model", modelId));
@@ -15,12 +19,12 @@ public sealed class GatewayRequestTracker(GatewayRuntimeState runtimeState) : IR
             GatewayMeters.ActiveStreams.Add(1, new KeyValuePair<string, object?>("model", modelId));
         }
 
-        return new InferenceScope(runtimeState, modelId, isStreaming);
+        return new InferenceScope(runtimeState, modelId, isStreaming, tenantId);
     }
 
     public void RecordRejectedRequest(string modelId, string errorCode)
     {
-        runtimeState.RecordRequestRejected(modelId);
+        runtimeState.RecordRequestRejected(modelId, ToReason(errorCode));
 
         GatewayMeters.InferenceRequests.Add(
             1,
@@ -32,21 +36,36 @@ public sealed class GatewayRequestTracker(GatewayRuntimeState runtimeState) : IR
             new KeyValuePair<string, object?>("code", errorCode));
     }
 
+    /// <summary>
+    /// Admission outcomes the router reports, as windowed reasons. Stream concurrency is null here
+    /// because the router already counted it through <c>RecordRateLimitRejection</c>.
+    /// </summary>
+    private static RejectionReason? ToReason(string outcome) => outcome switch
+    {
+        "bulkhead_full" => RejectionReason.Bulkhead,
+        "backend_unhealthy" => RejectionReason.BackendUnhealthy,
+        "circuit_open" => RejectionReason.CircuitOpen,
+        "insufficient_scope" => RejectionReason.GrantDenied,
+        _ => null,
+    };
+
     private sealed class InferenceScope : IInferenceRequestScope
     {
         private readonly GatewayRuntimeState _runtimeState;
         private readonly string _modelId;
         private readonly bool _isStreaming;
+        private readonly string? _tenantId;
         private readonly long _startTimestamp;
         private bool _disposed;
         private bool? _success;
         private string? _errorCode;
 
-        public InferenceScope(GatewayRuntimeState runtimeState, string modelId, bool isStreaming)
+        public InferenceScope(GatewayRuntimeState runtimeState, string modelId, bool isStreaming, string? tenantId)
         {
             _runtimeState = runtimeState;
             _modelId = modelId;
             _isStreaming = isStreaming;
+            _tenantId = tenantId;
             _startTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
         }
 
@@ -66,7 +85,7 @@ public sealed class GatewayRequestTracker(GatewayRuntimeState runtimeState) : IR
             _disposed = true;
             var success = _success ?? true;
             var elapsed = System.Diagnostics.Stopwatch.GetElapsedTime(_startTimestamp);
-            _runtimeState.RecordRequestComplete(_modelId, success, elapsed.TotalMilliseconds, _isStreaming);
+            _runtimeState.RecordRequestComplete(_modelId, success, elapsed.TotalMilliseconds, _isStreaming, _tenantId);
 
             var status = success ? "success" : "error";
             GatewayMeters.InferenceRequests.Add(

@@ -33,4 +33,16 @@ public interface IApiKeyRepository
         CancellationToken cancellationToken = default);
 
     Task TouchLastUsedAsync(Guid id, DateTimeOffset atUtc, CancellationToken cancellationToken = default);
+
+    /// <summary>Active (not revoked, not yet expired) keys whose expiry falls on or before <paramref name="before"/>.</summary>
+    Task<IReadOnlyList<ApiKeyRecord>> ListExpiringAsync(DateTimeOffset before, CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<ApiKeyRecord>>([]);
+
+    /// <summary>Active keys not used since <paramref name="idleSince"/> (never-used keys count from their creation).</summary>
+    Task<IReadOnlyList<ApiKeyRecord>> ListIdleAsync(DateTimeOffset idleSince, CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<ApiKeyRecord>>([]);
+
+    /// <summary>Total and revoked key counts across every tenant.</summary>
+    Task<(int Total, int Revoked)> CountAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult((0, 0));
 }

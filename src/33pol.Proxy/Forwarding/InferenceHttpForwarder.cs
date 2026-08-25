@@ -457,6 +457,8 @@ public sealed class InferenceHttpForwarder(
 
         context.Items[InferenceForwardingContextKeys.TimeToFirstTokenRecorded] = true;
         var elapsedSeconds = Math.Max(0, (DateTimeOffset.UtcNow - startedUtc).TotalSeconds);
+        // Kept on the context so the feed row can carry it; the router reads it at completion.
+        context.Items[InferenceForwardingContextKeys.TimeToFirstTokenMs] = elapsedSeconds * 1_000d;
         metricsCollector.RecordTimeToFirstToken(modelId, elapsedSeconds);
     }
 

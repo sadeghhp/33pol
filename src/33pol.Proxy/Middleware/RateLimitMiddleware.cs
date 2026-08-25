@@ -72,7 +72,7 @@ public sealed class RateLimitMiddleware
         var acquire = _rateLimitStore.TryAcquireRequest(partitionKey, policy, now);
         if (!acquire.IsAcquired)
         {
-            _metrics.RecordRateLimitRejection(acquire.RejectionReason?.ToString() ?? "rate_limit");
+            _metrics.RecordRateLimitRejection(acquire.RejectionReason?.ToString() ?? "rate_limit", partitionKey, modelId: null);
             await WriteRateLimitErrorAsync(context, acquire).ConfigureAwait(false);
             return;
         }

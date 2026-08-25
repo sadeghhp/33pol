@@ -50,7 +50,7 @@ public sealed class ModelRegistryConfigReload(
         {
             HotReloadEnabled = true,
             WatchEnabled = false,
-            LastReload = null,
+            LastReload = loader.LastLoadedUtc,
             ModelCount = models.Count,
             Models = models
                 .Select(m => new ConfigStatusModel { Id = m.Id, Url = m.Url, Aliases = m.Aliases })

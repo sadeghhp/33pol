@@ -151,30 +151,42 @@ ENVELOPE="$(curl -sS -X POST "$BASE/v1/chat/completions" -H 'Content-Type: appli
 echo "$ENVELOPE" | grep -q '"invalid_api_key"' || fail "expected invalid_api_key envelope, got: $ENVELOPE"
 echo "    unauthenticated request -> invalid_api_key envelope OK"
 
+# Inference routes reject the admin key with insufficient_scope before reading the body, so mint an
+# inference-role key through the admin API for the request-body checks below.
+INFER_KEY="$(curl -sS -X POST "$BASE/admin/api/keys" -H "Authorization: Bearer $ADMIN_KEY" \
+    -H 'Content-Type: application/json' -d '{"role":"Inference","label":"verify-release"}' \
+    | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get("secret") or "")')"
+[ -n "$INFER_KEY" ] || fail "could not create an inference API key through the admin API"
+echo "    admin API key creation OK"
+
 # Authenticated malformed JSON walks the parse path and the exception middleware.
-ENVELOPE="$(curl -sS -X POST "$BASE/v1/chat/completions" -H "Authorization: Bearer $ADMIN_KEY" \
+ENVELOPE="$(curl -sS -X POST "$BASE/v1/chat/completions" -H "Authorization: Bearer $INFER_KEY" \
     -H 'Content-Type: application/json' -d '{"model": ')"
 echo "$ENVELOPE" | grep -q '"error"' || fail "malformed JSON did not return an error envelope: $ENVELOPE"
 echo "    malformed JSON -> error envelope OK"
 
-# A body shorter than its declared Content-Length is what the production embeddings client was
-# sending. Kestrel raises BadHttpRequestException for it; the gateway must classify it as
-# request_incomplete and stay up. Raw socket, since curl will not send a lying Content-Length.
-python3 - "$PORT" "$ADMIN_KEY" <<'PY' || fail "truncated-body request could not be sent"
+# A body shorter than its declared Content-Length, with the socket left open, is what the
+# production embeddings client was sending. Kestrel's MinRequestBodyDataRate trips after its grace
+# period, the gateway must answer 400 with the request_incomplete code, and it must stay up.
+# Raw socket, since curl will not send a lying Content-Length.
+python3 - "$PORT" "$INFER_KEY" <<'PY' || fail "truncated body was not answered with 400 request_incomplete"
 import socket, sys
 port, key = int(sys.argv[1]), sys.argv[2]
-s = socket.create_connection(("127.0.0.1", port), timeout=5)
+s = socket.create_connection(("127.0.0.1", port), timeout=20)
 s.sendall((f"POST /v1/embeddings HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {key}\r\n"
            "Content-Type: application/json\r\nContent-Length: 500\r\n\r\n{\"model\":\"x\"").encode())
-s.shutdown(socket.SHUT_WR)
 try:
     data = s.recv(4096)
-except OSError:
-    data = b""
-s.close()
-sys.exit(0 if (not data or b"request_incomplete" in data or b"400" in data) else 1)
+except OSError as e:
+    print("    no response:", e); sys.exit(1)
+finally:
+    s.close()
+ok = data.startswith(b"HTTP/1.1 400") and b"X-33pol-Error-Code: request_incomplete" in data
+if not ok:
+    print("    unexpected response:", data[:200])
+sys.exit(0 if ok else 1)
 PY
-echo "    truncated body -> handled without crash"
+echo "    truncated body -> 400 request_incomplete OK"
 
 # Give background hosted services a moment, then make sure nothing crashed or threw.
 sleep 3

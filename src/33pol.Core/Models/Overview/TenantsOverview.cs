@@ -38,6 +38,9 @@ public sealed record TenantConsumer
     public long CompletionTokens { get; init; }
 
     public decimal Cost { get; init; }
+
+    /// <summary>Requests in the last 24 hours, from the in-memory tenant activity ring (0 after a restart).</summary>
+    public long Requests24h { get; init; }
 }
 
 public sealed record KeySummary

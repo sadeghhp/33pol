@@ -1477,3 +1477,105 @@ tr.request-detail-row td { background: var(--bg-inset); padding-top: 0.75rem; }
   .backend-row { grid-template-columns: 10px 1fr auto; }
   .backend-row .backend-load, .backend-row .num, .backend-row .backend-checked { display: none; }
 }
+
+/* FinOps card */
+.finops-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: var(--space-2); margin-bottom: var(--space-3); }
+.finops-tiles .mini-stat { flex-direction: column; align-items: flex-start; gap: 0.1rem; }
+.finops-tiles .ms-value { font-size: var(--text-lg); }
+.finops-tiles .ms-foot { color: var(--text-tertiary); font-size: var(--text-2xs); }
+.finops-bars { margin-top: var(--space-3); }
+.finops-bars .eyebrow, .finops-budgets .eyebrow { display: block; margin-bottom: var(--space-1); }
+.finops-line { font-size: var(--text-xs); margin: var(--space-2) 0 0; }
+.finops-line.healthy { color: var(--live-text); }
+.finops-line.is-warn { color: var(--warn); }
+.finops-line.is-error { color: var(--error-text); }
+.hint.is-warn { color: var(--warn); }
+.finops-budgets { margin-top: var(--space-3); display: flex; flex-direction: column; gap: var(--space-1); }
+.budget-row {
+  display: grid; align-items: center; gap: var(--space-2);
+  grid-template-columns: minmax(7rem, 1.2fr) minmax(5rem, 1fr) auto auto;
+  width: 100%; text-align: left; padding: 0.35rem var(--space-2);
+  border: 1px solid transparent; border-radius: var(--r-md); background: transparent;
+  color: var(--text-primary); font: inherit; font-size: var(--text-xs); cursor: pointer;
+}
+.budget-row:hover { background: var(--bg-sunken); border-color: var(--border); }
+.budget-name { display: flex; align-items: center; gap: var(--space-2); min-width: 0; overflow: hidden; white-space: nowrap; }
+.budget-spend { font-size: var(--text-2xs); color: var(--text-secondary); white-space: nowrap; }
+.budget-breach { grid-column: 1 / -1; color: var(--warn); font-size: var(--text-2xs); }
+
+/* Policy card */
+.policy-totals { margin: 0; }
+.policy-section { margin-top: var(--space-3); }
+.policy-section .eyebrow { display: block; margin-bottom: var(--space-1); }
+.policy-columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr)); gap: var(--space-3); }
+.quota-rows { display: flex; flex-direction: column; gap: var(--space-1); }
+
+/* Control-plane strip: mini-stats rendered as buttons. */
+.cp-strip { margin-bottom: var(--space-4); }
+.cp-strip .mini-stat { font: inherit; font-size: var(--text-xs); cursor: default; color: var(--text-primary); }
+.cp-strip .mini-stat.is-clickable { cursor: pointer; }
+.cp-strip .mini-stat.is-clickable:hover { border-color: var(--border-strong); background: var(--bg-sunken); }
+.mini-stat.error .ms-value { color: var(--error-text); }
+
+/* Activity card */
+.t-activity { table-layout: fixed; width: 100%; font-size: var(--text-xs); }
+.t-activity td, .t-activity th { padding: 0.35rem var(--space-2); }
+.t-activity .cell-time { white-space: nowrap; color: var(--text-secondary); font-family: var(--font-mono); }
+
+/* Per-model performance table */
+.model-perf-card { margin-bottom: var(--space-4); }
+.model-perf-table { width: 100%; table-layout: fixed; font-size: var(--text-xs); }
+.model-perf-table th, .model-perf-table td { padding: 0.4rem var(--space-2); }
+.model-perf-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+.model-perf-table .num.is-warn { color: var(--warn); }
+.model-perf-table .num.is-error { color: var(--error-text); }
+.model-perf-table .row-actions { text-align: right; white-space: nowrap; }
+
+/* Tenants card */
+.consumer-rows { display: flex; flex-direction: column; gap: var(--space-1); }
+.consumer-row, .key-row {
+  display: grid; align-items: center; gap: var(--space-2);
+  width: 100%; text-align: left; padding: 0.35rem var(--space-2);
+  border: 1px solid transparent; border-radius: var(--r-md); background: transparent;
+  color: var(--text-primary); font: inherit; font-size: var(--text-xs); cursor: pointer;
+}
+.consumer-row { grid-template-columns: minmax(6rem, 1.4fr) 4rem 4rem 5rem minmax(4rem, 1fr); }
+.key-row { grid-template-columns: minmax(6rem, 1.2fr) minmax(3rem, 0.8fr) auto; }
+.consumer-row:hover, .key-row:hover { background: var(--bg-sunken); border-color: var(--border); }
+.consumer-who, .key-row-label { display: flex; align-items: center; gap: var(--space-2); min-width: 0; overflow: hidden; white-space: nowrap; }
+.consumer-row .num { text-align: right; font-variant-numeric: tabular-nums; }
+.consumer-recent, .key-row-when { font-size: var(--text-2xs); white-space: nowrap; text-align: right; }
+
+/* Live tail filters, pins, pause */
+.tail-filters { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.tail-filters .inline-select { min-width: 7rem; }
+.cell-pin { width: 1.5rem; }
+.icon-btn.is-on { color: var(--accent-text); }
+.request-row.is-pinned { box-shadow: inset 3px 0 0 var(--accent); }
+.action.is-paused { color: var(--warn); border-color: var(--warn-border); }
+.feed-stat.is-warn { color: var(--warn); }
+
+/* Onboarding */
+.onboarding { margin-bottom: var(--space-4); }
+.onboarding-snippet {
+  text-align: left; white-space: pre-wrap; word-break: break-all; user-select: all;
+  padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--r-md);
+  background: var(--bg-sunken); font-size: var(--text-xs); max-width: 48rem; margin: var(--space-3) auto;
+}
+.onboarding-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--space-2); }
+
+/* Wallboard: chrome hidden, vitals scaled, only the live cards remain. */
+html.wallboard .rail, html.wallboard .topbar, html.wallboard .app-header,
+html.wallboard .page-header .page-actions .action:not(.wallboard-toggle),
+html.wallboard .window-picker,
+html.wallboard .cp-strip, html.wallboard .finops-card, html.wallboard .policy-card,
+html.wallboard .activity-card, html.wallboard .tenants-card, html.wallboard .tail-filters,
+html.wallboard .request-detail-row, html.wallboard .cell-pin, html.wallboard .feed-strip { display: none !important; }
+html.wallboard .app-main, html.wallboard .page-content { max-width: none; padding: var(--space-4); }
+html.wallboard .vital-value { font-size: 3.25rem; }
+html.wallboard .vitals-grid { gap: var(--space-5); }
+html.wallboard .t-requests tbody:nth-of-type(n+11) { display: none; }
+html.wallboard body::after {
+  content: 'Esc to exit wallboard'; position: fixed; right: var(--space-4); bottom: var(--space-3);
+  font-size: var(--text-2xs); color: var(--text-tertiary); font-family: var(--font-mono);
+}

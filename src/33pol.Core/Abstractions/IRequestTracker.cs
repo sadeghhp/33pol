@@ -8,6 +8,13 @@ public interface IRequestTracker
     IInferenceRequestScope BeginInferenceRequest(string modelId, bool isStreaming);
 
     /// <summary>
+    /// As <see cref="BeginInferenceRequest(string, bool)"/>, also attributing the request to a tenant
+    /// for the Overview's per-tenant activity. The default keeps older implementations working.
+    /// </summary>
+    IInferenceRequestScope BeginInferenceRequest(string modelId, bool isStreaming, string? tenantId) =>
+        BeginInferenceRequest(modelId, isStreaming);
+
+    /// <summary>
     /// Records a request the gateway answered with an error before it ever reached the upstream —
     /// an unhealthy backend, an open circuit, a full bulkhead or an exhausted stream slot.
     /// </summary>

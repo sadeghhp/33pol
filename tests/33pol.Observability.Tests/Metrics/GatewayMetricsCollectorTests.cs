@@ -1,4 +1,5 @@
 using Pol33.Observability.Metrics;
+using Pol33.Observability.Policy;
 using Pol33.Observability.Runtime;
 
 namespace Pol33.Observability.Tests.Metrics;
@@ -163,4 +164,41 @@ public sealed class GatewayMetricsCollectorTests
         var act = () => collector.RecordBillingReconciliation(2, 1.25);
         act.Should().NotThrow();
     }
+
+    [Fact]
+    public void DimensionedRejections_FeedTheRuntimeWindowsAndThePolicyTracker()
+    {
+        var runtime = new GatewayRuntimeState();
+        var tracker = new PolicyPressureTracker();
+        var collector = new GatewayMetricsCollector(runtime, tracker);
+
+        collector.RecordRateLimitRejection("RateLimitExceeded", "tenant-a", null);
+        collector.RecordRateLimitRejection("stream_concurrency", "tenant-a", "m1");
+        collector.RecordQuotaRejection("tenant-b", null);
+        collector.RecordBudgetRejection("tenant-b", "Ops", "m1");
+        collector.RecordGrantDenial("tenant-c", "m2");
+        collector.RecordModelResolve("not_found", "nope");
+
+        var stats = runtime.GetStats();
+        stats.RateLimit.Should().Be(2);
+        stats.Quota.Should().Be(2, "a budget hard stop is a quota-style refusal");
+        stats.Total.Should().Be(0, "none of these are counted as requests here");
+
+        var window = runtime.Windows.GetWindow(TimeSpan.FromMinutes(5));
+        window.RejectionsByReason.Should().Equal(new Dictionary<string, long>
+        {
+            ["rate_limit"] = 1,
+            ["stream_concurrency"] = 1,
+            ["quota"] = 1,
+            ["budget"] = 1,
+            ["model_not_found"] = 1,
+        });
+
+        var policy = tracker.Snapshot();
+        policy.RejectionsByTenant1h.Select(r => r.Key).Should().Contain(["tenant-a", "tenant-b", "tenant-c"]);
+        policy.UnknownModels1h.Should().ContainSingle(r => r.Key == "nope");
+        policy.GrantDenials1h.Should().ContainSingle(r => r.Key == "tenant-c|m2");
+        policy.BudgetRejections1h.Should().ContainSingle(r => r.Key == "Ops");
+    }
+
 }

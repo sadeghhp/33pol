@@ -14,6 +14,8 @@ public enum RejectionReason
     StreamConcurrency = 4,
     GrantDenied = 5,
     ModelNotFound = 6,
+    BackendUnhealthy = 7,
+    CircuitOpen = 8,
 }
 
 public static class RejectionReasonExtensions
@@ -28,6 +30,8 @@ public static class RejectionReasonExtensions
         RejectionReason.StreamConcurrency => "stream_concurrency",
         RejectionReason.GrantDenied => "grant_denied",
         RejectionReason.ModelNotFound => "model_not_found",
+        RejectionReason.BackendUnhealthy => "backend_unhealthy",
+        RejectionReason.CircuitOpen => "circuit_open",
         _ => reason.ToString().ToLowerInvariant(),
     };
 }

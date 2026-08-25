@@ -22,6 +22,9 @@ public sealed record RecentRequestEntry
 
     public bool IsStreaming { get; init; }
 
+    /// <summary>Time to first token for a streaming response, in milliseconds; null for buffered responses or before completion.</summary>
+    public double? TimeToFirstTokenMs { get; init; }
+
     public string? ErrorCode { get; init; }
 
     public DateTimeOffset TimestampUtc { get; init; }

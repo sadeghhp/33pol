@@ -145,7 +145,7 @@ public sealed class ModelRouterMiddleware
 
         if (!_registry.TryGetModel(requestInfo.Model, out var modelConfig) || modelConfig is null)
         {
-            _metricsCollector.RecordModelResolve("not_found");
+            _metricsCollector.RecordModelResolve("not_found", requestInfo.Model);
             await context.WriteGatewayErrorAsync(
                 _errors.Write(
                     GatewayErrorCode.ModelNotFound,
@@ -177,6 +177,10 @@ public sealed class ModelRouterMiddleware
             if (!await modelGrants.IsModelAllowedAsync(tenantId, apiKeyId, modelConfig.Id, context.RequestAborted)
                     .ConfigureAwait(false))
             {
+                // Counted like the other admission refusals so a key hammering a model it was never
+                // granted shows up on the Overview instead of vanishing between the counters.
+                _metricsCollector.RecordGrantDenial(tenantId.ToString(), modelConfig.Id);
+                _requestTracker.RecordRejectedRequest(modelConfig.Id, "insufficient_scope");
                 await context.WriteGatewayErrorAsync(
                     _errors.Write(
                         GatewayErrorCode.InsufficientScope,
@@ -261,7 +265,7 @@ public sealed class ModelRouterMiddleware
                     // Client-tier concurrency limit, not a backend signal. It is governed by the
                     // rate-limit master switch, so it is counted as a rate-limit rejection too —
                     // otherwise the console's "Rate-limited" stat silently omitted stream caps.
-                    _metricsCollector.RecordRateLimitRejection("stream_concurrency");
+                    _metricsCollector.RecordRateLimitRejection("stream_concurrency", ratePartitionKey, modelConfig.Id);
                     await RejectAtAdmissionAsync(
                         context,
                         modelConfig.Id,
@@ -282,7 +286,11 @@ public sealed class ModelRouterMiddleware
             var started = DateTimeOffset.UtcNow;
             context.Items[InferenceForwardingContextKeys.StartedUtc] = started;
             context.Items[InferenceForwardingContextKeys.ModelId] = modelConfig.Id;
-            using var inferenceScope = _requestTracker.BeginInferenceRequest(modelConfig.Id, requestInfo.Stream);
+            var scopeTenantId = context.Items.TryGetValue(TenantContextKeys.HttpContextItemKey, out var scopeTenantValue) &&
+                                scopeTenantValue is TenantContext scopeTenant
+                ? scopeTenant.TenantId
+                : null;
+            using var inferenceScope = _requestTracker.BeginInferenceRequest(modelConfig.Id, requestInfo.Stream, scopeTenantId);
 
             var requestId = ResolveRequestId(context);
 
@@ -359,6 +367,7 @@ public sealed class ModelRouterMiddleware
             {
                 inferenceScope.SetOutcome(false, "budget_exceeded");
                 _metricsCollector.RecordForwardAttempt(modelConfig.Id, "budget_exceeded");
+                _metricsCollector.RecordBudgetRejection(usageTenant?.TenantId, budgetReservation.BudgetName, modelConfig.Id);
                 await context.WriteGatewayErrorAsync(
                     _errors.Write(GatewayErrorCode.QuotaExceeded),
                     context.RequestAborted).ConfigureAwait(false);
@@ -773,6 +782,9 @@ public sealed class ModelRouterMiddleware
             StatusCode = statusCode,
             DurationMs = durationMs,
             IsStreaming = isStreaming,
+            TimeToFirstTokenMs = context.Items.TryGetValue(InferenceForwardingContextKeys.TimeToFirstTokenMs, out var ttft) && ttft is double ttftMs
+                ? ttftMs
+                : null,
             ErrorCode = errorCode,
             TimestampUtc = DateTimeOffset.UtcNow,
         };

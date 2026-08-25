@@ -17,8 +17,20 @@ public sealed class ModelRegistryLoader(
     IOptions<GatewayOptions> options,
     ILogger<ModelRegistryLoader> logger)
 {
+    private DateTimeOffset? _lastLoadedUtc;
+
+    /// <summary>When the registry was last (re)loaded successfully; null before the first load.</summary>
+    public DateTimeOffset? LastLoadedUtc => _lastLoadedUtc;
+
     /// <summary>Reloads the registry from the database (or file when DB-less). Returns the model count.</summary>
     public async Task<int> LoadAsync(CancellationToken cancellationToken = default)
+    {
+        var count = await LoadCoreAsync(cancellationToken).ConfigureAwait(false);
+        _lastLoadedUtc = DateTimeOffset.UtcNow;
+        return count;
+    }
+
+    private async Task<int> LoadCoreAsync(CancellationToken cancellationToken)
     {
         await using var scope = scopeFactory.CreateAsyncScope();
         var repository = scope.ServiceProvider.GetService<IModelRouteRepository>();

@@ -1,7 +1,7 @@
 using Microsoft.Extensions.Options;
 using Pol33.App.DependencyInjection;
 using Pol33.App.DependencyInjection.Overview;
-using Pol33.App.Health;
+using Pol33.Registry.Health;
 using Pol33.App.Metrics;
 using Pol33.Api.DependencyInjection;
 using Pol33.Core.Configuration;

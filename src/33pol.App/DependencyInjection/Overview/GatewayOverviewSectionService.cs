@@ -7,6 +7,9 @@ using Pol33.Core.Billing;
 using Pol33.Core.Configuration;
 using Pol33.Core.Models;
 using Pol33.Core.Models.Overview;
+using Pol33.Observability.Policy;
+using Pol33.Observability.Runtime;
+using Pol33.Registry.Services;
 
 namespace Pol33.App.DependencyInjection.Overview;
 
@@ -30,7 +33,14 @@ internal sealed partial class GatewayOverviewSectionService(
     IUsageWriterStateSource? usageWriter = null,
     IUsageQualityCounters? usageQuality = null,
     IBillingReconciliationStateSource? reconciliation = null,
-    BudgetReservationLedger? reservations = null)
+    BudgetReservationLedger? reservations = null,
+    PolicyPressureTracker? policyTracker = null,
+    IQuotaUsageSnapshotSource? quotaUsage = null,
+    IGatewayConfigProvider? configProvider = null,
+    IConfigReload? configReload = null,
+    FileUpstreamSecretStore? secretStore = null,
+    IAuditLogReader? auditReader = null,
+    GatewayRuntimeState? runtimeState = null)
     : IOverviewSectionService, IOverviewSlowSectionCache, IOverviewHotSectionSource
 {
     private readonly Section<FinOpsOverview> _finops = new();
@@ -71,9 +81,44 @@ internal sealed partial class GatewayOverviewSectionService(
         };
     }
 
-    public PolicyLiveOverview? GetPolicy() => null;
+    public PolicyLiveOverview? GetPolicy() => policyTracker?.Snapshot();
 
-    public ControlPlaneLiveOverview? GetControlPlane() => null;
+    private ControlPlaneLiveOverview? _processMemo;
+    private long _processMemoSecond;
+
+    /// <summary>Process facts, sampled at most once per second — GC info is not free and the summary is built on every frame.</summary>
+    public ControlPlaneLiveOverview? GetControlPlane()
+    {
+        var second = timeProvider.GetUtcNow().ToUnixTimeSeconds();
+        var memo = _processMemo;
+        if (memo is not null && Volatile.Read(ref _processMemoSecond) == second)
+        {
+            return memo;
+        }
+
+        var gc = GC.GetGCMemoryInfo();
+        ThreadPool.GetAvailableThreads(out var workerAvailable, out _);
+        ThreadPool.GetMaxThreads(out var workerMax, out _);
+        var status = configReload?.GetStatus();
+        var built = new ControlPlaneLiveOverview
+        {
+            WorkingSetBytes = Environment.WorkingSet,
+            GcHeapBytes = gc.HeapSizeBytes,
+            GcCommittedBytes = gc.TotalCommittedBytes,
+            Gen2Collections = GC.CollectionCount(2),
+            GcPauseTimePercent = gc.PauseTimePercentage,
+            ThreadPoolPendingWorkItems = ThreadPool.PendingWorkItemCount,
+            ThreadPoolThreads = Math.Max(0, workerMax - workerAvailable),
+            ProcessorCount = Environment.ProcessorCount,
+            CpuPercent = null,
+            ConfigLastReloadUtc = status?.LastReload,
+            ConfigHotReloadEnabled = status?.HotReloadEnabled ?? false,
+            ModelCount = status?.ModelCount ?? registry.GetAllModels().Count,
+        };
+        _processMemo = built;
+        Volatile.Write(ref _processMemoSecond, second);
+        return built;
+    }
 
     // ---- IOverviewSectionService ----
 
@@ -271,17 +316,312 @@ internal sealed partial class GatewayOverviewSectionService(
 
     // ---- sections filled in by later phases ----
 
-    private Task<PolicyOverview?> BuildPolicyAsync(CancellationToken cancellationToken) =>
-        Task.FromResult<PolicyOverview?>(null);
+    // ---- Policy ----
 
-    private Task<ControlPlaneOverview?> BuildControlPlaneAsync(CancellationToken cancellationToken) =>
-        Task.FromResult<ControlPlaneOverview?>(null);
+    private async Task<PolicyOverview?> BuildPolicyAsync(CancellationToken cancellationToken)
+    {
+        var now = timeProvider.GetUtcNow();
+        var quotas = new List<QuotaStatus>();
+        if (quotaUsage is not null)
+        {
+            var quota = configProvider?.Current.Quota;
+            var limit = quota?.DefaultMonthlyTokenLimit ?? 0;
+            var softRatio = quota?.SoftLimitRatio ?? 0.9;
+            var period = now.ToString("yyyy-MM");
+            var slugs = new Dictionary<string, (string? Slug, string? Plan)>(StringComparer.OrdinalIgnoreCase);
 
-    private Task<ActivityOverview?> BuildActivityAsync(int limit, CancellationToken cancellationToken) =>
-        Task.FromResult<ActivityOverview?>(null);
+            await using var scope = scopeFactory.CreateAsyncScope();
+            var tenants = scope.ServiceProvider.GetService<ITenantRepository>();
 
-    private Task<TenantsOverview?> BuildTenantsAsync(CancellationToken cancellationToken) =>
-        Task.FromResult<TenantsOverview?>(null);
+            foreach (var usage in quotaUsage.ExportUsage())
+            {
+                if (!string.Equals(usage.Period, period, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                string? slug = null;
+                string? plan = null;
+                if (tenants is not null && Guid.TryParse(usage.PartitionKey, out var tenantId))
+                {
+                    if (!slugs.TryGetValue(usage.PartitionKey, out var known))
+                    {
+                        var tenant = await tenants.GetByIdAsync(tenantId, cancellationToken).ConfigureAwait(false);
+                        known = (tenant?.Slug, tenant?.PlanSlug);
+                        slugs[usage.PartitionKey] = known;
+                    }
+
+                    (slug, plan) = known;
+                }
+
+                var ratio = limit > 0 ? (double)usage.Used / limit : 0;
+                quotas.Add(new QuotaStatus
+                {
+                    PartitionKey = usage.PartitionKey,
+                    TenantSlug = slug,
+                    PlanSlug = plan,
+                    Period = usage.Period,
+                    Used = usage.Used,
+                    Limit = limit,
+                    Ratio = ratio,
+                    NearLimit = limit > 0 && ratio >= softRatio && ratio < 1,
+                    Exceeded = limit > 0 && ratio >= 1,
+                });
+            }
+
+            quotas.Sort(static (a, b) => b.Ratio != a.Ratio ? b.Ratio.CompareTo(a.Ratio) : b.Used.CompareTo(a.Used));
+            if (quotas.Count > 20)
+            {
+                quotas.RemoveRange(20, quotas.Count - 20);
+            }
+        }
+
+        var budgetsNearLimit = (_finops.Last?.Budgets ?? [])
+            .Where(b => b.Ratio >= Math.Min(b.WarningRatio <= 0 ? 1 : b.WarningRatio, gatewayOptions.Value.Overview.Attention.BudgetNearLimitRatio))
+            .ToList();
+
+        return new PolicyOverview
+        {
+            BuiltAtUtc = now,
+            Quotas = quotas,
+            BudgetsNearLimit = budgetsNearLimit,
+            GrantDenials = policyTracker?.GrantDenials(1440) ?? [],
+            UnknownModels = policyTracker?.UnknownModels(1440) ?? [],
+        };
+    }
+
+    // ---- Control plane ----
+
+    private async Task<ControlPlaneOverview?> BuildControlPlaneAsync(CancellationToken cancellationToken)
+    {
+        var now = timeProvider.GetUtcNow();
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var services = scope.ServiceProvider;
+        var dbInfo = services.GetService<ISqliteDatabaseInfo>();
+        var stateStore = services.GetService<IMaintenanceStateStore>();
+
+        var secrets = new SecretsVerificationStatus();
+        if (secretStore is not null)
+        {
+            try
+            {
+                var (total, undecryptable) = secretStore.VerifyStoredSecrets();
+                secrets = new SecretsVerificationStatus { HasRun = true, Total = total, Undecryptable = undecryptable, CheckedAtUtc = now };
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                logger.LogDebug(ex, "Upstream secret verification failed while building the Overview");
+            }
+        }
+
+        var database = new DatabaseStatus
+        {
+            Configured = dbInfo?.IsSqliteFile ?? false,
+            Path = dbInfo?.DatabasePath,
+            SizeBytes = dbInfo?.SizeBytes,
+            JournalMode = dbInfo is { IsSqliteFile: true } ? await dbInfo.GetJournalModeAsync(cancellationToken).ConfigureAwait(false) : null,
+        };
+
+        BackupStatus? lastBackup = null;
+        if (stateStore is not null)
+        {
+            lastBackup = await stateStore.GetAsync<BackupStatus>(MaintenanceStateKeys.LastBackup, cancellationToken).ConfigureAwait(false);
+        }
+
+        var backupCount = 0;
+        if (dbInfo?.BackupDirectory is { } backupDir && Directory.Exists(backupDir))
+        {
+            var files = Directory.GetFiles(backupDir, "gateway-*.db");
+            backupCount = files.Length;
+            // No recorded state (older gateway, or the row was lost): the newest file on disk is the
+            // next best answer, and better than claiming no backup exists.
+            if (lastBackup is null && files.Length > 0)
+            {
+                var newest = files.Select(f => new FileInfo(f)).OrderByDescending(f => f.LastWriteTimeUtc).First();
+                lastBackup = new BackupStatus
+                {
+                    AttemptedAtUtc = new DateTimeOffset(newest.LastWriteTimeUtc, TimeSpan.Zero),
+                    Succeeded = true,
+                    Path = newest.FullName,
+                    SizeBytes = newest.Length,
+                    IntegrityCheck = "unknown",
+                };
+            }
+        }
+
+        DateTimeOffset? auditNewest = null;
+        if (auditReader is { IsAvailable: true })
+        {
+            try
+            {
+                auditNewest = (await auditReader.ReadRecentAsync(1, cancellationToken).ConfigureAwait(false)).NewestUtc;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                logger.LogDebug(ex, "Audit trail could not be read while building the Overview");
+            }
+        }
+
+        var status = configReload?.GetStatus();
+        return new ControlPlaneOverview
+        {
+            BuiltAtUtc = now,
+            Secrets = secrets,
+            LastBackup = lastBackup,
+            BackupCount = backupCount,
+            Database = database,
+            AuditLastEntryUtc = auditNewest,
+            ConfigLastReloadUtc = status?.LastReload,
+            ModelCount = status?.ModelCount ?? registry.GetAllModels().Count,
+        };
+    }
+
+    // ---- Activity ----
+
+    private async Task<ActivityOverview?> BuildActivityAsync(int limit, CancellationToken cancellationToken)
+    {
+        var now = timeProvider.GetUtcNow();
+        if (auditReader is null)
+        {
+            return null;
+        }
+
+        if (!auditReader.IsAvailable)
+        {
+            return new ActivityOverview { BuiltAtUtc = now, Available = false };
+        }
+
+        var read = await auditReader.ReadRecentAsync(limit, cancellationToken).ConfigureAwait(false);
+
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var tenants = scope.ServiceProvider.GetService<ITenantRepository>();
+        var keys = scope.ServiceProvider.GetService<IApiKeyRepository>();
+        var slugs = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+        var labels = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+
+        var entries = new List<ActivityEntry>(read.Entries.Count);
+        foreach (var e in read.Entries)
+        {
+            string? slug = null;
+            if (e.TenantId is not null && tenants is not null && Guid.TryParse(e.TenantId, out var tenantId))
+            {
+                if (!slugs.TryGetValue(e.TenantId, out slug))
+                {
+                    slug = (await tenants.GetByIdAsync(tenantId, cancellationToken).ConfigureAwait(false))?.Slug;
+                    slugs[e.TenantId] = slug;
+                }
+            }
+
+            string? label = null;
+            if (e.ApiKeyId is not null && keys is not null && Guid.TryParse(e.ApiKeyId, out var keyId))
+            {
+                if (!labels.TryGetValue(e.ApiKeyId, out label))
+                {
+                    var key = await keys.GetByIdAsync(keyId, cancellationToken).ConfigureAwait(false);
+                    label = key is null ? null : (string.IsNullOrEmpty(key.Label) ? key.KeyPrefix : key.Label);
+                    labels[e.ApiKeyId] = label;
+                }
+            }
+
+            entries.Add(new ActivityEntry
+            {
+                TimestampUtc = e.TimestampUtc,
+                Action = e.Action,
+                TenantId = e.TenantId,
+                TenantSlug = slug,
+                ApiKeyId = e.ApiKeyId,
+                ApiKeyLabel = label,
+                Details = e.Details,
+            });
+        }
+
+        return new ActivityOverview
+        {
+            BuiltAtUtc = now,
+            Entries = entries,
+            ParseErrors = read.ParseErrors,
+            Available = true,
+        };
+    }
+
+    // ---- Tenants ----
+
+    private async Task<TenantsOverview?> BuildTenantsAsync(CancellationToken cancellationToken)
+    {
+        var now = timeProvider.GetUtcNow();
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var services = scope.ServiceProvider;
+        var tenants = services.GetService<ITenantRepository>();
+        var keys = services.GetService<IApiKeyRepository>();
+        var rollups = services.GetService<IDailyUsageRollupRepository>();
+        if (tenants is null || keys is null)
+        {
+            return null;
+        }
+
+        var attention = gatewayOptions.Value.Overview.Attention;
+        var tenantList = await tenants.ListActiveAsync(cancellationToken).ConfigureAwait(false);
+        var byId = tenantList.ToDictionary(t => t.Id);
+        var (total, revoked) = await keys.CountAsync(cancellationToken).ConfigureAwait(false);
+        var expiring = await keys.ListExpiringAsync(now.AddDays(attention.KeyExpiringWithinDays), cancellationToken).ConfigureAwait(false);
+        var idle = await keys.ListIdleAsync(now.AddDays(-attention.KeyIdleAfterDays), cancellationToken).ConfigureAwait(false);
+
+        KeySummary Summarise(Pol33.Core.Identity.ApiKeyRecord k) => new()
+        {
+            Id = k.Id,
+            KeyPrefix = k.KeyPrefix,
+            Label = k.Label,
+            TenantSlug = byId.TryGetValue(k.TenantId, out var t) ? t.Slug : null,
+            CreatedAt = k.CreatedAt,
+            ExpiresAt = k.ExpiresAt,
+            LastUsedAt = k.LastUsedAt,
+        };
+
+        var consumers = new List<TenantConsumer>();
+        var anonymousShare = 0d;
+        if (rollups is not null)
+        {
+            var today = DateOnly.FromDateTime(now.UtcDateTime);
+            var monthStart = new DateOnly(today.Year, today.Month, 1);
+            var rows = await rollups.GetScopedRollupsAsync(UsageScope.Unrestricted, monthStart, today, cancellationToken).ConfigureAwait(false);
+            var allRequests = rows.Sum(r => (long)r.RequestCount);
+            var anonymousRequests = rows.Where(r => r.TenantId is null).Sum(r => (long)r.RequestCount);
+            anonymousShare = allRequests == 0 ? 0 : (double)anonymousRequests / allRequests;
+            var recent = runtimeState?.TenantRequests.Top(now, 1440, 1000).ToDictionary(r => r.Key, r => r.Count, StringComparer.OrdinalIgnoreCase)
+                ?? new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+
+            consumers = rows
+                .GroupBy(r => r.TenantId)
+                .Select(g => new TenantConsumer
+                {
+                    TenantId = g.Key,
+                    TenantSlug = g.Key is { } id && byId.TryGetValue(id, out var t) ? t.Slug : (g.Key is null ? "anonymous" : null),
+                    PlanSlug = g.Key is { } pid && byId.TryGetValue(pid, out var pt) ? pt.PlanSlug : null,
+                    Requests = g.Sum(r => (long)r.RequestCount),
+                    PromptTokens = g.Sum(r => r.PromptTokens),
+                    CompletionTokens = g.Sum(r => r.CompletionTokens),
+                    Cost = g.Sum(r => r.TotalCost),
+                    Requests24h = g.Key is { } rid && recent.TryGetValue(rid.ToString(), out var c) ? c : 0,
+                })
+                .OrderByDescending(c => c.Cost)
+                .ThenByDescending(c => c.Requests)
+                .Take(10)
+                .ToList();
+        }
+
+        return new TenantsOverview
+        {
+            BuiltAtUtc = now,
+            Currency = billingOptions.Value.DefaultCurrency,
+            TenantCount = tenantList.Count,
+            KeyCount = total,
+            RevokedKeyCount = revoked,
+            TopConsumersMonthToDate = consumers,
+            ExpiringKeys = expiring.Select(Summarise).ToList(),
+            IdleKeys = idle.Select(Summarise).ToList(),
+            AnonymousRequestShare = anonymousShare,
+        };
+    }
 
     // ---- memo ----
 

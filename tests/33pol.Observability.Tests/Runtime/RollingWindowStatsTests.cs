@@ -275,4 +275,19 @@ public sealed class RollingWindowStatsTests
 
         public void Advance(TimeSpan by) => _now += by;
     }
+
+    [Fact]
+    public void RecordRejection_ReasonOnly_DoesNotCountAsARequest()
+    {
+        var stats = new RollingWindowStats(new FakeTimeProvider(Start));
+
+        stats.RecordRejection(null, RejectionReason.RateLimit, countAsFailedRequest: false);
+        stats.RecordRejection("m", null, countAsFailedRequest: true);
+
+        var window = stats.GetWindow(TimeSpan.FromMinutes(5));
+        window.Requests.Should().Be(1, "only the admission rejection counts as a request");
+        window.Errors.Should().Be(1);
+        window.RejectionsByReason.Should().Equal(new Dictionary<string, long> { ["rate_limit"] = 1 });
+    }
+
 }

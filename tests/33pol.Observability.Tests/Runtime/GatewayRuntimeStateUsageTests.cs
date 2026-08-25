@@ -169,4 +169,17 @@ public sealed class GatewayRuntimeStateUsageTests
         window.PricedRequests.Should().Be(1);
         window.PerModel.Should().ContainSingle(m => m.ModelId == "m1" && m.PricedCost == 0.00105m);
     }
+
+    [Fact]
+    public void AttachUsage_CreditsTokensToTheRowsTenant()
+    {
+        var runtime = new GatewayRuntimeState();
+        runtime.EnqueueRecent(Entry("r1") with { TenantId = "tenant-z" });
+
+        runtime.AttachUsage("r1", Priced);
+
+        runtime.TenantTokens.Top(DateTimeOffset.UtcNow, 1440, 10)
+            .Should().ContainSingle(r => r.Key == "tenant-z" && r.Count == 150);
+    }
+
 }

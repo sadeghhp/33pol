@@ -52,4 +52,52 @@ public sealed class GatewayRequestTrackerTests
         runtime.GetStats().Errors.Should().Be(1);
         runtime.GetErrorsPerModel()["gpt-4o"].Should().Be(1);
     }
+
+    [Theory]
+    [InlineData("bulkhead_full", "bulkhead")]
+    [InlineData("circuit_open", "circuit_open")]
+    [InlineData("backend_unhealthy", "backend_unhealthy")]
+    [InlineData("insufficient_scope", "grant_denied")]
+    public void RecordRejectedRequest_MapsTheOutcomeToAWindowedReason(string outcome, string reason)
+    {
+        var runtime = new GatewayRuntimeState();
+        var tracker = new GatewayRequestTracker(runtime);
+
+        tracker.RecordRejectedRequest("m1", outcome);
+
+        var window = runtime.Windows.GetWindow(TimeSpan.FromMinutes(5));
+        window.Requests.Should().Be(1);
+        window.Errors.Should().Be(1);
+        window.RejectionsByReason.Should().ContainKey(reason).WhoseValue.Should().Be(1);
+    }
+
+    [Fact]
+    public void RecordRejectedRequest_StreamConcurrency_CountsTheRequestButNotASecondReason()
+    {
+        var runtime = new GatewayRuntimeState();
+        var tracker = new GatewayRequestTracker(runtime);
+
+        tracker.RecordRejectedRequest("m1", "stream_concurrency");
+
+        var window = runtime.Windows.GetWindow(TimeSpan.FromMinutes(5));
+        window.Requests.Should().Be(1);
+        window.RejectionsByReason.Should().BeEmpty("the router counts stream caps through RecordRateLimitRejection");
+    }
+
+
+    [Fact]
+    public void BeginInferenceRequest_WithTenant_CountsTheTenantsRequestsForTheOverview()
+    {
+        var runtime = new GatewayRuntimeState();
+        var tracker = new GatewayRequestTracker(runtime);
+
+        using (tracker.BeginInferenceRequest("m1", isStreaming: false, tenantId: "tenant-a")) { }
+        using (tracker.BeginInferenceRequest("m1", isStreaming: false, tenantId: "tenant-a")) { }
+        using (tracker.BeginInferenceRequest("m1", isStreaming: false, tenantId: null)) { }
+
+        var top = runtime.TenantRequests.Top(DateTimeOffset.UtcNow, 1440, 10);
+        top.Should().ContainSingle(r => r.Key == "tenant-a" && r.Count == 2);
+        runtime.GetStats().Total.Should().Be(3);
+    }
+
 }

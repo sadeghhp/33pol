@@ -17,13 +17,11 @@ namespace Pol33.Registry.Hosting;
 /// </remarks>
 public sealed class UpstreamSecretVerificationHostedService(
     FileUpstreamSecretStore secretStore,
-    ILogger<UpstreamSecretVerificationHostedService> logger,
-    UpstreamSecretVerificationState? state = null) : IHostedService
+    ILogger<UpstreamSecretVerificationHostedService> logger) : IHostedService
 {
     public Task StartAsync(CancellationToken cancellationToken)
     {
         var (total, undecryptable) = secretStore.VerifyStoredSecrets();
-        state?.Record(total, undecryptable);
 
         if (undecryptable > 0)
         {

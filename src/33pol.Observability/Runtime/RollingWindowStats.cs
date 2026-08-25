@@ -88,7 +88,13 @@ public sealed class RollingWindowStats
         }
     }
 
-    public void RecordRejection(string? modelId, RejectionReason reason)
+    /// <param name="reason">Which control refused the request; null when it is already counted under a reason elsewhere.</param>
+    /// <param name="countAsFailedRequest">
+    /// True for admission rejections that the lifetime counters also count as a failed request
+    /// (bulkhead, circuit, unhealthy backend, grant). False for the rate-limit and quota middleware,
+    /// which refuse before the request is counted at all — matching the lifetime totals.
+    /// </param>
+    public void RecordRejection(string? modelId, RejectionReason? reason, bool countAsFailedRequest = true)
     {
         if (!Enabled)
         {
@@ -96,10 +102,10 @@ public sealed class RollingWindowStats
         }
 
         var now = _time.GetUtcNow();
-        _global.RecordRejection(now, reason);
+        _global.RecordRejection(now, reason, countAsFailedRequest);
         if (!string.IsNullOrEmpty(modelId))
         {
-            Ring(modelId)?.RecordRejection(now, reason);
+            Ring(modelId)?.RecordRejection(now, reason, countAsFailedRequest);
         }
     }
 
@@ -490,26 +496,33 @@ public sealed class RollingWindowStats
             }
         }
 
-        public void RecordRejection(DateTimeOffset now, RejectionReason reason)
+        public void RecordRejection(DateTimeOffset now, RejectionReason? reason, bool countAsFailedRequest)
         {
-            var index = (int)reason;
-            if (index < 0 || index >= ReasonCount)
+            var index = reason is { } r ? (int)r : -1;
+            if (index >= ReasonCount)
             {
                 return;
             }
 
             lock (_sync)
             {
-                // A rejection is a failed request from the operator's point of view, so it counts
-                // toward requests and errors (matching the lifetime counters) but not latency.
-                var m = Minute(now);
-                m.Requests++;
-                m.Errors++;
-                m.Rejections[index]++;
-                var s = Second(now);
-                s.Requests++;
-                s.Errors++;
-                s.Rejections[index]++;
+                Apply(Minute(now));
+                Apply(Second(now));
+            }
+
+            void Apply(Bucket b)
+            {
+                if (countAsFailedRequest)
+                {
+                    // Counts toward requests and errors (matching the lifetime counters) but not latency.
+                    b.Requests++;
+                    b.Errors++;
+                }
+
+                if (index >= 0)
+                {
+                    b.Rejections[index]++;
+                }
             }
         }
 

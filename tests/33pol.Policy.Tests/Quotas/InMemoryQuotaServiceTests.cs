@@ -119,4 +119,21 @@ public sealed class InMemoryQuotaServiceTests
     {
         public GatewayConfigSnapshot Current => snapshot;
     }
+
+    [Fact]
+    public void CheckBeforeForward_WhenAtHardLimit_ReportsThePartitionAndModel()
+    {
+        var metrics = Substitute.For<IGatewayMetricsCollector>();
+        var provider = new StubConfigProvider(new GatewayConfigSnapshot
+        {
+            Quota = new QuotaConfigSection { DefaultMonthlyTokenLimit = 10, SoftLimitRatio = 0.9 },
+        });
+        var service = new InMemoryQuotaService(provider, Options.Create(new QuotaOptions()), metrics);
+        service.CommitUsage("t1", "m", 10, "req-1");
+
+        service.CheckBeforeForward("t1", "m").IsAllowed.Should().BeFalse();
+
+        metrics.Received(1).RecordQuotaRejection("t1", "m");
+    }
+
 }

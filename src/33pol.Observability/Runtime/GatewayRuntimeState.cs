@@ -24,6 +24,12 @@ public sealed class GatewayRuntimeState
     /// </summary>
     public RollingWindowStats Windows { get; }
 
+    /// <summary>Requests per tenant over the last 24 hours, for the Overview's top consumers.</summary>
+    public CountDimension TenantRequests { get; } = new();
+
+    /// <summary>Tokens per tenant over the last 24 hours (attached when usage arrives).</summary>
+    public CountDimension TenantTokens { get; } = new();
+
     private readonly ConcurrentQueue<RecentRequestEntry> _recentRequests = new();
 
     /// <summary>
@@ -70,8 +76,23 @@ public sealed class GatewayRuntimeState
         string modelId,
         bool success,
         double durationMs,
-        bool wasStreaming)
+        bool wasStreaming) =>
+        RecordRequestComplete(modelId, success, durationMs, wasStreaming, tenantId: null);
+
+    /// <inheritdoc cref="RecordRequestComplete(string, bool, double, bool)"/>
+    /// <param name="tenantId">The tenant the request belonged to; null for anonymous traffic.</param>
+    public void RecordRequestComplete(
+        string modelId,
+        bool success,
+        double durationMs,
+        bool wasStreaming,
+        string? tenantId)
     {
+        if (!string.IsNullOrEmpty(tenantId))
+        {
+            TenantRequests.Add(tenantId, DateTimeOffset.UtcNow);
+        }
+
         lock (_statsSync)
         {
             _totalRequests++;
@@ -131,11 +152,11 @@ public sealed class GatewayRuntimeState
     /// the request and error totals but not to latency — see <see cref="Pol33.Core.Abstractions.IRequestTracker.RecordRejectedRequest"/>.
     /// </summary>
     public void RecordRequestRejected(string modelId) =>
-        RecordRequestRejected(modelId, RejectionReason.Bulkhead);
+        RecordRequestRejected(modelId, reason: null);
 
     /// <inheritdoc cref="RecordRequestRejected(string)"/>
-    /// <param name="reason">Which admission control refused the request; feeds the windowed breakdown.</param>
-    public void RecordRequestRejected(string modelId, RejectionReason reason)
+    /// <param name="reason">Which admission control refused the request; null when it is counted under a reason by another call.</param>
+    public void RecordRequestRejected(string modelId, RejectionReason? reason)
     {
         lock (_statsSync)
         {
@@ -145,7 +166,7 @@ public sealed class GatewayRuntimeState
 
         _requestsPerModel.AddOrUpdate(modelId, 1, static (_, count) => count + 1);
         _errorsPerModel.AddOrUpdate(modelId, 1, static (_, count) => count + 1);
-        Windows.RecordRejection(modelId, reason);
+        Windows.RecordRejection(modelId, reason, countAsFailedRequest: true);
         Touch();
     }
 
@@ -259,6 +280,8 @@ public sealed class GatewayRuntimeState
             }
 
             Windows.Reset();
+            TenantRequests.Clear();
+            TenantTokens.Clear();
             Touch();
         }
     }
@@ -274,7 +297,9 @@ public sealed class GatewayRuntimeState
     public void RecordRateLimitRejection(RejectionReason reason, string? modelId)
     {
         Interlocked.Increment(ref _rateLimitRejections);
-        Windows.RecordRejection(modelId, reason);
+        // Reason only: the middleware refuses before the request is counted, and the lifetime
+        // request/error totals do not include it either.
+        Windows.RecordRejection(modelId, reason, countAsFailedRequest: false);
         Touch();
     }
 
@@ -283,7 +308,14 @@ public sealed class GatewayRuntimeState
     public void RecordQuotaRejection(RejectionReason reason, string? modelId)
     {
         Interlocked.Increment(ref _quotaRejections);
-        Windows.RecordRejection(modelId, reason);
+        Windows.RecordRejection(modelId, reason, countAsFailedRequest: false);
+        Touch();
+    }
+
+    /// <summary>A refusal that is neither a request nor a lifetime counter — only the windowed reason breakdown sees it.</summary>
+    public void RecordReasonOnly(RejectionReason reason, string? modelId)
+    {
+        Windows.RecordRejection(modelId, reason, countAsFailedRequest: false);
         Touch();
     }
 
@@ -342,6 +374,10 @@ public sealed class GatewayRuntimeState
         if (added)
         {
             Windows.RecordUsage(modelId, usage.PromptTokens, usage.CompletionTokens, PricedCostOf(usage));
+            if (FindTenantId(requestId) is { Length: > 0 } tenantId)
+            {
+                TenantTokens.Add(tenantId, DateTimeOffset.UtcNow, usage.PromptTokens + usage.CompletionTokens);
+            }
         }
         else if (PricedCostOf(usage) is { } cost)
         {
@@ -353,6 +389,24 @@ public sealed class GatewayRuntimeState
 
     private static decimal? PricedCostOf(RecentRequestUsage usage) =>
         usage.PricingStatus == RecentRequestUsage.StatusPriced ? usage.TotalCost : null;
+
+    private string? FindTenantId(string requestId)
+    {
+        if (_inFlight.TryGetValue(requestId, out var running))
+        {
+            return running.TenantId;
+        }
+
+        foreach (var entry in _recentRequests)
+        {
+            if (string.Equals(entry.RequestId, requestId, StringComparison.Ordinal))
+            {
+                return entry.TenantId;
+            }
+        }
+
+        return null;
+    }
 
     private string? FindModelId(string requestId)
     {

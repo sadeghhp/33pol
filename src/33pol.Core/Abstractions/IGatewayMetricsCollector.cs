@@ -4,7 +4,31 @@ public interface IGatewayMetricsCollector
 {
     void RecordRateLimitRejection(string reason);
 
+    /// <summary>
+    /// Rate-limit rejection with the dimensions the Overview's policy card needs. The default body
+    /// preserves the old single-argument behaviour for implementations that do not track them.
+    /// </summary>
+    /// <param name="tenantId">The rejected partition (tenant id, or <c>anon:&lt;ip&gt;</c>); null when unknown.</param>
+    /// <param name="modelId">Known only for controls that run after routing (stream concurrency); null otherwise.</param>
+    void RecordRateLimitRejection(string reason, string? tenantId, string? modelId) => RecordRateLimitRejection(reason);
+
     void RecordQuotaRejection();
+
+    /// <inheritdoc cref="RecordRateLimitRejection(string, string?, string?)"/>
+    void RecordQuotaRejection(string? tenantId, string? modelId) => RecordQuotaRejection();
+
+    /// <summary>A hard-stop budget refused the request before forwarding.</summary>
+    void RecordBudgetRejection(string? tenantId, string? budgetName, string modelId)
+    {
+    }
+
+    /// <summary>The API key is not granted the model it asked for.</summary>
+    void RecordGrantDenial(string? tenantId, string modelId)
+    {
+    }
+
+    /// <summary>A resolve outcome plus the name the client actually sent, so unknown models can be listed.</summary>
+    void RecordModelResolve(string result, string? requestedModel) => RecordModelResolve(result);
 
     void RecordTokenUsage(string modelId, long promptTokens, long completionTokens);
 

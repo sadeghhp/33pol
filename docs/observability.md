@@ -138,6 +138,29 @@ Validate rules:
 promtool check rules deploy/prometheus/alerts/33pol.yml
 ```
 
+### In-app Attention list
+
+The admin Overview evaluates the same conditions in-process and lists them under **Attention**, so the console is useful without a monitoring stack (not instead of one). Thresholds live under `Gateway:Overview:Attention` and default to the rule values below.
+
+| Prometheus rule | Attention code | Severity | Default |
+|---|---|---|---|
+| `GatewayHighErrorRate` | `error_rate_high` | warning | error rate > 5 % over 5 m, ≥ 20 requests, for 5 m |
+| `GatewayNoHealthyBackends` | `no_healthy_backends` | critical | every registered model unhealthy, for 2 m |
+| — | `backend_unhealthy` | warning | per model, for 2 m |
+| `GatewayCircuitBreakerOpen` | `circuit_open` | warning | per model, for 5 m |
+| — | `bulkhead_saturated` | warning | in-flight at the ceiling with a queue, for 1 m |
+| `GatewayUsageParseFailures` | `usage_parse_failures` | warning | > 0.1/s over 5 m |
+| `GatewayUsageWriterQueueHigh` | `usage_writer_backlog` | warning | queue depth > 5000, for 5 m |
+| `GatewayUsageWriterDroppedEvents` | `usage_events_dropped` | critical | any drop in the last 5 m |
+| `GatewayBillingReconciliationDrift` | `reconciliation_discrepancies` | warning | > 0 buckets, for 15 m |
+| `GatewayBillingReconciliationStalled` | `reconciliation_stalled` | warning | last sweep older than 3 h |
+| — | `budget_near_limit` / `budget_exceeded` / `budget_hard_stop` | warning / warning / critical | budget warning ratio, exhausted, exhausted with hard stop |
+| — | `quota_near_limit` / `quota_exceeded` | info / warning | monthly token quota at the soft ratio / exhausted |
+| — | `unpriced_models` | info | registered models with no rate card |
+| — | `secrets_undecryptable` | critical | stored upstream credentials that no longer decrypt |
+| — | `backup_stale` / `backup_failed` | info / warning | no verified backup in 7 d / last attempt failed |
+| — | `key_expiring` / `key_idle` | info | keys expiring within 7 d / unused for 30 d |
+
 ## Traces
 
 Sample OpenTelemetry Collector config: [deploy/otel-collector/config.yaml](../deploy/otel-collector/config.yaml).

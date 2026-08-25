@@ -145,3 +145,7 @@ Admin UI: `/admin` (static Alpine.js dashboard).
 ## Soft quota
 
 When usage crosses `SoftLimitRatio` of the monthly limit, responses include header `X-33pol-Quota-Warning`.
+
+## Overview tiles
+
+The admin Overview's FinOps card (`GET /admin/api/overview/finops`, Operator only) is **gateway-wide** — every tenant plus anonymous usage — unlike the tenant-scoped Usage page. It reports today / yesterday / month-to-date spend, the same projection as `/admin/api/usage/forecast` (7 trailing complete days), tokens today, spend by model and cost centre, every budget's period spend versus its limit with a projected exhaustion date, rate-card coverage (registered models minus those with an active rate card), the last reconciliation sweep, and the usage-writer queue. It is memoised for `Gateway:Overview:SlowSectionTtlSeconds` (default 15) and refreshed in the background so the Overview's Attention rules can judge budgets and reconciliation without a page open.

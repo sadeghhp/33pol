@@ -53,13 +53,13 @@ directive that the evaluator could not resolve fails the build instead of the op
 4. The key is persisted in **`localStorage`** under `33pol-admin-key` — only after the gateway has accepted it. A candidate key from **Connect** / **Change key** is verified first (`GET /admin/api/config/status` with the candidate in the header); a rejected candidate is reported and the previous working key stays in place.
 5. **Invalid key** is set only by a `401`. A transient failure of the periodic session check (network blip, 5xx) marks the session *degraded* and keeps polling so the page recovers on its own.
 
-**Navigation:** Sidebar sections use URL hash (`#/dashboard`, `#/usage`, `#/routing`, `#/keys`, `#/logs`, `#/errors`, `#/settings`) and `sessionStorage` for the last tab. Legacy hashes `#/models` and `#/backends` redirect to **Routing** (Models / Backends sub-tabs). The Errors tab also accepts filters in the hash — `#/errors?model=gpt-4o&status=502&code=upstream_error&range=24h` — which is how the Overview tile and the errors-by-model bars deep-link into it.
+**Navigation:** Sidebar sections use URL hash (`#/dashboard`, `#/usage`, `#/routing`, `#/keys`, `#/logs`, `#/errors`, `#/settings`) and `sessionStorage` for the last tab. Legacy hashes `#/models` and `#/backends` redirect to **Routing** (Models / Backends sub-tabs). The Errors tab also accepts filters in the hash — `#/errors?model=gpt-4o&status=502&code=upstream_error&range=24h` — which is how the Overview tile and the errors-by-model bars deep-link into it. The Overview carries its own state in the hash too — `#/dashboard?window=5m&wall=1` (trailing window, wallboard mode) — so a view can be bookmarked and survives back/forward.
 
 ## Information architecture
 
 | Section | Hash | Content |
 |---------|------|---------|
-| Overview | `#/dashboard` | Metrics, health chips, in-flight requests, recent requests with cost centre / tokens / cost — pushed over SSE, 2s poll as fallback |
+| Overview | `#/dashboard` | Attention list, windowed vitals (requests, errors, latency p95, TTFT p95, in flight) with server-side sparklines, control-plane strip, backends & health, policy pressure, FinOps, per-model table, recent activity, tenants & keys, live tail with filters/pause/pin — pushed over SSE, 2s poll as fallback, slow cards polled every 30s |
 | Usage | `#/usage` | Date presets, cost center / API key filters, rollups, enriched billing events, forecast, export |
 | Routing | `#/routing` | **Models** (registry, quick-add drawer) and **Backends** (health table) |
 | API keys | `#/keys` | List (assignee, MTD usage, last used), create/edit metadata, per-key model access, revoke, view usage |
@@ -198,7 +198,7 @@ GET requests retry once on network failure. Usage export uses `downloadBlob` wit
 
 | Section | Endpoints |
 |---------|-----------|
-| Overview | `GET /admin/api/live?limit=25` (SSE; falls back to `GET /admin/api/summary` + `GET /admin/api/requests?limit=25`), `GET /health/live`, `GET /health/ready` |
+| Overview | `GET /admin/api/live?limit=25` (SSE; falls back to `GET /admin/api/summary` + `GET /admin/api/requests?limit=25`), `GET /health/live`, `GET /health/ready`; slow sections every 30s: `GET /admin/api/overview/finops`, `/policy`, `/control-plane`, `/activity?limit=20`, `/tenants` (all Operator; `?refresh=true` bypasses the 15s server memo; `204` when the gateway has no such data) |
 | Usage | `GET /admin/api/usage?costCenter=`, `/usage/events?apiKeyId=&costCenter=`, `/usage/forecast`, `GET /usage/export` |
 | Routing — Models | `GET/POST/PATCH/DELETE /admin/api/models` (write body: `{ model, apiKey?, clearApiKey? }`; GET returns `{ model, hasUpstreamCredential }`), `POST /admin/api/models/{id}/test` (type-specific health check) |
 | Routing — Backends | `GET /admin/api/backends` |
@@ -333,6 +333,60 @@ When the gateway runs in Docker, upstream URLs must use `http://host.docker.inte
 - [ ] **Clear errors** (Overview or Errors tab) zeroes the tile, the by-model bars and the tab, with
       no phantom spike on the error-rate sparkline, and the counts stay zero after a gateway restart
 - [ ] Sign out clears session; Escape closes drawer/modal
+
+## Overview
+
+The Overview is the operator's first stop, so it answers "is something wrong *now*?" before "how much has happened?". Everything on it is tolerant of an older gateway: a summary without the new sections falls back to the lifetime counters, labelled **lifetime**, and hides the cards it cannot fill.
+
+### Time windows
+
+The picker in the page header selects a trailing window (`1m`, `5m`, `1h`, `24h`; default `5m`, persisted in `sessionStorage` and mirrored in the hash). The vitals, the per-model table and the backends card's error-rate/p95 columns read from that window. The **sparklines never change shape with the picker**: they are the server's last 60 minutes at one point per minute (`summary.series`), so every operator sees the same trend and it survives a reload. Windowed statistics are in-memory (`Gateway:Overview:WindowedStats`) and reset with the process — unlike the lifetime counters, which are persisted.
+
+Latency is shown as **p95** (p50/p99 in the foot) rather than the lifetime mean, and **TTFT p95** (time to first token, streaming responses only) has its own tile.
+
+### Attention
+
+The banner under the header lists conditions the gateway itself judges worth an operator, ranked critical → warning → info, each with an **Open** link to the page that fixes it and a per-session **Dismiss**. The rules and thresholds mirror the Prometheus rules in `deploy/prometheus/alerts/` (see [observability.md](observability.md#alerts)) and are configured under `Gateway:Overview:Attention`. A condition is listed only after it has held for the rule's `for` duration, and `since` is the first observation. Items derived from the slow sections (budgets, reconciliation, keys) can lag by the 15s memo.
+
+### Cards
+
+| Card | Source | What it answers |
+|---|---|---|
+| Control-plane strip | summary `controlPlane` + `/overview/control-plane` | uptime, config last reload, secret verification, last backup, DB size, process memory, usage-writer backlog |
+| Backends & health | summary `backends` | probe result and *since when*, circuit state (closed / half-open / OPEN), bulkhead occupancy, 5-minute error rate and p95 per model |
+| Policy pressure | summary `policy` + `/overview/policy` | rejections by reason / tenant / model (last hour), unknown model names clients asked for, keys denied a model, monthly token quota per tenant |
+| FinOps | `/overview/finops` | today / month-to-date / projected spend, tokens today, spend by model and cost centre, budgets with breach projection, rate-card coverage, reconciliation and pipeline health |
+| Models | summary `windows[].perModel` | requests, share, error rate, p95, TTFT p95 and priced cost per model in the selected window |
+| Recent activity | `/overview/activity` | the audit trail's last admin actions (who, what, when) |
+| Tenants & keys | `/overview/tenants` | top consumers this month, keys expiring soon, idle keys, anonymous share |
+
+FinOps and tenant figures are **gateway-wide** (every tenant, anonymous included); the Usage page stays tenant-scoped.
+
+### Live tail
+
+Filters (model, tenant, status class, slow, errors only) compose. **Pause** freezes the rows — new requests are counted in the strip and applied on **Resume** — and the pin on each row keeps that request at the top even after the 25-row feed has evicted it. New columns: **TTFT** (streaming responses) and **tok/s**.
+
+### Wallboard
+
+`#/dashboard?wall=1` (or the **Wallboard** button) hides the rail, header actions and slow cards, scales the vitals up and trims the tail to ten rows; `Esc` exits. Meant for a NOC screen.
+
+### First run
+
+A gateway that has never routed a request shows a curl snippet (with **Copy curl**) and links to add a model or create an inference key instead of empty cards.
+
+### Overview checklist
+
+- Window picker `1m`/`5m`/`1h`/`24h` changes the tile numbers but not the sparkline shape; the selection survives a reload and is in the hash.
+- Against an older gateway (no `windows` in the summary) the tiles show lifetime totals labelled **lifetime** and the picker is disabled.
+- Stop the upstream: the backend row flips to unhealthy with a "since", the circuit shows **OPEN** after enough failures, and an Attention item appears once its `for` window has elapsed; **Open** lands on Routing → Backends filtered to that model; **Dismiss** hides it for the session and "Show them" restores it.
+- FinOps tiles agree with Usage & cost → month to date / projected for the same day; a model with no rate card is listed under "no rate card".
+- Hammer a key past its RPM: the Policy card's "Rate limit" bar rises and the tenant appears under "By tenant"; asking for an unknown model lists it under "Unknown models requested".
+- `POST /admin/api/maintenance/backup`: the **Backup** chip updates; `POST /admin/api/config/reload`: the **Config** chip shows "loaded just now"; both appear in Recent activity.
+- Per-model table is sorted by requests, error % colours above 1 % / 5 %, and the row actions open Errors / Routing.
+- Live tail: model / tenant / status / slow filters compose with **Errors only**; **Pause** freezes rows and counts new ones; **Resume** applies them; a pinned row stays on top across frames.
+- **Wallboard** (button or `?wall=1`) hides the chrome; `Esc` exits.
+- A fresh database shows the onboarding curl; **Copy curl** copies; one request replaces it with the dashboard.
+- Every changed asset URL carries a bumped `?v=`.
 
 ## Deferred (post-GA)
 

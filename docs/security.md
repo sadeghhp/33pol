@@ -189,3 +189,5 @@ Deliverables: written report with severity ratings and remediation tickets; rete
 ## Reporting
 
 Report vulnerabilities privately to the maintainers; do not open public issues with exploit details.
+
+**Reading it back.** `IAuditLogReader` (`FileAuditLogReader`) tails the trail newest-first for the admin Overview's *Recent activity* card and `GET /admin/api/overview/activity` (Operator only, up to 200 entries, spanning the `.1` rollover). Malformed lines are skipped and counted, never raised. Entries are shown with the tenant slug and key label resolved from the database; the trail itself still stores only ids.
