@@ -16,6 +16,13 @@ All notable changes to this project are documented here. Version tags follow [Se
 - **Per-model table** replaces the "Requests by model" bars; **live tail** gains model / tenant / status / slow filters, pause/resume, pinned rows and TTFT + tok/s columns (`RecentRequestEntry.TimeToFirstTokenMs`); **wallboard** mode (`?wall=1`, `Esc` to exit); a first-run panel with a copyable curl replaces empty cards on a gateway that has never routed a request.
 - New endpoints are Operator-only and answer `204` when the gateway has no such data; sections are memoised for `Gateway:Overview:SlowSectionTtlSeconds` (15 s) and kept warm by a background refresher.
 
+### Changed — error accounting: the Overview counter and the Errors tab count the same thing
+
+- **Client disconnects are no longer errors.** A caller hanging up mid-response is counted as a request and under a new `summary.clientDisconnects` (topbar *disconnects* chip; persisted in `gateway_stats_snapshot.ClientDisconnects`), not in `totalErrors`, `errorsPerModel`, the windowed error rate or `gateway_inference_errors_total`. `gateway_inference_requests_total` gains `status="canceled"`. New `IInferenceRequestScope.SetClientCanceled()`.
+- **An exception escaping the forward is now an error.** The inference scope used to default to *success* when disposed by an exception, so the client got a 502 and the Errors tab a record while the Overview counted a successful request. It now records `unhandled` (or a disconnect when the client had already gone).
+- **Model-grant denials (`insufficient_scope`) are stored** in the Errors tab and the recent-request feed, not only counted.
+- **Loss is reported, not logged away.** The error writer retries a failed batch once, then counts it; buffer overflow is counted too. `GET /admin/api/errors/groups` returns `droppedTotal`, `persistFailedTotal`, `prunedTotal`, `retainedSinceUtc` (from the retention pass, kept in `maintenance_state`) and `degraded` (archive unreachable, page served from memory). The Errors tab states these under its summary so a count reads as a floor, not as data going missing. *Clear all* rebases all of them.
+
 ### Added — error diagnostics
 
 - **Upstream error bodies are stored with the error record.** The first 2 KB of any upstream 4xx/5xx response body (uncompressed only) is captured, redacted and shown in the Errors tab, so an upstream `400` says *why* instead of "check your config". `Gateway:ErrorTracking:CaptureUpstreamBodySnippet` now defaults to `true`; set it to `false` to keep the old behaviour. Note that an upstream that echoes request text in its error message will have that text persisted (bearer tokens and API-key patterns are masked).

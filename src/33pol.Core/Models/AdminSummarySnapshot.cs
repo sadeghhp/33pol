@@ -13,6 +13,13 @@ public sealed class AdminSummarySnapshot
 
     public long TotalErrors { get; init; }
 
+    /// <summary>
+    /// Requests whose client disconnected before the response finished. Reported beside
+    /// <see cref="TotalErrors"/> rather than inside it, so the Overview pill and the Errors tab count
+    /// the same population.
+    /// </summary>
+    public long ClientDisconnects { get; init; }
+
     public double AverageLatencyMs { get; init; }
 
     public int ActiveStreams { get; init; }

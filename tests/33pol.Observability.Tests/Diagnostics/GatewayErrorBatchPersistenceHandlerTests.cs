@@ -67,6 +67,93 @@ public sealed class GatewayErrorBatchPersistenceHandlerTests
         gated.Batches.Should().HaveCount(1, "req_b was discarded before any write and must not appear");
     }
 
+    /// <summary>
+    /// A write that fails once is not lost: the batch is held for the next flush. Only a second
+    /// failure counts it as lost, and that count is what the Errors tab reports.
+    /// </summary>
+    [Fact]
+    public async Task FailedWrite_IsRetriedOnce_ThenCountedAsLost()
+    {
+        var archive = new FailingArchive(failuresBeforeSuccess: 1);
+        var handler = CreateHandler(archive, batchSize: 100);
+        handler.Enqueue(Error("req_a"));
+        handler.Enqueue(Error("req_b"));
+
+        await handler.FlushPendingAsync();
+        archive.Attempts.Should().Be(1);
+        archive.Written.Should().BeEmpty();
+        handler.PersistFailedTotal.Should().Be(0, "the first failure only queues a retry");
+
+        await handler.FlushPendingAsync();
+        archive.Attempts.Should().Be(2);
+        archive.Written.Select(r => r.RequestId).Should().Equal("req_a", "req_b");
+        handler.PersistFailedTotal.Should().Be(0);
+
+        var dead = new FailingArchive(failuresBeforeSuccess: int.MaxValue);
+        var deadHandler = CreateHandler(dead, batchSize: 100);
+        deadHandler.Enqueue(Error("req_c"));
+        await deadHandler.FlushPendingAsync();
+        await deadHandler.FlushPendingAsync();
+        deadHandler.PersistFailedTotal.Should().Be(1, "the retry failed too");
+
+        // A third flush has nothing left to retry: the record is not pinned forever.
+        await deadHandler.FlushPendingAsync();
+        dead.Attempts.Should().Be(2);
+    }
+
+    [Fact]
+    public void Overflow_IsCountedInDroppedTotal_AndClearedByDiscard()
+    {
+        var handler = CreateHandler(new BlockingArchive(), batchSize: 1);
+        // Batch size 1 with a stalled gate: the first record takes the gate, the rest pend.
+        for (var i = 0; i < 15; i++)
+        {
+            handler.Enqueue(Error($"req_{i}"));
+        }
+
+        handler.DroppedTotal.Should().Be(4, "MaxPending is 10 x batch size");
+
+        handler.DiscardPending();
+        handler.DroppedTotal.Should().Be(0);
+        handler.PendingCount.Should().Be(0);
+    }
+
+    private sealed class FailingArchive(int failuresBeforeSuccess) : IGatewayErrorArchive
+    {
+        public int Attempts { get; private set; }
+
+        public List<GatewayErrorRecord> Written { get; } = [];
+
+        public Task AppendBatchAsync(IReadOnlyList<GatewayErrorRecord> batch, CancellationToken cancellationToken = default)
+        {
+            Attempts++;
+            if (Attempts <= failuresBeforeSuccess)
+            {
+                throw new InvalidOperationException("database is locked");
+            }
+
+            Written.AddRange(batch);
+            return Task.CompletedTask;
+        }
+
+        public Task<GatewayErrorPage> QueryAsync(GatewayErrorQuery query, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<GatewayErrorGroupPage> QueryGroupsAsync(GatewayErrorQuery query, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<GatewayErrorRecord?> GetAsync(string id, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<GatewayErrorFacets> GetFacetsAsync(DateTimeOffset? from, DateTimeOffset? to, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<int> DeleteAllAsync(CancellationToken cancellationToken = default) => Task.FromResult(0);
+
+        public Task<int> PruneAsync(DateTimeOffset olderThan, int maxRows, CancellationToken cancellationToken = default) =>
+            Task.FromResult(0);
+    }
+
     private static GatewayErrorBatchPersistenceHandler CreateHandler(IGatewayErrorArchive archive, int batchSize)
     {
         var services = new ServiceCollection();

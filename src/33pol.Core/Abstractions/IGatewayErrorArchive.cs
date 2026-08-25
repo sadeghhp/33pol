@@ -45,4 +45,10 @@ public interface IGatewayErrorArchiveWriter
     /// the wipe cannot land in the database after it.
     /// </summary>
     void DiscardPending();
+
+    /// <summary>Records dropped unwritten because the buffer was full. Lifetime; reset by <see cref="DiscardPending"/>.</summary>
+    long DroppedTotal { get; }
+
+    /// <summary>Records that failed to write after their retry. Lifetime; reset by <see cref="DiscardPending"/>.</summary>
+    long PersistFailedTotal { get; }
 }

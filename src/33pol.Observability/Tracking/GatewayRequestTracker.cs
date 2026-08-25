@@ -58,6 +58,7 @@ public sealed class GatewayRequestTracker(GatewayRuntimeState runtimeState) : IR
         private readonly long _startTimestamp;
         private bool _disposed;
         private bool? _success;
+        private bool _canceled;
         private string? _errorCode;
 
         public InferenceScope(GatewayRuntimeState runtimeState, string modelId, bool isStreaming, string? tenantId)
@@ -73,6 +74,14 @@ public sealed class GatewayRequestTracker(GatewayRuntimeState runtimeState) : IR
         {
             _success = success;
             _errorCode = errorCode;
+            _canceled = false;
+        }
+
+        public void SetClientCanceled()
+        {
+            _success = false;
+            _errorCode = "client_canceled";
+            _canceled = true;
         }
 
         public void Dispose()
@@ -85,6 +94,26 @@ public sealed class GatewayRequestTracker(GatewayRuntimeState runtimeState) : IR
             _disposed = true;
             var success = _success ?? true;
             var elapsed = System.Diagnostics.Stopwatch.GetElapsedTime(_startTimestamp);
+
+            if (_canceled)
+            {
+                _runtimeState.RecordRequestCanceled(_modelId, elapsed.TotalMilliseconds, _isStreaming, _tenantId);
+                GatewayMeters.InferenceRequests.Add(
+                    1,
+                    new KeyValuePair<string, object?>("model", _modelId),
+                    new KeyValuePair<string, object?>("status", "canceled"));
+                GatewayMeters.InferenceDuration.Record(
+                    elapsed.TotalSeconds,
+                    new KeyValuePair<string, object?>("model", _modelId));
+                GatewayMeters.ActiveRequests.Add(-1, new KeyValuePair<string, object?>("model", _modelId));
+                if (_isStreaming)
+                {
+                    GatewayMeters.ActiveStreams.Add(-1, new KeyValuePair<string, object?>("model", _modelId));
+                }
+
+                return;
+            }
+
             _runtimeState.RecordRequestComplete(_modelId, success, elapsed.TotalMilliseconds, _isStreaming, _tenantId);
 
             var status = success ? "success" : "error";

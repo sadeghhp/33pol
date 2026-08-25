@@ -59,6 +59,7 @@ public sealed class GatewayRuntimeState
     private readonly object _statsSync = new();
     private long _totalRequests;
     private long _totalErrors;
+    private long _clientDisconnects;
     private long _totalLatencyMs;
     private int _activeStreams;
     private int _activeRequests;
@@ -110,6 +111,42 @@ public sealed class GatewayRuntimeState
         }
 
         Windows.RecordCompletion(modelId, durationMs, success, wasStreaming);
+
+        if (wasStreaming)
+        {
+            Interlocked.Decrement(ref _activeStreams);
+        }
+
+        Interlocked.Decrement(ref _activeRequests);
+        DecrementActiveForModel(modelId);
+        Touch();
+    }
+
+    /// <summary>
+    /// Records a request whose client disconnected before the response finished. It counts toward
+    /// the request total and latency like any completion, and toward <c>ClientDisconnects</c>
+    /// instead of the error total — the Overview "errors" pill and the Errors tab both measure
+    /// failures, and a caller walking away is not one.
+    /// </summary>
+    public void RecordRequestCanceled(string modelId, double durationMs, bool wasStreaming, string? tenantId)
+    {
+        if (!string.IsNullOrEmpty(tenantId))
+        {
+            TenantRequests.Add(tenantId, DateTimeOffset.UtcNow);
+        }
+
+        lock (_statsSync)
+        {
+            _totalRequests++;
+            _totalLatencyMs += (long)Math.Round(durationMs);
+            _clientDisconnects++;
+        }
+
+        _requestsPerModel.AddOrUpdate(modelId, 1, static (_, count) => count + 1);
+
+        // Not a failure of the backend, so the windowed error rate (and the attention rule built on
+        // it) does not move either.
+        Windows.RecordCompletion(modelId, durationMs, success: true, wasStreaming);
 
         if (wasStreaming)
         {
@@ -220,6 +257,7 @@ public sealed class GatewayRuntimeState
         {
             var clearedTotal = _totalErrors;
             _totalErrors = 0;
+            _clientDisconnects = 0;
             _errorsPerModel.Clear();
 
             // Drain and re-enqueue rather than filter in place: ConcurrentQueue has no removal, and
@@ -264,6 +302,7 @@ public sealed class GatewayRuntimeState
         {
             _totalRequests = 0;
             _totalErrors = 0;
+            _clientDisconnects = 0;
             _totalLatencyMs = 0;
             Interlocked.Exchange(ref _rateLimitRejections, 0);
             Interlocked.Exchange(ref _quotaRejections, 0);
@@ -500,6 +539,15 @@ public sealed class GatewayRuntimeState
 
     public int GetActiveRequests() => Math.Max(0, Volatile.Read(ref _activeRequests));
 
+    /// <summary>Lifetime count of requests whose client disconnected mid-response. Not part of <c>Errors</c>.</summary>
+    public long GetClientDisconnects()
+    {
+        lock (_statsSync)
+        {
+            return _clientDisconnects;
+        }
+    }
+
     /// <summary>Records the current in-flight count into the windowed series and bumps the version.</summary>
     public void SampleInFlight()
     {
@@ -528,6 +576,7 @@ public sealed class GatewayRuntimeState
             {
                 TotalRequests = _totalRequests,
                 TotalErrors = _totalErrors,
+                ClientDisconnects = _clientDisconnects,
                 TotalLatencyMs = _totalLatencyMs,
                 RateLimitRejections = Interlocked.Read(ref _rateLimitRejections),
                 QuotaRejections = Interlocked.Read(ref _quotaRejections),
@@ -553,6 +602,7 @@ public sealed class GatewayRuntimeState
         {
             _totalRequests = snapshot.TotalRequests;
             _totalErrors = snapshot.TotalErrors;
+            _clientDisconnects = snapshot.ClientDisconnects;
             _totalLatencyMs = snapshot.TotalLatencyMs;
             Interlocked.Exchange(ref _rateLimitRejections, snapshot.RateLimitRejections);
             Interlocked.Exchange(ref _quotaRejections, snapshot.QuotaRejections);

@@ -85,6 +85,7 @@ public sealed class GatewayAdminSummaryReader(
             UptimeSeconds = totalSeconds,
             TotalInferenceRequests = total,
             TotalErrors = errors,
+            ClientDisconnects = runtimeState.GetClientDisconnects(),
             AverageLatencyMs = avgMs,
             ActiveStreams = activeStreams,
             ActiveRequests = runtimeState.GetActiveRequests(),

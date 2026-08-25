@@ -180,12 +180,14 @@ public sealed class ModelRouterMiddleware
                 // Counted like the other admission refusals so a key hammering a model it was never
                 // granted shows up on the Overview instead of vanishing between the counters.
                 _metricsCollector.RecordGrantDenial(tenantId.ToString(), modelConfig.Id);
-                _requestTracker.RecordRejectedRequest(modelConfig.Id, "insufficient_scope");
-                await context.WriteGatewayErrorAsync(
+                await RejectAtAdmissionAsync(
+                    context,
+                    modelConfig.Id,
+                    requestInfo.Stream,
                     _errors.Write(
                         GatewayErrorCode.InsufficientScope,
                         message: "The API key is not granted access to this model."),
-                    context.RequestAborted).ConfigureAwait(false);
+                    outcome: "insufficient_scope").ConfigureAwait(false);
                 return;
             }
         }
@@ -279,6 +281,10 @@ public sealed class ModelRouterMiddleware
                 streamSlotAcquired = true;
             }
 
+            // Declared outside the try so the catch below can mark it failed. Every exception that
+            // escapes the forward would otherwise dispose a scope with no outcome, which the tracker
+            // reads as success — a 502 to the client that never reached the Overview error count.
+            IInferenceRequestScope? inferenceScope = null;
             try
             {
                 context.Request.Body.Position = 0;
@@ -290,7 +296,7 @@ public sealed class ModelRouterMiddleware
                                 scopeTenantValue is TenantContext scopeTenant
                 ? scopeTenant.TenantId
                 : null;
-            using var inferenceScope = _requestTracker.BeginInferenceRequest(modelConfig.Id, requestInfo.Stream, scopeTenantId);
+            inferenceScope = _requestTracker.BeginInferenceRequest(modelConfig.Id, requestInfo.Stream, scopeTenantId);
 
             var requestId = ResolveRequestId(context);
 
@@ -590,7 +596,7 @@ public sealed class ModelRouterMiddleware
                 // The client hung up. This is not evidence the backend is unhealthy, and counting it
                 // would let a burst of disconnects trip the breaker on a perfectly good backend.
                 // Leaving the lease unrecorded abandons the probe on dispose.
-                inferenceScope.SetOutcome(false, "client_canceled");
+                inferenceScope.SetClientCanceled();
                 _metricsCollector.RecordForwardAttempt(modelConfig.Id, "client_canceled");
                 RecordRecentRequest(
                     context,
@@ -635,8 +641,22 @@ public sealed class ModelRouterMiddleware
                 }
             }
             }
+            catch (Exception) when (inferenceScope is not null)
+            {
+                if (context.RequestAborted.IsCancellationRequested)
+                {
+                    inferenceScope.SetClientCanceled();
+                }
+                else
+                {
+                    inferenceScope.SetOutcome(false, "unhandled");
+                }
+
+                throw;
+            }
             finally
             {
+                inferenceScope?.Dispose();
                 if (streamSlotAcquired)
                 {
                     _rateLimitStore.ReleaseStreamSlot(ratePartitionKey);

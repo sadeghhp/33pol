@@ -117,6 +117,9 @@
             @click="openErrorsAll" title="Open the Errors tab">
             <span class="vc-value" x-text="totalErrorsText"></span> <span class="vc-label">errors</span>
           </button>
+          <span class="vital-chip" x-show="hasClientDisconnects" title="Clients that hung up mid-response. Not errors.">
+            <span class="vc-value" x-text="clientDisconnectsText"></span> <span class="vc-label">disconnects</span>
+          </span>
         </div>
 
         <div class="topbar-right">
@@ -1380,6 +1383,8 @@
               <!-- The counter and this grid measure different things. When they disagree, say why
                    here rather than letting it read as data going missing. -->
               <p class="page-sub" x-show="showErrorsCounterMismatch" x-text="errorsCounterMismatchText"></p>
+              <!-- Loss and retention are numbers, not prose: the page states how incomplete it is. -->
+              <p class="page-sub" x-show="errorsCoverageNote" x-text="errorsCoverageNote"></p>
             </div>
           </div>
 

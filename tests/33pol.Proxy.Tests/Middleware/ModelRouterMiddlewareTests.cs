@@ -409,11 +409,13 @@ public sealed class ModelRouterMiddlewareTests
         authState.IsAuthenticationRequired.Returns(true);
 
         var requestTracker = Substitute.For<IRequestTracker>();
+        var errorRecorder = Substitute.For<IGatewayErrorRecorder>();
         var middleware = CreateMiddleware(
             registry: registry,
             scopeFactory: scopeFactory,
             authState: authState,
-            requestTracker: requestTracker);
+            requestTracker: requestTracker,
+            errorRecorder: errorRecorder);
 
         var context = CreateContext(
             HttpMethods.Post,
@@ -426,8 +428,48 @@ public sealed class ModelRouterMiddlewareTests
         context.Response.StatusCode.Should().Be(StatusCodes.Status403Forbidden);
         var body = await ReadResponseBodyAsync(context);
         body.Should().Contain("insufficient_scope");
-        // The refusal is counted like the other admission rejections so it reaches the Overview.
+        // The refusal is counted like the other admission rejections so it reaches the Overview —
+        // and stored, so the Overview count and the Errors tab agree on it.
         requestTracker.Received(1).RecordRejectedRequest("m1", "insufficient_scope");
+        errorRecorder.Received(1).Record(Arg.Is<GatewayErrorRecord>(r =>
+            r.Outcome == "insufficient_scope" && r.ModelId == "m1" && r.StatusCode == StatusCodes.Status403Forbidden));
+    }
+
+    /// <summary>
+    /// An exception escaping the forward reaches the client as a 502 from the terminal handler. The
+    /// inference scope must record it as a failure, not default to success on dispose — otherwise
+    /// the Errors tab stores a record the Overview error count never saw.
+    /// </summary>
+    [Fact]
+    public async Task InvokeAsync_ForwarderThrows_MarksTheInferenceScopeFailed()
+    {
+        await WithSingleModelRegistryAsync(async registry =>
+        {
+            var forwarder = Substitute.For<IInferenceHttpForwarder>();
+            forwarder.SendAsync(
+                    Arg.Any<HttpContext>(),
+                    Arg.Any<string>(),
+                    Arg.Any<string?>(),
+                    Arg.Any<StreamingHttpTransformer>(),
+                    Arg.Any<bool>(),
+                    Arg.Any<InferenceForwardTimeouts>(),
+                    Arg.Any<CancellationToken>())
+                .Returns<ForwarderError>(_ => throw new InvalidOperationException("boom"));
+
+            var scope = Substitute.For<IInferenceRequestScope>();
+            var requestTracker = Substitute.For<IRequestTracker>();
+            requestTracker.BeginInferenceRequest(Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<string?>())
+                .Returns(scope);
+
+            var middleware = CreateMiddleware(registry: registry, forwarder: forwarder, requestTracker: requestTracker);
+            var context = CreateContext(HttpMethods.Post, "/v1/chat/completions", """{"model":"m1"}""");
+
+            var act = () => middleware.InvokeAsync(context);
+
+            await act.Should().ThrowAsync<InvalidOperationException>();
+            scope.Received(1).SetOutcome(false, "unhandled");
+            scope.Received(1).Dispose();
+        });
     }
 
     [Fact]

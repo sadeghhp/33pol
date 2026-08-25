@@ -36,6 +36,7 @@ public sealed class GatewayStatsSnapshotStore(GatewayDbContext dbContext) : IGat
         {
             TotalRequests = counters.TotalRequests,
             TotalErrors = counters.TotalErrors,
+            ClientDisconnects = counters.ClientDisconnects,
             TotalLatencyMs = counters.TotalLatencyMs,
             RateLimitRejections = counters.RateLimitRejections,
             QuotaRejections = counters.QuotaRejections,
@@ -63,6 +64,7 @@ public sealed class GatewayStatsSnapshotStore(GatewayDbContext dbContext) : IGat
 
         counters.TotalRequests = snapshot.TotalRequests;
         counters.TotalErrors = snapshot.TotalErrors;
+        counters.ClientDisconnects = snapshot.ClientDisconnects;
         counters.TotalLatencyMs = snapshot.TotalLatencyMs;
         counters.RateLimitRejections = snapshot.RateLimitRejections;
         counters.QuotaRejections = snapshot.QuotaRejections;
