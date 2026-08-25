@@ -202,11 +202,50 @@ public sealed class HealthCheckServiceTests
         uri.ToString().Should().Be("http://backend:8000/api/tags");
     }
 
+    /// <summary>
+    /// An outage is one fault however many sweeps observe it: the Errors tab gets one record when
+    /// the backend goes down, none while it stays down, and a fresh one if it goes down again.
+    /// </summary>
+    [Fact]
+    public async Task CheckBackendAsync_RecordsAnErrorOncePerUnhealthyTransition()
+    {
+        var handler = new SequenceHttpMessageHandler(
+            _ => throw new HttpRequestException("connection refused"),
+            _ => throw new HttpRequestException("connection refused"),
+            _ => throw new HttpRequestException("connection refused"),
+            _ => throw new HttpRequestException("connection refused"),
+            _ => throw new HttpRequestException("connection refused"),
+            _ => throw new HttpRequestException("connection refused"),
+            _ => throw new HttpRequestException("connection refused"),
+            _ => throw new HttpRequestException("connection refused"),
+            _ => new HttpResponseMessage(HttpStatusCode.OK),
+            _ => throw new HttpRequestException("connection refused"),
+            _ => throw new HttpRequestException("connection refused"),
+            _ => throw new HttpRequestException("connection refused"),
+            _ => throw new HttpRequestException("connection refused"));
+        var healthStore = new BackendHealthStore(Options.Create(new GatewayOptions()));
+        var recorder = Substitute.For<IGatewayErrorRecorder>();
+        var service = CreateService(handler, healthStore, errorRecorder: recorder);
+        var model = new ModelConfig { Id = "model-a", Url = "http://backend:8000" };
+
+        await service.CheckBackendAsync(model);   // healthy -> unhealthy (4 probe paths fail)
+        await service.CheckBackendAsync(model);   // still unhealthy
+        await service.CheckBackendAsync(model);   // recovers on the first path
+        await service.CheckBackendAsync(model);   // unhealthy again
+
+        recorder.Received(2).Record(Arg.Is<GatewayErrorRecord>(r =>
+            r.Source == GatewayErrorSourceNames.Health
+            && r.ModelId == "model-a"
+            && r.Outcome == "backend_unhealthy"
+            && r.Message.Contains("connection refused")));
+    }
+
     private static HealthCheckService CreateService(
         HttpMessageHandler handler,
         IBackendHealthStore? healthStore = null,
         IModelRegistry? registry = null,
-        IUpstreamBearerTokenResolver? bearerTokenResolver = null)
+        IUpstreamBearerTokenResolver? bearerTokenResolver = null,
+        IGatewayErrorRecorder? errorRecorder = null)
     {
         var modelRegistry = registry ?? Substitute.For<IModelRegistry>();
         var store = healthStore ?? new BackendHealthStore(Options.Create(new GatewayOptions()));
@@ -216,7 +255,8 @@ public sealed class HealthCheckServiceTests
             bearerTokenResolver ?? Substitute.For<IUpstreamBearerTokenResolver>(),
             Options.Create(new GatewayOptions { HealthCheckIntervalSeconds = 30 }),
             NullLogger<HealthCheckService>.Instance,
-            new HttpClient(handler));
+            new HttpClient(handler),
+            errorRecorder);
     }
 
     private sealed class SequenceHttpMessageHandler : HttpMessageHandler

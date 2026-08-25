@@ -198,6 +198,8 @@ public sealed class AdminModelTestServiceTests
         var entry = _logs.Entries.Should().ContainSingle().Subject;
         entry.Level.Should().Be(nameof(GatewayLogLevel.Error));
         entry.Category.Should().Be(AdminModelTestService.LogCategory);
+        _errors.Received(1).Record(Arg.Is<GatewayErrorRecord>(r =>
+            r.Source == GatewayErrorSourceNames.ModelTest && r.ModelId == "demo" && r.StatusCode == 404));
         entry.EventCode.Should().Be("upstream.http_404");
         entry.ModelId.Should().Be("demo");
         entry.Hint.Should().NotBeNullOrWhiteSpace();
@@ -366,6 +368,7 @@ public sealed class AdminModelTestServiceTests
 
     /// <summary>Diagnostics recorded by the service under test; xUnit gives each test a fresh instance.</summary>
     private readonly RecordingLogStore _logs = new();
+    private readonly IGatewayErrorRecorder _errors = Substitute.For<IGatewayErrorRecorder>();
 
     private AdminModelTestService CreateService(
         HttpMessageHandler handler,
@@ -409,7 +412,7 @@ public sealed class AdminModelTestServiceTests
         factory.CreateClient(AdminModelTestService.HttpClientName)
             .Returns(_ => new HttpClient(handler, disposeHandler: false));
 
-        return new AdminModelTestService(registry, resolver, factory, _logs);
+        return new AdminModelTestService(registry, resolver, factory, _logs, _errors);
     }
 
     private sealed class RecordingLogStore : IGatewayLogStore

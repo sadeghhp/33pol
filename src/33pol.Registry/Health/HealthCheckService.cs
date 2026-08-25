@@ -4,6 +4,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Pol33.Core.Abstractions;
+using Pol33.Core.Diagnostics;
 using Pol33.Core.Configuration;
 using Pol33.Core.Models;
 
@@ -32,6 +33,7 @@ public sealed class HealthCheckService : BackgroundService
     private readonly ILogger<HealthCheckService> _logger;
     private readonly HttpClient _httpClient;
     private readonly bool _ownsHttpClient;
+    private readonly IGatewayErrorRecorder? _errorRecorder;
 
     public HealthCheckService(
         IModelRegistry registry,
@@ -39,13 +41,15 @@ public sealed class HealthCheckService : BackgroundService
         IUpstreamBearerTokenResolver bearerTokenResolver,
         IOptions<GatewayOptions> options,
         ILogger<HealthCheckService> logger,
-        HttpClient? httpClient = null)
+        HttpClient? httpClient = null,
+        IGatewayErrorRecorder? errorRecorder = null)
     {
         _registry = registry;
         _healthStore = healthStore;
         _bearerTokenResolver = bearerTokenResolver;
         _options = options.Value;
         _logger = logger;
+        _errorRecorder = errorRecorder;
         _httpClient = httpClient ?? new HttpClient(new SocketsHttpHandler { AllowAutoRedirect = false })
         {
             Timeout = TimeSpan.FromSeconds(10),
@@ -127,6 +131,9 @@ public sealed class HealthCheckService : BackgroundService
         var (isHealthy, statusCode, error) = await ProbeBackendAsync(model.Url, bearerToken, cancellationToken)
             .ConfigureAwait(false);
 
+        // Read before the write so this sweep can tell a transition from a repeat.
+        var wasHealthy = _healthStore.GetHealth(model.Id)?.IsHealthy ?? true;
+
         _healthStore.SetHealth(new BackendHealth(
             model.Id,
             model.Url,
@@ -137,11 +144,35 @@ public sealed class HealthCheckService : BackgroundService
 
         if (!isHealthy)
         {
+            var detail = error ?? statusCode?.ToString() ?? "unknown";
             _logger.LogWarning(
                 "Backend {ModelId} at {Url} is unhealthy: {Error}",
                 model.Id,
                 model.Url,
-                error ?? statusCode?.ToString() ?? "unknown");
+                detail);
+
+            // One record per transition, not per sweep: an outage is one fault however many
+            // probes observe it, and a repeat every interval would bury everything else. The
+            // attention item shows the live state; this is the durable history of it.
+            if (wasHealthy)
+            {
+                _errorRecorder?.Record(new GatewayErrorRecord
+                {
+                    Id = $"err_{Guid.NewGuid():N}",
+                    Fingerprint = string.Empty,
+                    OccurredAt = DateTimeOffset.UtcNow,
+                    Level = GatewayLogLevel.Error.ToString(),
+                    Source = GatewayErrorSourceNames.Health,
+                    Category = nameof(HealthCheckService),
+                    EventCode = "backend_unhealthy",
+                    Message = $"Backend for model '{model.Id}' became unhealthy: {detail}",
+                    StatusCode = statusCode ?? 0,
+                    ModelId = model.Id,
+                    UpstreamTarget = model.Url,
+                    Outcome = "backend_unhealthy",
+                    Hint = GatewayLogHints.ForUpstreamStatus(statusCode ?? 0, model.Url, null, model.Id),
+                });
+            }
         }
     }
 
