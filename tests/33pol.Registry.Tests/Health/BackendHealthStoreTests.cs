@@ -58,4 +58,22 @@ public sealed class BackendHealthStoreTests
 
     private static BackendHealthStore CreateStore(bool strictMode) =>
         new(Options.Create(new GatewayOptions { HealthCheckStrictMode = strictMode }));
+
+    [Fact]
+    public void SetHealth_TracksWhenTheStateLastFlipped()
+    {
+        var store = CreateStore(strictMode: false);
+        var t0 = new DateTimeOffset(2026, 8, 25, 12, 0, 0, TimeSpan.Zero);
+
+        store.SetHealth(new BackendHealth("m", "http://x", true, 200, null, t0));
+        store.GetHealth("m")!.LastTransitionUtc.Should().Be(t0, "the first observation starts the clock");
+
+        store.SetHealth(new BackendHealth("m", "http://x", true, 200, null, t0.AddSeconds(30)));
+        store.GetHealth("m")!.LastTransitionUtc.Should().Be(t0, "same state, the stamp is kept");
+
+        store.SetHealth(new BackendHealth("m", "http://x", false, 503, "boom", t0.AddSeconds(60)));
+        var flipped = store.GetHealth("m")!;
+        flipped.IsHealthy.Should().BeFalse();
+        flipped.LastTransitionUtc.Should().Be(t0.AddSeconds(60));
+    }
 }

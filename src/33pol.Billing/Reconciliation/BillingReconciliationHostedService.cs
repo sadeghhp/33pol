@@ -21,7 +21,8 @@ namespace Pol33.Billing.Reconciliation;
 public sealed class BillingReconciliationHostedService(
     IServiceScopeFactory scopeFactory,
     IOptions<BillingOptions> options,
-    ILogger<BillingReconciliationHostedService> logger) : BackgroundService
+    ILogger<BillingReconciliationHostedService> logger,
+    BillingReconciliationState? state = null) : BackgroundService
 {
     /// <summary>Discrepancies written out individually before the rest are summarised.</summary>
     private const int MaxLoggedDiscrepancies = 20;
@@ -30,6 +31,7 @@ public sealed class BillingReconciliationHostedService(
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        state?.MarkEnabled(options.Value.ReconciliationEnabled);
         if (!options.Value.ReconciliationEnabled)
         {
             logger.LogInformation(
@@ -92,6 +94,7 @@ public sealed class BillingReconciliationHostedService(
 
         Report(report);
         PublishMetrics(scope.ServiceProvider, report);
+        state?.Record(report, utcNow);
 
         return report;
     }

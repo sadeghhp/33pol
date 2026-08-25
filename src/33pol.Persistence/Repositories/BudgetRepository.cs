@@ -19,4 +19,16 @@ public sealed class BudgetRepository(GatewayDbContext dbContext) : IBudgetReposi
 
         return entities.Select(BillingEntityMapper.ToRecord).ToList();
     }
+
+    public async Task<IReadOnlyList<BudgetRecord>> GetAllAsync(CancellationToken cancellationToken = default)
+    {
+        var entities = await dbContext.Budgets
+            .AsNoTracking()
+            .OrderBy(b => b.TenantId)
+            .ThenBy(b => b.Name)
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        return entities.Select(BillingEntityMapper.ToRecord).ToList();
+    }
 }

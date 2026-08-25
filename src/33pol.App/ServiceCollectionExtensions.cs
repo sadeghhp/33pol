@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Options;
 using Pol33.App.DependencyInjection;
+using Pol33.App.DependencyInjection.Overview;
 using Pol33.App.Health;
 using Pol33.App.Metrics;
 using Pol33.Api.DependencyInjection;
@@ -48,6 +49,7 @@ public static class ServiceCollectionExtensions
         services.AddGatewayRegistry();
         services.AddGatewayApi();
         services.AddGatewayProxy();
+        services.AddGatewayOverview();
         services.AddHostedService<GatewayAdmissionLimitsStartupLogger>();
         services.AddHttpClient(UpstreamHttpClientNames.Inference)
             .ConfigureHttpClient(client =>

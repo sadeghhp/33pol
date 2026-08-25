@@ -655,6 +655,25 @@ public sealed class InferenceHttpForwarderTests
         context.Items.ContainsKey(GatewayErrorContextKeys.UpstreamBodySnippet).Should().BeFalse();
     }
 
+    [Fact]
+    public async Task SendAsync_CompressedUpstreamError_DoesNotStashBinarySnippet()
+    {
+        var handler = new StatusUpstreamHandler(HttpStatusCode.BadRequest, StatusUpstreamHandler.ErrorBody, contentEncoding: "gzip");
+        var forwarder = new InferenceHttpForwarder(
+            new SingleHandlerClientFactory(handler),
+            NoOpGatewayMetricsCollector.Instance,
+            NullLogger<InferenceHttpForwarder>.Instance,
+            Options.Create(new GatewayErrorTrackingOptions()));
+
+        var context = CreatePostContext("""{"model":"gpt","stream":false}""");
+        var transformer = new StreamingHttpTransformer(isStreaming: false, clientModelName: "gpt", canonicalModelId: "gpt");
+
+        await forwarder.SendAsync(
+            context, "http://backend:8000", null, transformer, isStreaming: false, TestTimeouts, CancellationToken.None);
+
+        context.Items.ContainsKey(GatewayErrorContextKeys.UpstreamBodySnippet).Should().BeFalse();
+    }
+
     private static DefaultHttpContext CreatePostContext(string jsonBody)
     {
         var bodyBytes = Encoding.UTF8.GetBytes(jsonBody);
@@ -888,17 +907,26 @@ public sealed class InferenceHttpForwarderTests
         }
     }
 
-    private sealed class StatusUpstreamHandler(HttpStatusCode status, string body) : HttpMessageHandler
+    private sealed class StatusUpstreamHandler(HttpStatusCode status, string body, string? contentEncoding = null)
+        : HttpMessageHandler
     {
         public const string ErrorBody = """{"error":{"message":"'system' role is not supported by this model","type":"invalid_request_error"}}""";
 
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
-            CancellationToken cancellationToken) =>
-            Task.FromResult(new HttpResponseMessage(status)
+            CancellationToken cancellationToken)
+        {
+            var response = new HttpResponseMessage(status)
             {
                 Content = new StringContent(body, Encoding.UTF8, "application/json"),
-            });
+            };
+            if (contentEncoding is not null)
+            {
+                response.Content.Headers.ContentEncoding.Add(contentEncoding);
+            }
+
+            return Task.FromResult(response);
+        }
     }
 
     private sealed class ImmediateJsonUpstreamHandler : HttpMessageHandler

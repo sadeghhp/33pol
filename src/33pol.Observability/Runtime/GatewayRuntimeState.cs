@@ -1,11 +1,28 @@
 using System.Collections.Concurrent;
 using Pol33.Core.Models;
+using Pol33.Core.Models.Overview;
 
 namespace Pol33.Observability.Runtime;
 
 public sealed class GatewayRuntimeState
 {
+    public GatewayRuntimeState()
+        : this(new RollingWindowStats())
+    {
+    }
+
+    public GatewayRuntimeState(RollingWindowStats windows)
+    {
+        Windows = windows ?? throw new ArgumentNullException(nameof(windows));
+    }
+
     public DateTimeOffset StartedUtc { get; } = DateTimeOffset.UtcNow;
+
+    /// <summary>
+    /// The time-bucketed view behind the Overview's windows and sparklines. Fed from the same
+    /// calls as the lifetime counters, but never persisted.
+    /// </summary>
+    public RollingWindowStats Windows { get; }
 
     private readonly ConcurrentQueue<RecentRequestEntry> _recentRequests = new();
 
@@ -71,6 +88,8 @@ public sealed class GatewayRuntimeState
             _errorsPerModel.AddOrUpdate(modelId, 1, static (_, count) => count + 1);
         }
 
+        Windows.RecordCompletion(modelId, durationMs, success, wasStreaming);
+
         if (wasStreaming)
         {
             Interlocked.Decrement(ref _activeStreams);
@@ -111,7 +130,12 @@ public sealed class GatewayRuntimeState
     /// Counts a request the gateway rejected at admission, before any upstream call. Contributes to
     /// the request and error totals but not to latency — see <see cref="Pol33.Core.Abstractions.IRequestTracker.RecordRejectedRequest"/>.
     /// </summary>
-    public void RecordRequestRejected(string modelId)
+    public void RecordRequestRejected(string modelId) =>
+        RecordRequestRejected(modelId, RejectionReason.Bulkhead);
+
+    /// <inheritdoc cref="RecordRequestRejected(string)"/>
+    /// <param name="reason">Which admission control refused the request; feeds the windowed breakdown.</param>
+    public void RecordRequestRejected(string modelId, RejectionReason reason)
     {
         lock (_statsSync)
         {
@@ -121,7 +145,17 @@ public sealed class GatewayRuntimeState
 
         _requestsPerModel.AddOrUpdate(modelId, 1, static (_, count) => count + 1);
         _errorsPerModel.AddOrUpdate(modelId, 1, static (_, count) => count + 1);
+        Windows.RecordRejection(modelId, reason);
         Touch();
+    }
+
+    /// <summary>
+    /// Time to first token for a streaming response. Only the windowed statistics keep it — there is
+    /// no lifetime TTFT counter, and the Prometheus histogram is recorded by the metrics collector.
+    /// </summary>
+    public void RecordTimeToFirstToken(string modelId, double ttftMs)
+    {
+        Windows.RecordTimeToFirstToken(modelId, ttftMs);
     }
 
     private void DecrementActiveForModel(string modelId)
@@ -224,19 +258,32 @@ public sealed class GatewayRuntimeState
             {
             }
 
+            Windows.Reset();
             Touch();
         }
     }
 
-    public void RecordRateLimitRejection()
+    public void RecordRateLimitRejection() => RecordRateLimitRejection(RejectionReason.RateLimit, modelId: null);
+
+    /// <param name="reason">
+    /// The specific control that refused the request (<see cref="RejectionReason.RateLimit"/>,
+    /// <see cref="RejectionReason.StreamConcurrency"/>, …) — the lifetime counter stays one number;
+    /// the windowed statistics keep the breakdown.
+    /// </param>
+    /// <param name="modelId">Known only for controls that run after routing; null otherwise.</param>
+    public void RecordRateLimitRejection(RejectionReason reason, string? modelId)
     {
         Interlocked.Increment(ref _rateLimitRejections);
+        Windows.RecordRejection(modelId, reason);
         Touch();
     }
 
-    public void RecordQuotaRejection()
+    public void RecordQuotaRejection() => RecordQuotaRejection(RejectionReason.Quota, modelId: null);
+
+    public void RecordQuotaRejection(RejectionReason reason, string? modelId)
     {
         Interlocked.Increment(ref _quotaRejections);
+        Windows.RecordRejection(modelId, reason);
         Touch();
     }
 
@@ -273,7 +320,8 @@ public sealed class GatewayRuntimeState
             return;
         }
 
-        if (_usageByRequest.TryAdd(requestId, usage))
+        var added = _usageByRequest.TryAdd(requestId, usage);
+        if (added)
         {
             _usageOrder.Enqueue(requestId);
             var cap = MaxRecentRequests + MaxInFlightTracked;
@@ -287,7 +335,41 @@ public sealed class GatewayRuntimeState
             _usageByRequest[requestId] = usage;
         }
 
+        // Tokens and priced cost feed the windows once per request: the first attach carries the
+        // tokens (pending pricing), and only a priced attach carries a cost. Re-pricing the same
+        // request would double count, so the tokens are only counted on the first attach.
+        var modelId = FindModelId(requestId);
+        if (added)
+        {
+            Windows.RecordUsage(modelId, usage.PromptTokens, usage.CompletionTokens, PricedCostOf(usage));
+        }
+        else if (PricedCostOf(usage) is { } cost)
+        {
+            Windows.RecordUsage(modelId, 0, 0, cost);
+        }
+
         Touch();
+    }
+
+    private static decimal? PricedCostOf(RecentRequestUsage usage) =>
+        usage.PricingStatus == RecentRequestUsage.StatusPriced ? usage.TotalCost : null;
+
+    private string? FindModelId(string requestId)
+    {
+        if (_inFlight.TryGetValue(requestId, out var running))
+        {
+            return running.ModelId;
+        }
+
+        foreach (var entry in _recentRequests)
+        {
+            if (string.Equals(entry.RequestId, requestId, StringComparison.Ordinal))
+            {
+                return entry.ModelId;
+            }
+        }
+
+        return null;
     }
 
     private RecentRequestEntry MergeUsage(RecentRequestEntry entry) =>
@@ -363,6 +445,13 @@ public sealed class GatewayRuntimeState
     }
 
     public int GetActiveRequests() => Math.Max(0, Volatile.Read(ref _activeRequests));
+
+    /// <summary>Records the current in-flight count into the windowed series and bumps the version.</summary>
+    public void SampleInFlight()
+    {
+        Windows.SampleInFlight(GetActiveRequests());
+        Touch();
+    }
 
     public IReadOnlyDictionary<string, int> GetActiveRequestsPerModel() =>
         new Dictionary<string, int>(_activeRequestsPerModel, StringComparer.OrdinalIgnoreCase);

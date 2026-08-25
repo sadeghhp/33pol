@@ -152,4 +152,21 @@ public sealed class GatewayRuntimeStateUsageTests
 
         runtime.Version.Should().Be(v);
     }
+
+    [Fact]
+    public void AttachUsage_FeedsTheWindowedTokensOnceAndCostOnlyWhenPriced()
+    {
+        var runtime = new GatewayRuntimeState();
+        runtime.EnqueueRecent(Entry("r1"));
+
+        runtime.AttachUsage("r1", Priced with { PricingStatus = RecentRequestUsage.StatusPending, TotalCost = null });
+        runtime.AttachUsage("r1", Priced);
+
+        var window = runtime.Windows.GetWindow(TimeSpan.FromMinutes(5));
+        window.PromptTokens.Should().Be(100, "tokens are counted on the first attach only");
+        window.CompletionTokens.Should().Be(50);
+        window.PricedCost.Should().Be(0.00105m);
+        window.PricedRequests.Should().Be(1);
+        window.PerModel.Should().ContainSingle(m => m.ModelId == "m1" && m.PricedCost == 0.00105m);
+    }
 }

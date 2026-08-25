@@ -52,3 +52,4 @@ trufflehog-stderr.txt
 # Deploy runtime state (versions, backups, generated overrides)
 deploy/docker/.deploy/
 errors/*
+verify-release-test.log

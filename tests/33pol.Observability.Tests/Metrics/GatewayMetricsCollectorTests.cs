@@ -17,6 +17,19 @@ public sealed class GatewayMetricsCollectorTests
     }
 
     [Fact]
+    public void RecordTimeToFirstToken_FeedsTheWindowedStatistics()
+    {
+        var runtime = new GatewayRuntimeState();
+        var collector = new GatewayMetricsCollector(runtime);
+
+        collector.RecordTimeToFirstToken("gpt-4o", seconds: 0.2);
+
+        var window = runtime.Windows.GetWindow(TimeSpan.FromMinutes(5));
+        window.TtftSamples.Should().Be(1);
+        window.TtftP95Ms.Should().NotBeNull().And.BeInRange(100, 250);
+    }
+
+    [Fact]
     public void RecordQuotaRejection_IncrementsRuntimeCounter()
     {
         var runtime = new GatewayRuntimeState();

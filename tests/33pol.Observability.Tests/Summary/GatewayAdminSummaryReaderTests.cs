@@ -72,4 +72,58 @@ public sealed class GatewayAdminSummaryReaderTests
         // Admission takes microseconds; contributing it would drag the mean toward zero.
         snapshot.AverageLatencyMs.Should().Be(0);
     }
+
+    [Fact]
+    public void GetSnapshot_IncludesWindowsAndSeries()
+    {
+        var runtime = new GatewayRuntimeState();
+        runtime.RecordRequestStart("gpt-4o", isStreaming: true);
+        runtime.RecordTimeToFirstToken("gpt-4o", 120);
+        runtime.RecordRequestComplete("gpt-4o", success: true, durationMs: 400, wasStreaming: true);
+
+        var snapshot = new GatewayAdminSummaryReader(runtime).GetSnapshot();
+
+        snapshot.Windows.Should().NotBeNull();
+        snapshot.Windows!.Select(w => w.Window).Should().Equal("1m", "5m", "1h", "24h");
+        var fiveMinutes = snapshot.Windows.Single(w => w.Window == "5m");
+        fiveMinutes.Requests.Should().Be(1);
+        fiveMinutes.TtftSamples.Should().Be(1);
+        fiveMinutes.PerModel.Should().ContainSingle(m => m.ModelId == "gpt-4o");
+        snapshot.Series.Should().NotBeNull();
+        snapshot.Series!.Points.Should().HaveCount(60);
+        snapshot.Series.Points[^1].Requests.Should().Be(1);
+    }
+
+    [Fact]
+    public void GetSnapshot_SameVersionAndSecond_ReturnsTheMemoisedInstance()
+    {
+        var runtime = new GatewayRuntimeState();
+        var clock = new FrozenTimeProvider(new DateTimeOffset(2026, 8, 25, 12, 0, 0, TimeSpan.Zero));
+        var reader = new GatewayAdminSummaryReader(runtime, clock);
+
+        var first = reader.GetSnapshot();
+        var second = reader.GetSnapshot();
+        runtime.RecordRateLimitRejection();
+        var third = reader.GetSnapshot();
+
+        second.Should().BeSameAs(first);
+        third.Should().NotBeSameAs(first);
+        third.RateLimitRejections.Should().Be(1);
+    }
+
+    [Fact]
+    public void GetSnapshot_WindowsDisabled_OmitsTheSections()
+    {
+        var runtime = new GatewayRuntimeState(new RollingWindowStats { Enabled = false });
+
+        var snapshot = new GatewayAdminSummaryReader(runtime).GetSnapshot();
+
+        snapshot.Windows.Should().BeNull();
+        snapshot.Series.Should().BeNull();
+    }
+
+    private sealed class FrozenTimeProvider(DateTimeOffset now) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => now;
+    }
 }

@@ -721,6 +721,11 @@ code.inp-hint { font-family: var(--font-mono); font-size: 0.95em; padding: 0.05r
   border-color: var(--accent-border); font-weight: var(--fw-semi);
 }
 .preset:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--bg-base), 0 0 0 4px var(--accent); }
+.preset:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Overview time-window picker: a preset group that sits inline in the page header. */
+.window-picker { display: inline-flex; gap: var(--space-1); align-items: center; }
+.window-picker .preset { padding: 0.35rem 0.7rem; }
 
 /* ================================================================
    10. CARDS & GRIDS
@@ -1402,4 +1407,73 @@ tr.request-detail-row td { background: var(--bg-inset); padding-top: 0.75rem; }
 
 @media (max-width: 400px) {
   .vitals-grid { grid-template-columns: 1fr; }
+}
+
+/* ================================================================
+   13. OVERVIEW CARDS — attention banner, routing health
+   ================================================================ */
+.attention {
+  border: 1px solid var(--border); border-left: 4px solid var(--warn);
+  border-radius: var(--r-lg); background: var(--bg-surface);
+  padding: var(--space-3) var(--space-4); margin-bottom: var(--space-4);
+}
+.attention.is-critical { border-left-color: var(--error); }
+.attention.is-warning  { border-left-color: var(--warn); }
+.attention.is-info     { border-left-color: var(--accent); }
+.attention-head { display: flex; align-items: center; gap: var(--space-2); }
+.attention-head > strong { flex: 1; font-size: var(--text-sm); }
+.attention.is-critical .attention-head .icon { color: var(--error); }
+.attention.is-warning .attention-head .icon { color: var(--warn); }
+.attention-list { list-style: none; margin: var(--space-3) 0 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+.attention-item {
+  display: flex; align-items: flex-start; gap: var(--space-3);
+  padding: var(--space-2) var(--space-3); border-radius: var(--r-md);
+  background: var(--bg-sunken); border-left: 3px solid var(--border-strong);
+}
+.attention-item.is-critical { border-left-color: var(--error); }
+.attention-item.is-critical .attention-icon { color: var(--error); }
+.attention-item.is-warning { border-left-color: var(--warn); }
+.attention-item.is-warning .attention-icon { color: var(--warn); }
+.attention-item.is-info { border-left-color: var(--accent); }
+.attention-item.is-info .attention-icon { color: var(--accent-text); }
+.attention-icon { margin-top: 0.15rem; }
+.attention-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0.15rem; font-size: var(--text-sm); }
+.attention-detail { color: var(--text-secondary); font-size: var(--text-xs); }
+.attention-since { font-size: var(--text-2xs); font-family: var(--font-mono); }
+.attention-actions { display: flex; align-items: center; gap: var(--space-1); flex-shrink: 0; }
+.link-btn { background: none; border: none; padding: 0; color: var(--accent-text); cursor: pointer; font: inherit; text-decoration: underline; }
+
+.card-title-row { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-3); margin-bottom: var(--space-3); }
+.card-title-row h3 { margin: 0; }
+.card-foot-actions { display: flex; justify-content: flex-end; gap: var(--space-2); margin-top: var(--space-3); }
+
+.backend-rows { display: flex; flex-direction: column; gap: var(--space-1); }
+.backend-row {
+  display: grid; align-items: center; gap: var(--space-3);
+  grid-template-columns: 10px minmax(7rem, 1.4fr) auto minmax(6rem, 1fr) 3.5rem 4rem auto;
+  width: 100%; text-align: left; padding: 0.45rem var(--space-2);
+  border: 1px solid transparent; border-radius: var(--r-md); background: transparent;
+  color: var(--text-primary); font: inherit; font-size: var(--text-xs); cursor: pointer;
+  transition: background var(--dur-fast), border-color var(--dur-fast);
+}
+.backend-row:hover { background: var(--bg-sunken); border-color: var(--border); }
+.backend-row:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--bg-base), 0 0 0 4px var(--accent); }
+.backend-model { display: flex; flex-direction: column; min-width: 0; }
+.backend-id { font-family: var(--font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.backend-alias { font-size: var(--text-2xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.backend-load { display: flex; flex-direction: column; gap: 0.2rem; min-width: 0; }
+.backend-load-text { font-family: var(--font-mono); font-size: var(--text-2xs); color: var(--text-secondary); white-space: nowrap; }
+.backend-checked { font-size: var(--text-2xs); white-space: nowrap; }
+.backend-error { grid-column: 2 / -1; color: var(--error-text); font-size: var(--text-2xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.backend-row .num { font-variant-numeric: tabular-nums; text-align: right; }
+.backend-row .num.is-warn { color: var(--warn); }
+.backend-row .num.is-error { color: var(--error-text); }
+/* Generic capacity / quota / budget meter. */
+.load-track { display: block; height: 6px; border-radius: var(--r-full); background: var(--bg-sunken); border: 1px solid var(--border); overflow: hidden; }
+.load-fill { display: block; height: 100%; background: var(--accent); border-radius: var(--r-full); transition: width var(--dur-fast); }
+.load-fill.is-hot { background: var(--warn); }
+.load-fill.is-over { background: var(--error); }
+@media (max-width: 720px) {
+  .backend-row { grid-template-columns: 10px 1fr auto; }
+  .backend-row .backend-load, .backend-row .num, .backend-row .backend-checked { display: none; }
 }

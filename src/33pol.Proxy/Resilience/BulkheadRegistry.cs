@@ -20,7 +20,7 @@ namespace Pol33.Proxy.Resilience;
 /// never blocks another's; and because a waiter's cancellation token is the client's own abort, a
 /// caller that gives up leaves the queue at once rather than holding a place it will never use.</para>
 /// </remarks>
-public sealed class BulkheadRegistry
+public sealed class BulkheadRegistry : IBulkheadStateSource
 {
     private readonly ConcurrentDictionary<string, ModelBulkhead> _bulkheads = new(StringComparer.Ordinal);
     private readonly int _maxConcurrent;
@@ -44,6 +44,19 @@ public sealed class BulkheadRegistry
 
     /// <summary>Configured queue depth per model (0 = refuse at capacity).</summary>
     public int MaxQueuedPerModel => _maxQueued;
+
+    /// <summary>Occupancy of every model bulkhead that has ever admitted a request. Models at zero are included so a quiet model still shows its ceiling.</summary>
+    public IReadOnlyList<BulkheadModelState> GetStates()
+    {
+        var list = new List<BulkheadModelState>(_bulkheads.Count);
+        foreach (var pair in _bulkheads)
+        {
+            var inFlight = Math.Max(0, _maxConcurrent - pair.Value.Semaphore.CurrentCount);
+            list.Add(new BulkheadModelState(pair.Key, inFlight, pair.Value.QueuedCount, _maxConcurrent, _maxQueued));
+        }
+
+        return list;
+    }
 
     /// <summary>
     /// Acquires a forwarding slot for <paramref name="modelId"/>, waiting in the bounded queue if
@@ -115,6 +128,8 @@ public sealed class BulkheadRegistry
         private int _queued;
 
         public SemaphoreSlim Semaphore { get; } = new(maxConcurrent, maxConcurrent);
+
+        public int QueuedCount => Math.Max(0, Volatile.Read(ref _queued));
 
         public bool TryEnterQueue(int maxQueued)
         {

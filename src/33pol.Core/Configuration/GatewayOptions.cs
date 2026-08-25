@@ -41,4 +41,6 @@ public sealed class GatewayOptions
     public GatewayCorsOptions Cors { get; set; } = new();
 
     public GatewayForwardedHeadersOptions ForwardedHeaders { get; set; } = new();
+
+    public OverviewOptions Overview { get; set; } = new();
 }

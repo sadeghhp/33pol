@@ -11,6 +11,7 @@ namespace Pol33.Proxy.Resilience;
 public sealed class ModelCircuitBreakerRegistry : ICircuitBreakerStateSource
 {
     private readonly ConcurrentDictionary<string, CircuitBreaker> _breakers = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, DateTimeOffset> _lastTransition = new(StringComparer.Ordinal);
     private readonly CircuitBreakerPolicyOptions _policyOptions;
     private readonly int _maxTrackedModels;
     private readonly IGatewayMetricsCollector _metrics;
@@ -69,7 +70,11 @@ public sealed class ModelCircuitBreakerRegistry : ICircuitBreakerStateSource
     /// Removes tracking for a model that no longer exists, so live registry churn cannot walk the
     /// dictionary up to its cardinality limit and force every model into the shared overflow breaker.
     /// </summary>
-    public void Forget(string modelId) => _breakers.TryRemove(modelId, out _);
+    public void Forget(string modelId)
+    {
+        _breakers.TryRemove(modelId, out _);
+        _lastTransition.TryRemove(modelId, out _);
+    }
 
     /// <summary>Drops tracking for every model outside <paramref name="knownModelIds"/>.</summary>
     public void RetainOnly(IReadOnlySet<string> knownModelIds)
@@ -134,7 +139,14 @@ public sealed class ModelCircuitBreakerRegistry : ICircuitBreakerStateSource
         var list = new List<CircuitBreakerModelState>(_breakers.Count);
         foreach (var pair in _breakers)
         {
-            list.Add(new CircuitBreakerModelState(pair.Key, ToMetricState(pair.Value.State)));
+            var snapshot = pair.Value.GetSnapshot();
+            list.Add(new CircuitBreakerModelState(
+                pair.Key,
+                ToMetricState(snapshot.State),
+                snapshot.OpenedAt,
+                snapshot.FailuresInWindow,
+                snapshot.OutcomesInWindow,
+                _lastTransition.TryGetValue(pair.Key, out var at) ? at : null));
         }
 
         return list;
@@ -147,6 +159,7 @@ public sealed class ModelCircuitBreakerRegistry : ICircuitBreakerStateSource
             return;
         }
 
+        _lastTransition[modelId] = DateTimeOffset.UtcNow;
         _metrics.RecordCircuitBreakerTransition(modelId, ToStateLabel(after));
 
         if (after == CircuitState.Open)

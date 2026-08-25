@@ -45,6 +45,23 @@ public sealed class ModelCircuitBreakerRegistryTests
     }
 
     [Fact]
+    public void GetStates_AfterOpen_CarriesOpenedAtAndLastTransition()
+    {
+        var options = Options.Create(new GatewayOptions
+        {
+            Resilience = new GatewayResilienceOptions { CircuitBreakerFailureThreshold = 1 },
+        });
+        var registry = new ModelCircuitBreakerRegistry(options, Substitute.For<IGatewayMetricsCollector>());
+        var before = DateTimeOffset.UtcNow.AddSeconds(-1);
+
+        registry.RecordFailure("m1");
+
+        var state = registry.GetStates().Single();
+        state.OpenedAt.Should().NotBeNull().And.BeAfter(before);
+        state.LastTransitionUtc.Should().NotBeNull().And.BeAfter(before);
+    }
+
+    [Fact]
     public void RecordFailure_WhenTrackedModelLimitReached_DoesNotGrowRegistry()
     {
         var options = Options.Create(new GatewayOptions

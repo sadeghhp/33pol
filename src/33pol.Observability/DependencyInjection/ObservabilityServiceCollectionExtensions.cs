@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Pol33.Core.Abstractions;
 using Pol33.Core.Configuration;
+using Pol33.Observability.Attention;
 using Pol33.Observability.ControlPlane;
 using Pol33.Observability.Diagnostics;
 using Pol33.Observability.Metrics;
@@ -20,8 +21,21 @@ public static class ObservabilityServiceCollectionExtensions
 {
     public static IServiceCollection AddGatewayObservability(this IServiceCollection services)
     {
-        services.AddSingleton<GatewayRuntimeState>();
-        services.AddSingleton<IGatewayMetricsCollector, GatewayMetricsCollector>();
+        services.TryAddSingleton(TimeProvider.System);
+        services.AddSingleton(sp =>
+        {
+            var options = sp.GetService<IOptions<GatewayOptions>>()?.Value.Overview.WindowedStats ?? new OverviewWindowedStatsOptions();
+            return new RollingWindowStats(sp.GetRequiredService<TimeProvider>())
+            {
+                Enabled = options.Enabled,
+                MaxTrackedModels = Math.Max(0, options.MaxTrackedModels),
+            };
+        });
+        services.AddSingleton(sp => new GatewayRuntimeState(sp.GetRequiredService<RollingWindowStats>()));
+        services.AddHostedService<GatewayOverviewSamplerHostedService>();
+        services.AddSingleton<GatewayMetricsCollector>();
+        services.AddSingleton<IGatewayMetricsCollector>(sp => sp.GetRequiredService<GatewayMetricsCollector>());
+        services.AddSingleton<IUsageQualityCounters>(sp => sp.GetRequiredService<GatewayMetricsCollector>());
         services.AddSingleton<IRequestTracker, GatewayRequestTracker>();
         services.AddSingleton<IRecentRequestStore, InMemoryRecentRequestStore>();
         services.AddSingleton<IAdminLiveFeed, GatewayAdminLiveFeed>();
@@ -33,8 +47,6 @@ public static class ObservabilityServiceCollectionExtensions
         services.AddSingleton<InMemoryGatewayErrorStore>();
         services.AddSingleton<IGatewayErrorStore>(sp => sp.GetRequiredService<InMemoryGatewayErrorStore>());
         services.AddSingleton<IGatewayErrorRecorder>(sp => sp.GetRequiredService<InMemoryGatewayErrorStore>());
-        services.TryAddSingleton(TimeProvider.System);
-
         // Registering the sink as an ILoggerProvider in the container makes every ILogger warning
         // and error in the process visible in the admin Logs tab, with no call-site changes.
         // This only takes effect because the host opts into writeToProviders — see
@@ -44,10 +56,12 @@ public static class ObservabilityServiceCollectionExtensions
                 sp.GetRequiredService<IGatewayLogStore>,
                 sp.GetRequiredService<IGatewayErrorRecorder>,
                 sp.GetRequiredService<IOptions<GatewayErrorTrackingOptions>>().Value));
+        services.AddSingleton<IAttentionEvaluator, AttentionEvaluator>();
         services.AddSingleton<IAdminSummaryReader, GatewayAdminSummaryReader>();
         services.AddSingleton<IControlPlaneCommands, ControlPlaneCommands>();
         services.AddSingleton<ChannelUsageRecorder>();
         services.AddSingleton<IUsageRecorder>(sp => sp.GetRequiredService<ChannelUsageRecorder>());
+        services.AddSingleton<IUsageWriterStateSource>(sp => sp.GetRequiredService<ChannelUsageRecorder>());
         services.AddHostedService(sp => sp.GetRequiredService<ChannelUsageRecorder>());
         services.AddHostedService<GatewayBackendHealthMetricsExporter>();
         services.AddHostedService<GatewayCircuitBreakerMetricsExporter>();

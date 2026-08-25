@@ -48,4 +48,33 @@ public sealed class BudgetRepositoryTests
         budgets.Should().ContainSingle();
         budgets[0].Name.Should().Be("A");
     }
+
+    [Fact]
+    public async Task GetAllAsync_ReturnsEveryTenantsBudgetsOrderedByTenantThenName()
+    {
+        await using var db = PersistenceTestDbContextFactory.CreateInMemory(nameof(GetAllAsync_ReturnsEveryTenantsBudgetsOrderedByTenantThenName));
+        var tenantA = Guid.NewGuid();
+        var tenantB = Guid.NewGuid();
+        BudgetEntity Budget(Guid tenant, string name) => new()
+        {
+            Id = Guid.NewGuid(),
+            TenantId = tenant,
+            Name = name,
+            AmountLimit = 100m,
+            Currency = "USD",
+            WarningThresholdRatio = 0.8m,
+            HardStopEnabled = false,
+            PeriodStartDay = 1,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        };
+        db.Budgets.AddRange(Budget(tenantB, "Z"), Budget(tenantA, "B"), Budget(tenantA, "A"));
+        await db.SaveChangesAsync();
+
+        var all = await new BudgetRepository(db).GetAllAsync();
+
+        all.Should().HaveCount(3);
+        all.Select(b => b.TenantId).Distinct().Should().BeEquivalentTo([tenantA, tenantB]);
+        all.Where(b => b.TenantId == tenantA).Select(b => b.Name).Should().Equal("A", "B");
+    }
 }

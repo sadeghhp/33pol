@@ -305,12 +305,34 @@ public sealed class InferenceHttpForwarder(
         if (options is null
             || !options.CaptureUpstreamBodySnippet
             || options.UpstreamBodySnippetBytes <= 0
-            || (int)response.StatusCode < StatusCodes.Status400BadRequest)
+            || (int)response.StatusCode < StatusCodes.Status400BadRequest
+            || HasNonIdentityContentEncoding(response.Content?.Headers))
         {
+            // A compressed body is not text on the wire; storing its first bytes would only put
+            // binary noise in the Errors tab.
             return null;
         }
 
         return new ErrorBodySnippet(options.UpstreamBodySnippetBytes);
+    }
+
+    private static bool HasNonIdentityContentEncoding(HttpContentHeaders? headers)
+    {
+        if (headers is null)
+        {
+            return false;
+        }
+
+        foreach (var encoding in headers.ContentEncoding)
+        {
+            if (!string.IsNullOrWhiteSpace(encoding) &&
+                !string.Equals(encoding, "identity", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static void StashSnippet(HttpContext context, ErrorBodySnippet? snippet)

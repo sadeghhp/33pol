@@ -23,6 +23,7 @@ public static class ProxyServiceCollectionExtensions
         services.AddSingleton<ICircuitBreakerStateSource>(sp =>
             sp.GetRequiredService<ModelCircuitBreakerRegistry>());
         services.AddSingleton<BulkheadRegistry>();
+        services.AddSingleton<IBulkheadStateSource>(sp => sp.GetRequiredService<BulkheadRegistry>());
         services.AddHostedService<GatewayShutdownHostedService>();
         return services;
     }

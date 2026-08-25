@@ -53,5 +53,9 @@ public sealed class CachingBudgetRepository(
         return budgets;
     }
 
+    /// <summary>Not cached: it is read on the Overview's slow cadence, never on the request path.</summary>
+    public Task<IReadOnlyList<BudgetRecord>> GetAllAsync(CancellationToken cancellationToken = default) =>
+        inner.GetAllAsync(cancellationToken);
+
     public void Invalidate(Guid tenantId) => cache.Remove(CacheKey(tenantId));
 }

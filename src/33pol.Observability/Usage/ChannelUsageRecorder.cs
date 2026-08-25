@@ -9,7 +9,7 @@ using Pol33.Observability.Runtime;
 
 namespace Pol33.Observability.Usage;
 
-public sealed class ChannelUsageRecorder : IUsageRecorder, IHostedService
+public sealed class ChannelUsageRecorder : IUsageRecorder, IHostedService, IUsageWriterStateSource
 {
     private const int ChannelCapacity = 10_000;
 
@@ -42,6 +42,12 @@ public sealed class ChannelUsageRecorder : IUsageRecorder, IHostedService
         _logger = logger;
     }
 
+    /// <inheritdoc />
+    public int QueueDepth => _channel.Reader.CanCount ? _channel.Reader.Count : -1;
+
+    /// <inheritdoc />
+    public int Capacity => ChannelCapacity;
+
     public bool Enqueue(UsageEvent usageEvent)
     {
         if (_channel.Writer.TryWrite(usageEvent))
@@ -62,7 +68,7 @@ public sealed class ChannelUsageRecorder : IUsageRecorder, IHostedService
         // is accurate and counted (the previous DropOldest path lost the oldest event silently).
         // Reporting it to the caller matters as much as counting it: the router settles the
         // request's budget reservation only when persistence will actually run.
-        GatewayMeters.UsageWriterDropped.Add(1);
+        _metricsCollector.RecordUsageEventsDropped(1);
         _logger.LogWarning("Usage event dropped (queue saturated) for request {RequestId}", usageEvent.RequestId);
         return false;
     }

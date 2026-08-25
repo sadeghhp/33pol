@@ -46,6 +46,24 @@ public sealed class CircuitBreaker
         }
     }
 
+    /// <summary>
+    /// A consistent read of the breaker for the admin Overview: the state, when it opened, how the
+    /// sampling window currently looks and how long an open breaker has left before it probes.
+    /// </summary>
+    public CircuitBreakerSnapshot GetSnapshot()
+    {
+        lock (_sync)
+        {
+            var now = _clock();
+            var (failures, total) = _state == CircuitState.Open ? (0, 0) : CountWindow();
+            var opened = _state == CircuitState.Open || _state == CircuitState.HalfOpen ? _openedAt : (DateTimeOffset?)null;
+            TimeSpan? remaining = _state == CircuitState.Open
+                ? TimeSpan.FromTicks(Math.Max(0, (_openedAt + _options.BreakDuration - now).Ticks))
+                : null;
+            return new CircuitBreakerSnapshot(_state, opened, failures, total, remaining);
+        }
+    }
+
     public bool TryEnter()
     {
         lock (_sync)

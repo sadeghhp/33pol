@@ -17,11 +17,11 @@
        is that no expression below may contain an operator, a ternary or a call with arguments:
        every value comes from a getter, a zero-argument method, or a {get,set} pair on adminApp. -->
   <link rel="stylesheet" href="vendor/fonts.css?v=1" />
-  <link rel="stylesheet" href="admin.css?v=17" />
+  <link rel="stylesheet" href="admin.css?v=19" />
   <script defer src="admin-icons.js?v=10"></script>
   <script defer src="admin-errors.js?v=7"></script>
   <script defer src="admin-store.js?v=10"></script>
-  <script defer src="admin-app.js?v=30"></script>
+  <script defer src="admin-app.js?v=32"></script>
   <script defer src="vendor/alpine-csp-3.14.9.min.js"></script>
 </head>
 <body x-data="adminApp" x-cloak @keydown.window="onModalKeydown">
@@ -173,6 +173,13 @@
               <p class="page-sub" x-show="summaryUpdatedAt" x-text="updatedLineText"></p>
             </div>
             <div class="page-actions">
+              <!-- Trailing window for the vitals and per-model numbers. The sparklines are always
+                   the server's last hour, so the picker changes the numbers, never the shape. -->
+              <div class="window-picker" role="group" aria-label="Time window" :title="sparkSourceText">
+                <template x-for="w in windowButtons" :key="w.key">
+                  <button type="button" :class="w.cls" :aria-pressed="w.pressed" :disabled="windowPickerDisabled" @click="w.select" x-text="w.label"></button>
+                </template>
+              </div>
               <!-- Push-stream state: Live while the gateway is streaming frames, Polling when the
                    console has fallen back to its 2s refresh, Reconnecting in between. -->
               <span :class="liveBadgeClass" :title="liveBadgeTitle" role="status">
@@ -188,17 +195,48 @@
           <p class="notice warn" x-show="showStaleNotice" role="status">Live data may be stale — the last refresh failed. Check your connection.</p>
           <p class="notice error" x-show="connectionFailed" role="status">Your admin API key was rejected. Use <strong>Change key</strong> in the top bar to sign in again.</p>
 
+          <!-- Attention: what the gateway itself thinks needs an operator, ranked critical first.
+               The conditions mirror the shipped Prometheus rules so the console is useful without
+               a monitoring stack. Dismissals are per browser session only. -->
+          <section :class="attentionBannerClass" x-show="hasAttention" role="status" aria-live="polite">
+            <div class="attention-head">
+              <span class="icon" x-html="icons.alert-triangle"></span>
+              <strong x-text="attentionSummaryText"></strong>
+              <button type="button" class="action secondary" @click="toggleAttention" x-text="attentionToggleText"></button>
+            </div>
+            <ul class="attention-list" x-show="attentionExpanded">
+              <template x-for="at in attentionRows" :key="at.key">
+                <li :class="at.cls">
+                  <span class="icon attention-icon" x-html="at.icon"></span>
+                  <span class="attention-body">
+                    <strong x-text="at.title"></strong>
+                    <span class="attention-detail" x-text="at.detail"></span>
+                    <span class="attention-since muted" x-text="at.sinceText" :title="at.sinceTitle"></span>
+                  </span>
+                  <span class="attention-actions">
+                    <button type="button" class="action secondary" x-show="at.hasLink" @click="at.open">Open</button>
+                    <button type="button" class="icon-btn" @click="at.dismiss" title="Dismiss for this session" aria-label="Dismiss">
+                      <span class="icon" x-html="icons.x"></span>
+                    </button>
+                  </span>
+                </li>
+              </template>
+            </ul>
+          </section>
+          <p class="hint" x-show="hasDismissedAttention">
+            Some attention items are hidden for this session. <button type="button" class="link-btn" @click="undismissAttention">Show them</button>
+          </p>
+
           <!-- Primary vitals -->
-          <div class="vitals-grid" x-show="summary">
-            <article class="vital">
+          <div class="vitals-grid vitals-5" x-show="summary">
+            <article class="vital" :title="sparkSourceText">
               <div class="vital-head"><span class="vital-label">Requests</span><span class="icon" x-html="icons.activity"></span></div>
-              <strong class="vital-value" x-text="totalRequestsText"></strong>
+              <strong class="vital-value" x-text="requestsValueText"></strong>
               <div class="vital-foot">
                 <span class="vital-trend up" x-show="hasThroughput">
                   <span class="icon" x-html="icons.trending-up"></span>
-                  <span x-text="throughputText"></span>
                 </span>
-                <span x-show="noThroughput">total routed</span>
+                <span x-text="requestsFootText"></span>
               </div>
               <div class="vital-spark" x-show="spark.throughput.has" aria-hidden="true">
                 <svg viewBox="0 0 100 100" preserveAspectRatio="none">
@@ -215,8 +253,8 @@
               @keydown.enter.prevent="openErrorsAll"
               @keydown.space.prevent="openErrorsAll">
               <div class="vital-head"><span class="vital-label">Errors</span><span class="icon" x-html="icons.alert-circle"></span></div>
-              <strong class="vital-value" x-text="totalErrorsText"></strong>
-              <div class="vital-foot"><span x-text="errorRateText"></span> · view details</div>
+              <strong class="vital-value" x-text="errorsValueText"></strong>
+              <div class="vital-foot"><span x-text="errorsFootText"></span></div>
               <div class="vital-spark" x-show="spark.errorRate.has" aria-hidden="true">
                 <svg viewBox="0 0 100 100" preserveAspectRatio="none">
                   <path class="spark-fill" :d="spark.errorRate.fill"></path>
@@ -225,14 +263,30 @@
               </div>
             </article>
 
-            <article class="vital">
-              <div class="vital-head"><span class="vital-label">Avg latency</span><span class="icon" x-html="icons.timer"></span></div>
-              <strong class="vital-value"><span x-text="avgLatencyText"></span><span class="unit">ms</span></strong>
-              <div class="vital-foot"><span>mean upstream round-trip</span></div>
+            <!-- p95 rather than the lifetime mean: an LLM gateway's mean is dominated by long
+                 streams and hides the tail that users actually feel. The mean is the fallback
+                 when the gateway predates trailing windows. -->
+            <article class="vital" :title="sparkSourceText">
+              <div class="vital-head"><span class="vital-label" x-text="latencyLabelText"></span><span class="icon" x-html="icons.timer"></span></div>
+              <strong class="vital-value"><span x-text="latencyP95Text"></span><span class="unit" x-text="latencyUnitText"></span></strong>
+              <div class="vital-foot"><span x-text="latencyFootText"></span></div>
               <div class="vital-spark" x-show="spark.latency.has" aria-hidden="true">
                 <svg viewBox="0 0 100 100" preserveAspectRatio="none">
                   <path class="spark-fill" :d="spark.latency.fill"></path>
                   <polyline class="spark-line" :points="spark.latency.line"></polyline>
+                </svg>
+              </div>
+            </article>
+
+            <!-- Time to first token: the number a person waiting on a stream notices first. -->
+            <article class="vital" :title="sparkSourceText">
+              <div class="vital-head"><span class="vital-label">TTFT p95</span><span class="icon" x-html="icons.zap"></span></div>
+              <strong class="vital-value"><span x-text="ttftP95Text"></span><span class="unit" x-text="ttftUnitText"></span></strong>
+              <div class="vital-foot"><span x-text="ttftFootText"></span></div>
+              <div class="vital-spark" x-show="spark.ttft.has" aria-hidden="true">
+                <svg viewBox="0 0 100 100" preserveAspectRatio="none">
+                  <path class="spark-fill" :d="spark.ttft.fill"></path>
+                  <polyline class="spark-line" :points="spark.ttft.line"></polyline>
                 </svg>
               </div>
             </article>
@@ -274,6 +328,42 @@
             <span class="mini-stat"><span class="ms-label">Uptime</span><span class="ms-value" x-text="uptimeText"></span></span>
             <span class="mini-stat" :class="rateLimitedClass"><span class="ms-label">Rate-limited</span><span class="ms-value" x-text="rateLimitedText"></span></span>
             <span class="mini-stat" :class="quotaBlockedClass"><span class="ms-label">Quota-blocked</span><span class="ms-value" x-text="quotaBlockedText"></span></span>
+          </div>
+
+          <!-- Routing health: probe result, circuit breaker and bulkhead occupancy per model. -->
+          <div class="chart-row" x-show="hasBackendsSection">
+            <div class="card backends-card">
+              <div class="card-title-row">
+                <div><span class="eyebrow">Routing</span><h3>Backends &amp; health</h3></div>
+                <span :class="backendsHealthClass" x-text="backendsHealthText"></span>
+              </div>
+              <div class="backend-rows" x-show="hasBackendHealthRows">
+                <template x-for="bk in backendHealthRows" :key="bk.key">
+                  <button type="button" class="backend-row" @click="bk.open" :title="bk.url">
+                    <span class="health-dot" :class="bk.dotClass" :title="bk.healthTitle"></span>
+                    <span class="backend-model">
+                      <span class="backend-id" x-text="bk.modelId"></span>
+                      <span class="backend-alias muted" x-show="bk.hasAlias" x-text="bk.alias"></span>
+                    </span>
+                    <span :class="bk.circuitClass" x-text="bk.circuitText" :title="bk.circuitTitle"></span>
+                    <span class="backend-load">
+                      <span class="load-track" x-show="bk.hasLoadBar"><span :class="bk.loadClass" :style="bk.loadStyle"></span></span>
+                      <span class="backend-load-text" x-text="bk.loadText"></span>
+                    </span>
+                    <span :class="bk.errorRateClass" x-text="bk.errorRateText" title="Error rate, last 5 minutes"></span>
+                    <span class="num" x-text="bk.p95Text" title="p95 latency, last 5 minutes"></span>
+                    <span class="backend-checked muted" x-text="bk.checkedText" title="Last health probe"></span>
+                    <span class="backend-error" x-show="bk.hasError" x-text="bk.errorText"></span>
+                  </button>
+                </template>
+              </div>
+              <p class="hint" x-show="noBackendHealthRows">No models registered — add one under <strong>Routing</strong>.</p>
+              <div class="card-foot-actions">
+                <button type="button" class="action secondary" @click="openBackends">
+                  <span class="icon" x-html="icons.server"></span> All backends
+                </button>
+              </div>
+            </div>
           </div>
 
           <!-- Model breakdown charts -->

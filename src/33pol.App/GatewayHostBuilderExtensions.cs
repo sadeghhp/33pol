@@ -93,6 +93,7 @@ public static class GatewayHostBuilderExtensions
         app.MapAdminErrorEndpoints();
         app.MapAdminProviderEndpoints();
         app.MapAdminUsageEndpoints();
+        app.MapAdminOverviewEndpoints();
         app.MapMaintenanceAdminEndpoints();
         app.MapModelsEndpoints();
         app.UseDefaultFiles();

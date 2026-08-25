@@ -42,7 +42,19 @@ public sealed class BackendHealthStore : IBackendHealthStore
     public void SetHealth(BackendHealth health)
     {
         ArgumentNullException.ThrowIfNull(health);
-        _health[health.ModelId] = health;
+        // Each sweep overwrites the row wholesale, so the "since when" an operator wants for an
+        // unhealthy backend is carried across here: the transition stamp survives as long as the
+        // state does not flip again.
+        _health.AddOrUpdate(
+            health.ModelId,
+            static (_, incoming) => incoming with { LastTransitionUtc = incoming.LastTransitionUtc ?? incoming.LastCheckedUtc },
+            static (_, previous, incoming) => incoming with
+            {
+                LastTransitionUtc = previous.IsHealthy == incoming.IsHealthy
+                    ? previous.LastTransitionUtc ?? previous.LastCheckedUtc
+                    : incoming.LastCheckedUtc,
+            },
+            health);
     }
 
     /// <summary>

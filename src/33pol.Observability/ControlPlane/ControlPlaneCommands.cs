@@ -22,12 +22,20 @@ public sealed class ControlPlaneCommands(
     {
         var models = registry.GetAllModels();
         return models
-            .Select(m => new BackendAdminDto
+            .Select(m =>
             {
-                ModelId = m.Id,
-                Url = m.Url,
-                IsHealthy = healthStore.IsBackendHealthy(m.Id),
-                Alias = m.Aliases.Count > 0 ? m.Aliases[0] : null,
+                var health = healthStore.GetHealth(m.Id);
+                return new BackendAdminDto
+                {
+                    ModelId = m.Id,
+                    Url = m.Url,
+                    IsHealthy = healthStore.IsBackendHealthy(m.Id),
+                    Alias = m.Aliases.Count > 0 ? m.Aliases[0] : null,
+                    StatusCode = health?.StatusCode,
+                    Error = health?.Error,
+                    LastCheckedUtc = health?.LastCheckedUtc,
+                    LastTransitionUtc = health?.LastTransitionUtc,
+                };
             })
             .ToList();
     }

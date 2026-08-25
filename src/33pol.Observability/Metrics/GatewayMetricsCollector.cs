@@ -3,8 +3,21 @@ using Pol33.Observability.Runtime;
 
 namespace Pol33.Observability.Metrics;
 
-public sealed class GatewayMetricsCollector(GatewayRuntimeState runtimeState) : IGatewayMetricsCollector
+public sealed class GatewayMetricsCollector(GatewayRuntimeState runtimeState) : IGatewayMetricsCollector, IUsageQualityCounters
 {
+    private long _parseFailures;
+    private long _estimatedUsage;
+    private long _unsplitUsage;
+    private long _droppedEvents;
+
+    public long ParseFailures => Interlocked.Read(ref _parseFailures);
+
+    public long EstimatedUsage => Interlocked.Read(ref _estimatedUsage);
+
+    public long UnsplitUsage => Interlocked.Read(ref _unsplitUsage);
+
+    public long DroppedEvents => Interlocked.Read(ref _droppedEvents);
+
     public void RecordRateLimitRejection(string reason)
     {
         runtimeState.RecordRateLimitRejection();
@@ -22,14 +35,23 @@ public sealed class GatewayMetricsCollector(GatewayRuntimeState runtimeState) : 
     public void RecordTokenUsage(string modelId, long promptTokens, long completionTokens) =>
         GatewayTokenMetricsRecorder.Record(modelId, promptTokens, completionTokens);
 
-    public void RecordUsageParseFailure(string modelId) =>
+    public void RecordUsageParseFailure(string modelId)
+    {
+        Interlocked.Increment(ref _parseFailures);
         GatewayMeters.UsageParseFailures.Add(1, new KeyValuePair<string, object?>("model", modelId));
+    }
 
-    public void RecordEstimatedUsage(string modelId) =>
+    public void RecordEstimatedUsage(string modelId)
+    {
+        Interlocked.Increment(ref _estimatedUsage);
         GatewayMeters.EstimatedUsage.Add(1, new KeyValuePair<string, object?>("model", modelId));
+    }
 
-    public void RecordUnsplitUsage(string modelId) =>
+    public void RecordUnsplitUsage(string modelId)
+    {
+        Interlocked.Increment(ref _unsplitUsage);
         GatewayMeters.UnsplitUsage.Add(1, new KeyValuePair<string, object?>("model", modelId));
+    }
 
     public void RecordInferenceRouted(string modelId, string route, bool isStreaming) =>
         GatewayMeters.InferenceRoute.Add(
@@ -66,10 +88,13 @@ public sealed class GatewayMetricsCollector(GatewayRuntimeState runtimeState) : 
             delta,
             new KeyValuePair<string, object?>("model", modelId));
 
-    public void RecordTimeToFirstToken(string modelId, double seconds) =>
+    public void RecordTimeToFirstToken(string modelId, double seconds)
+    {
+        runtimeState.RecordTimeToFirstToken(modelId, seconds * 1_000d);
         GatewayMeters.TimeToFirstToken.Record(
             seconds,
             new KeyValuePair<string, object?>("model", modelId));
+    }
 
     /// <summary>
     /// Shares <c>gateway_usage_writer_dropped_total</c> with the channel-full path: either way the
@@ -79,6 +104,7 @@ public sealed class GatewayMetricsCollector(GatewayRuntimeState runtimeState) : 
     {
         if (count > 0)
         {
+            Interlocked.Add(ref _droppedEvents, count);
             GatewayMeters.UsageWriterDropped.Add(count);
         }
     }

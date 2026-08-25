@@ -1,3 +1,6 @@
+using System.Text.Json.Serialization;
+using Pol33.Core.Models.Overview;
+
 namespace Pol33.Core.Models;
 
 public sealed class AdminSummarySnapshot
@@ -33,4 +36,34 @@ public sealed class AdminSummarySnapshot
 
     public IReadOnlyDictionary<string, long> ErrorsPerModel { get; init; } =
         new Dictionary<string, long>();
+
+    // ---- Overview sections (all optional; null when the producing component is not wired) ----
+
+    /// <summary>Trailing windows (1m, 5m, 1h, 24h) with percentiles, tokens, cost and rejections.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<WindowStats>? Windows { get; init; }
+
+    /// <summary>One point per minute for the last hour, for the sparklines.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public OverviewSeries? Series { get; init; }
+
+    /// <summary>Per-model routing health: probe result, circuit breaker and bulkhead occupancy.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<BackendOverview>? Backends { get; init; }
+
+    /// <summary>Ranked list of conditions an operator should act on; empty when all is well.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<AttentionItem>? Attention { get; init; }
+
+    /// <summary>Usage/billing pipeline health.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public PipelineOverview? Pipeline { get; init; }
+
+    /// <summary>In-memory policy pressure (rejections by reason / tenant / model).</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public PolicyLiveOverview? Policy { get; init; }
+
+    /// <summary>Process and config facts cheap enough to refresh with every frame.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ControlPlaneLiveOverview? ControlPlane { get; init; }
 }

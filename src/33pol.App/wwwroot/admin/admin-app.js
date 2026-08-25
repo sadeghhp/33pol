@@ -23,6 +23,15 @@ function adminApp() {
     ['30d', 'Last 30 days', 720],
     ['all', 'All time', 0]
   ];
+  /** Trailing windows the Overview can show; the ids match the server's `summary.windows[].window`. */
+  const OVERVIEW_WINDOWS = [
+    ['1m', '1 min', 60],
+    ['5m', '5 min', 300],
+    ['1h', '1 hour', 3600],
+    ['24h', '24 h', 86400]
+  ];
+  const DEFAULT_OVERVIEW_WINDOW = '5m';
+  const WINDOW_STORAGE_KEY = '33pol-admin-overview-window';
   const LEGACY = {
     backends: { tab: 'routing', routingSubTab: 'backends' },
     models: { tab: 'routing', routingSubTab: 'models' }
@@ -64,6 +73,11 @@ function adminApp() {
     summaryUpdatedAt: null,
     pollFailCount: 0,
     overviewStale: false,
+    /** Selected trailing window on the Overview (`1m`|`5m`|`1h`|`24h`); persisted and mirrored in the hash. */
+    overviewWindow: DEFAULT_OVERVIEW_WINDOW,
+    /** Attention keys (code + subject) the operator dismissed this session; kept in sessionStorage. */
+    attentionDismissed: [],
+    attentionCollapsed: false,
     usage: null,
     usageEvents: null,
     usageEventsHasMore: false,
@@ -219,6 +233,7 @@ function adminApp() {
       this.initUsageDates();
       this.loadModelTypes();
       this.restoreTab();
+      this.restoreDismissedAttention();
       window.addEventListener('hashchange', () => this.applyHashTab());
       document.addEventListener('visibilitychange', () => { this.syncPoll(); this.syncLive(); });
       // Safety net: an API failure that escapes a fire-and-forget call site still lands in the
@@ -265,9 +280,12 @@ function adminApp() {
     },
 
     restoreTab() {
+      const savedWindow = sessionStorage.getItem(WINDOW_STORAGE_KEY);
+      if (savedWindow && OVERVIEW_WINDOWS.some(([id]) => id === savedWindow)) this.overviewWindow = savedWindow;
       const resolved = this.resolveHash(location.hash);
       if (resolved) {
         this.applyErrorHashParams(resolved.params);
+        if (resolved.tab === 'dashboard') this.applyDashboardHashParams(resolved.params);
         this.applyTab(resolved.tab, resolved.routingSubTab, false);
         return;
       }
@@ -281,6 +299,8 @@ function adminApp() {
     applyHashTab() {
       const resolved = this.resolveHash(location.hash);
       if (!resolved) return;
+      // Same-tab parameter changes (back/forward between windows) never reach the branch below.
+      if (resolved.tab === 'dashboard') this.applyDashboardHashParams(resolved.params);
       if (resolved.tab !== this.tab || (resolved.routingSubTab && resolved.routingSubTab !== this.routingSubTab)) {
         this.applyErrorHashParams(resolved.params);
         this.applyTab(resolved.tab, resolved.routingSubTab, false);
@@ -298,6 +318,31 @@ function adminApp() {
       this.errorsOffset = 0;
     },
 
+    /** Applies #/dashboard?window=5m; unknown values are ignored so a bad link cannot break the page. */
+    applyDashboardHashParams(params) {
+      if (!params) return;
+      const w = params.get('window');
+      if (w && OVERVIEW_WINDOWS.some(([id]) => id === w)) this.setOverviewWindow(w, false);
+    },
+
+    /** The Overview's hash, carrying the selected window so the view is linkable and survives back/forward. */
+    dashboardHash() {
+      return '#dashboard?window=' + this.overviewWindow;
+    },
+
+    setOverviewWindow(id, updateHash = true) {
+      if (!OVERVIEW_WINDOWS.some(([key]) => key === id)) return;
+      // Early return on the same value: applyHashTab re-applies params on every hashchange, and
+      // writing the hash from here would otherwise ping-pong with it.
+      if (id === this.overviewWindow) return;
+      this.overviewWindow = id;
+      sessionStorage.setItem(WINDOW_STORAGE_KEY, id);
+      if (updateHash && this.tab === 'dashboard') {
+        const next = this.dashboardHash();
+        if (location.hash !== next) location.hash = next;
+      }
+    },
+
     applyTab(name, routingSubTab, updateHash) {
       if (!TABS.includes(name)) return;
       this.tab = name;
@@ -307,7 +352,7 @@ function adminApp() {
       sessionStorage.setItem('33pol-admin-tab', name);
       sessionStorage.setItem('33pol-admin-routing-sub', this.routingSubTab);
       if (updateHash) {
-        const next = '#' + name;
+        const next = name === 'dashboard' ? this.dashboardHash() : '#' + name;
         if (location.hash !== next) location.hash = next;
       }
       this.syncPoll();
@@ -651,9 +696,35 @@ function adminApp() {
       if (h.length > 60) h.shift();
     },
 
+    /**
+     * Sparkline values from the server's per-minute series when the gateway provides one: the same
+     * trend for every operator, and it survives a reload. Returns null when the series is absent so
+     * the caller falls back to the in-browser sample history.
+     */
+    _seriesValues(metric) {
+      const points = this.summary?.series?.points;
+      if (!Array.isArray(points) || points.length < 2) return null;
+      const step = Math.max(1, Number(this.summary.series.stepSeconds ?? 60));
+      return points.map(p => {
+        const requests = Number(p.requests ?? 0);
+        switch (metric) {
+          case 'throughput': return requests / step;
+          case 'errorRate': return requests > 0 ? Number(p.errors ?? 0) / requests : 0;
+          case 'latency': return Number(p.latencyP95Ms ?? 0);
+          case 'ttft': return Number(p.ttftP95Ms ?? 0);
+          case 'inflight': return Number(p.inFlight ?? 0);
+          case 'cost': return Number(p.cost ?? 0);
+          default: return 0;
+        }
+      });
+    },
+
     _sparkValues(metric) {
+      const fromServer = this._seriesValues(metric);
+      if (fromServer) return fromServer;
       const h = this.vitalsHistory;
       if (h.length < 2) return [];
+      if (metric === 'ttft' || metric === 'cost') return [];
       if (metric === 'throughput' || metric === 'errorRate') {
         const key = metric === 'throughput' ? 'requests' : 'errors';
         const out = [];
@@ -709,6 +780,20 @@ function adminApp() {
       const err = Number(this.summary?.totalErrors ?? 0);
       if (req <= 0) return 0;
       return (err / req) * 100;
+    },
+
+    /** "812 ms" / "2.1 s" as separate value and unit, so the tile can style the unit. */
+    formatMsParts(ms) {
+      const x = Number(ms);
+      if (!Number.isFinite(x) || x < 0) return { value: '—', unit: '' };
+      if (x >= 10000) return { value: (x / 1000).toFixed(0), unit: 's' };
+      if (x >= 1000) return { value: (x / 1000).toFixed(1), unit: 's' };
+      return { value: x < 10 ? x.toFixed(1) : Math.round(x).toString(), unit: 'ms' };
+    },
+
+    formatMsShort(ms) {
+      const p = this.formatMsParts(ms);
+      return p.unit ? p.value + ' ' + p.unit : p.value;
     },
 
     formatNum(n) {
@@ -2710,11 +2795,12 @@ function adminApp() {
     get hasActiveRequests() { return !!this.summary && this.activeRequestsCount > 0; },
     get noActiveRequests() { return this.activeRequestsCount === 0; },
     get inFlightFootText() {
+      const queued = this.queuedCount > 0 ? ' · ' + this.queuedCount + ' queued' : '';
       if (this.activeStreamsCount > 0) {
         return this.activeStreamsCount + ' streaming · ' +
-          (this.activeRequestsCount - this.activeStreamsCount) + ' buffered';
+          (this.activeRequestsCount - this.activeStreamsCount) + ' buffered' + queued;
       }
-      return this.activeRequestsCount === 1 ? 'inference running' : 'inferences running';
+      return (this.activeRequestsCount === 1 ? 'inference running' : 'inferences running') + queued;
     },
 
     /** One chip per model with work in progress, so an operator can see *what* is running. */
@@ -2736,16 +2822,338 @@ function adminApp() {
     get totalErrorsCount() { return Number(this.summary?.totalErrors ?? 0); },
     get hasErrors() { return !!this.summary && this.totalErrorsCount > 0; },
 
+    // ---- deep links ----
+
+    /**
+     * Follows a console link `{tab, params}` as the server's attention items and the Overview cards
+     * emit them: sets the destination tab's filters first, then activates it, so it fetches once.
+     */
+    openLink(link) {
+      if (!link || !TABS.includes(link.tab)) return;
+      const params = link.params || {};
+      const p = (name) => (params[name] == null ? '' : String(params[name]));
+      switch (link.tab) {
+        case 'errors':
+          this.errorsModel = p('model');
+          this.errorsStatus = p('status');
+          this.errorsCode = p('code');
+          if (p('range') && ERROR_RANGES.some(([key]) => key === p('range'))) this.errorsRange = p('range');
+          this.errorsOffset = 0;
+          break;
+        case 'routing':
+          this.routingSubTab = p('sub') === 'backends' ? 'backends' : 'models';
+          if (this.routingSubTab === 'backends') this.backendsFilter = p('model');
+          else this.modelsFilter = p('model');
+          break;
+        case 'usage':
+          if (p('costCenter')) this.usageFilterCostCenter = p('costCenter');
+          if (p('apiKeyId')) this.usageFilterApiKeyId = p('apiKeyId');
+          break;
+        case 'settings':
+          this.setSettingsSubTab(p('sub') || 'runtime');
+          break;
+        case 'keys':
+          this.keysTextFilter = p('q');
+          if (p('filter')) this.keysFilter = p('filter');
+          break;
+        case 'logs':
+          if (p('search')) this.logsSearch = p('search');
+          break;
+        case 'dashboard':
+          if (p('window')) this.setOverviewWindow(p('window'));
+          break;
+        default:
+          break;
+      }
+      this.applyTab(link.tab, this.routingSubTab, true);
+    },
+
+    openBackends() { this.openLink({ tab: 'routing', params: { sub: 'backends' } }); },
+    openUsage() { this.openLink({ tab: 'usage' }); },
+    openKeys() { this.openLink({ tab: 'keys' }); },
+    openSettingsRuntime() { this.openLink({ tab: 'settings', params: { sub: 'runtime' } }); },
+
+    /** "just now" / "42s ago" / "3m ago" / "2h ago" / "5d ago" for any ISO timestamp; '' when absent. */
+    relativeTimeText(value) {
+      if (!value) return '';
+      const t = new Date(value).getTime();
+      if (!Number.isFinite(t)) return '';
+      const sec = Math.max(0, Math.floor((Date.now() - t) / 1000));
+      if (sec < 5) return 'just now';
+      if (sec < 60) return sec + 's ago';
+      if (sec < 3600) return Math.floor(sec / 60) + 'm ago';
+      if (sec < 86400) return Math.floor(sec / 3600) + 'h ago';
+      return Math.floor(sec / 86400) + 'd ago';
+    },
+
+    // ---- attention ----
+
+    attentionKey(item) {
+      return [item.code, item.modelId || '', item.tenantId || ''].join('|');
+    },
+
+    restoreDismissedAttention() {
+      try {
+        const raw = sessionStorage.getItem('33pol-admin-attention-dismissed');
+        const list = raw ? JSON.parse(raw) : [];
+        this.attentionDismissed = Array.isArray(list) ? list.filter(x => typeof x === 'string') : [];
+      } catch { this.attentionDismissed = []; }
+    },
+
+    dismissAttention(key) {
+      if (!this.attentionDismissed.includes(key)) this.attentionDismissed = [...this.attentionDismissed, key];
+      try { sessionStorage.setItem('33pol-admin-attention-dismissed', JSON.stringify(this.attentionDismissed)); } catch { /* storage unavailable */ }
+    },
+
+    undismissAttention() {
+      this.attentionDismissed = [];
+      try { sessionStorage.removeItem('33pol-admin-attention-dismissed'); } catch { /* storage unavailable */ }
+    },
+
+    toggleAttention() { this.attentionCollapsed = !this.attentionCollapsed; },
+
+    /** Server attention items minus the ones dismissed this session, already ranked by the gateway. */
+    get attentionRows() {
+      const items = Array.isArray(this.summary?.attention) ? this.summary.attention : [];
+      const iconFor = { critical: 'x-circle', warning: 'alert-triangle', info: 'lightbulb' };
+      return items
+        .map(item => ({ item, key: this.attentionKey(item) }))
+        .filter(({ key }) => !this.attentionDismissed.includes(key))
+        .map(({ item, key }) => ({
+          key,
+          cls: 'attention-item is-' + (item.severity || 'info'),
+          icon: this.icon(iconFor[item.severity] || 'lightbulb'),
+          severity: item.severity || 'info',
+          title: item.title || item.code,
+          detail: item.detail || '',
+          sinceText: this.relativeTimeText(item.sinceUtc),
+          sinceTitle: item.sinceUtc ? 'Since ' + new Date(item.sinceUtc).toLocaleString() : '',
+          hasLink: !!item.link,
+          open: () => this.openLink(item.link),
+          dismiss: () => this.dismissAttention(key)
+        }));
+    },
+    get hasAttention() { return this.attentionRows.length > 0; },
+    get hasDismissedAttention() { return this.attentionDismissed.length > 0 && Array.isArray(this.summary?.attention) && this.summary.attention.length > 0; },
+    get attentionExpanded() { return !this.attentionCollapsed; },
+    get attentionToggleText() { return this.attentionCollapsed ? 'Show' : 'Hide'; },
+    get attentionBannerClass() {
+      if (this.attentionRows.some(r => r.severity === 'critical')) return 'attention is-critical';
+      if (this.attentionRows.some(r => r.severity === 'warning')) return 'attention is-warning';
+      return 'attention is-info';
+    },
+    get attentionSummaryText() {
+      const rows = this.attentionRows;
+      const critical = rows.filter(r => r.severity === 'critical').length;
+      const warning = rows.filter(r => r.severity === 'warning').length;
+      const parts = [];
+      if (critical) parts.push(critical + ' critical');
+      if (warning) parts.push(warning + ' warning' + (warning === 1 ? '' : 's'));
+      const info = rows.length - critical - warning;
+      if (info) parts.push(info + ' info');
+      return rows.length + (rows.length === 1 ? ' item needs' : ' items need') + ' attention' + (parts.length ? ' · ' + parts.join(' · ') : '');
+    },
+
+    // ---- backends card ----
+
+    /** True when the gateway ships the routing-health section (older gateways only have /backends). */
+    get hasBackendsSection() { return Array.isArray(this.summary?.backends); },
+
+    get backendHealthRows() {
+      const list = this.hasBackendsSection ? this.summary.backends : [];
+      const circuitLabel = { closed: 'closed', half_open: 'half-open', open: 'OPEN', unknown: '—' };
+      const circuitClass = { closed: 'tag', half_open: 'tag level-warning', open: 'tag level-critical', unknown: 'tag muted' };
+      return list.map(b => {
+        const max = Number(b.maxConcurrent ?? 0);
+        const inFlight = Number(b.inFlight ?? 0);
+        const queued = Number(b.queued ?? 0);
+        const pct = max > 0 ? Math.min(100, Math.round((inFlight / max) * 100)) : 0;
+        const rate = b.errorRate5m;
+        const state = b.circuitState || 'unknown';
+        const failures = Number(b.circuitFailures ?? 0);
+        return {
+          key: b.modelId + '|' + (b.url || ''),
+          modelId: b.modelId,
+          url: b.url || '',
+          alias: b.alias || '',
+          hasAlias: !!b.alias,
+          dotClass: b.isHealthy ? 'dot-ok' : 'dot-fail',
+          healthText: b.isHealthy ? 'Healthy' : 'Unhealthy',
+          healthTitle: (b.isHealthy ? 'Healthy' : 'Unhealthy') +
+            (b.lastTransitionUtc ? ' since ' + new Date(b.lastTransitionUtc).toLocaleString() : '') +
+            (b.error ? ' · ' + b.error : ''),
+          circuitText: circuitLabel[state] || state,
+          circuitClass: circuitClass[state] || 'tag',
+          circuitTitle: state === 'open'
+            ? 'Circuit open since ' + (b.circuitOpenedAt ? new Date(b.circuitOpenedAt).toLocaleTimeString() : '?') + ' — requests are refused until a probe succeeds'
+            : (failures > 0 ? failures + ' failure' + (failures === 1 ? '' : 's') + ' in the sampling window' : 'Circuit breaker ' + (circuitLabel[state] || state)),
+          loadText: max > 0 ? inFlight + '/' + max + (queued > 0 ? ' · ' + queued + ' queued' : '') : (inFlight > 0 ? inFlight + ' in flight' : 'idle'),
+          loadStyle: 'width:' + pct + '%',
+          loadClass: 'load-fill' + (pct >= 100 ? ' is-over' : (pct >= 80 ? ' is-hot' : '')),
+          hasLoadBar: max > 0,
+          errorRateText: rate == null ? '—' : (Number(rate) * 100).toFixed(1) + '%',
+          errorRateClass: rate == null ? 'num muted' : (rate > 0.05 ? 'num is-error' : (rate > 0.01 ? 'num is-warn' : 'num')),
+          p95Text: b.latencyP95Ms5m == null || Number(b.requests5m ?? 0) === 0 ? '—' : this.formatMsShort(b.latencyP95Ms5m),
+          checkedText: b.lastCheckedUtc ? this.relativeTimeText(b.lastCheckedUtc) : 'not probed',
+          errorText: b.error || '',
+          hasError: !!b.error && !b.isHealthy,
+          open: () => this.openLink({ tab: 'routing', params: { sub: 'backends', model: b.modelId } })
+        };
+      });
+    },
+    get hasBackendHealthRows() { return this.backendHealthRows.length > 0; },
+    get noBackendHealthRows() { return this.hasBackendsSection && this.backendHealthRows.length === 0; },
+    get backendsHealthText() {
+      const rows = this.hasBackendsSection ? this.summary.backends : [];
+      const healthy = rows.filter(b => b.isHealthy).length;
+      const open = rows.filter(b => b.circuitState === 'open').length;
+      if (rows.length === 0) return 'no models';
+      return healthy + ' of ' + rows.length + ' healthy' + (open ? ' · ' + open + ' circuit' + (open === 1 ? '' : 's') + ' open' : '');
+    },
+    get backendsHealthClass() {
+      const rows = this.hasBackendsSection ? this.summary.backends : [];
+      if (rows.length === 0) return 'status-chip';
+      const healthy = rows.filter(b => b.isHealthy).length;
+      if (healthy === 0) return 'status-chip fail';
+      if (healthy < rows.length || rows.some(b => b.circuitState === 'open')) return 'status-chip warn';
+      return 'status-chip ok';
+    },
+    get queuedCount() {
+      const rows = this.hasBackendsSection ? this.summary.backends : [];
+      return rows.reduce((sum, b) => sum + Number(b.queued ?? 0), 0);
+    },
+
     // ---- overview ----
 
     get showStaleNotice() { return this.overviewStale && this.connectionStatus !== 'fail'; },
     get totalRequestsText() { return this.formatNum(this.summary?.totalInferenceRequests ?? 0); },
     get totalErrorsText() { return this.formatNum(this.totalErrorsCount); },
     get avgLatencyText() { return Number(this.summary?.averageLatencyMs ?? 0).toFixed(1); },
-    get errorsVitalClass() { return this.totalErrorsCount > 0 ? 'accent-error' : ''; },
-    get errorRateText() { return this.errorRatePct().toFixed(2) + '% error rate'; },
-    get hasThroughput() { return this.currentThroughput() > 0; },
-    get noThroughput() { return this.currentThroughput() === 0; },
+    get errorsVitalClass() { return this.windowStats.errors > 0 ? 'accent-error' : ''; },
+    get errorRateText() { return (this.windowStats.errorRate * 100).toFixed(2) + '% error rate'; },
+
+    // ---- trailing windows ----
+
+    /** True when the gateway ships trailing windows; older gateways only have the lifetime counters. */
+    get hasWindows() { return Array.isArray(this.summary?.windows) && this.summary.windows.length > 0; },
+    get isLifetimeStats() { return !this.hasWindows; },
+    get windowPickerDisabled() { return !this.hasWindows; },
+
+    /**
+     * The selected window's aggregates, or a synthesised lifetime object when the gateway has none,
+     * so every tile reads from one shape. `lifetime: true` is what the labels key off.
+     */
+    get windowStats() {
+      const s = this.summary;
+      if (this.hasWindows) {
+        const w = s.windows.find(x => x.window === this.overviewWindow) || s.windows[0];
+        return {
+          lifetime: false,
+          window: w.window,
+          seconds: Number(w.windowSeconds ?? this.windowSeconds),
+          requests: Number(w.requests ?? 0),
+          errors: Number(w.errors ?? 0),
+          errorRate: Number(w.errorRate ?? 0),
+          rps: Number(w.requestsPerSecond ?? 0),
+          avgMs: Number(w.latencyAvgMs ?? 0),
+          p50Ms: w.latencyP50Ms ?? null,
+          p95Ms: w.latencyP95Ms ?? null,
+          p99Ms: w.latencyP99Ms ?? null,
+          ttftP50Ms: w.ttftP50Ms ?? null,
+          ttftP95Ms: w.ttftP95Ms ?? null,
+          ttftSamples: Number(w.ttftSamples ?? 0),
+          promptTokens: Number(w.promptTokens ?? 0),
+          completionTokens: Number(w.completionTokens ?? 0),
+          cost: w.pricedCost ?? null,
+          rejections: w.rejectionsByReason || {},
+          perModel: Array.isArray(w.perModel) ? w.perModel : []
+        };
+      }
+      const req = Number(s?.totalInferenceRequests ?? 0);
+      const err = Number(s?.totalErrors ?? 0);
+      return {
+        lifetime: true,
+        window: 'lifetime',
+        seconds: Number(s?.uptimeSeconds ?? 0),
+        requests: req,
+        errors: err,
+        errorRate: req > 0 ? err / req : 0,
+        rps: this.currentThroughput(),
+        avgMs: Number(s?.averageLatencyMs ?? 0),
+        p50Ms: null, p95Ms: null, p99Ms: null,
+        ttftP50Ms: null, ttftP95Ms: null, ttftSamples: 0,
+        promptTokens: 0, completionTokens: 0, cost: null,
+        rejections: {},
+        perModel: null
+      };
+    },
+
+    get windowSeconds() {
+      const def = OVERVIEW_WINDOWS.find(([id]) => id === this.overviewWindow);
+      return def ? def[2] : 300;
+    },
+
+    /** "last 5 min" or "lifetime" — the qualifier every windowed number carries. */
+    get windowLabel() {
+      if (this.isLifetimeStats) return 'lifetime';
+      const def = OVERVIEW_WINDOWS.find(([id]) => id === this.overviewWindow);
+      return 'last ' + (def ? def[1] : this.overviewWindow);
+    },
+
+    get windowButtons() {
+      return OVERVIEW_WINDOWS.map(([id, label]) => {
+        const active = id === this.overviewWindow;
+        return {
+          key: id,
+          label,
+          cls: active ? 'preset active' : 'preset',
+          pressed: active ? 'true' : 'false',
+          select: () => this.setOverviewWindow(id)
+        };
+      });
+    },
+
+    get requestsValueText() { return this.formatNum(this.windowStats.requests); },
+    get requestsFootText() {
+      const w = this.windowStats;
+      if (w.lifetime) return w.rps > 0 ? this.throughputText + ' · total routed' : 'total routed';
+      const rps = w.rps;
+      return (rps.toFixed(rps < 10 ? 1 : 0)) + '/s · ' + this.windowLabel;
+    },
+    get errorsValueText() { return this.formatNum(this.windowStats.errors); },
+    get errorsFootText() { return this.errorRateText + ' · ' + this.windowLabel + ' · view details'; },
+
+    get latencyLabelText() { return this.isLifetimeStats ? 'Avg latency' : 'Latency p95'; },
+    get latencyP95Text() {
+      const w = this.windowStats;
+      return this.formatMsParts(w.lifetime ? w.avgMs : (w.p95Ms ?? 0)).value;
+    },
+    get latencyUnitText() {
+      const w = this.windowStats;
+      return this.formatMsParts(w.lifetime ? w.avgMs : (w.p95Ms ?? 0)).unit;
+    },
+    get latencyFootText() {
+      const w = this.windowStats;
+      if (w.lifetime) return 'mean upstream round-trip';
+      if (w.requests === 0) return 'no requests · ' + this.windowLabel;
+      return 'p50 ' + this.formatMsShort(w.p50Ms) + ' · p99 ' + this.formatMsShort(w.p99Ms) + ' · ' + this.windowLabel;
+    },
+
+    get hasTtft() { return !this.isLifetimeStats && this.windowStats.ttftSamples > 0; },
+    get noTtft() { return !this.hasTtft; },
+    get ttftP95Text() { return this.hasTtft ? this.formatMsParts(this.windowStats.ttftP95Ms).value : '—'; },
+    get ttftUnitText() { return this.hasTtft ? this.formatMsParts(this.windowStats.ttftP95Ms).unit : ''; },
+    get ttftFootText() {
+      if (this.isLifetimeStats) return 'needs a newer gateway';
+      const w = this.windowStats;
+      if (w.ttftSamples === 0) return 'no streams · ' + this.windowLabel;
+      return 'p50 ' + this.formatMsShort(w.ttftP50Ms) + ' · ' + this.formatNum(w.ttftSamples) + ' streams · ' + this.windowLabel;
+    },
+
+    /** Where the sparklines come from — the tiles carry it as a title. */
+    get sparkSourceText() { return this._seriesValues('throughput') ? 'Last 60 minutes, one point per minute' : 'Since this page was opened'; },
+    get hasThroughput() { return this.windowStats.rps > 0; },
+    get noThroughput() { return this.windowStats.rps === 0; },
     get throughputText() {
       const v = this.currentThroughput();
       return v.toFixed(v < 10 ? 1 : 0) + '/s';
@@ -2768,6 +3176,7 @@ function adminApp() {
         throughput: one('throughput'),
         errorRate: one('errorRate'),
         latency: one('latency'),
+        ttft: one('ttft'),
         streams: one('streams'),
         inflight: one('inflight')
       };

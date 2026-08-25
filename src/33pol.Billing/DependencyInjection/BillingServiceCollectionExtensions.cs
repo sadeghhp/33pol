@@ -4,6 +4,7 @@ using Microsoft.Extensions.Options;
 using Pol33.Billing.Aggregates;
 using Pol33.Billing.Forecast;
 using Pol33.Billing.RateCards;
+using Pol33.Billing.Reconciliation;
 using Pol33.Billing.Usage;
 using Pol33.Billing.Webhooks;
 using Pol33.Core.Abstractions;
@@ -48,6 +49,8 @@ public static class BillingServiceCollectionExtensions
             return new BillingDailyUsageWebhookTracker(billingOptions.DailyWebhookTrackerRetentionLimit);
         });
         services.AddSingleton<BillingUnpricedModelTracker>();
+        services.AddSingleton<BillingReconciliationState>();
+        services.AddSingleton<IBillingReconciliationStateSource>(sp => sp.GetRequiredService<BillingReconciliationState>());
         services.AddMemoryCache();
         services.AddSingleton<BudgetSpendCache>();
         services.AddSingleton<IRateCardAdminService, NoOpRateCardAdminService>();
