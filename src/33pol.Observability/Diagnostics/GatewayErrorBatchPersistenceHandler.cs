@@ -251,9 +251,13 @@ public sealed class GatewayErrorBatchPersistenceHandler(
             // First failure: hold the fresh records for one more attempt on the next flush. Records
             // already on their retry are counted as lost so a dead database cannot pin them forever.
             var fresh = batch.Count - retrying;
+            bool rebased;
             lock (_gate)
             {
-                if (generation == _generation && fresh > 0)
+                // A clear-all rebased the archive while this batch was in flight: these records
+                // were meant to go, so they are neither retried nor counted as lost.
+                rebased = generation != _generation;
+                if (!rebased && fresh > 0)
                 {
                     _retry = batch.GetRange(retrying, fresh);
                     if (_retry.Count > MaxPending)
@@ -266,7 +270,11 @@ public sealed class GatewayErrorBatchPersistenceHandler(
                 }
             }
 
-            Interlocked.Add(ref _persistFailedTotal, retrying);
+            if (!rebased)
+            {
+                Interlocked.Add(ref _persistFailedTotal, retrying);
+            }
+
             logger.LogWarning(
                 ex,
                 "Failed to persist {Count} error records ({Lost} lost after retry, {Retrying} queued for one retry).",

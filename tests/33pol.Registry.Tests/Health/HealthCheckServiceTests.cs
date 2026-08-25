@@ -240,6 +240,33 @@ public sealed class HealthCheckServiceTests
             && r.Message.Contains("connection refused")));
     }
 
+    /// <summary>
+    /// The service remembers each backend's last verdict so a standing outage records once. That
+    /// memory has to be forgotten when a model leaves the registry — otherwise a model removed
+    /// while unhealthy and later re-added is still remembered as down, and its next outage is
+    /// silently never recorded.
+    /// </summary>
+    [Fact]
+    public async Task CheckAllBackendsAsync_ForgetsTheLastVerdictOfRemovedModels()
+    {
+        var handler = SequenceHttpMessageHandler.AlwaysReturning(HttpStatusCode.ServiceUnavailable);
+        var registry = Substitute.For<IModelRegistry>();
+        var model = new ModelConfig { Id = "model-a", Url = "http://backend:8000" };
+        var recorder = Substitute.For<IGatewayErrorRecorder>();
+        var service = CreateService(handler, registry: registry, errorRecorder: recorder);
+
+        registry.GetAllModels().Returns([model]);
+        await service.CheckAllBackendsAsync();      // healthy -> unhealthy: one record
+
+        registry.GetAllModels().Returns([]);
+        await service.CheckAllBackendsAsync();      // model removed: the verdict is forgotten
+
+        registry.GetAllModels().Returns([model]);
+        await service.CheckAllBackendsAsync();      // re-added and down again: a fresh record
+
+        recorder.Received(2).Record(Arg.Is<GatewayErrorRecord>(r => r.ModelId == "model-a"));
+    }
+
     private static HealthCheckService CreateService(
         HttpMessageHandler handler,
         IBackendHealthStore? healthStore = null,

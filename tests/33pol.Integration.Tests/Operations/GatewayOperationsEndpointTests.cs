@@ -19,6 +19,12 @@ public sealed class GatewayOperationsEndpointTests : IClassFixture<WebApplicatio
     /// The model registry is populated by a hosted service, so under load the first request can
     /// arrive before it has finished. Poll rather than asserting on a single shot — the fixed-shot
     /// version failed intermittently whenever the suite ran under parallel load.
+    /// <para>
+    /// The status is deliberately not pinned to <c>healthy</c>. This fixture's upstreams are not
+    /// listening, so the moment the first health sweep lands the gateway correctly reports
+    /// <c>degraded</c>/503 — and whether the request beats that sweep is a race, which is exactly
+    /// how this test flaked. The shape is the contract under test and is identical either way.
+    /// </para>
     /// </summary>
     [Fact]
     public async Task GetHealth_ReturnsGatewayBackendShape()
@@ -46,10 +52,14 @@ public sealed class GatewayOperationsEndpointTests : IClassFixture<WebApplicatio
         using (json)
         using (response)
         {
-            response!.StatusCode.Should().Be(HttpStatusCode.OK);
-            json!.RootElement.GetProperty("status").GetString().Should().Be("healthy");
+            response!.StatusCode.Should().BeOneOf(HttpStatusCode.OK, HttpStatusCode.ServiceUnavailable);
+            json!.RootElement.GetProperty("status").GetString().Should().BeOneOf("healthy", "degraded");
             json.RootElement.GetProperty("totalBackends").GetInt32().Should().BeGreaterThan(0);
             json.RootElement.GetProperty("backends").GetArrayLength().Should().BeGreaterThan(0);
+
+            // The two must agree: 503 is only correct when nothing is healthy.
+            var healthy = json.RootElement.GetProperty("status").GetString() == "healthy";
+            response.StatusCode.Should().Be(healthy ? HttpStatusCode.OK : HttpStatusCode.ServiceUnavailable);
         }
     }
 
