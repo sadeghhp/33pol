@@ -125,6 +125,17 @@ public sealed class HealthCheckService : BackgroundService
         {
             store.RetainOnly(models.Select(m => m.Id));
         }
+
+        // Forget removed models here too, or a model deleted while unhealthy and later re-added
+        // would be remembered as already-down and its next outage would go unrecorded.
+        var known = models.Select(m => m.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var modelId in _lastVerdict.Keys)
+        {
+            if (!known.Contains(modelId))
+            {
+                _lastVerdict.TryRemove(modelId, out _);
+            }
+        }
     }
 
     public async Task CheckBackendAsync(ModelConfig model, CancellationToken cancellationToken = default)

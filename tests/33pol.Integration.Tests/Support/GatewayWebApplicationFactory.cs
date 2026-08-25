@@ -54,6 +54,7 @@ internal static class GatewayWebApplicationFactory
 
             builder.ConfigureServices(services =>
             {
+                RemoveBackendHealthSweep(services);
                 if (healthStore is not null)
                 {
                     services.RemoveAll<IBackendHealthStore>();
@@ -100,6 +101,7 @@ internal static class GatewayWebApplicationFactory
 
             builder.ConfigureServices(services =>
             {
+                RemoveBackendHealthSweep(services);
                 if (healthStore is not null)
                 {
                     services.RemoveAll<IBackendHealthStore>();
@@ -161,6 +163,7 @@ internal static class GatewayWebApplicationFactory
             {
                 services.AddSingleton(keepAlive);
 
+                RemoveBackendHealthSweep(services);
                 services.RemoveAll<IBackendHealthStore>();
                 if (healthStore is not null)
                 {
@@ -196,4 +199,23 @@ internal static class GatewayWebApplicationFactory
 
         factory.Services.GetRequiredService<GatewayAuthenticationState>().IsAuthenticationRequired = keyCount > 0;
     }
+
+    /// <summary>
+    /// Drops the background health sweep. Every factory here substitutes
+    /// <see cref="IBackendHealthStore"/> with a stub, so the sweep's verdicts are discarded anyway —
+    /// all it does is probe a dead port on a timer and, since probe failures are recorded as error
+    /// records, drop unrelated rows into the Errors tab mid-assertion. Tests that want real probing
+    /// use the default factory, which is untouched.
+    /// </summary>
+    private static void RemoveBackendHealthSweep(IServiceCollection services)
+    {
+        var sweep = services.FirstOrDefault(d =>
+            d.ServiceType == typeof(IHostedService) &&
+            d.ImplementationType == typeof(Pol33.Registry.Health.HealthCheckService));
+        if (sweep is not null)
+        {
+            services.Remove(sweep);
+        }
+    }
+
 }

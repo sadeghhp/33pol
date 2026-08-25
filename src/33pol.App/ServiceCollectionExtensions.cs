@@ -107,6 +107,12 @@ public static class ServiceCollectionExtensions
 
     public static IServiceCollection AddGatewayHealthChecks(this IServiceCollection services)
     {
+        // Registered explicitly so AddCheck resolves the singleton instead of constructing a fresh
+        // instance per probe. The check records an error record the first time a credential stops
+        // decrypting and not on every probe thereafter, and that "first time" lives in the
+        // instance — a per-probe instance turns one standing fault into one Critical record every
+        // few seconds, and health records carry no request id for the store's dedupe to catch.
+        services.AddSingleton<UpstreamSecretsHealthCheck>();
         services.AddHealthChecks()
             .AddCheck<UpstreamSecretsHealthCheck>("upstream-secrets");
         return services;

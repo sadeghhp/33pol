@@ -118,6 +118,69 @@ public sealed class GatewayErrorBatchPersistenceHandlerTests
         handler.PendingCount.Should().Be(0);
     }
 
+    /// <summary>
+    /// Clear all rebases the archive and zeroes the loss counters. A batch already on its retry
+    /// when the clear lands must not resurrect that count — otherwise a freshly cleared Errors tab
+    /// reports "N records failed to persist" for records the operator deliberately discarded.
+    /// </summary>
+    [Fact]
+    public async Task FailedRetry_AfterAClearRebasedTheArchive_IsNotCountedAsLost()
+    {
+        var archive = new FailFastThenBlockArchive();
+        var handler = CreateHandler(archive, batchSize: 100);   // no size trigger; flushes are explicit
+
+        handler.Enqueue(Error("req_a"));
+        await handler.FlushPendingAsync();                      // attempt 1 fails fast -> queued for retry
+        handler.PersistFailedTotal.Should().Be(0, "a first failure is retried, not counted");
+
+        var retryFlush = handler.FlushPendingAsync();           // attempt 2 blocks inside the archive
+        await archive.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        handler.DiscardPending();                               // clear-all bumps the generation
+        archive.Release.SetResult();                            // the in-flight retry now fails
+        await retryFlush;
+
+        handler.PersistFailedTotal.Should().Be(0, "those records were discarded on purpose");
+        handler.PendingCount.Should().Be(0);
+    }
+
+    /// <summary>Throws immediately on the first attempt, then blocks until released and throws.</summary>
+    private sealed class FailFastThenBlockArchive : IGatewayErrorArchive
+    {
+        private int _attempts;
+
+        public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async Task AppendBatchAsync(IReadOnlyList<GatewayErrorRecord> batch, CancellationToken cancellationToken = default)
+        {
+            if (Interlocked.Increment(ref _attempts) > 1)
+            {
+                Entered.TrySetResult();
+                await Release.Task.WaitAsync(cancellationToken);
+            }
+
+            throw new InvalidOperationException("database is locked");
+        }
+
+        public Task<GatewayErrorPage> QueryAsync(GatewayErrorQuery query, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<GatewayErrorGroupPage> QueryGroupsAsync(GatewayErrorQuery query, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<GatewayErrorRecord?> GetAsync(string id, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<GatewayErrorFacets> GetFacetsAsync(DateTimeOffset? from, DateTimeOffset? to, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<int> DeleteAllAsync(CancellationToken cancellationToken = default) => Task.FromResult(0);
+
+        public Task<int> PruneAsync(DateTimeOffset olderThan, int maxRows, CancellationToken cancellationToken = default) =>
+            Task.FromResult(0);
+    }
+
     private sealed class FailingArchive(int failuresBeforeSuccess) : IGatewayErrorArchive
     {
         public int Attempts { get; private set; }
