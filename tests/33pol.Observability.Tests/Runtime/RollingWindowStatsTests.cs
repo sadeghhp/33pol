@@ -8,6 +8,57 @@ public sealed class RollingWindowStatsTests
 {
     private static readonly DateTimeOffset Start = new(2026, 8, 25, 12, 0, 0, TimeSpan.Zero);
 
+    /// <summary>
+    /// A window must reflect a write that has just landed, with no clock movement in between.
+    /// </summary>
+    /// <remarks>
+    /// Windows longer than a minute are served partly from a cached sum of the completed minute
+    /// buckets. Only completed minutes may be cached: the minute in progress has to be summed on
+    /// every read. Caching the whole window instead is measurably faster and quietly wrong — the
+    /// live stream pushes a frame whenever activity changes, so the dashboard would have shown a
+    /// frame whose numbers had not moved, for up to a second after every request.
+    /// </remarks>
+    [Theory]
+    [InlineData(5)]
+    [InlineData(60)]
+    [InlineData(60 * 24)]
+    public void GetWindow_ReadAfterWriteInTheSameMinute_ReflectsTheWrite(int windowMinutes)
+    {
+        var clock = new FakeTimeProvider(Start);
+        var stats = new RollingWindowStats(clock);
+        var window = TimeSpan.FromMinutes(windowMinutes);
+
+        stats.RecordCompletion("m", 100, success: true, isStreaming: false);
+        stats.GetWindow(window).Requests.Should().Be(1);
+
+        // No clock movement: the second read must still see this.
+        stats.RecordCompletion("m", 100, success: false, isStreaming: false);
+
+        var after = stats.GetWindow(window);
+        after.Requests.Should().Be(2);
+        after.Errors.Should().Be(1);
+        after.PerModel.Single().Requests.Should().Be(2);
+    }
+
+    /// <summary>
+    /// The cached portion must age out with the ring rather than being carried forward, so a window
+    /// that has moved past a minute stops counting it.
+    /// </summary>
+    [Fact]
+    public void GetWindow_AfterTheWindowMovesOn_DropsMinutesThatFellOutOfIt()
+    {
+        var clock = new FakeTimeProvider(Start);
+        var stats = new RollingWindowStats(clock);
+
+        stats.RecordCompletion("m", 100, success: true, isStreaming: false);
+        stats.GetWindow(TimeSpan.FromMinutes(5)).Requests.Should().Be(1);
+
+        clock.Advance(TimeSpan.FromMinutes(6));
+
+        stats.GetWindow(TimeSpan.FromMinutes(5)).Requests.Should().Be(0);
+        stats.GetWindow(TimeSpan.FromHours(1)).Requests.Should().Be(1, "an hour still covers it");
+    }
+
     [Fact]
     public void ResetErrors_ZeroesErrorsAndRejectionsButKeepsRequests()
     {

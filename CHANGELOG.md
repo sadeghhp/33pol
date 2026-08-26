@@ -4,6 +4,15 @@ All notable changes to this project are documented here. Version tags follow [Se
 
 ## [Unreleased]
 
+### Changed — request-path and Overview overheads
+
+- **The Overview no longer aggregates the whole 24-hour ring on every read.** Each live-stream frame rebuilt four windows for the gateway and for every tracked model, and each window scanned all 1440 minute buckets and filtered — a 5-minute window cost 1440 bucket reads instead of 5. That ran under the same lock every request completion takes, so completions queued behind the console's rendering. Windows now walk only the minutes they cover, and the sum of the *completed* minutes is cached until the minute rolls over. Measured on a 64-model registry: **5.28 ms → 0.44 ms** per snapshot build. Only completed minutes are cached, never the minute in progress, so a read still reflects a write that landed microseconds earlier.
+- **Inference request bodies stay in memory up to `Gateway:Resilience:RequestBufferThresholdBytes`** (new, default 256 KB) instead of ASP.NET's 30 KB default. The gateway reads each body two or three times — the routing parse, the length behind the forward allowance, and the send — so an ordinary long-context request was written to a temp file and read back from disk on each. Worst-case memory is the threshold times the per-model bulkhead.
+- **Model resolution no longer takes a process-wide lock.** `TryGetModel` runs once per inference request and `GetAllModels` once per live-stream frame; both locked the registry and cloned. The routing table is only ever swapped wholesale, so readers now take a volatile snapshot with no lock. Callers still get a cloned `ModelConfig`, so nothing can edit the live table.
+- The idle deadline on a response body is re-armed at most once a second rather than once per forwarded chunk — a token stream was rescheduling a timer several times a second. The effective idle gap can only shorten, never lengthen, and by at most that floor.
+- The forwarder sends the request body through replayable content, matching what the aliased path already did, so both forward paths behave the same if `HttpClient` retries onto a fresh connection.
+- Priced usage now finds its feed row in one pass instead of walking the recent-request queue twice per usage event.
+
 ### Fixed — a slow backend no longer degrades into a total outage
 
 Two admission controls turned "the model server is slow" into "the model answers nothing at all". Both refuse requests wholesale, before anything reaches the upstream, so when they misfire the whole model is down for every caller.

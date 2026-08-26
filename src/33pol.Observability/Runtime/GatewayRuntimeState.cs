@@ -409,11 +409,14 @@ public sealed class GatewayRuntimeState
         // Tokens and priced cost feed the windows once per request: the first attach carries the
         // tokens (pending pricing), and only a priced attach carries a cost. Re-pricing the same
         // request would double count, so the tokens are only counted on the first attach.
-        var modelId = FindModelId(requestId);
+        // One lookup, not two: finding the row walks the recent-request queue, and this runs once per
+        // usage event off the billing writer.
+        var entry = FindEntry(requestId);
+        var modelId = entry?.ModelId;
         if (added)
         {
             Windows.RecordUsage(modelId, usage.PromptTokens, usage.CompletionTokens, PricedCostOf(usage));
-            if (FindTenantId(requestId) is { Length: > 0 } tenantId)
+            if (entry?.TenantId is { Length: > 0 } tenantId)
             {
                 TenantTokens.Add(tenantId, DateTimeOffset.UtcNow, usage.PromptTokens + usage.CompletionTokens);
             }
@@ -429,36 +432,22 @@ public sealed class GatewayRuntimeState
     private static decimal? PricedCostOf(RecentRequestUsage usage) =>
         usage.PricingStatus == RecentRequestUsage.StatusPriced ? usage.TotalCost : null;
 
-    private string? FindTenantId(string requestId)
+    /// <summary>
+    /// The in-flight or recently completed row for <paramref name="requestId"/>, or null once the
+    /// feed has evicted it.
+    /// </summary>
+    private RecentRequestEntry? FindEntry(string requestId)
     {
         if (_inFlight.TryGetValue(requestId, out var running))
         {
-            return running.TenantId;
+            return running;
         }
 
         foreach (var entry in _recentRequests)
         {
             if (string.Equals(entry.RequestId, requestId, StringComparison.Ordinal))
             {
-                return entry.TenantId;
-            }
-        }
-
-        return null;
-    }
-
-    private string? FindModelId(string requestId)
-    {
-        if (_inFlight.TryGetValue(requestId, out var running))
-        {
-            return running.ModelId;
-        }
-
-        foreach (var entry in _recentRequests)
-        {
-            if (string.Equals(entry.RequestId, requestId, StringComparison.Ordinal))
-            {
-                return entry.ModelId;
+                return entry;
             }
         }
 

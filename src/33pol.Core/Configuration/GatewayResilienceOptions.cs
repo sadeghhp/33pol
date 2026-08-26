@@ -54,6 +54,25 @@ public sealed class GatewayResilienceOptions
     public long MaxRequestBodyBytes { get; set; } = 26_214_400;
 
     /// <summary>
+    /// How much of an inference request body is held in memory before it spills to a temporary file.
+    /// </summary>
+    /// <remarks>
+    /// <para>The gateway buffers every inference body so it can be parsed for routing and then
+    /// replayed to the upstream. ASP.NET's default threshold is 30 KB, which is smaller than an
+    /// ordinary long-context chat request — so a typical RAG call was written to disk and read back
+    /// two or three times (the routing parse, the length used for the forward allowance, and the
+    /// send itself) before it ever reached the model server.</para>
+    ///
+    /// <para>The cost of raising it is memory: at worst this many bytes times the number of requests
+    /// buffering at once, which the per-model bulkhead bounds
+    /// (<see cref="MaxConcurrentForwardsPerModel"/>). The default trades roughly 64 MB at full
+    /// per-model concurrency for keeping normal traffic off the disk entirely. Raise it if prompts
+    /// are routinely larger and the pod has the headroom; lower it if memory is the tighter
+    /// constraint.</para>
+    /// </remarks>
+    public int RequestBufferThresholdBytes { get; set; } = 262_144;
+
+    /// <summary>
     /// How long the gateway keeps serving after it starts draining, so load balancers have time to
     /// observe the readiness probe flip and stop routing to this instance.
     /// </summary>

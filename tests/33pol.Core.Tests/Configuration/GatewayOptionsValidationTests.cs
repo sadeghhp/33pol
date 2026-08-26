@@ -72,6 +72,21 @@ public sealed class GatewayOptionsValidationTests
     }
 
     [Fact]
+    public void Validate_ZeroRequestBufferThreshold_ReturnsError()
+    {
+        var options = new GatewayOptions
+        {
+            Resilience = new GatewayResilienceOptions { RequestBufferThresholdBytes = 0 },
+        };
+
+        var errors = GatewayOptionsValidation.Validate(options);
+
+        errors.Should().Contain(e => e.Contains(
+            nameof(GatewayResilienceOptions.RequestBufferThresholdBytes),
+            StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Validate_ValidOptions_ReturnsNoErrors()
     {
         var options = new GatewayOptions();

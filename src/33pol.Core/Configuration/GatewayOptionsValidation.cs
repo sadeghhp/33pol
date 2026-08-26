@@ -62,6 +62,11 @@ public static class GatewayOptionsValidation
             errors.Add($"{nameof(GatewayOptions.Resilience)}.{nameof(GatewayResilienceOptions.MaxConcurrentForwardsPerModel)} must be at least 1.");
         }
 
+        if (options.Resilience.RequestBufferThresholdBytes < 1)
+        {
+            errors.Add($"{nameof(GatewayOptions.Resilience)}.{nameof(GatewayResilienceOptions.RequestBufferThresholdBytes)} must be at least 1 byte.");
+        }
+
         if (options.Resilience.MaxQueuedForwardsPerModel < 0)
         {
             errors.Add($"{nameof(GatewayOptions.Resilience)}.{nameof(GatewayResilienceOptions.MaxQueuedForwardsPerModel)} must be 0 or greater.");

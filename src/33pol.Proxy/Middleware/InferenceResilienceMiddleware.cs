@@ -15,6 +15,7 @@ public sealed class InferenceResilienceMiddleware
     private readonly IGatewayDrainState _drainState;
     private readonly IErrorResponseWriter _errors;
     private readonly long _maxRequestBodyBytes;
+    private readonly int _requestBufferThresholdBytes;
 
     public InferenceResilienceMiddleware(
         RequestDelegate next,
@@ -26,6 +27,7 @@ public sealed class InferenceResilienceMiddleware
         _drainState = drainState;
         _errors = errors;
         _maxRequestBodyBytes = options.Value.Resilience.MaxRequestBodyBytes;
+        _requestBufferThresholdBytes = options.Value.Resilience.RequestBufferThresholdBytes;
     }
 
     public async Task InvokeAsync(HttpContext context)
@@ -61,6 +63,16 @@ public sealed class InferenceResilienceMiddleware
         {
             maxBodySizeFeature.MaxRequestBodySize = _maxRequestBodyBytes;
         }
+
+        // Buffering is turned on here, ahead of every consumer, so the threshold is applied once and
+        // from configuration. EnableBuffering leaves an already-seekable body alone, so the calls
+        // downstream (PublicModelDetection, ModelRouter) stay correct as no-ops and still cover a
+        // pipeline where this middleware did not run.
+        //
+        // The threshold matters because the default is 30 KB: below it the body stays in memory,
+        // above it every read and replay of the body goes through a temp file, and this gateway
+        // reads the body two or three times per request.
+        context.Request.EnableBuffering(_requestBufferThresholdBytes);
 
         await _next(context).ConfigureAwait(false);
     }

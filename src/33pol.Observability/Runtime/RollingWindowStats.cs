@@ -407,6 +407,26 @@ public sealed class RollingWindowStats
         private readonly Bucket[] _minutes = new Bucket[MinuteBuckets];
         private readonly Bucket[] _seconds = new Bucket[SecondBuckets];
 
+        /// <summary>
+        /// Sums of the <em>completed</em> minute buckets behind each window length (in minutes),
+        /// valid for as long as <see cref="_completedMinutesStamp"/> is the current minute.
+        /// </summary>
+        /// <remarks>
+        /// The live stream pushes a frame whenever gateway activity changes, coalesced to 4 Hz, and
+        /// every frame rebuilds all four windows for the gateway and for each tracked model. The
+        /// 24-hour window walks the whole 1440-bucket ring, so the same sum was recomputed several
+        /// times a second per subscriber — under the lock that every request completion needs, which
+        /// made completions queue behind the Overview's rendering.
+        ///
+        /// Only completed minutes are cached, never the minute in progress, so this is a pure
+        /// speed-up and not a staleness trade: a read still sees a write that landed microseconds
+        /// earlier. Caching the whole window instead would have been visibly wrong — the live
+        /// stream's version moves on every completion, so the dashboard would have pushed a frame
+        /// whose numbers had not changed yet.
+        /// </remarks>
+        private readonly Dictionary<int, Bucket> _completedMinutes = [];
+        private long _completedMinutesStamp = long.MinValue;
+
         public WindowRing()
         {
             for (var i = 0; i < _minutes.Length; i++)
@@ -424,6 +444,7 @@ public sealed class RollingWindowStats
         {
             lock (_sync)
             {
+                InvalidateMinuteAggregates();
                 foreach (var bucket in _minutes)
                 {
                     bucket.Errors = 0;
@@ -436,6 +457,16 @@ public sealed class RollingWindowStats
                     Array.Clear(bucket.Rejections);
                 }
             }
+        }
+
+        /// <summary>
+        /// Drops the cached aggregates. Required from anything that rewrites bucket contents rather
+        /// than appending to them — a reset clears counters the cache is still holding a sum of.
+        /// </summary>
+        private void InvalidateMinuteAggregates()
+        {
+            _completedMinutes.Clear();
+            _completedMinutesStamp = long.MinValue;
         }
 
         private static long MinuteStamp(DateTimeOffset now) => now.ToUnixTimeSeconds() / 60;
@@ -571,6 +602,7 @@ public sealed class RollingWindowStats
         {
             lock (_sync)
             {
+                InvalidateMinuteAggregates();
                 foreach (var b in _minutes)
                 {
                     b.Clear(-1);
@@ -606,11 +638,41 @@ public sealed class RollingWindowStats
                     var newest = MinuteStamp(now);
                     var minutes = (seconds + 59) / 60;
                     var oldest = newest - minutes + 1;
-                    foreach (var b in _minutes)
+
+                    // Everything before the current minute is frozen: writes always land in the
+                    // bucket for the wall-clock minute they happen in, so a minute that has rolled
+                    // over cannot change again until the ring laps it 24 hours later. That part is
+                    // cached and recomputed once a minute; the current minute is summed live on
+                    // every read, so the answer stays exact.
+                    if (_completedMinutesStamp != newest)
                     {
-                        if (b.Stamp >= oldest && b.Stamp <= newest)
+                        _completedMinutes.Clear();
+                        _completedMinutesStamp = newest;
+                    }
+
+                    if (!_completedMinutes.TryGetValue(minutes, out var completed))
+                    {
+                        completed = new Bucket();
+                        for (var stamp = Math.Max(0, oldest); stamp < newest; stamp++)
                         {
-                            result.AddFrom(b);
+                            var b = _minutes[(int)(stamp % MinuteBuckets)];
+                            if (b.Stamp == stamp)
+                            {
+                                completed.AddFrom(b);
+                            }
+                        }
+
+                        _completedMinutes[minutes] = completed;
+                    }
+
+                    result.AddFrom(completed);
+
+                    if (newest >= 0)
+                    {
+                        var current = _minutes[(int)(newest % MinuteBuckets)];
+                        if (current.Stamp == newest)
+                        {
+                            result.AddFrom(current);
                         }
                     }
                 }

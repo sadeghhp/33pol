@@ -7,11 +7,32 @@ namespace Pol33.Registry.Services;
 public sealed class ModelRegistryService : IModelRegistry
 {
     private readonly ILogger<ModelRegistryService> _logger;
-    private readonly object _lock = new();
-    private Dictionary<string, ModelConfig> _lookup = new(StringComparer.OrdinalIgnoreCase);
-    private List<ModelConfig> _models = [];
-    private bool _isLoaded;
-    private long _appliedRouteVersion;
+
+    /// <summary>Serialises writers only; readers never take it.</summary>
+    private readonly object _writeLock = new();
+
+    /// <summary>
+    /// The live routing table, replaced wholesale rather than edited in place.
+    /// </summary>
+    /// <remarks>
+    /// Every inference request resolves its model through <see cref="TryGetModel"/>, and the admin
+    /// Overview calls <see cref="GetAllModels"/> on every live-stream frame. Both used to take a
+    /// process-wide lock, so model resolution serialised across all concurrent requests and behind
+    /// the console's rendering. The set is only ever swapped for a freshly built one — nothing
+    /// mutates a published lookup or list — so a single volatile reference gives readers a
+    /// consistent snapshot with no lock at all.
+    /// </remarks>
+    private volatile Snapshot _snapshot = Snapshot.Empty;
+
+    private sealed record Snapshot(
+        Dictionary<string, ModelConfig> Lookup,
+        List<ModelConfig> Models,
+        bool IsLoaded,
+        long AppliedRouteVersion)
+    {
+        public static readonly Snapshot Empty =
+            new(new Dictionary<string, ModelConfig>(StringComparer.OrdinalIgnoreCase), [], false, 0);
+    }
 
     public ModelRegistryService(ILogger<ModelRegistryService> logger)
     {
@@ -23,65 +44,36 @@ public sealed class ModelRegistryService : IModelRegistry
     /// configured" (a valid state) from "the routes could not be read" (a broken gateway) — readiness
     /// depends on the difference, and a model count alone cannot tell them apart.
     /// </summary>
-    public bool IsLoaded
-    {
-        get
-        {
-            lock (_lock)
-            {
-                return _isLoaded;
-            }
-        }
-    }
+    public bool IsLoaded => _snapshot.IsLoaded;
 
     /// <summary>The route-table version the current in-memory set was built from; 0 when unknown.</summary>
-    public long AppliedRouteVersion
-    {
-        get
-        {
-            lock (_lock)
-            {
-                return _appliedRouteVersion;
-            }
-        }
-    }
+    public long AppliedRouteVersion => _snapshot.AppliedRouteVersion;
 
     public bool TryGetModel(string name, out ModelConfig? model)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
 
-        lock (_lock)
+        if (!_snapshot.Lookup.TryGetValue(name, out var found))
         {
-            if (!_lookup.TryGetValue(name, out var found))
-            {
-                model = null;
-                return false;
-            }
-
-            // A copy, like GetAllModels: ModelConfig is mutable (Url, Aliases, UpstreamAuth) and a
-            // caller normalising the result must not edit the live routing table behind the
-            // writer's back.
-            model = ModelRegistryPersistence.CloneModel(found);
-            return true;
+            model = null;
+            return false;
         }
+
+        // A copy, like GetAllModels: ModelConfig is mutable (Url, Aliases, UpstreamAuth) and a
+        // caller normalising the result must not edit the live routing table behind the
+        // writer's back.
+        model = ModelRegistryPersistence.CloneModel(found);
+        return true;
     }
 
-    public IReadOnlyList<ModelConfig> GetAllModels()
-    {
-        lock (_lock)
-        {
-            return _models.Select(ModelRegistryPersistence.CloneModel).ToList();
-        }
-    }
+    public IReadOnlyList<ModelConfig> GetAllModels() =>
+        _snapshot.Models.Select(ModelRegistryPersistence.CloneModel).ToList();
 
     public bool ModelExists(string name)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
 
-        lock (_lock)
-        {
-            return _lookup.ContainsKey(name);
-        }
+        return _snapshot.Lookup.ContainsKey(name);
     }
 
     public string? GetBackendUrl(string name)
@@ -125,12 +117,10 @@ public sealed class ModelRegistryService : IModelRegistry
         (Dictionary<string, ModelConfig> Lookup, List<ModelConfig> Models) snapshot,
         long routeVersion = 0)
     {
-        lock (_lock)
+        // The lock orders concurrent writers; readers see the new table on the volatile write.
+        lock (_writeLock)
         {
-            _lookup = snapshot.Lookup;
-            _models = snapshot.Models;
-            _isLoaded = true;
-            _appliedRouteVersion = routeVersion;
+            _snapshot = new Snapshot(snapshot.Lookup, snapshot.Models, IsLoaded: true, routeVersion);
         }
     }
 }

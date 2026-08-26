@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Diagnostics;
 using System.Net.Http.Headers;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Features;
@@ -80,12 +81,17 @@ public sealed class InferenceHttpForwarder(
         if (HasRequestBody(context.Request))
         {
             context.Request.Body.Position = 0;
-            requestMessage.Content = new StreamContent(context.Request.Body);
-            if (!string.IsNullOrWhiteSpace(context.Request.ContentType) &&
-                MediaTypeHeaderValue.TryParse(context.Request.ContentType, out var contentType))
+            MediaTypeHeaderValue? contentType = null;
+            if (!string.IsNullOrWhiteSpace(context.Request.ContentType))
             {
-                requestMessage.Content.Headers.ContentType = contentType;
+                MediaTypeHeaderValue.TryParse(context.Request.ContentType, out contentType);
             }
+
+            // Replayable, matching the aliased path's ModelRewritingHttpContent. The body is
+            // buffered and seekable, so there is no reason for the two to differ.
+            requestMessage.Content =
+                SeekableStreamContent.TryCreate(context.Request.Body, contentType)
+                ?? BuildSingleReadContent(context.Request.Body, contentType);
         }
 
         if (!string.IsNullOrWhiteSpace(upstreamBearerToken))
@@ -191,6 +197,16 @@ public sealed class InferenceHttpForwarder(
                 using var idleCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                 idleCts.CancelAfter(timeouts.StreamIdleTimeout);
 
+                // Re-arming the idle deadline reschedules a timer, and a token stream forwards a
+                // chunk several times a second, so doing it per chunk is pure churn. Skipping the
+                // re-arm for a short spell only ever makes the deadline fire *earlier* than the
+                // configured gap — by at most this floor — so a healthy stream is never cut short by
+                // it, and at the default 120s idle timeout the floor is 1s.
+                var rearmFloor = TimeSpan.FromTicks(Math.Min(
+                    TimeSpan.TicksPerSecond,
+                    timeouts.StreamIdleTimeout.Ticks / 4));
+                var lastRearm = Stopwatch.GetTimestamp();
+
                 await using var upstreamBody = await responseMessage.Content
                     .ReadAsStreamAsync(idleCts.Token)
                     .ConfigureAwait(false);
@@ -212,7 +228,17 @@ public sealed class InferenceHttpForwarder(
                             onFirstByteWritten: isStreaming
                                 ? () => RecordTimeToFirstTokenIfNeeded(context)
                                 : null,
-                            onChunkForwarded: () => idleCts.CancelAfter(timeouts.StreamIdleTimeout),
+                            onChunkForwarded: () =>
+                            {
+                                var now = Stopwatch.GetTimestamp();
+                                if (Stopwatch.GetElapsedTime(lastRearm, now) < rearmFloor)
+                                {
+                                    return;
+                                }
+
+                                lastRearm = now;
+                                idleCts.CancelAfter(timeouts.StreamIdleTimeout);
+                            },
                             flushEachChunk: isStreaming,
                             idleCts.Token)
                         .ConfigureAwait(false);
@@ -550,6 +576,18 @@ public sealed class InferenceHttpForwarder(
         {
             ArrayPool<byte>.Shared.Return(buffer);
         }
+    }
+
+    /// <summary>Fallback for a body that cannot be rewound; read once, as before.</summary>
+    private static HttpContent BuildSingleReadContent(Stream body, MediaTypeHeaderValue? contentType)
+    {
+        var content = new StreamContent(body);
+        if (contentType is not null)
+        {
+            content.Headers.ContentType = contentType;
+        }
+
+        return content;
     }
 
     private static bool HasRequestBody(HttpRequest request) =>
