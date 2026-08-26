@@ -44,6 +44,26 @@ internal sealed class GatewayAdmissionLimitsStartupLogger(
             tier.Burst,
             tier.MaxConcurrentStreams <= 0 ? "unlimited" : tier.MaxConcurrentStreams.ToString());
 
+        // The two controls that can refuse a model's traffic wholesale, for reasons unrelated to how
+        // many requests are in flight. Both cost availability when they misfire, so their effective
+        // values belong beside the concurrency ceilings rather than only in the config file.
+        logger.LogInformation(
+            "Backend availability controls: circuit breaker opens after {FailureThreshold} failures at "
+            + "{FailureRatio:P0} of outcomes in {SamplingWindow}s, stays open {BreakDuration}s, then admits one "
+            + "probe whose permit is reclaimed after {HalfOpenProbeTimeout}s if it has not reported; health "
+            + "sweep every {HealthInterval}s at {HealthTimeout}s per probe, marking a backend down after "
+            + "{UnhealthyThreshold} consecutive failed sweeps and restoring it on the first success. "
+            + "A backend that is down or breaker-open is refused at admission, so these decide how a slow "
+            + "model server degrades: gracefully, or into blanket 503s.",
+            resilience.CircuitBreakerFailureThreshold,
+            resilience.CircuitBreakerFailureRatioThreshold,
+            resilience.CircuitBreakerSamplingWindowSeconds,
+            resilience.CircuitBreakerBreakDurationSeconds,
+            resilience.CircuitBreakerHalfOpenProbeTimeoutSeconds,
+            options.Value.HealthCheckIntervalSeconds,
+            options.Value.HealthCheckTimeoutSeconds,
+            options.Value.HealthCheckUnhealthyThreshold);
+
         if (rateLimits.Enabled &&
             tier.MaxConcurrentStreams > 0 &&
             tier.MaxConcurrentStreams < resilience.MaxConcurrentForwardsPerModel)

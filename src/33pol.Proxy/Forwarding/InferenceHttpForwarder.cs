@@ -141,6 +141,17 @@ public sealed class InferenceHttpForwarder(
             return ForwarderError.Request;
         }
 
+        // Headers are in, so the header allowance has done its job: disarm it rather than leaving a
+        // timer to fire minutes later against a token nothing observes any more.
+        //
+        // Not a correctness fix on the current runtime — with ResponseHeadersRead, SocketsHttpHandler
+        // does not tear the response body down when the send token is cancelled after the headers
+        // have been read (verified against a real socket in InferenceHttpForwarderLoopbackTests).
+        // It is still wrong to leave armed: it costs a pointless timer per in-flight request, and it
+        // is the kind of latent whole-exchange deadline that client.Timeout was deliberately set to
+        // Timeout.InfiniteTimeSpan to avoid.
+        headerCts.CancelAfter(Timeout.InfiniteTimeSpan);
+
         using (responseMessage)
         {
             // Names of the upstream headers copied onto the response, so they can be removed again

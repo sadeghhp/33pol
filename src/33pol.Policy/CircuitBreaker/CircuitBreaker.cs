@@ -27,6 +27,7 @@ public sealed class CircuitBreaker
     private CircuitState _state = CircuitState.Closed;
     private DateTimeOffset _openedAt;
     private bool _halfOpenPermit = true;
+    private DateTimeOffset _halfOpenPermitTakenAt;
 
     public CircuitBreaker(CircuitBreakerPolicyOptions options, Func<DateTimeOffset>? clock = null)
     {
@@ -64,13 +65,20 @@ public sealed class CircuitBreaker
         }
     }
 
+    /// <remarks>
+    /// In <see cref="CircuitState.HalfOpen"/> this consumes the single probe permit, so every other
+    /// caller is refused until the probe reports an outcome — or until it is presumed stalled, see
+    /// <see cref="CircuitBreakerPolicyOptions.HalfOpenProbeTimeout"/>.
+    /// </remarks>
     public bool TryEnter()
     {
         lock (_sync)
         {
+            var now = _clock();
+
             if (_state == CircuitState.Open)
             {
-                if (_clock() - _openedAt < _options.BreakDuration)
+                if (now - _openedAt < _options.BreakDuration)
                 {
                     return false;
                 }
@@ -81,12 +89,24 @@ public sealed class CircuitBreaker
 
             if (_state == CircuitState.HalfOpen)
             {
-                if (!_halfOpenPermit)
+                // A probe holding the permit past the deadline is presumed stalled and the permit is
+                // reclaimed for this caller. Without this the breaker refused every other request for
+                // as long as the probe ran, and on this gateway a probe is a generation that can
+                // legitimately take minutes: a model that was merely slow answered nothing at all,
+                // for far longer than BreakDuration.
+                //
+                // A reclaimed probe that later reports an outcome is still believed — evidence about
+                // the backend is evidence whenever it arrives. The only looseness this admits is that
+                // its RecordAbandoned can hand back a permit the newer probe holds, which at worst
+                // lets one extra probe through; admissions remain bounded at roughly one per timeout,
+                // and the breaker can no longer wedge.
+                if (!_halfOpenPermit && now - _halfOpenPermitTakenAt < _options.HalfOpenProbeTimeout)
                 {
                     return false;
                 }
 
                 _halfOpenPermit = false;
+                _halfOpenPermitTakenAt = now;
             }
 
             return true;
@@ -205,5 +225,6 @@ public sealed class CircuitBreaker
         _outcomeCount = 0;
         _outcomeStart = 0;
         _halfOpenPermit = true;
+        _halfOpenPermitTakenAt = default;
     }
 }

@@ -22,6 +22,16 @@ public static class GatewayOptionsValidation
             errors.Add($"{nameof(GatewayOptions.HealthCheckIntervalSeconds)} must be at least 1 second.");
         }
 
+        if (options.HealthCheckUnhealthyThreshold < 1)
+        {
+            errors.Add($"{nameof(GatewayOptions.HealthCheckUnhealthyThreshold)} must be at least 1.");
+        }
+
+        if (options.HealthCheckTimeoutSeconds < 1)
+        {
+            errors.Add($"{nameof(GatewayOptions.HealthCheckTimeoutSeconds)} must be at least 1 second.");
+        }
+
         if (options.Resilience.ForwardTimeoutSeconds < 1)
         {
             errors.Add($"{nameof(GatewayOptions.Resilience)}.{nameof(GatewayResilienceOptions.ForwardTimeoutSeconds)} must be at least 1 second.");
@@ -95,6 +105,11 @@ public static class GatewayOptionsValidation
         if (options.Resilience.CircuitBreakerBreakDurationSeconds < 1)
         {
             errors.Add($"{nameof(GatewayOptions.Resilience)}.{nameof(GatewayResilienceOptions.CircuitBreakerBreakDurationSeconds)} must be at least 1 second.");
+        }
+
+        if (options.Resilience.CircuitBreakerHalfOpenProbeTimeoutSeconds < 1)
+        {
+            errors.Add($"{nameof(GatewayOptions.Resilience)}.{nameof(GatewayResilienceOptions.CircuitBreakerHalfOpenProbeTimeoutSeconds)} must be at least 1 second.");
         }
 
         if (options.Resilience.CircuitBreakerSamplingWindowSeconds < 1)

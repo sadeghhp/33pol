@@ -29,6 +29,20 @@ public sealed class CircuitBreakerPolicyOptions
     /// </summary>
     public double FailureRatioThreshold { get; init; } = 0.5;
 
+    /// <summary>
+    /// How long a half-open probe may go without reporting an outcome before its permit is
+    /// reclaimed and handed to the next caller.
+    /// </summary>
+    /// <remarks>
+    /// A half-open breaker admits one probe and refuses everyone else until that probe reports back.
+    /// On an inference gateway the probe <em>is</em> a generation, which legitimately runs for
+    /// minutes — so a breaker that tripped during a slow patch stayed shut for the probe's whole
+    /// duration rather than for <see cref="BreakDuration"/>, and a merely slow model presented to
+    /// every caller as a model that answered nothing at all. Reclaiming on a deadline bounds that:
+    /// traffic resumes trickling through at worst one request per timeout even while the probe runs.
+    /// </remarks>
+    public TimeSpan HalfOpenProbeTimeout { get; init; } = TimeSpan.FromSeconds(30);
+
     public static CircuitBreakerPolicyOptions FromGatewayResilience(GatewayResilienceOptions resilience) =>
         new()
         {
@@ -36,5 +50,7 @@ public sealed class CircuitBreakerPolicyOptions
             BreakDuration = TimeSpan.FromSeconds(resilience.CircuitBreakerBreakDurationSeconds),
             SamplingWindow = TimeSpan.FromSeconds(Math.Max(1, resilience.CircuitBreakerSamplingWindowSeconds)),
             FailureRatioThreshold = resilience.CircuitBreakerFailureRatioThreshold,
+            HalfOpenProbeTimeout =
+                TimeSpan.FromSeconds(Math.Max(1, resilience.CircuitBreakerHalfOpenProbeTimeoutSeconds)),
         };
 }

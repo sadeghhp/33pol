@@ -41,6 +41,27 @@ public sealed class HealthCheckService : BackgroundService
     // would turn a standing outage into one error record per interval.
     private readonly ConcurrentDictionary<string, bool> _lastVerdict = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// Consecutive failed sweeps per backend. A backend is only taken out of service once this
+    /// reaches <see cref="GatewayOptions.HealthCheckUnhealthyThreshold"/>.
+    /// </summary>
+    /// <remarks>
+    /// One failed probe used to be enough, and the router refuses every request to an unhealthy
+    /// backend outright — so a single slow sweep took a model out of service until the next
+    /// successful one. That is the wrong trade here: <c>/v1/models</c> is served by the same process
+    /// that is busy generating, so a saturated model server answers its own health probe slowly
+    /// exactly when it is under the most load. The probe then failed <em>because</em> the model was
+    /// busy, and the gateway responded by refusing all its traffic.
+    /// </remarks>
+    private readonly ConcurrentDictionary<string, int> _consecutiveFailures = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The probe path that last answered for each backend, tried first on the next sweep. A backend
+    /// that does not implement <c>/v1/models</c> would otherwise pay for the full walk down
+    /// <see cref="ProbePaths"/> on every sweep, at the probe timeout each.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, string> _lastGoodProbePath = new(StringComparer.OrdinalIgnoreCase);
+
     public HealthCheckService(
         IModelRegistry registry,
         IBackendHealthStore healthStore,
@@ -58,7 +79,7 @@ public sealed class HealthCheckService : BackgroundService
         _errorRecorder = errorRecorder;
         _httpClient = httpClient ?? new HttpClient(new SocketsHttpHandler { AllowAutoRedirect = false })
         {
-            Timeout = TimeSpan.FromSeconds(10),
+            Timeout = TimeSpan.FromSeconds(Math.Max(1, _options.HealthCheckTimeoutSeconds)),
         };
         _ownsHttpClient = httpClient is null;
     }
@@ -138,6 +159,8 @@ public sealed class HealthCheckService : BackgroundService
             if (!known.Contains(modelId))
             {
                 _lastVerdict.TryRemove(modelId, out _);
+                _consecutiveFailures.TryRemove(modelId, out _);
+                _lastGoodProbePath.TryRemove(modelId, out _);
             }
         }
     }
@@ -149,9 +172,36 @@ public sealed class HealthCheckService : BackgroundService
         // inference request to it returned 502 — a total outage for any cloud provider.
         var bearerToken = ResolveBearerTokenSafely(model);
 
-        var (isHealthy, statusCode, error) = await ProbeBackendAsync(model.Url, bearerToken, cancellationToken)
+        _lastGoodProbePath.TryGetValue(model.Id, out var preferredPath);
+        var (probeHealthy, statusCode, error, succeededPath) = await ProbeBackendAsync(
+                model.Url,
+                bearerToken,
+                preferredPath,
+                cancellationToken)
             .ConfigureAwait(false);
 
+        int consecutiveFailures;
+        if (probeHealthy)
+        {
+            // Slow to condemn, fast to forgive: one good probe clears the streak outright. A backend
+            // that is answering is serving, whatever the previous sweeps looked like.
+            _consecutiveFailures.TryRemove(model.Id, out _);
+            consecutiveFailures = 0;
+            if (succeededPath is not null)
+            {
+                _lastGoodProbePath[model.Id] = succeededPath;
+            }
+        }
+        else
+        {
+            consecutiveFailures = _consecutiveFailures.AddOrUpdate(model.Id, 1, static (_, count) => count + 1);
+        }
+
+        var threshold = Math.Max(1, _options.HealthCheckUnhealthyThreshold);
+        var isHealthy = probeHealthy || consecutiveFailures < threshold;
+
+        // The observed status and error are stored even while the backend is still being served, so
+        // the Backends card shows a degradation building rather than flipping from clean to down.
         _healthStore.SetHealth(new BackendHealth(
             model.Id,
             model.Url,
@@ -160,13 +210,26 @@ public sealed class HealthCheckService : BackgroundService
             error,
             DateTimeOffset.UtcNow));
 
+        if (!probeHealthy && isHealthy)
+        {
+            _logger.LogWarning(
+                "Backend {ModelId} at {Url} failed its health probe ({ConsecutiveFailures} of {Threshold} "
+                + "consecutive failures needed to take it out of service): {Error}",
+                model.Id,
+                model.Url,
+                consecutiveFailures,
+                threshold,
+                error ?? statusCode?.ToString() ?? "unknown");
+        }
+
         if (!isHealthy)
         {
             var detail = error ?? statusCode?.ToString() ?? "unknown";
             _logger.LogWarning(
-                "Backend {ModelId} at {Url} is unhealthy: {Error}",
+                "Backend {ModelId} at {Url} is unhealthy after {ConsecutiveFailures} consecutive failed probes: {Error}",
                 model.Id,
                 model.Url,
+                consecutiveFailures,
                 detail);
 
             // One record per transition, not per sweep: an outage is one fault however many
@@ -233,10 +296,34 @@ public sealed class HealthCheckService : BackgroundService
         string? bearerToken,
         CancellationToken cancellationToken = default)
     {
+        var (isHealthy, statusCode, error, _) = await ProbeBackendAsync(
+                baseUrl,
+                bearerToken,
+                preferredPath: null,
+                cancellationToken)
+            .ConfigureAwait(false);
+        return (isHealthy, statusCode, error);
+    }
+
+    /// <param name="preferredPath">
+    /// The path that answered for this backend last time, tried first. A backend that does not
+    /// implement <c>/v1/models</c> otherwise walks the whole of <see cref="ProbePaths"/> on every
+    /// sweep, paying the probe timeout for each miss — which on a large registry can outrun the
+    /// sweep interval itself.
+    /// </param>
+    /// <returns>
+    /// The verdict plus the path that produced it, so the caller can remember it for the next sweep.
+    /// </returns>
+    private async Task<(bool IsHealthy, int? StatusCode, string? Error, string? SucceededPath)> ProbeBackendAsync(
+        string baseUrl,
+        string? bearerToken,
+        string? preferredPath,
+        CancellationToken cancellationToken)
+    {
         int? lastStatusCode = null;
         string? lastError = null;
 
-        foreach (var path in ProbePaths)
+        foreach (var path in OrderProbePaths(preferredPath))
         {
             Uri requestUri;
             try
@@ -245,7 +332,7 @@ public sealed class HealthCheckService : BackgroundService
             }
             catch (Exception ex) when (ex is UriFormatException or ArgumentException)
             {
-                return (false, null, $"Invalid backend URL '{baseUrl}': {ex.Message}");
+                return (false, null, $"Invalid backend URL '{baseUrl}': {ex.Message}", null);
             }
 
             try
@@ -261,13 +348,13 @@ public sealed class HealthCheckService : BackgroundService
 
                 if (response.IsSuccessStatusCode)
                 {
-                    return (true, status, null);
+                    return (true, status, null, path);
                 }
 
                 if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
                 {
                     return (true, status, $"Backend reachable but rejected the gateway's credential (HTTP {status}). "
-                                          + "Check this model's upstream auth configuration.");
+                                          + "Check this model's upstream auth configuration.", path);
                 }
 
                 lastStatusCode = status;
@@ -283,7 +370,31 @@ public sealed class HealthCheckService : BackgroundService
             }
         }
 
-        return (false, lastStatusCode, lastError ?? "All probe endpoints failed");
+        return (false, lastStatusCode, lastError ?? "All probe endpoints failed", null);
+    }
+
+    /// <summary>
+    /// <see cref="ProbePaths"/> with <paramref name="preferredPath"/> moved to the front, if it is
+    /// one of them. Every path is still tried, so a backend that stops serving its usual path still
+    /// falls back to the rest.
+    /// </summary>
+    private static IEnumerable<string> OrderProbePaths(string? preferredPath)
+    {
+        if (preferredPath is null || Array.IndexOf(ProbePaths, preferredPath) <= 0)
+        {
+            return ProbePaths;
+        }
+
+        var ordered = new List<string>(ProbePaths.Length) { preferredPath };
+        foreach (var path in ProbePaths)
+        {
+            if (!string.Equals(path, preferredPath, StringComparison.Ordinal))
+            {
+                ordered.Add(path);
+            }
+        }
+
+        return ordered;
     }
 
     public static Uri BuildProbeUri(string baseUrl, string path)

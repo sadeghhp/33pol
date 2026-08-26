@@ -143,9 +143,94 @@ public sealed class CircuitBreakerTests
         sut.TryEnter().Should().BeTrue();
     }
 
-    private static void TripOpen(Breaker breaker)
+    /// <summary>
+    /// A half-open probe that has not reported an outcome within
+    /// <see cref="CircuitBreakerPolicyOptions.HalfOpenProbeTimeout"/> loses its permit to the next
+    /// caller.
+    /// </summary>
+    /// <remarks>
+    /// The defect this covers: the permit was held until the probe reported, with no deadline. Here a
+    /// probe is a whole inference, so a breaker that tripped during a slow patch refused every other
+    /// request for that model for as long as the probe ran — minutes, not the 30s break duration.
+    /// A model that was merely slow presented to every caller as one that answered nothing at all.
+    /// </remarks>
+    [Fact]
+    public void TryEnter_HalfOpenProbePastTimeout_ReclaimsPermitForTheNextCaller()
     {
-        for (var i = 0; i < DefaultPolicy.FailureThreshold; i++)
+        var clock = new MutableClock(DateTimeOffset.UtcNow);
+        var policy = PolicyWithProbeTimeout(TimeSpan.FromSeconds(30));
+        var sut = new Breaker(policy, () => clock.Now);
+
+        TripOpen(sut, policy);
+        clock.Advance(TimeSpan.FromMinutes(2));
+
+        sut.TryEnter().Should().BeTrue("the first caller after the break duration is the probe");
+        clock.Advance(TimeSpan.FromSeconds(31));
+
+        sut.TryEnter().Should().BeTrue("a probe that has not reported within the timeout is presumed stalled");
+        sut.State.Should().Be(CircuitState.HalfOpen, "reclaiming a permit is not an outcome");
+    }
+
+    [Fact]
+    public void TryEnter_HalfOpenProbeWithinTimeout_StillRefusesOtherCallers()
+    {
+        var clock = new MutableClock(DateTimeOffset.UtcNow);
+        var policy = PolicyWithProbeTimeout(TimeSpan.FromSeconds(30));
+        var sut = new Breaker(policy, () => clock.Now);
+
+        TripOpen(sut, policy);
+        clock.Advance(TimeSpan.FromMinutes(2));
+        sut.TryEnter().Should().BeTrue();
+
+        clock.Advance(TimeSpan.FromSeconds(29));
+
+        sut.TryEnter().Should().BeFalse("one probe at a time is still the rule while it is within its deadline");
+    }
+
+    /// <summary>
+    /// The end-to-end shape of the outage: a long-running probe must not take the model out of
+    /// service for its whole duration.
+    /// </summary>
+    [Fact]
+    public void TryEnter_ProbeRunningForMinutes_DoesNotBlockTheModelThroughout()
+    {
+        var clock = new MutableClock(DateTimeOffset.UtcNow);
+        var policy = PolicyWithProbeTimeout(TimeSpan.FromSeconds(30));
+        var sut = new Breaker(policy, () => clock.Now);
+
+        TripOpen(sut, policy);
+        clock.Advance(TimeSpan.FromMinutes(2));
+        sut.TryEnter().Should().BeTrue("the probe is admitted");
+
+        // The probe is a ten-minute generation and never reports back. Traffic keeps arriving.
+        var admitted = 0;
+        for (var minute = 0; minute < 10; minute++)
+        {
+            clock.Advance(TimeSpan.FromMinutes(1));
+            if (sut.TryEnter())
+            {
+                admitted++;
+            }
+        }
+
+        admitted.Should().Be(
+            10,
+            "each minute is past the 30s probe deadline, so traffic resumes trickling through "
+            + "instead of the model being refused for the probe's whole duration");
+    }
+
+    private static CircuitBreakerPolicyOptions PolicyWithProbeTimeout(TimeSpan probeTimeout) => new()
+    {
+        FailureThreshold = DefaultPolicy.FailureThreshold,
+        BreakDuration = DefaultPolicy.BreakDuration,
+        HalfOpenProbeTimeout = probeTimeout,
+    };
+
+    private static void TripOpen(Breaker breaker) => TripOpen(breaker, DefaultPolicy);
+
+    private static void TripOpen(Breaker breaker, CircuitBreakerPolicyOptions policy)
+    {
+        for (var i = 0; i < policy.FailureThreshold; i++)
         {
             breaker.TryEnter().Should().BeTrue();
             breaker.RecordFailure();

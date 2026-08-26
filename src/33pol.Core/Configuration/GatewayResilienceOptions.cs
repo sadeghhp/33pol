@@ -140,6 +140,20 @@ public sealed class GatewayResilienceOptions
     public int CircuitBreakerBreakDurationSeconds { get; set; } = 30;
 
     /// <summary>
+    /// How long the single half-open probe may run without reporting an outcome before its permit is
+    /// reclaimed and the next caller is admitted.
+    /// </summary>
+    /// <remarks>
+    /// While a probe holds the permit the breaker refuses every other request for that model. Here a
+    /// probe is a whole inference, which can legitimately take minutes, so without a deadline a
+    /// tripped breaker stayed shut for the probe's duration rather than for
+    /// <see cref="CircuitBreakerBreakDurationSeconds"/> — one slow generation kept a working model
+    /// out of service for every caller. Raise it if probes are expected to be long and you would
+    /// rather test the backend more conservatively; lower it to resume traffic sooner.
+    /// </remarks>
+    public int CircuitBreakerHalfOpenProbeTimeoutSeconds { get; set; } = 30;
+
+    /// <summary>
     /// How far back the breaker counts outcomes when deciding whether a backend is failing.
     /// </summary>
     /// <remarks>

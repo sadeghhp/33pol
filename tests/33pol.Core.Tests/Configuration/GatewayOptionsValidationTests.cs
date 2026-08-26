@@ -37,6 +37,41 @@ public sealed class GatewayOptionsValidationTests
     }
 
     [Fact]
+    public void Validate_ZeroHealthCheckUnhealthyThreshold_ReturnsError()
+    {
+        var options = new GatewayOptions { HealthCheckUnhealthyThreshold = 0 };
+
+        var errors = GatewayOptionsValidation.Validate(options);
+
+        errors.Should().Contain(e => e.Contains(nameof(GatewayOptions.HealthCheckUnhealthyThreshold), StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Validate_ZeroHealthCheckTimeout_ReturnsError()
+    {
+        var options = new GatewayOptions { HealthCheckTimeoutSeconds = 0 };
+
+        var errors = GatewayOptionsValidation.Validate(options);
+
+        errors.Should().Contain(e => e.Contains(nameof(GatewayOptions.HealthCheckTimeoutSeconds), StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Validate_ZeroCircuitBreakerHalfOpenProbeTimeout_ReturnsError()
+    {
+        var options = new GatewayOptions
+        {
+            Resilience = new GatewayResilienceOptions { CircuitBreakerHalfOpenProbeTimeoutSeconds = 0 },
+        };
+
+        var errors = GatewayOptionsValidation.Validate(options);
+
+        errors.Should().Contain(e => e.Contains(
+            nameof(GatewayResilienceOptions.CircuitBreakerHalfOpenProbeTimeoutSeconds),
+            StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Validate_ValidOptions_ReturnsNoErrors()
     {
         var options = new GatewayOptions();

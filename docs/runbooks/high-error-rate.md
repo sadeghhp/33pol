@@ -17,9 +17,14 @@
 | Cause | Action |
 |-------|--------|
 | All backends down | Restore upstream; verify `models.json` URLs |
-| Circuit open | Wait for half-open or reduce upstream failures |
+| Circuit open | Wait for half-open or reduce upstream failures. A half-open probe holds the model shut only until `Gateway:Resilience:CircuitBreakerHalfOpenProbeTimeoutSeconds` (default 30) elapses; a "permit was reclaimed" warning in the log means probes are running longer than that |
+| Backend unhealthy while the model server is merely busy | The sweep marks a backend down after `Gateway:HealthCheckUnhealthyThreshold` (default 2) consecutive failed probes at `Gateway:HealthCheckTimeoutSeconds` (default 15) each. A saturated model server answers `/v1/models` slowly, so raise the timeout or the threshold before suspecting the backend |
 | Gateway draining | New deploy in progress; wait for ready |
 | Rate limit storm | Expected 429; tune limits or client backoff |
+
+## Slow, not failing
+
+`48 in flight · 4 streaming · 44 buffered` with no *queued* suffix on the Overview means the bulkhead is not the constraint: those requests are waiting on the model server, not on the gateway. Check the upstream's own queue depth (vLLM's scheduler, `OLLAMA_MAX_QUEUE`) before tuning anything here. The gateway's job in that state is to degrade gracefully rather than to start refusing traffic — the breaker and health thresholds above are what decide which of the two happens.
 
 ## Mitigation
 

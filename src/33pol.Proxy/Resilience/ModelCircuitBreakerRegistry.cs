@@ -102,6 +102,23 @@ public sealed class ModelCircuitBreakerRegistry : ICircuitBreakerStateSource
         var breaker = GetBreaker(modelId);
         var before = breaker.State;
         var entered = breaker.TryEnter();
+
+        // Admission granted while the breaker was *already* half-open means the previous probe's
+        // permit was reclaimed: it had not reported an outcome within the probe timeout. A normal
+        // Open -> HalfOpen promotion enters this method with `before == Open`, so it never lands
+        // here. Worth a line, because the condition it reports — a probe running far longer than
+        // the breaker expects — is otherwise invisible and is usually the real story.
+        if (entered && before == CircuitState.HalfOpen)
+        {
+            _logger.LogWarning(
+                "Circuit breaker for model {ModelId}: half-open probe did not report an outcome within "
+                + "{HalfOpenProbeTimeoutSeconds}s and its permit was reclaimed for a new probe. Requests "
+                + "for this model were refused while it ran; if probes routinely take this long, raise "
+                + "Gateway:Resilience:CircuitBreakerHalfOpenProbeTimeoutSeconds.",
+                modelId,
+                _policyOptions.HalfOpenProbeTimeout.TotalSeconds);
+        }
+
         NotifyStateChange(modelId, before, breaker.State);
         return entered;
     }

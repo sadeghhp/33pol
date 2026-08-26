@@ -118,12 +118,11 @@ public sealed class HealthCheckServiceTests
         var handler = SequenceHttpMessageHandler.AlwaysReturning(HttpStatusCode.ServiceUnavailable);
         var healthStore = new BackendHealthStore(Options.Create(new GatewayOptions()));
         var service = CreateService(handler, healthStore);
+        var model = new ModelConfig { Id = "model-a", Url = "http://backend:8000" };
 
-        await service.CheckBackendAsync(new ModelConfig
-        {
-            Id = "model-a",
-            Url = "http://backend:8000",
-        });
+        // Takes HealthCheckUnhealthyThreshold consecutive failed sweeps, not one.
+        await service.CheckBackendAsync(model);
+        await service.CheckBackendAsync(model);
 
         healthStore.IsBackendHealthy("model-a").Should().BeFalse();
         healthStore.GetHealth("model-a")!.Error.Should().Contain("503");
@@ -270,7 +269,9 @@ public sealed class HealthCheckServiceTests
             _ => throw new HttpRequestException("connection refused"));
         var healthStore = new BackendHealthStore(Options.Create(new GatewayOptions()));
         var recorder = Substitute.For<IGatewayErrorRecorder>();
-        var service = CreateService(handler, healthStore, errorRecorder: recorder);
+        // Threshold 1: this test is about recording a transition once, not about the hysteresis,
+        // and the handler's fixed response sequence maps one sweep to one verdict.
+        var service = CreateService(handler, healthStore, errorRecorder: recorder, unhealthyThreshold: 1);
         var model = new ModelConfig { Id = "model-a", Url = "http://backend:8000" };
 
         await service.CheckBackendAsync(model);   // healthy -> unhealthy (4 probe paths fail)
@@ -298,7 +299,8 @@ public sealed class HealthCheckServiceTests
         var registry = Substitute.For<IModelRegistry>();
         var model = new ModelConfig { Id = "model-a", Url = "http://backend:8000" };
         var recorder = Substitute.For<IGatewayErrorRecorder>();
-        var service = CreateService(handler, registry: registry, errorRecorder: recorder);
+        // Threshold 1: this test is about forgetting a removed model's verdict, not the hysteresis.
+        var service = CreateService(handler, registry: registry, errorRecorder: recorder, unhealthyThreshold: 1);
 
         registry.GetAllModels().Returns([model]);
         await service.CheckAllBackendsAsync();      // healthy -> unhealthy: one record
@@ -312,20 +314,133 @@ public sealed class HealthCheckServiceTests
         recorder.Received(2).Record(Arg.Is<GatewayErrorRecord>(r => r.ModelId == "model-a"));
     }
 
+    /// <summary>
+    /// A single failed sweep must not take a backend out of service.
+    /// </summary>
+    /// <remarks>
+    /// The defect this covers: one failed probe marked the backend unhealthy, and the router refuses
+    /// every request to an unhealthy backend outright — so one slow sweep was a full outage for that
+    /// model until the next successful one. The probe endpoint is served by the same process that is
+    /// generating, so a saturated model server answers slowly exactly when it is busiest: the probe
+    /// failed <em>because</em> the model was loaded, and the gateway then refused all its traffic.
+    /// </remarks>
+    [Fact]
+    public async Task CheckBackendAsync_SingleFailedProbe_KeepsBackendServing()
+    {
+        var handler = SequenceHttpMessageHandler.AlwaysReturning(HttpStatusCode.ServiceUnavailable);
+        var healthStore = new BackendHealthStore(Options.Create(new GatewayOptions()));
+        var service = CreateService(handler, healthStore, unhealthyThreshold: 2);
+
+        await service.CheckBackendAsync(new ModelConfig { Id = "model-a", Url = "http://backend:8000" });
+
+        healthStore.IsBackendHealthy("model-a").Should().BeTrue("one bad sweep is not an outage");
+
+        // The observed failure is still visible, so a degradation shows on the Backends card as it
+        // builds rather than appearing only once the backend is already refused.
+        healthStore.GetHealth("model-a")!.StatusCode.Should().Be(503);
+        healthStore.GetHealth("model-a")!.Error.Should().Contain("503");
+    }
+
+    [Fact]
+    public async Task CheckBackendAsync_ConsecutiveFailuresReachThreshold_MarksBackendUnhealthy()
+    {
+        var handler = SequenceHttpMessageHandler.AlwaysReturning(HttpStatusCode.ServiceUnavailable);
+        var healthStore = new BackendHealthStore(Options.Create(new GatewayOptions()));
+        var service = CreateService(handler, healthStore, unhealthyThreshold: 3);
+        var model = new ModelConfig { Id = "model-a", Url = "http://backend:8000" };
+
+        await service.CheckBackendAsync(model);
+        await service.CheckBackendAsync(model);
+        healthStore.IsBackendHealthy("model-a").Should().BeTrue("still one short of the threshold");
+
+        await service.CheckBackendAsync(model);
+        healthStore.IsBackendHealthy("model-a").Should().BeFalse("a sustained outage is a real one");
+    }
+
+    /// <summary>
+    /// Slow to condemn, fast to forgive: one good probe restores service and resets the streak, so a
+    /// recovered backend is not held out for another threshold's worth of sweeps.
+    /// </summary>
+    [Fact]
+    public async Task CheckBackendAsync_SuccessAfterFailures_RestoresServiceAndResetsTheStreak()
+    {
+        var handler = new SequenceHttpMessageHandler(
+            // Sweep 1: every path fails.
+            _ => new HttpResponseMessage(HttpStatusCode.ServiceUnavailable),
+            _ => new HttpResponseMessage(HttpStatusCode.ServiceUnavailable),
+            _ => new HttpResponseMessage(HttpStatusCode.ServiceUnavailable),
+            _ => new HttpResponseMessage(HttpStatusCode.ServiceUnavailable),
+            // Sweep 2: recovers on the first path.
+            _ => new HttpResponseMessage(HttpStatusCode.OK),
+            // Sweep 3: fails again, but the streak restarted at sweep 2.
+            _ => new HttpResponseMessage(HttpStatusCode.ServiceUnavailable),
+            _ => new HttpResponseMessage(HttpStatusCode.ServiceUnavailable),
+            _ => new HttpResponseMessage(HttpStatusCode.ServiceUnavailable),
+            _ => new HttpResponseMessage(HttpStatusCode.ServiceUnavailable));
+        var healthStore = new BackendHealthStore(Options.Create(new GatewayOptions()));
+        var service = CreateService(handler, healthStore, unhealthyThreshold: 2);
+        var model = new ModelConfig { Id = "model-a", Url = "http://backend:8000" };
+
+        await service.CheckBackendAsync(model);
+        await service.CheckBackendAsync(model);
+        healthStore.IsBackendHealthy("model-a").Should().BeTrue("the second sweep succeeded");
+
+        await service.CheckBackendAsync(model);
+        healthStore.IsBackendHealthy("model-a").Should().BeTrue(
+            "the success reset the streak, so this is failure one of two again");
+    }
+
+    /// <summary>
+    /// The path that answered is tried first next time, so a backend without <c>/v1/models</c> does
+    /// not pay the full walk down the probe list — at the probe timeout per miss — on every sweep.
+    /// </summary>
+    [Fact]
+    public async Task CheckBackendAsync_RemembersTheProbePathThatAnswered()
+    {
+        var handler = new SequenceHttpMessageHandler(
+            _ => new HttpResponseMessage(HttpStatusCode.NotFound),   // /v1/models
+            _ => new HttpResponseMessage(HttpStatusCode.NotFound),   // /health
+            _ => new HttpResponseMessage(HttpStatusCode.OK),         // /api/tags
+            _ => new HttpResponseMessage(HttpStatusCode.OK));        // second sweep, first attempt
+        var service = CreateService(handler);
+        var model = new ModelConfig { Id = "model-a", Url = "http://backend:8000" };
+
+        await service.CheckBackendAsync(model);
+        handler.RequestedPaths.Should().Equal("/v1/models", "/health", "/api/tags");
+
+        await service.CheckBackendAsync(model);
+
+        handler.RequestedPaths.Skip(3).Should().Equal(
+            ["/api/tags"],
+            "the second sweep starts from the path that answered, not from the top of the list");
+    }
+
+    /// <param name="unhealthyThreshold">
+    /// Consecutive failed probes before a backend is taken out of service. Left at the shipped
+    /// default unless a test is specifically isolating behaviour that predates the hysteresis, in
+    /// which case 1 keeps that test about the one thing it is checking.
+    /// </param>
     private static HealthCheckService CreateService(
         HttpMessageHandler handler,
         IBackendHealthStore? healthStore = null,
         IModelRegistry? registry = null,
         IUpstreamBearerTokenResolver? bearerTokenResolver = null,
-        IGatewayErrorRecorder? errorRecorder = null)
+        IGatewayErrorRecorder? errorRecorder = null,
+        int? unhealthyThreshold = null)
     {
         var modelRegistry = registry ?? Substitute.For<IModelRegistry>();
         var store = healthStore ?? new BackendHealthStore(Options.Create(new GatewayOptions()));
+        var options = new GatewayOptions { HealthCheckIntervalSeconds = 30 };
+        if (unhealthyThreshold is int threshold)
+        {
+            options.HealthCheckUnhealthyThreshold = threshold;
+        }
+
         return new HealthCheckService(
             modelRegistry,
             store,
             bearerTokenResolver ?? Substitute.For<IUpstreamBearerTokenResolver>(),
-            Options.Create(new GatewayOptions { HealthCheckIntervalSeconds = 30 }),
+            Options.Create(options),
             NullLogger<HealthCheckService>.Instance,
             new HttpClient(handler),
             errorRecorder);

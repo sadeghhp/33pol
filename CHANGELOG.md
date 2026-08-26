@@ -4,6 +4,17 @@ All notable changes to this project are documented here. Version tags follow [Se
 
 ## [Unreleased]
 
+### Fixed — a slow backend no longer degrades into a total outage
+
+Two admission controls turned "the model server is slow" into "the model answers nothing at all". Both refuse requests wholesale, before anything reaches the upstream, so when they misfire the whole model is down for every caller.
+
+- **A half-open circuit-breaker probe no longer holds the model shut for its whole duration.** A tripped breaker admits one probe and refuses everyone else until that probe reports back — but here a probe *is* an inference, which legitimately runs for minutes. A breaker that tripped during a slow patch therefore stayed shut for the probe's duration rather than for `CircuitBreakerBreakDurationSeconds`, and if the probe timed out it re-opened and did it again. The permit is now reclaimed after `Gateway:Resilience:CircuitBreakerHalfOpenProbeTimeoutSeconds` (new, default 30) so traffic resumes trickling through, and the reclaim is logged — the condition was previously invisible.
+- **One failed health probe no longer takes a backend out of service.** An unhealthy backend is refused at admission, so a single slow sweep was a full outage for that model until the next successful one. The probe endpoint is served by the same process that is generating, so a saturated model server answers it slowly precisely when it is busiest: the probe failed *because* the model was loaded, and the gateway responded by refusing all of its traffic. A backend is now marked down only after `Gateway:HealthCheckUnhealthyThreshold` (new, default 2) consecutive failed sweeps, and one success restores it immediately — slow to condemn, fast to forgive. The observed status and error are stored throughout, so a degradation shows on the Backends card as it builds instead of appearing only once the backend is already refused.
+- **The health probe's timeout is configurable** and now defaults to 15s rather than a hard-coded 10s (`Gateway:HealthCheckTimeoutSeconds`), and each backend's last working probe path is tried first on the next sweep — a backend without `/v1/models` previously walked the whole probe list, at the full timeout per miss, on every sweep.
+- The startup log now states the breaker and health-sweep settings alongside the existing admission limits, since these are what decide how a slow model server degrades.
+- The forwarder disarms its header deadline once response headers arrive. This is hygiene rather than a behaviour fix — verified against a real socket, `SocketsHttpHandler` does not tear a response body down when the send token is cancelled after headers are read — but it removes a pointless timer per in-flight request and the latent whole-exchange deadline it represented.
+
+
 ### Added — stop a model route from the admin panel
 
 - **Model routes carry a state.** `ModelConfig.state` is `serving` or `stopped` (`ModelRouteStates`), persisted in a new `model_routes.State` column (migration `ModelRouteState`, existing rows backfilled to `serving`). A registry entry without the field — every `models.json` and every row written before this — loads as `serving`.
