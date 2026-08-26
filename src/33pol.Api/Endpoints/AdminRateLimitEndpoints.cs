@@ -18,8 +18,36 @@ public static class AdminRateLimitEndpoints
 
         group.MapGet("/", GetAsync);
         group.MapPut("/", PutAsync);
+        group.MapGet("/usage", GetUsageAsync);
 
         return endpoints;
+    }
+
+    /// <summary>
+    /// The usage report: who is sending what, against which limits, and where those limits are being
+    /// hit.
+    /// </summary>
+    /// <remarks>
+    /// A read of in-memory counters, so it is cheap enough to poll and safe to call during an
+    /// incident — it takes no database connection and touches nothing on the request path. The
+    /// window is capped at what the counters actually hold; asking for more returns the longest
+    /// available rather than an error, and the response says which window it answered.
+    /// </remarks>
+    private static IResult GetUsageAsync(
+        IRateLimitUsageTracker? tracker,
+        TimeProvider? timeProvider,
+        [FromQuery] int? minutes,
+        [FromQuery] int? take)
+    {
+        if (tracker is null)
+        {
+            return Results.Json(
+                new { message = "Rate-limit usage tracking is not enabled in this deployment." },
+                statusCode: 503);
+        }
+
+        var now = (timeProvider ?? TimeProvider.System).GetUtcNow();
+        return Results.Json(tracker.BuildReport(minutes ?? 60, take ?? 25, now));
     }
 
     private static Task<IResult> GetAsync(IRateLimitConfigAdminService service, CancellationToken cancellationToken)
@@ -41,8 +69,18 @@ public static class AdminRateLimitEndpoints
             return Results.BadRequest(new { message = "Request body is required." });
         }
 
+        // Null rules pass through as null so the service leaves the stored set alone; an empty list
+        // is a deliberate "delete them all" and is passed through as such.
+        var rules = request.Rules?.Select(static r => r.ToDefinition()).ToArray();
+
         var result = await service
-            .UpdateAsync(request.Enabled, request.Default, request.Plans, cancellationToken)
+            .UpdateAsync(
+                request.Enabled,
+                request.AdaptiveEnabled,
+                request.Default,
+                request.Plans,
+                rules,
+                cancellationToken)
             .ConfigureAwait(false);
 
         if (!result.Success)
@@ -58,10 +96,12 @@ public static class AdminRateLimitEndpoints
                 new
                 {
                     request.Enabled,
+                    request.AdaptiveEnabled,
                     request.Default.Rpm,
                     request.Default.Burst,
                     request.Default.MaxConcurrentStreams,
                     PlanCount = request.Plans.Count,
+                    RuleCount = rules?.Length,
                 }));
 
         return Results.Json(new { message = result.Message });
@@ -71,6 +111,7 @@ public static class AdminRateLimitEndpoints
         new()
         {
             Enabled = config.Enabled,
+            AdaptiveEnabled = config.AdaptiveEnabled,
             Default = new Core.Configuration.RateLimitTierOptions
             {
                 Rpm = config.Default.Rpm,
@@ -86,5 +127,6 @@ public static class AdminRateLimitEndpoints
                     MaxConcurrentStreams = p.Value.MaxConcurrentStreams,
                 },
                 StringComparer.OrdinalIgnoreCase),
+            Rules = [.. config.Rules.Select(AdminRateLimitRuleDto.FromDefinition)],
         };
 }

@@ -71,8 +71,10 @@ public sealed class AuthFailureRateLimitMiddleware
 
         var partitionKey = RateLimitPartition.ResolveAuthFailure(context);
 
-        // The default tier: there is no tenant yet, so no plan or per-tenant override can apply.
-        var policy = _policyResolver.Resolve(planSlug: null, tenantSlug: null);
+        // The auth-failure tier: there is no tenant yet, so no plan or per-tenant override can
+        // apply, and a tier sized for legitimate traffic is far too generous for credential
+        // guessing. Falls back to the default tier where none is configured.
+        var policy = _policyResolver.ResolveAuthFailure();
         var now = _timeProvider.GetUtcNow();
 
         var budget = _rateLimitStore.PeekRequest(partitionKey, policy, now);

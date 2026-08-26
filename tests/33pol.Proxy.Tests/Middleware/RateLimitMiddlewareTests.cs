@@ -15,7 +15,7 @@ public sealed class RateLimitMiddlewareTests
     [Fact]
     public async Task InvokeAsync_WhenRpmExceeded_Returns429WithRetryAfter()
     {
-        var resolver = new RateLimitPolicyResolver(new StubConfigProvider(new GatewayConfigSnapshot
+        var resolver = new RateLimitPlanResolver(new StubConfigProvider(new GatewayConfigSnapshot
         {
             RateLimits = new RateLimitsConfigSection { Default = new RateLimitPolicy(1, 0, 5) },
         }));
@@ -37,7 +37,8 @@ public sealed class RateLimitMiddlewareTests
             store,
             errors,
             metrics,
-            TimeProvider.System);
+            Substitute.For<IModelRegistry>(),
+            timeProvider: TimeProvider.System);
 
         await middleware.InvokeAsync(context);
         nextCalls.Should().Be(1);
@@ -54,7 +55,7 @@ public sealed class RateLimitMiddlewareTests
     public async Task InvokeAsync_WhenRateLimitingDisabled_NeverRejects()
     {
         // Same tier that rejects the second request above (rpm 1, burst 0), but with the master switch off.
-        var resolver = new RateLimitPolicyResolver(new StubConfigProvider(new GatewayConfigSnapshot
+        var resolver = new RateLimitPlanResolver(new StubConfigProvider(new GatewayConfigSnapshot
         {
             RateLimits = new RateLimitsConfigSection
             {
@@ -77,7 +78,8 @@ public sealed class RateLimitMiddlewareTests
             new InMemoryDistributedRateLimitStore(),
             new OpenAiErrorResponseWriter(),
             Substitute.For<IGatewayMetricsCollector>(),
-            TimeProvider.System);
+            Substitute.For<IModelRegistry>(),
+            timeProvider: TimeProvider.System);
 
         for (var i = 0; i < 5; i++)
         {
@@ -100,7 +102,7 @@ public sealed class RateLimitMiddlewareTests
         bool invalidJson,
         string expectedErrorCode)
     {
-        var resolver = new RateLimitPolicyResolver(new StubConfigProvider(new GatewayConfigSnapshot
+        var resolver = new RateLimitPlanResolver(new StubConfigProvider(new GatewayConfigSnapshot
         {
             RateLimits = new RateLimitsConfigSection { Default = new RateLimitPolicy(1, 0, 5) },
         }));
@@ -116,7 +118,8 @@ public sealed class RateLimitMiddlewareTests
             store,
             new OpenAiErrorResponseWriter(),
             Substitute.For<IGatewayMetricsCollector>(),
-            TimeProvider.System);
+            Substitute.For<IModelRegistry>(),
+            timeProvider: TimeProvider.System);
 
         var rejected = CreateInferenceContext();
         if (invalidJson)
@@ -151,7 +154,7 @@ public sealed class RateLimitMiddlewareTests
     [Fact]
     public async Task InvokeAsync_CachedUnroutableBody_WhenRateLimitingDisabled_FallsThroughToTheRouter()
     {
-        var resolver = new RateLimitPolicyResolver(new StubConfigProvider(new GatewayConfigSnapshot
+        var resolver = new RateLimitPlanResolver(new StubConfigProvider(new GatewayConfigSnapshot
         {
             RateLimits = new RateLimitsConfigSection { Enabled = false, Default = new RateLimitPolicy(1, 0, 5) },
         }));
@@ -166,7 +169,8 @@ public sealed class RateLimitMiddlewareTests
             new InMemoryDistributedRateLimitStore(),
             new OpenAiErrorResponseWriter(),
             Substitute.For<IGatewayMetricsCollector>(),
-            TimeProvider.System);
+            Substitute.For<IModelRegistry>(),
+            timeProvider: TimeProvider.System);
 
         var context = CreateInferenceContext();
         InferenceRequestParseCache.SetInvalidJson(context);
@@ -184,7 +188,7 @@ public sealed class RateLimitMiddlewareTests
     [Fact]
     public async Task InvokeAsync_PublishesBudgetHeaders_OnAdmissionAndOnRejection()
     {
-        var resolver = new RateLimitPolicyResolver(new StubConfigProvider(new GatewayConfigSnapshot
+        var resolver = new RateLimitPlanResolver(new StubConfigProvider(new GatewayConfigSnapshot
         {
             RateLimits = new RateLimitsConfigSection { Default = new RateLimitPolicy(60, 2, 5) },
         }));
@@ -195,7 +199,8 @@ public sealed class RateLimitMiddlewareTests
             store,
             new OpenAiErrorResponseWriter(),
             Substitute.For<IGatewayMetricsCollector>(),
-            TimeProvider.System);
+            Substitute.For<IModelRegistry>(),
+            timeProvider: TimeProvider.System);
 
         var admitted = CreateInferenceContext();
         await middleware.InvokeAsync(admitted);
@@ -222,7 +227,7 @@ public sealed class RateLimitMiddlewareTests
     [Fact]
     public async Task InvokeAsync_NoCachedParse_AcquiresAsBefore()
     {
-        var resolver = new RateLimitPolicyResolver(new StubConfigProvider(new GatewayConfigSnapshot
+        var resolver = new RateLimitPlanResolver(new StubConfigProvider(new GatewayConfigSnapshot
         {
             RateLimits = new RateLimitsConfigSection { Default = new RateLimitPolicy(1, 0, 5) },
         }));
@@ -237,7 +242,8 @@ public sealed class RateLimitMiddlewareTests
             new InMemoryDistributedRateLimitStore(),
             new OpenAiErrorResponseWriter(),
             Substitute.For<IGatewayMetricsCollector>(),
-            TimeProvider.System);
+            Substitute.For<IModelRegistry>(),
+            timeProvider: TimeProvider.System);
 
         await middleware.InvokeAsync(CreateInferenceContext());
         await middleware.InvokeAsync(CreateInferenceContext());

@@ -22,18 +22,66 @@ public sealed class RateLimitConfigAdminService(
         return new RateLimitAdminConfig
         {
             Enabled = rateLimits.Enabled,
+            AdaptiveEnabled = rateLimits.AdaptiveEnabled,
             Default = ToTierOptions(rateLimits.Default),
             Plans = rateLimits.Plans.ToDictionary(
                 static p => p.Key,
                 static p => ToTierOptions(p.Value),
                 StringComparer.OrdinalIgnoreCase),
+            Rules = ToRules(rateLimits),
         };
+    }
+
+    /// <summary>
+    /// Flattens the snapshot's per-scope maps back into the flat rule list the admin API speaks, in
+    /// scope order so a GET is stable and diffable between calls.
+    /// </summary>
+    private static List<RateLimitRuleDefinition> ToRules(Core.Configuration.RateLimitsConfigSection rateLimits)
+    {
+        var rules = new List<RateLimitRuleDefinition>();
+
+        if (!rateLimits.Global.EnforcesNothing)
+        {
+            rules.Add(RateLimitRuleDefinition.FromPolicy(
+                RateLimitScopeNames.Global,
+                RateLimitScopeNames.SingletonTarget,
+                rateLimits.Global));
+        }
+
+        AddScope(rules, RateLimitScopeNames.Tenant, rateLimits.TenantOverrides);
+        AddScope(rules, RateLimitScopeNames.ApiKey, rateLimits.ApiKeys);
+        AddScope(rules, RateLimitScopeNames.Model, rateLimits.Models);
+        AddScope(rules, RateLimitScopeNames.TenantModel, rateLimits.TenantModels);
+        AddScope(rules, RateLimitScopeNames.ApiKeyModel, rateLimits.ApiKeyModels);
+
+        if (!rateLimits.AuthFailure.EnforcesNothing)
+        {
+            rules.Add(RateLimitRuleDefinition.FromPolicy(
+                RateLimitScopeNames.AuthFailure,
+                RateLimitScopeNames.SingletonTarget,
+                rateLimits.AuthFailure));
+        }
+
+        return rules;
+    }
+
+    private static void AddScope(
+        List<RateLimitRuleDefinition> rules,
+        string scope,
+        IReadOnlyDictionary<string, RateLimitPolicy> map)
+    {
+        foreach (var (target, policy) in map.OrderBy(static p => p.Key, StringComparer.Ordinal))
+        {
+            rules.Add(RateLimitRuleDefinition.FromPolicy(scope, target, policy));
+        }
     }
 
     public async Task<RateLimitConfigUpdateResult> UpdateAsync(
         bool enabled,
+        bool adaptiveEnabled,
         RateLimitTierOptions defaultTier,
         IReadOnlyDictionary<string, RateLimitTierOptions> plans,
+        IReadOnlyList<RateLimitRuleDefinition>? rules = null,
         CancellationToken cancellationToken = default)
     {
         // Tier values are validated even when disabling, so re-enabling later cannot restore a
@@ -42,6 +90,15 @@ public sealed class RateLimitConfigAdminService(
         {
             return RateLimitConfigUpdateResult.Fail(validationError!, statusCode: 400);
         }
+
+        if (!RateLimitConfigValidation.TryValidateRules(rules, out var ruleError))
+        {
+            return RateLimitConfigUpdateResult.Fail(ruleError!, statusCode: 400);
+        }
+
+        // Null means "the caller does not manage rules", so the stored set is carried through
+        // unchanged rather than wiped by a client that predates them.
+        var effectiveRules = rules ?? ToRules(configProvider.Current.RateLimits);
 
         await using var scope = scopeFactory.CreateAsyncScope();
         var repository = scope.ServiceProvider.GetService<IRateLimitSettingsRepository>();
@@ -59,7 +116,14 @@ public sealed class RateLimitConfigAdminService(
                 static p => ToPolicy(p.Value),
                 StringComparer.OrdinalIgnoreCase);
 
-            await repository.SaveAsync(enabled, ToPolicy(defaultTier), planPolicies, cancellationToken)
+            await repository
+                .SaveAsync(
+                    enabled,
+                    adaptiveEnabled,
+                    ToPolicy(defaultTier),
+                    planPolicies,
+                    effectiveRules,
+                    cancellationToken)
                 .ConfigureAwait(false);
 
             var refresher = scope.ServiceProvider.GetService<IGatewayConfigRefresher>();
@@ -69,9 +133,11 @@ public sealed class RateLimitConfigAdminService(
             }
 
             logger.LogInformation(
-                "Updated rate limits (enabled={Enabled}, default + {PlanCount} plan tier(s)).",
+                "Updated rate limits (enabled={Enabled}, adaptive={Adaptive}, default + {PlanCount} plan tier(s), {RuleCount} scoped rule(s)).",
                 enabled,
-                plans.Count);
+                adaptiveEnabled,
+                plans.Count,
+                effectiveRules.Count);
             return RateLimitConfigUpdateResult.Ok(
                 enabled ? "Rate limits updated." : "Rate limits updated. Rate limiting is now disabled.");
         }

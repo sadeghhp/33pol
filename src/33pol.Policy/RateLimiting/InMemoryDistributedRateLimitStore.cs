@@ -6,20 +6,38 @@ using Pol33.Core.RateLimiting;
 
 namespace Pol33.Policy.RateLimiting;
 
+/// <summary>
+/// The counters behind every admission decision: one token bucket and one concurrency-slot state per
+/// partition, held in memory for the life of the process.
+/// </summary>
+/// <remarks>
+/// <para>In-memory is the right storage here and not a placeholder for something distributed. The
+/// gateway is a single process writing to one embedded database, so there is no second instance to
+/// coordinate with; a network round trip per admission decision would add more latency than the
+/// decision saves. The <c>IDistributedRateLimitStore</c> name is the seam a Redis-backed
+/// implementation would fill if the gateway ever scales out — the interface is deliberately shaped
+/// so every operation is one round trip and none of them require a read-modify-write from the
+/// caller.</para>
+///
+/// <para>Maintenance — sweeping stale partitions and holding the table under its ceiling — is driven
+/// by <see cref="RateLimitMaintenanceHostedService"/> on a timer, not from the request path. It used
+/// to run inline on whichever request tripped an operation counter, which made one request in every
+/// few hundred pay an O(live partitions) scan, and past the ceiling a full array copy and sort of up
+/// to 50,000 entries. That is invisible in a mean and very visible at p99.</para>
+/// </remarks>
 public sealed class InMemoryDistributedRateLimitStore : IDistributedRateLimitStore
 {
-    private readonly ConcurrentDictionary<string, RequestWindowState> _requestWindows = new();
-    private readonly ConcurrentDictionary<string, StreamConcurrencyState> _streamSlots = new();
+    private readonly ConcurrentDictionary<string, RequestWindowState> _requestWindows = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, StreamConcurrencyState> _streamSlots = new(StringComparer.Ordinal);
     private readonly TimeProvider _timeProvider;
     private readonly TimeSpan _partitionRetention;
-    private readonly TimeSpan _minCompactionInterval;
-    private readonly int _compactEveryOperations;
     private readonly int _maxPartitions;
-    private int _operationCount;
-    private int _compacting;
 
-    /// <summary>UTC ticks of the last sweep; zero until the first one runs.</summary>
-    private long _lastCompactionTicks;
+    // Maintained with the dictionaries rather than read from them: ConcurrentDictionary.Count takes
+    // every bucket lock, which is not something the ceiling check should cost when it runs on a
+    // timer over a table this size.
+    private int _requestPartitionCount;
+    private int _streamPartitionCount;
 
     public InMemoryDistributedRateLimitStore(
         IOptions<RateLimitingOptions>? options = null,
@@ -29,12 +47,6 @@ public sealed class InMemoryDistributedRateLimitStore : IDistributedRateLimitSto
 
         var retentionSeconds = options?.Value.InMemoryPartitionRetentionSeconds ?? 3600;
         _partitionRetention = TimeSpan.FromSeconds(Math.Max(1, retentionSeconds));
-
-        var compactEvery = options?.Value.InMemoryCompactionEveryOperations ?? 256;
-        _compactEveryOperations = Math.Max(1, compactEvery);
-
-        var minIntervalSeconds = options?.Value.InMemoryCompactionMinIntervalSeconds ?? 5;
-        _minCompactionInterval = TimeSpan.FromSeconds(Math.Max(0, minIntervalSeconds));
 
         var maxPartitions = options?.Value.InMemoryMaxPartitions ?? 50_000;
         _maxPartitions = Math.Max(1, maxPartitions);
@@ -61,50 +73,121 @@ public sealed class InMemoryDistributedRateLimitStore : IDistributedRateLimitSto
         RateLimitPolicy policy,
         DateTimeOffset now)
     {
-        var capacity = policy.Rpm + policy.Burst;
+        var capacity = policy.Capacity;
         if (capacity <= 0)
         {
-            return new RateLimitAcquireResult(true);
+            return RateLimitAcquireResult.Unlimited;
         }
 
+        var refill = RefillPerSecond(policy);
         var state = GetOrAddWindow(partitionKey, now);
 
         // Refill, the limit decision and the debit happen under one lock, so a rejected request
         // never consumes a token and the decision is always made against the current fill.
-        var reading = state.Apply(TokenOperation.TakeIfAvailable, now, capacity, RefillPerSecond(policy));
+        var reading = state.Apply(TokenOperation.TakeIfAvailable, now, capacity, refill);
+        return ToResult(reading, capacity, refill, scope: null, partitionKey, adaptiveFactor: 1.0);
+    }
 
-        // Compaction runs on both outcomes: a partition stuck in permanent rejection would otherwise
-        // never be swept.
-        CompactIfNeeded(now);
+    /// <inheritdoc />
+    public RateLimitAcquireResult TryAcquireAll(ReadOnlySpan<RateLimitRule> rules, DateTimeOffset now)
+    {
+        // The tightest admitting rule, tracked as we go: the client is told about the limit closest
+        // to refusing it, because reporting the roomiest one would have it pace against a budget
+        // that is not the one about to run out.
+        RateLimitAcquireResult? tightest = null;
+        var tightestRatio = double.MaxValue;
+        var taken = 0;
 
-        return ToResult(reading, capacity, RefillPerSecond(policy));
+        for (var i = 0; i < rules.Length; i++)
+        {
+            ref readonly var rule = ref rules[i];
+            var capacity = rule.Policy.Capacity;
+            if (capacity <= 0)
+            {
+                continue;
+            }
+
+            var refill = RefillPerSecond(rule.Policy);
+            var state = GetOrAddWindow(rule.PartitionKey, now);
+            var reading = state.Apply(TokenOperation.TakeIfAvailable, now, capacity, refill);
+
+            if (!reading.HasToken)
+            {
+                // Hand back every token taken by the rules before this one. Without it a caller
+                // pinned by its narrowest limit would still spend its tenant-wide and gateway-wide
+                // budget on each attempt, so one over-limit key would rate-limit its whole tenant.
+                RefundRange(rules[..i], now);
+                return ToResult(reading, capacity, refill, rule.Scope, rule.PartitionKey, rule.AdaptiveFactor);
+            }
+
+            taken++;
+
+            var ratio = reading.Tokens / capacity;
+            if (ratio < tightestRatio)
+            {
+                tightestRatio = ratio;
+                tightest = ToResult(reading, capacity, refill, rule.Scope, rule.PartitionKey, rule.AdaptiveFactor);
+            }
+        }
+
+        return taken == 0 ? RateLimitAcquireResult.Unlimited : tightest!;
+    }
+
+    /// <inheritdoc />
+    public void RefundAll(ReadOnlySpan<RateLimitRule> rules, DateTimeOffset now) => RefundRange(rules, now);
+
+    private void RefundRange(ReadOnlySpan<RateLimitRule> rules, DateTimeOffset now)
+    {
+        foreach (ref readonly var rule in rules)
+        {
+            var capacity = rule.Policy.Capacity;
+            if (capacity <= 0)
+            {
+                continue;
+            }
+
+            // TryGetValue, not GetOrAdd: a partition that has been swept between the take and the
+            // refund starts full again anyway, and materialising it here would only add an entry
+            // nobody is counting against.
+            if (_requestWindows.TryGetValue(rule.PartitionKey, out var state))
+            {
+                state.Apply(TokenOperation.Refund, now, capacity, RefillPerSecond(rule.Policy));
+            }
+        }
     }
 
     /// <inheritdoc />
     public RateLimitAcquireResult PeekRequest(string partitionKey, RateLimitPolicy policy, DateTimeOffset now)
     {
-        var capacity = policy.Rpm + policy.Burst;
+        var capacity = policy.Capacity;
         if (capacity <= 0)
         {
-            return new RateLimitAcquireResult(true);
+            return RateLimitAcquireResult.Unlimited;
         }
+
+        var refill = RefillPerSecond(policy);
 
         // A peek must not create a partition: callers peek on every request but debit only on the
         // ones that fail, so materialising a bucket here would fill the table with entries that are
         // never charged anything.
         if (!_requestWindows.TryGetValue(partitionKey, out var state))
         {
-            return new RateLimitAcquireResult(true, Limit: capacity, Remaining: capacity, ResetAfterSeconds: 0);
+            return new RateLimitAcquireResult(
+                true,
+                Limit: capacity,
+                Remaining: capacity,
+                ResetAfterSeconds: 0,
+                PartitionKey: partitionKey);
         }
 
-        var reading = state.Apply(TokenOperation.Peek, now, capacity, RefillPerSecond(policy));
-        return ToResult(reading, capacity, RefillPerSecond(policy));
+        var reading = state.Apply(TokenOperation.Peek, now, capacity, refill);
+        return ToResult(reading, capacity, refill, scope: null, partitionKey, adaptiveFactor: 1.0);
     }
 
     /// <inheritdoc />
     public void DebitRequest(string partitionKey, RateLimitPolicy policy, DateTimeOffset now)
     {
-        var capacity = policy.Rpm + policy.Burst;
+        var capacity = policy.Capacity;
         if (capacity <= 0)
         {
             return;
@@ -112,57 +195,80 @@ public sealed class InMemoryDistributedRateLimitStore : IDistributedRateLimitSto
 
         var state = GetOrAddWindow(partitionKey, now);
         state.Apply(TokenOperation.ForceTake, now, capacity, RefillPerSecond(policy));
-        CompactIfNeeded(now);
     }
 
     public RateLimitAcquireResult TryAcquireStreamSlot(string partitionKey, RateLimitPolicy policy)
     {
-        if (policy.MaxConcurrentStreams <= 0)
+        if (!policy.EnforcesConcurrency)
         {
             // Zero is "unlimited", not "denied" — see RateLimitPolicy.
-            return new RateLimitAcquireResult(true);
+            return RateLimitAcquireResult.Unlimited;
         }
 
         var now = _timeProvider.GetUtcNow();
+        var outcome = AcquireSlot(partitionKey, policy.MaxConcurrentStreams, now);
+        return ToSlotResult(outcome, policy.MaxConcurrentStreams, scope: null, partitionKey);
+    }
 
-        // Eviction marks a state as tombstoned and then removes it from the dictionary. In the
-        // window between those two steps GetOrAdd can hand back the tombstone, whose TryAcquire
-        // always fails — producing a spurious 429 for a tenant with zero active streams. Retry
-        // until a live state is obtained; the tombstoned entry is on its way out.
-        StreamConcurrencyState state;
-        bool acquired;
-        int active;
-        while (true)
+    /// <inheritdoc />
+    public RateLimitAcquireResult TryAcquireStreamSlots(
+        ReadOnlySpan<RateLimitRule> rules,
+        out RateLimitSlotLease held)
+    {
+        held = RateLimitSlotLease.Empty;
+
+        var capping = 0;
+        foreach (ref readonly var rule in rules)
         {
-            state = _streamSlots.GetOrAdd(partitionKey, _ => new StreamConcurrencyState(now));
-            if (state.TryAcquire(policy.MaxConcurrentStreams, now, out acquired, out active))
+            if (rule.Policy.EnforcesConcurrency)
             {
-                break;
+                capping++;
+            }
+        }
+
+        if (capping == 0)
+        {
+            return RateLimitAcquireResult.Unlimited;
+        }
+
+        var now = _timeProvider.GetUtcNow();
+        var keys = new string[capping];
+        var taken = 0;
+
+        // The tightest cap, for the same reason the rate path tracks one: a streaming client should
+        // be told how many slots are left in the scope nearest to full.
+        RateLimitAcquireResult? tightest = null;
+        var tightestRemaining = int.MaxValue;
+
+        foreach (ref readonly var rule in rules)
+        {
+            if (!rule.Policy.EnforcesConcurrency)
+            {
+                continue;
             }
 
-            // Tombstoned: help it out of the dictionary so the next GetOrAdd creates a fresh state.
-            _streamSlots.TryRemove(new KeyValuePair<string, StreamConcurrencyState>(partitionKey, state));
+            var outcome = AcquireSlot(rule.PartitionKey, rule.Policy.MaxConcurrentStreams, now);
+            if (!outcome.Acquired)
+            {
+                // Give back the slots already taken. A streaming response holds its slots for its
+                // whole lifetime, so a leak here is not a transient overcount — it permanently
+                // shrinks the scope's capacity until the process restarts.
+                ReleaseSlots(keys.AsSpan(0, taken));
+                return ToSlotResult(outcome, rule.Policy.MaxConcurrentStreams, rule.Scope, rule.PartitionKey);
+            }
+
+            keys[taken++] = rule.PartitionKey;
+
+            var remaining = Math.Max(0, rule.Policy.MaxConcurrentStreams - outcome.Active);
+            if (remaining < tightestRemaining)
+            {
+                tightestRemaining = remaining;
+                tightest = ToSlotResult(outcome, rule.Policy.MaxConcurrentStreams, rule.Scope, rule.PartitionKey);
+            }
         }
 
-        // On both outcomes, for the same reason the request path does it: a partition parked at its
-        // stream cap would otherwise never drive a sweep.
-        CompactIfNeeded(now);
-
-        var remaining = Math.Max(0, policy.MaxConcurrentStreams - active);
-        if (!acquired)
-        {
-            return new RateLimitAcquireResult(
-                false,
-                GatewayRateLimitReason.ConcurrencyLimitExceeded,
-                RetryAfterSeconds: 1,
-                Limit: policy.MaxConcurrentStreams,
-                Remaining: remaining);
-        }
-
-        return new RateLimitAcquireResult(
-            true,
-            Limit: policy.MaxConcurrentStreams,
-            Remaining: remaining);
+        held = new RateLimitSlotLease(keys, taken);
+        return tightest!;
     }
 
     public void ReleaseStreamSlot(string partitionKey)
@@ -173,12 +279,93 @@ public sealed class InMemoryDistributedRateLimitStore : IDistributedRateLimitSto
         }
     }
 
+    /// <inheritdoc />
+    public void ReleaseStreamSlots(in RateLimitSlotLease held) => ReleaseSlots(held.Keys);
+
+    /// <inheritdoc />
+    public RateLimitStoreStats GetStats() => new(
+        Volatile.Read(ref _requestPartitionCount),
+        Volatile.Read(ref _streamPartitionCount),
+        _maxPartitions);
+
+    private void ReleaseSlots(ReadOnlySpan<string> keys)
+    {
+        var now = _timeProvider.GetUtcNow();
+        foreach (var key in keys)
+        {
+            if (_streamSlots.TryGetValue(key, out var state))
+            {
+                state.Release(now);
+            }
+        }
+    }
+
+    private SlotOutcome AcquireSlot(string partitionKey, int maxConcurrent, DateTimeOffset now)
+    {
+        // Eviction marks a state as tombstoned and then removes it from the dictionary. In the
+        // window between those two steps GetOrAdd can hand back the tombstone, whose TryAcquire
+        // always fails — producing a spurious 429 for a tenant with zero active streams. Retry
+        // until a live state is obtained; the tombstoned entry is on its way out.
+        while (true)
+        {
+            var state = GetOrAddSlotState(partitionKey, now);
+            if (state.TryAcquire(maxConcurrent, now, out var acquired, out var active))
+            {
+                return new SlotOutcome(acquired, active);
+            }
+
+            if (_streamSlots.TryRemove(new KeyValuePair<string, StreamConcurrencyState>(partitionKey, state)))
+            {
+                Interlocked.Decrement(ref _streamPartitionCount);
+            }
+        }
+    }
+
     private static double RefillPerSecond(RateLimitPolicy policy) => Math.Max(1, policy.Rpm) / 60.0;
 
-    private RequestWindowState GetOrAddWindow(string partitionKey, DateTimeOffset now) =>
-        _requestWindows.GetOrAdd(partitionKey, _ => new RequestWindowState(now));
+    private RequestWindowState GetOrAddWindow(string partitionKey, DateTimeOffset now)
+    {
+        // The hit path is a single lookup with no allocation; only a genuinely new partition pays
+        // for a state object, and only the thread that installed it adjusts the count.
+        if (_requestWindows.TryGetValue(partitionKey, out var existing))
+        {
+            return existing;
+        }
 
-    private static RateLimitAcquireResult ToResult(BucketReading reading, int capacity, double refillPerSecond)
+        var created = new RequestWindowState(now);
+        var state = _requestWindows.GetOrAdd(partitionKey, created);
+        if (ReferenceEquals(state, created))
+        {
+            Interlocked.Increment(ref _requestPartitionCount);
+        }
+
+        return state;
+    }
+
+    private StreamConcurrencyState GetOrAddSlotState(string partitionKey, DateTimeOffset now)
+    {
+        if (_streamSlots.TryGetValue(partitionKey, out var existing))
+        {
+            return existing;
+        }
+
+        var created = new StreamConcurrencyState(now);
+        var state = _streamSlots.GetOrAdd(partitionKey, created);
+        if (ReferenceEquals(state, created))
+        {
+            Interlocked.Increment(ref _streamPartitionCount);
+        }
+
+        return state;
+    }
+
+    private static RateLimitAcquireResult ToResult(
+        BucketReading reading,
+        int capacity,
+        double refillPerSecond,
+        RateLimitScope? scope,
+        string partitionKey,
+        double adaptiveFactor)
     {
         var remaining = (int)Math.Floor(Math.Max(0, reading.Tokens));
         var resetAfter = (int)Math.Ceiling(Math.Max(0, capacity - reading.Tokens) / refillPerSecond);
@@ -189,7 +376,10 @@ public sealed class InMemoryDistributedRateLimitStore : IDistributedRateLimitSto
                 true,
                 Limit: capacity,
                 Remaining: remaining,
-                ResetAfterSeconds: resetAfter);
+                ResetAfterSeconds: resetAfter,
+                Scope: scope,
+                PartitionKey: partitionKey,
+                AdaptiveFactor: adaptiveFactor);
         }
 
         return new RateLimitAcquireResult(
@@ -198,85 +388,80 @@ public sealed class InMemoryDistributedRateLimitStore : IDistributedRateLimitSto
             Math.Max(1, (int)Math.Ceiling(reading.RetryAfter.TotalSeconds)),
             Limit: capacity,
             Remaining: remaining,
-            ResetAfterSeconds: resetAfter);
+            ResetAfterSeconds: resetAfter,
+            Scope: scope,
+            PartitionKey: partitionKey,
+            AdaptiveFactor: adaptiveFactor);
     }
 
-    /// <summary>
-    /// Sweeps partitions nobody has touched for the retention window, and enforces the partition
-    /// ceiling.
-    /// </summary>
-    /// <remarks>
-    /// A sweep is O(live partitions) and runs inline on whichever request triggered it, so it is
-    /// gated three ways: an operation counter, a minimum wall-clock interval, and a single-sweeper
-    /// latch so a burst of concurrent requests cannot all scan at once. Passing the partition
-    /// ceiling overrides the first two — that is the case where deferring the work is what lets the
-    /// table grow.
-    /// </remarks>
-    private void CompactIfNeeded(DateTimeOffset now)
+    private static RateLimitAcquireResult ToSlotResult(
+        SlotOutcome outcome,
+        int maxConcurrent,
+        RateLimitScope? scope,
+        string partitionKey)
     {
-        if (Interlocked.Increment(ref _operationCount) % _compactEveryOperations != 0)
+        var remaining = Math.Max(0, maxConcurrent - outcome.Active);
+        if (!outcome.Acquired)
         {
-            return;
+            return new RateLimitAcquireResult(
+                false,
+                GatewayRateLimitReason.ConcurrencyLimitExceeded,
+                RetryAfterSeconds: 1,
+                Limit: maxConcurrent,
+                Remaining: remaining,
+                Scope: scope,
+                PartitionKey: partitionKey);
         }
 
-        // Counted first: ConcurrentDictionary.Count takes every bucket lock, so it belongs behind
-        // the operation counter rather than on every acquire. Between two counts the table can grow
-        // by at most one interval's worth of new partitions, which the ceiling has room for.
-        var overCapacity = _requestWindows.Count > _maxPartitions || _streamSlots.Count > _maxPartitions;
-        if (!overCapacity && _minCompactionInterval > TimeSpan.Zero)
-        {
-            // Both sides are UTC tick counts, so this cannot overflow; the zero it starts at is
-            // "never swept", which is always further back than any interval.
-            var since = now.UtcTicks - Interlocked.Read(ref _lastCompactionTicks);
-            if (since >= 0 && since < _minCompactionInterval.Ticks)
-            {
-                return;
-            }
-        }
-
-        // One sweeper at a time. A second thread arriving mid-sweep has nothing to add: the sweep
-        // already in flight covers the same partitions.
-        if (Interlocked.CompareExchange(ref _compacting, 1, 0) != 0)
-        {
-            return;
-        }
-
-        try
-        {
-            Interlocked.Exchange(ref _lastCompactionTicks, now.UtcTicks);
-            Compact(now);
-        }
-        finally
-        {
-            Interlocked.Exchange(ref _compacting, 0);
-        }
+        return new RateLimitAcquireResult(
+            true,
+            Limit: maxConcurrent,
+            Remaining: remaining,
+            Scope: scope,
+            PartitionKey: partitionKey);
     }
 
-    private void Compact(DateTimeOffset now)
+    /// <inheritdoc />
+    public int Compact(DateTimeOffset now)
     {
         var staleThreshold = now - _partitionRetention;
+        var removed = 0;
 
         foreach (var pair in _requestWindows)
         {
-            if (pair.Value.IsStale(staleThreshold))
-            {
+            if (pair.Value.IsStale(staleThreshold) &&
                 // Value-matched removal: between the staleness check and the removal another thread
                 // can replace this entry with a freshly created bucket. Dropping that one instead
                 // would hand its partition a full bucket it did not earn.
-                _requestWindows.TryRemove(new KeyValuePair<string, RequestWindowState>(pair.Key, pair.Value));
+                _requestWindows.TryRemove(new KeyValuePair<string, RequestWindowState>(pair.Key, pair.Value)))
+            {
+                Interlocked.Decrement(ref _requestPartitionCount);
+                removed++;
             }
         }
 
         foreach (var pair in _streamSlots)
         {
-            if (pair.Value.TryMarkEvicted(staleThreshold))
+            if (pair.Value.TryMarkEvicted(staleThreshold) &&
+                _streamSlots.TryRemove(new KeyValuePair<string, StreamConcurrencyState>(pair.Key, pair.Value)))
             {
-                _streamSlots.TryRemove(new KeyValuePair<string, StreamConcurrencyState>(pair.Key, pair.Value));
+                Interlocked.Decrement(ref _streamPartitionCount);
+                removed++;
             }
         }
 
-        EnforceCeiling(_requestWindows, static state => state.LastSeenUtc, static _ => true);
-        EnforceCeiling(_streamSlots, static state => state.LastSeenUtc, static state => state.TryMarkEvicted(DateTimeOffset.MaxValue));
+        removed += EnforceCeiling(
+            _requestWindows,
+            ref _requestPartitionCount,
+            static state => state.LastSeenUtc,
+            static _ => true);
+        removed += EnforceCeiling(
+            _streamSlots,
+            ref _streamPartitionCount,
+            static state => state.LastSeenUtc,
+            static state => state.TryMarkEvicted(DateTimeOffset.MaxValue));
+
+        return removed;
     }
 
     /// <summary>
@@ -287,16 +472,17 @@ public sealed class InMemoryDistributedRateLimitStore : IDistributedRateLimitSto
     /// being rejected is touched on every rejection, so it sorts to the end and cannot be evicted
     /// (and thereby handed a fresh bucket) by a caller flooding the table with new partitions.
     /// </remarks>
-    private void EnforceCeiling<TState>(
+    private int EnforceCeiling<TState>(
         ConcurrentDictionary<string, TState> partitions,
+        ref int liveCount,
         Func<TState, DateTimeOffset> lastSeen,
         Func<TState, bool> canEvict)
         where TState : class
     {
-        var excess = partitions.Count - _maxPartitions;
+        var excess = Volatile.Read(ref liveCount) - _maxPartitions;
         if (excess <= 0)
         {
-            return;
+            return 0;
         }
 
         var victims = partitions
@@ -304,14 +490,20 @@ public sealed class InMemoryDistributedRateLimitStore : IDistributedRateLimitSto
             .OrderBy(pair => lastSeen(pair.Value))
             .Take(excess);
 
+        var removed = 0;
         foreach (var victim in victims)
         {
-            if (canEvict(victim.Value))
+            if (canEvict(victim.Value) && partitions.TryRemove(victim))
             {
-                partitions.TryRemove(victim);
+                Interlocked.Decrement(ref liveCount);
+                removed++;
             }
         }
+
+        return removed;
     }
+
+    private readonly record struct SlotOutcome(bool Acquired, int Active);
 
     private enum TokenOperation
     {
@@ -323,6 +515,9 @@ public sealed class InMemoryDistributedRateLimitStore : IDistributedRateLimitSto
 
         /// <summary>Take one token whether or not the bucket holds one, flooring at empty.</summary>
         ForceTake,
+
+        /// <summary>Give one token back, for a request another scope went on to refuse.</summary>
+        Refund,
     }
 
     /// <summary>The bucket's state after an operation, in the terms every caller needs.</summary>
@@ -334,25 +529,21 @@ public sealed class InMemoryDistributedRateLimitStore : IDistributedRateLimitSto
         private readonly object _sync = new();
         private double _tokens;
         private DateTimeOffset _lastRefillUtc;
-        private DateTimeOffset _lastSeenUtc;
         private bool _primed;
+
+        // Read without the lock by the maintenance sweep, which sorts up to the whole table by it.
+        // Taking the per-partition lock 50,000 times to order a list is a cost with no correctness
+        // to show for it: a last-seen that is one operation stale only changes which of two
+        // equally-idle partitions is evicted first.
+        private long _lastSeenTicks;
 
         public RequestWindowState(DateTimeOffset now)
         {
             _lastRefillUtc = now;
-            _lastSeenUtc = now;
+            _lastSeenTicks = now.UtcTicks;
         }
 
-        public DateTimeOffset LastSeenUtc
-        {
-            get
-            {
-                lock (_sync)
-                {
-                    return _lastSeenUtc;
-                }
-            }
-        }
+        public DateTimeOffset LastSeenUtc => new(Interlocked.Read(ref _lastSeenTicks), TimeSpan.Zero);
 
         /// <summary>
         /// Refills the bucket for the time elapsed since the last call, then applies
@@ -392,9 +583,14 @@ public sealed class InMemoryDistributedRateLimitStore : IDistributedRateLimitSto
 
                 // Touch on every attempt, including rejections, so an actively-rejected partition is
                 // not treated as stale and evicted from under itself.
-                if (now > _lastSeenUtc)
+                TouchLastSeen(now);
+
+                if (operation == TokenOperation.Refund)
                 {
-                    _lastSeenUtc = now;
+                    // Capped at capacity, so a refund that races a sweep — or an unmatched one from
+                    // any future caller — can never inflate a partition past its tier.
+                    _tokens = Math.Min(capacity, _tokens + 1.0);
+                    return new BucketReading(true, _tokens, TimeSpan.Zero);
                 }
 
                 var hasToken = _tokens >= 1.0;
@@ -417,11 +613,15 @@ public sealed class InMemoryDistributedRateLimitStore : IDistributedRateLimitSto
             }
         }
 
-        public bool IsStale(DateTimeOffset staleThreshold)
+        public bool IsStale(DateTimeOffset staleThreshold) => LastSeenUtc < staleThreshold;
+
+        private void TouchLastSeen(DateTimeOffset now)
         {
-            lock (_sync)
+            var ticks = now.UtcTicks;
+            var current = Interlocked.Read(ref _lastSeenTicks);
+            if (ticks > current)
             {
-                return _lastSeenUtc < staleThreshold;
+                Interlocked.Exchange(ref _lastSeenTicks, ticks);
             }
         }
     }
@@ -430,24 +630,15 @@ public sealed class InMemoryDistributedRateLimitStore : IDistributedRateLimitSto
     {
         private readonly object _sync = new();
         private int _active;
-        private DateTimeOffset _lastSeenUtc;
+        private long _lastSeenTicks;
         private bool _evicted;
 
         public StreamConcurrencyState(DateTimeOffset now)
         {
-            _lastSeenUtc = now;
+            _lastSeenTicks = now.UtcTicks;
         }
 
-        public DateTimeOffset LastSeenUtc
-        {
-            get
-            {
-                lock (_sync)
-                {
-                    return _lastSeenUtc;
-                }
-            }
-        }
+        public DateTimeOffset LastSeenUtc => new(Interlocked.Read(ref _lastSeenTicks), TimeSpan.Zero);
 
         /// <summary>
         /// Attempts to take a slot. Returns false when this state has been tombstoned by compaction,
@@ -470,14 +661,12 @@ public sealed class InMemoryDistributedRateLimitStore : IDistributedRateLimitSto
                 {
                     acquired = false;
                     active = _active;
+                    Touch(now);
                     return true;
                 }
 
                 _active++;
-                if (now > _lastSeenUtc)
-                {
-                    _lastSeenUtc = now;
-                }
+                Touch(now);
 
                 acquired = true;
                 active = _active;
@@ -490,10 +679,7 @@ public sealed class InMemoryDistributedRateLimitStore : IDistributedRateLimitSto
             lock (_sync)
             {
                 _active = Math.Max(0, _active - 1);
-                if (now > _lastSeenUtc)
-                {
-                    _lastSeenUtc = now;
-                }
+                Touch(now);
             }
         }
 
@@ -505,13 +691,22 @@ public sealed class InMemoryDistributedRateLimitStore : IDistributedRateLimitSto
         {
             lock (_sync)
             {
-                if (_evicted || _active > 0 || _lastSeenUtc >= staleThreshold)
+                if (_evicted || _active > 0 || LastSeenUtc >= staleThreshold)
                 {
                     return false;
                 }
 
                 _evicted = true;
                 return true;
+            }
+        }
+
+        private void Touch(DateTimeOffset now)
+        {
+            var ticks = now.UtcTicks;
+            if (ticks > Interlocked.Read(ref _lastSeenTicks))
+            {
+                Interlocked.Exchange(ref _lastSeenTicks, ticks);
             }
         }
     }

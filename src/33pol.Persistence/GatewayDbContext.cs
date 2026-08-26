@@ -47,6 +47,8 @@ public sealed class GatewayDbContext : DbContext
 
     public DbSet<RateLimitPlanEntity> RateLimitPlans => Set<RateLimitPlanEntity>();
 
+    public DbSet<RateLimitRuleEntity> RateLimitRules => Set<RateLimitRuleEntity>();
+
     public DbSet<ModelRouteEntity> ModelRoutes => Set<ModelRouteEntity>();
 
     public DbSet<QuotaSettingsEntity> QuotaSettings => Set<QuotaSettingsEntity>();

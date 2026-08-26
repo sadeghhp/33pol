@@ -18,6 +18,7 @@ public sealed class RateLimitConfigAdminServiceTests
 
         var result = await service.UpdateAsync(
             enabled: true,
+            adaptiveEnabled: false,
             new RateLimitTierOptions { Rpm = 30, Burst = 3, MaxConcurrentStreams = 3 },
             new Dictionary<string, RateLimitTierOptions>(StringComparer.OrdinalIgnoreCase)
             {
@@ -37,6 +38,7 @@ public sealed class RateLimitConfigAdminServiceTests
 
         var result = await service.UpdateAsync(
             enabled: true,
+            adaptiveEnabled: false,
             new RateLimitTierOptions { Rpm = 0, Burst = 0, MaxConcurrentStreams = 0 },
             new Dictionary<string, RateLimitTierOptions>());
 
@@ -51,6 +53,7 @@ public sealed class RateLimitConfigAdminServiceTests
 
         var result = await service.UpdateAsync(
             enabled: true,
+            adaptiveEnabled: false,
             new RateLimitTierOptions { Rpm = 60, Burst = 10, MaxConcurrentStreams = 5 },
             new Dictionary<string, RateLimitTierOptions>());
 
@@ -109,17 +112,25 @@ public sealed class RateLimitConfigAdminServiceTests
 
         public IReadOnlyDictionary<string, RateLimitPolicy>? SavedPlans { get; private set; }
 
+        public IReadOnlyList<RateLimitRuleDefinition>? SavedRules { get; private set; }
+
         public bool? SavedEnabled { get; private set; }
+
+        public bool? SavedAdaptiveEnabled { get; private set; }
 
         public Task SaveAsync(
             bool enabled,
+            bool adaptiveEnabled,
             RateLimitPolicy defaultTier,
             IReadOnlyDictionary<string, RateLimitPolicy> plans,
+            IReadOnlyList<RateLimitRuleDefinition> rules,
             CancellationToken cancellationToken = default)
         {
             SavedEnabled = enabled;
+            SavedAdaptiveEnabled = adaptiveEnabled;
             SavedDefault = defaultTier;
             SavedPlans = plans;
+            SavedRules = rules;
             return Task.CompletedTask;
         }
     }

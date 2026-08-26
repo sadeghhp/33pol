@@ -48,11 +48,13 @@ public sealed class GatewayConfigStoreTests
 
         await new RateLimitSettingsRepository(db).SaveAsync(
             enabled: true,
+            adaptiveEnabled: false,
             new RateLimitPolicy(55, 5, 4),
             new Dictionary<string, RateLimitPolicy>(StringComparer.OrdinalIgnoreCase)
             {
                 ["pro"] = new(200, 20, 15),
-            });
+            },
+            []);
 
         var snapshot = await new GatewayConfigStore(db).LoadSnapshotAsync();
 
@@ -71,8 +73,10 @@ public sealed class GatewayConfigStoreTests
 
         await new RateLimitSettingsRepository(db).SaveAsync(
             enabled: false,
+            adaptiveEnabled: false,
             new RateLimitPolicy(55, 5, 4),
-            new Dictionary<string, RateLimitPolicy>(StringComparer.OrdinalIgnoreCase));
+            new Dictionary<string, RateLimitPolicy>(StringComparer.OrdinalIgnoreCase),
+            []);
 
         var snapshot = await new GatewayConfigStore(db).LoadSnapshotAsync();
 

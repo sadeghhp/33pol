@@ -35,12 +35,24 @@ public sealed record CorsConfigSection
 }
 
 /// <summary>
-/// Rate-limit section of the config snapshot. The resolver picks a tier in precedence order:
-/// per-tenant override, then plan, then default. Plan/tenant keys are compared OrdinalIgnoreCase.
-/// TenantOverrides comes from the <c>RateLimiting:Tenants</c> map and is therefore populated only on
-/// a database-less deployment, where appsettings is the whole of the configuration; the
-/// database-backed snapshot has no table for it yet and always leaves it empty.
+/// Rate-limit section of the config snapshot.
 /// </summary>
+/// <remarks>
+/// <para>The scopes here compose rather than override one another: a request is admitted only when
+/// every scope that applies to it admits it. Adding a narrower rule can therefore only tighten what
+/// a caller may do, which is what makes the outcome independent of the order rules were configured
+/// in.</para>
+///
+/// <para>Precedence applies <em>within</em> the tenant scope only, where three sources can each name
+/// a tier for the same caller: a per-tenant override wins, then the tenant's plan, then the default.
+/// Every other scope has exactly one source, so there is nothing to resolve. All keys are compared
+/// OrdinalIgnoreCase.</para>
+///
+/// <para><see cref="TenantOverrides"/>, <see cref="Models"/> and the combined maps are populated
+/// from the database on a database-backed deployment and from the <c>RateLimiting</c> section of
+/// appsettings on a database-less one; both sources produce the same shape, and the database wins
+/// where a deployment has one.</para>
+/// </remarks>
 public sealed record RateLimitsConfigSection
 {
     /// <summary>
@@ -51,11 +63,40 @@ public sealed record RateLimitsConfigSection
     /// </summary>
     public bool Enabled { get; init; } = true;
 
+    /// <summary>
+    /// Whether load-aware adaptation may reduce the configured tiers. Separate from
+    /// <see cref="Enabled"/> so an operator can switch off the clever half without switching off
+    /// enforcement — the order you want in an incident.
+    /// </summary>
+    public bool AdaptiveEnabled { get; init; }
+
     public RateLimitPolicy Default { get; init; } = RateLimitPolicy.Default;
 
     public IReadOnlyDictionary<string, RateLimitPolicy> Plans { get; init; } = EmptyMap;
 
     public IReadOnlyDictionary<string, RateLimitPolicy> TenantOverrides { get; init; } = EmptyMap;
+
+    /// <summary>A ceiling on all inference traffic; <see cref="RateLimitPolicy.Unlimited"/> when unset.</summary>
+    public RateLimitPolicy Global { get; init; } = RateLimitPolicy.Unlimited;
+
+    /// <summary>Per-model limits, keyed by canonical model id.</summary>
+    public IReadOnlyDictionary<string, RateLimitPolicy> Models { get; init; } = EmptyMap;
+
+    /// <summary>Per-API-key limits, keyed by key id.</summary>
+    public IReadOnlyDictionary<string, RateLimitPolicy> ApiKeys { get; init; } = EmptyMap;
+
+    /// <summary>Combined limits keyed <c>tenantId|modelId</c>.</summary>
+    public IReadOnlyDictionary<string, RateLimitPolicy> TenantModels { get; init; } = EmptyMap;
+
+    /// <summary>Combined limits keyed <c>apiKeyId|modelId</c>.</summary>
+    public IReadOnlyDictionary<string, RateLimitPolicy> ApiKeyModels { get; init; } = EmptyMap;
+
+    /// <summary>
+    /// The budget for requests authentication refuses, per client address block.
+    /// <see cref="RateLimitPolicy.Unlimited"/> means "use the default tier", which is what
+    /// deployments that never configured one get.
+    /// </summary>
+    public RateLimitPolicy AuthFailure { get; init; } = RateLimitPolicy.Unlimited;
 
     public static RateLimitsConfigSection Defaults { get; } = new();
 

@@ -23,4 +23,27 @@ public static class GatewayHeaders
 
     /// <summary>Seconds until the partition is back at its full budget.</summary>
     public const string RateLimitReset = "X-33pol-RateLimit-Reset";
+
+    /// <summary>
+    /// Which scope the reported budget belongs to — <c>global</c>, <c>tenant</c>, <c>api_key</c>,
+    /// <c>model</c>, <c>tenant_model</c> or <c>api_key_model</c>.
+    /// </summary>
+    /// <remarks>
+    /// Several limits apply to one request, so a bare remaining-count is ambiguous: a client that
+    /// sees 4 left cannot tell whether it is its own key, its whole organisation, or the model it
+    /// chose that is nearly exhausted, and those call for three different responses. On a rejection
+    /// this names the scope that refused; on a success, the one closest to refusing.
+    /// </remarks>
+    public const string RateLimitScope = "X-33pol-RateLimit-Scope";
+
+    /// <summary>
+    /// Present only while load-aware adaptation is holding the reported scope below its configured
+    /// rate, as <c>&lt;effective&gt;/&lt;configured&gt;</c> requests per minute.
+    /// </summary>
+    /// <remarks>
+    /// Absent means "you are being enforced exactly as configured", which is the answer to the first
+    /// question anyone asks when a limit behaves unexpectedly. Emitting it unconditionally would make
+    /// the interesting case invisible among the ordinary ones.
+    /// </remarks>
+    public const string RateLimitAdaptive = "X-33pol-RateLimit-Adaptive";
 }

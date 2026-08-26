@@ -21,5 +21,10 @@ internal sealed class RateLimitDefaultsEntityConfiguration : IEntityTypeConfigur
         // column default is the only thing protecting those installs.
         builder.Property(d => d.Enabled)
             .HasDefaultValue(true);
+
+        // False for databases created before the column existed, which is the same answer they gave
+        // when adaptation did not exist: enforce exactly the configured tiers.
+        builder.Property(d => d.AdaptiveEnabled)
+            .HasDefaultValue(false);
     }
 }

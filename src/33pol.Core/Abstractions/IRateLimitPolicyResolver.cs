@@ -12,4 +12,15 @@ public interface IRateLimitPolicyResolver
     /// acquiring request or stream-concurrency slots.
     /// </summary>
     bool IsEnabled();
+
+    /// <summary>
+    /// The tier applied to requests authentication refuses, counted per client address block.
+    /// </summary>
+    /// <remarks>
+    /// Its own tier because the default one is the wrong shape for credential guessing: a default
+    /// sized for legitimate traffic lets one address make hundreds of guesses a minute, which is not
+    /// a limit on guessing in any useful sense. The default body returns the default tier, which is
+    /// what the gateway enforced before the setting existed.
+    /// </remarks>
+    RateLimitPolicy ResolveAuthFailure() => Resolve(planSlug: null, tenantSlug: null);
 }

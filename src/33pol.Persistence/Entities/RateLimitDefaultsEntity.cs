@@ -19,5 +19,13 @@ public sealed class RateLimitDefaultsEntity
 
     public int MaxConcurrentStreams { get; set; }
 
+    /// <summary>
+    /// Whether load-aware adaptation may reduce the configured tiers. Separate from
+    /// <see cref="Enabled"/> so an operator can switch off the clever half without switching off
+    /// enforcement — the order you want in an incident. Defaults to false: a gateway enforces
+    /// exactly what it was configured to until someone asks for something cleverer.
+    /// </summary>
+    public bool AdaptiveEnabled { get; set; }
+
     public DateTimeOffset UpdatedAt { get; set; }
 }

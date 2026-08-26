@@ -87,6 +87,13 @@ public static class GatewayConfigSnapshotServiceCollectionExtensions
                     static t => t.Key,
                     static t => ToPolicy(t.Value),
                     StringComparer.OrdinalIgnoreCase),
+                AdaptiveEnabled = rateLimiting.Adaptive.Enabled,
+                Global = ToPolicy(rateLimiting.Global),
+                Models = ToPolicyMap(rateLimiting.Models),
+                ApiKeys = ToPolicyMap(rateLimiting.ApiKeys),
+                TenantModels = ToPolicyMap(rateLimiting.TenantModels),
+                ApiKeyModels = ToPolicyMap(rateLimiting.ApiKeyModels),
+                AuthFailure = ToPolicy(rateLimiting.AuthFailure),
             },
             Quota = new QuotaConfigSection
             {
@@ -98,4 +105,11 @@ public static class GatewayConfigSnapshotServiceCollectionExtensions
 
     private static RateLimitPolicy ToPolicy(RateLimitTierOptions tier) =>
         new(tier.Rpm, tier.Burst, tier.MaxConcurrentStreams);
+
+    private static IReadOnlyDictionary<string, RateLimitPolicy> ToPolicyMap(
+        Dictionary<string, RateLimitTierOptions> tiers) =>
+        tiers.ToDictionary(
+            static t => t.Key,
+            static t => ToPolicy(t.Value),
+            StringComparer.OrdinalIgnoreCase);
 }

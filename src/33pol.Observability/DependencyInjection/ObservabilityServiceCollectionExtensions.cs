@@ -10,6 +10,7 @@ using Pol33.Observability.ControlPlane;
 using Pol33.Observability.Diagnostics;
 using Pol33.Observability.Metrics;
 using Pol33.Observability.Policy;
+using Pol33.Observability.RateLimiting;
 using Pol33.Observability.RecentRequests;
 using Pol33.Observability.Runtime;
 using Pol33.Observability.Summary;
@@ -35,6 +36,8 @@ public static class ObservabilityServiceCollectionExtensions
         services.AddSingleton(sp => new GatewayRuntimeState(sp.GetRequiredService<RollingWindowStats>()));
         services.AddHostedService<GatewayOverviewSamplerHostedService>();
         services.AddSingleton(sp => new PolicyPressureTracker(sp.GetRequiredService<TimeProvider>()));
+        services.AddSingleton<RateLimitUsageTracker>();
+        services.AddSingleton<IRateLimitUsageTracker>(sp => sp.GetRequiredService<RateLimitUsageTracker>());
         services.AddSingleton<GatewayMetricsCollector>();
         services.AddSingleton<IGatewayMetricsCollector>(sp => sp.GetRequiredService<GatewayMetricsCollector>());
         services.AddSingleton<IUsageQualityCounters>(sp => sp.GetRequiredService<GatewayMetricsCollector>());

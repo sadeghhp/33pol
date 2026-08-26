@@ -23,6 +23,11 @@ public static class PolicyServiceCollectionExtensions
             .Bind(configuration.GetSection(QuotaOptions.SectionName));
 
         services.AddSingleton<IRateLimitPolicyResolver, RateLimitPolicyResolver>();
+        services.AddSingleton<RateLimitPlanResolver>();
+        services.AddSingleton<IRateLimitPlanResolver>(sp => sp.GetRequiredService<RateLimitPlanResolver>());
+        services.AddSingleton<AdaptiveRateLimitGovernor>();
+        services.AddSingleton<IAdaptiveRateLimitGovernor>(sp => sp.GetRequiredService<AdaptiveRateLimitGovernor>());
+        services.AddHostedService<RateLimitMaintenanceHostedService>();
         services.AddSingleton<IRateLimitConfigAdminService, RateLimitConfigAdminService>();
         services.AddSingleton<ICorsConfigAdminService, CorsConfigAdminService>();
         services.AddSingleton<IDistributedRateLimitStore, InMemoryDistributedRateLimitStore>();

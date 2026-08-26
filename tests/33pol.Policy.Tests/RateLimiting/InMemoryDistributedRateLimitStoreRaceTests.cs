@@ -12,36 +12,44 @@ namespace Pol33.Policy.Tests.RateLimiting;
 /// </summary>
 public sealed class InMemoryDistributedRateLimitStoreRaceTests
 {
-    private static InMemoryDistributedRateLimitStore Create(
-        int retentionSeconds = 3600,
-        int compactEvery = 256) =>
+    private static InMemoryDistributedRateLimitStore Create(int retentionSeconds = 3600) =>
         new(Options.Create(new RateLimitingOptions
         {
             InMemoryPartitionRetentionSeconds = retentionSeconds,
-            InMemoryCompactionEveryOperations = compactEvery,
         }));
 
     /// <summary>
-    /// Acquire/release churn drives compaction constantly. A tenant that never exceeds its limit
-    /// must never see a rejection — every one would be an eviction-race artefact, since a tombstoned
-    /// state used to fail acquisition outright.
+    /// The maintenance sweep now runs on its own thread, concurrently with traffic, so the eviction
+    /// race it can lose is wider than it was when sweeping happened inline. A tenant that never
+    /// exceeds its limit must still never see a rejection — every one would be a tombstoned state
+    /// being handed out as if it were live, which used to fail acquisition outright.
     /// </summary>
     [Fact]
-    public async Task TryAcquireStreamSlot_UnderCompactionChurn_NeverRejectsBelowTheLimit()
+    public async Task TryAcquireStreamSlot_WhileTheSweeperRuns_NeverRejectsBelowTheLimit()
     {
-        // Aggressive compaction and instant staleness maximise the eviction window.
-        var store = Create(retentionSeconds: 1, compactEvery: 1);
+        // Instant staleness maximises how much a concurrent sweep is willing to evict.
+        var store = Create(retentionSeconds: 1);
         var policy = new RateLimitPolicy(Rpm: 100_000, Burst: 0, MaxConcurrentStreams: 4);
 
         var spuriousRejections = 0;
+        using var sweeping = new CancellationTokenSource();
+
+        var sweeper = Task.Run(() =>
+        {
+            while (!sweeping.IsCancellationRequested)
+            {
+                // A far-future timestamp: everything idle is stale, so every sweep evicts whatever
+                // is not holding a slot at that instant.
+                store.Compact(DateTimeOffset.UtcNow.AddHours(1));
+            }
+        });
 
         await Task.WhenAll(Enumerable.Range(0, 8).Select(worker => Task.Run(() =>
         {
             for (var i = 0; i < 500; i++)
             {
-                // One slot at a time per worker, well under the limit of 4 across 8 workers only if
-                // they serialise — so use a distinct partition per worker to keep the invariant
-                // strictly "one in flight, limit 4".
+                // One slot at a time per worker, so a distinct partition per worker keeps the
+                // invariant strictly "one in flight, limit 4".
                 var partition = $"tenant-{worker}";
 
                 var result = store.TryAcquireStreamSlot(partition, policy);
@@ -55,6 +63,9 @@ public sealed class InMemoryDistributedRateLimitStoreRaceTests
             }
         })));
 
+        await sweeping.CancelAsync();
+        await sweeper;
+
         spuriousRejections.Should().Be(
             0,
             "no partition ever held more than one concurrent stream against a limit of 4");
@@ -63,18 +74,14 @@ public sealed class InMemoryDistributedRateLimitStoreRaceTests
     [Fact]
     public void TryAcquireStreamSlot_AfterEvictionOfAnIdlePartition_StillAcquires()
     {
-        var store = Create(retentionSeconds: 1, compactEvery: 1);
+        var store = Create(retentionSeconds: 1);
         var policy = new RateLimitPolicy(Rpm: 100_000, Burst: 0, MaxConcurrentStreams: 2);
 
         store.TryAcquireStreamSlot("tenant-a", policy).IsAcquired.Should().BeTrue();
         store.ReleaseStreamSlot("tenant-a");
 
-        // Drive compaction repeatedly so "tenant-a" is swept while idle, then use it again.
-        for (var i = 0; i < 50; i++)
-        {
-            store.TryAcquireStreamSlot("filler", policy);
-            store.ReleaseStreamSlot("filler");
-        }
+        // Sweep it away while idle, then use it again.
+        store.Compact(DateTimeOffset.UtcNow.AddHours(1));
 
         store.TryAcquireStreamSlot("tenant-a", policy).IsAcquired
             .Should().BeTrue("a swept partition must be recreated, not resurrected as a tombstone");
@@ -174,33 +181,26 @@ public sealed class InMemoryDistributedRateLimitStoreRaceTests
     }
 
     /// <summary>
-    /// Compaction runs on rejection paths too. Previously it was only reached after a successful
-    /// acquire, so a partition stuck permanently over its limit was never swept.
+    /// A rejection touches the partition, so a caller stuck permanently over its limit is never the
+    /// one a sweep evicts. Evicting it would hand it a fresh, full bucket — a limit bypass available
+    /// to anyone willing to keep being refused.
     /// </summary>
     [Fact]
-    public void TryAcquireRequest_PermanentlyRejectedPartitions_StillDriveCompaction()
+    public void Compact_WhileAPartitionIsBeingRejected_DoesNotEvictIt()
     {
-        var store = Create(retentionSeconds: 1, compactEvery: 2);
+        var store = Create(retentionSeconds: 60);
         var policy = new RateLimitPolicy(Rpm: 1, Burst: 0, MaxConcurrentStreams: 0);
         var now = new DateTimeOffset(2026, 7, 29, 12, 0, 0, TimeSpan.Zero);
 
         store.TryAcquireRequest("blocked", policy, now).IsAcquired.Should().BeTrue();
 
-        // Every subsequent call in this window is rejected; the act of rejecting must still tick the
-        // compaction counter rather than skipping it.
-        var act = () =>
+        for (var i = 0; i < 20; i++)
         {
-            for (var i = 0; i < 20; i++)
-            {
-                store.TryAcquireRequest("blocked", policy, now).IsAcquired.Should().BeFalse();
-            }
-        };
+            store.TryAcquireRequest("blocked", policy, now).IsAcquired.Should().BeFalse();
+            store.Compact(now);
+        }
 
-        act.Should().NotThrow();
-
-        // An idle partition created earlier is swept by that compaction and comes back fresh.
-        store.TryAcquireRequest("idle", policy, now).IsAcquired.Should().BeTrue();
-        store.TryAcquireRequest("idle", policy, now.AddSeconds(30)).IsAcquired
-            .Should().BeFalse("still inside the same minute window");
+        store.TryAcquireRequest("blocked", policy, now).IsAcquired
+            .Should().BeFalse("the partition kept its drained bucket across every sweep");
     }
 }

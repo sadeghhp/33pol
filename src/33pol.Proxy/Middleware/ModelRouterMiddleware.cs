@@ -46,6 +46,15 @@ public sealed class ModelRouterMiddleware
     private readonly IGatewayErrorRecorder _errorRecorder;
     private readonly ILogger<ModelRouterMiddleware> _logger;
 
+    /// <summary>
+    /// Optional so the many tests that build this middleware by hand keep compiling. When absent the
+    /// stream-concurrency cap falls back to the tenant tier alone, which is what it enforced before
+    /// scoped rules existed.
+    /// </summary>
+    private readonly IRateLimitPlanResolver? _rateLimitPlanResolver;
+
+    private readonly IRateLimitUsageTracker? _rateLimitUsage;
+
     public ModelRouterMiddleware(
         RequestDelegate next,
         IModelRegistry registry,
@@ -66,7 +75,9 @@ public sealed class ModelRouterMiddleware
         IUpstreamBearerTokenResolver upstreamBearerTokenResolver,
         IBudgetEnforcementService budgetEnforcement,
         IGatewayErrorRecorder errorRecorder,
-        ILogger<ModelRouterMiddleware> logger)
+        ILogger<ModelRouterMiddleware> logger,
+        IRateLimitPlanResolver? rateLimitPlanResolver = null,
+        IRateLimitUsageTracker? rateLimitUsage = null)
     {
         _next = next;
         _registry = registry;
@@ -88,6 +99,8 @@ public sealed class ModelRouterMiddleware
         _budgetEnforcement = budgetEnforcement;
         _errorRecorder = errorRecorder;
         _logger = logger;
+        _rateLimitPlanResolver = rateLimitPlanResolver;
+        _rateLimitUsage = rateLimitUsage;
     }
 
     public async Task InvokeAsync(HttpContext context)
@@ -266,31 +279,39 @@ public sealed class ModelRouterMiddleware
 
         using (bulkheadLease)
         {
-            var ratePartitionKey = RateLimitPartition.Resolve(context);
-            var rateTenant = context.Items.TryGetValue(TenantContextKeys.HttpContextItemKey, out var rateTenantItem)
-                ? rateTenantItem as TenantContext
-                : null;
-
-            // Resolved from the tenant slug, not from the partition key. The two are the same string
-            // for authenticated traffic, but an anonymous partition is "anon:<address>" — passing it
-            // as a tenant slug would look for a per-tenant override under a key no tenant can have,
-            // and would disagree with the tier RateLimitMiddleware picked for the same request.
-            var ratePolicy = _rateLimitPolicyResolver.Resolve(rateTenant?.PlanSlug, rateTenant?.TenantId);
+            var rateSubject = RateLimitPartition.ResolveSubject(context);
+            var ratePartitionKey = rateSubject.PartitionKey;
 
             // The stream-concurrency cap is part of rate limiting, so the same master switch governs it;
             // otherwise "rate limiting off" would still throttle streaming requests.
-            var rateLimitingEnabled = _rateLimitPolicyResolver.IsEnabled();
+            var rateLimitingEnabled = _rateLimitPlanResolver?.IsEnabled() ?? _rateLimitPolicyResolver.IsEnabled();
 
-            var streamSlotAcquired = false;
+            var streamLease = RateLimitSlotLease.Empty;
             if (requestInfo.Stream && rateLimitingEnabled)
             {
-                var streamAcquire = _rateLimitStore.TryAcquireStreamSlot(ratePartitionKey, ratePolicy);
+                // Every scope that caps concurrency is taken at once, in one place, so a model's
+                // slots and a tenant's slots cannot be admitted independently and then disagree. The
+                // model id is the canonical one, which is what per-model rules are keyed on.
+                var streamAcquire = AcquireStreamSlots(rateSubject, modelConfig.Id, out streamLease);
                 if (!streamAcquire.IsAcquired)
                 {
                     // Client-tier concurrency limit, not a backend signal. It is governed by the
                     // rate-limit master switch, so it is counted as a rate-limit rejection too —
                     // otherwise the console's "Rate-limited" stat silently omitted stream caps.
-                    _metricsCollector.RecordRateLimitRejection("stream_concurrency", ratePartitionKey, modelConfig.Id);
+                    var scopeLabel = streamAcquire.Scope?.ToLabel() ?? "tenant";
+                    _metricsCollector.RecordRateLimitRejection(
+                        "stream_concurrency:" + scopeLabel,
+                        ratePartitionKey,
+                        modelConfig.Id);
+                    _rateLimitUsage?.Record(new RateLimitUsageEvent(
+                        ratePartitionKey,
+                        rateSubject.ApiKeyId,
+                        modelConfig.Id,
+                        Admitted: false,
+                        streamAcquire.Scope,
+                        RateLimitControl.Concurrency,
+                        streamAcquire.Limit ?? 0,
+                        streamAcquire.Limit ?? 0));
                     await RejectAtAdmissionAsync(
                         context,
                         modelConfig.Id,
@@ -300,8 +321,6 @@ public sealed class ModelRouterMiddleware
                         retryAfterSeconds: streamAcquire.RetryAfterSeconds).ConfigureAwait(false);
                     return;
                 }
-
-                streamSlotAcquired = true;
             }
 
             // Declared outside the try so the catch below can mark it failed. Every exception that
@@ -680,12 +699,41 @@ public sealed class ModelRouterMiddleware
             finally
             {
                 inferenceScope?.Dispose();
-                if (streamSlotAcquired)
+                if (streamLease.Count > 0)
                 {
-                    _rateLimitStore.ReleaseStreamSlot(ratePartitionKey);
+                    _rateLimitStore.ReleaseStreamSlots(streamLease);
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// Takes a concurrency slot in every scope that caps concurrency for this caller and model.
+    /// </summary>
+    /// <remarks>
+    /// Falls back to the tenant tier alone when no plan resolver is wired — the behaviour before
+    /// scoped rules existed, and what the middleware's hand-built test instances get.
+    /// </remarks>
+    private RateLimitAcquireResult AcquireStreamSlots(
+        in RateLimitSubject subject,
+        string modelId,
+        out RateLimitSlotLease lease)
+    {
+        if (_rateLimitPlanResolver is null)
+        {
+            lease = RateLimitSlotLease.Empty;
+            var tier = _rateLimitPolicyResolver.Resolve(subject.PlanSlug, subject.TenantId);
+            var single = _rateLimitStore.TryAcquireStreamSlot(subject.PartitionKey, tier);
+            if (single.IsAcquired && tier.EnforcesConcurrency)
+            {
+                lease = new RateLimitSlotLease([subject.PartitionKey], 1);
+            }
+
+            return single;
+        }
+
+        var plan = _rateLimitPlanResolver.Resolve(subject, modelId);
+        return _rateLimitStore.TryAcquireStreamSlots(plan.Rules, out lease);
     }
 
     /// <summary>

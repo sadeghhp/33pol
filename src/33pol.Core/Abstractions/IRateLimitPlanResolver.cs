@@ -24,4 +24,15 @@ public interface IRateLimitPlanResolver
     /// — the second call reuses the same cached rules for the first stage.
     /// </param>
     RateLimitPlan Resolve(in RateLimitSubject subject, string? modelId);
+
+    /// <summary>
+    /// Whether any model-scoped rule is configured anywhere.
+    /// </summary>
+    /// <remarks>
+    /// The request path uses this to decide whether it needs the model at all. Learning the model
+    /// means buffering and parsing the request body, and on a gateway with no per-model rules — the
+    /// default, and every deployment that predates them — that parse would buy nothing. Checking
+    /// first keeps the added cost of the feature at zero for anyone not using it.
+    /// </remarks>
+    bool HasModelScopedRules();
 }

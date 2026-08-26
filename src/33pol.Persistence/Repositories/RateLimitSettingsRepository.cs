@@ -12,12 +12,15 @@ public sealed class RateLimitSettingsRepository(GatewayDbContext dbContext) : IR
 
     public async Task SaveAsync(
         bool enabled,
+        bool adaptiveEnabled,
         RateLimitPolicy defaultTier,
         IReadOnlyDictionary<string, RateLimitPolicy> plans,
+        IReadOnlyList<RateLimitRuleDefinition> rules,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(defaultTier);
         ArgumentNullException.ThrowIfNull(plans);
+        ArgumentNullException.ThrowIfNull(rules);
 
         var now = DateTimeOffset.UtcNow;
 
@@ -32,6 +35,7 @@ public sealed class RateLimitSettingsRepository(GatewayDbContext dbContext) : IR
         }
 
         defaults.Enabled = enabled;
+        defaults.AdaptiveEnabled = adaptiveEnabled;
         defaults.Rpm = defaultTier.Rpm;
         defaults.Burst = defaultTier.Burst;
         defaults.MaxConcurrentStreams = defaultTier.MaxConcurrentStreams;
@@ -53,6 +57,27 @@ public sealed class RateLimitSettingsRepository(GatewayDbContext dbContext) : IR
                 Rpm = tier.Rpm,
                 Burst = tier.Burst,
                 MaxConcurrentStreams = tier.MaxConcurrentStreams,
+                UpdatedAt = now,
+            });
+        }
+
+        // Same wholesale replacement, for the same reason: the rule set an admin submits is the
+        // complete one, and merging would leave no way to delete a rule.
+        var existingRules = await dbContext.RateLimitRules
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+        dbContext.RateLimitRules.RemoveRange(existingRules);
+
+        foreach (var rule in rules)
+        {
+            dbContext.RateLimitRules.Add(new RateLimitRuleEntity
+            {
+                Id = Guid.NewGuid(),
+                Scope = rule.Scope,
+                TargetKey = rule.TargetKey,
+                Rpm = rule.Rpm,
+                Burst = rule.Burst,
+                MaxConcurrentStreams = rule.MaxConcurrentStreams,
                 UpdatedAt = now,
             });
         }
