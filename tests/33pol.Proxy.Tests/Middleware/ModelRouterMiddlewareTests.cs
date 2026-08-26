@@ -1336,6 +1336,21 @@ public sealed class ModelRouterMiddlewareTests
         }
     }
 
+    /// <summary>
+    /// The same harness, for the rate-limit tests next door: building the router by hand takes
+    /// twenty collaborators, and duplicating that is how the two copies drift apart.
+    /// </summary>
+    internal static ModelRouterMiddleware CreateMiddlewareForRateLimitTests(
+        Pol33.Registry.Services.ModelRegistryService registry,
+        IInferenceHttpForwarder forwarder,
+        IRateLimitPolicyResolver? rateLimitPolicyResolver = null,
+        IDistributedRateLimitStore? rateLimitStore = null) =>
+        CreateMiddleware(
+            registry: registry,
+            forwarder: forwarder,
+            rateLimitPolicyResolver: rateLimitPolicyResolver,
+            rateLimitStore: rateLimitStore);
+
     private static ModelRouterMiddleware CreateMiddleware(
         RequestDelegate? next = null,
         IModelRegistry? registry = null,
@@ -1351,7 +1366,9 @@ public sealed class ModelRouterMiddlewareTests
         GatewayOptions? gatewayOptions = null,
         IBudgetEnforcementService? budgetEnforcement = null,
         ModelCircuitBreakerRegistry? circuitBreakers = null,
-        IGatewayErrorRecorder? errorRecorder = null)
+        IGatewayErrorRecorder? errorRecorder = null,
+        IRateLimitPolicyResolver? rateLimitPolicyResolver = null,
+        IDistributedRateLimitStore? rateLimitStore = null)
     {
         next ??= _ => Task.CompletedTask;
         registry ??= Substitute.For<IModelRegistry>();
@@ -1390,15 +1407,29 @@ public sealed class ModelRouterMiddlewareTests
         var gatewayOptionsWrapper = Options.Create(options);
         circuitBreakers ??= new ModelCircuitBreakerRegistry(gatewayOptionsWrapper, metricsCollector);
         bulkhead ??= new BulkheadRegistry(gatewayOptionsWrapper, metricsCollector);
-        var rateLimitResolver = Substitute.For<IRateLimitPolicyResolver>();
-        rateLimitResolver.Resolve(Arg.Any<string?>(), Arg.Any<string?>())
-            .Returns(new RateLimitPolicy(10_000, 1_000, 1_000));
-        // Must be stubbed explicitly: an unconfigured substitute returns false, which would silently
-        // bypass the stream-slot path these tests exercise.
-        rateLimitResolver.IsEnabled().Returns(true);
-        var rateLimitStore = Substitute.For<IDistributedRateLimitStore>();
-        rateLimitStore.TryAcquireStreamSlot(Arg.Any<string>(), Arg.Any<RateLimitPolicy>())
-            .Returns(new RateLimitAcquireResult(true));
+        IRateLimitPolicyResolver rateLimitResolver;
+        if (rateLimitPolicyResolver is null)
+        {
+            var defaultResolver = Substitute.For<IRateLimitPolicyResolver>();
+            defaultResolver.Resolve(Arg.Any<string?>(), Arg.Any<string?>())
+                .Returns(new RateLimitPolicy(10_000, 1_000, 1_000));
+            // Must be stubbed explicitly: an unconfigured substitute returns false, which would
+            // silently bypass the stream-slot path these tests exercise.
+            defaultResolver.IsEnabled().Returns(true);
+            rateLimitResolver = defaultResolver;
+        }
+        else
+        {
+            rateLimitResolver = rateLimitPolicyResolver;
+        }
+
+        if (rateLimitStore is null)
+        {
+            var defaultStore = Substitute.For<IDistributedRateLimitStore>();
+            defaultStore.TryAcquireStreamSlot(Arg.Any<string>(), Arg.Any<RateLimitPolicy>())
+                .Returns(new RateLimitAcquireResult(true));
+            rateLimitStore = defaultStore;
+        }
 
         return new ModelRouterMiddleware(
             next,

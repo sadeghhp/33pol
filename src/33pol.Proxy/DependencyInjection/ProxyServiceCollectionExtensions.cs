@@ -37,6 +37,13 @@ public static class ProxyServiceCollectionExtensions
     public static IApplicationBuilder UseInferenceResilience(this IApplicationBuilder app) =>
         app.UseMiddleware<InferenceResilienceMiddleware>();
 
+    /// <summary>
+    /// Wraps the security middleware so requests it refuses are still bounded. Must be registered
+    /// immediately before <c>UseGatewaySecurity</c>.
+    /// </summary>
+    public static IApplicationBuilder UseAuthFailureRateLimiting(this IApplicationBuilder app) =>
+        app.UseMiddleware<AuthFailureRateLimitMiddleware>();
+
     public static IApplicationBuilder UseGatewayRateLimiting(this IApplicationBuilder app) =>
         app.UseMiddleware<RateLimitMiddleware>();
 

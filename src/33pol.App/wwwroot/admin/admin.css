@@ -1354,6 +1354,15 @@ tr.request-detail-row td { background: var(--bg-inset); padding-top: 0.75rem; }
 .grant-list label.checkbox:last-child { margin-bottom: 0; }
 
 /* Rate-limit + CORS rows */
+/* Field glossary: term/definition pairs above a settings form; stacks on narrow screens. */
+.setting-defs { display: grid; grid-template-columns: minmax(5.5rem, max-content) 1fr; gap: 0.3rem 0.8rem; margin: 0.35rem 0 0.9rem; max-width: var(--measure); font-size: var(--text-xs); line-height: 1.5; color: var(--text-secondary); }
+.setting-defs dt { margin: 0; font-weight: var(--fw-semi); color: var(--text-primary); }
+.setting-defs dd { margin: 0; }
+.setting-defs code { font-size: 0.95em; padding: 0.05rem 0.3rem; border-radius: var(--r-xs); background: var(--bg-sunken); }
+@media (max-width: 40rem) {
+  .setting-defs { grid-template-columns: 1fr; gap: 0.1rem; }
+  .setting-defs dd { margin-bottom: 0.5rem; }
+}
 /* Numeric tiers: the 13rem ceiling stops an RPM box from spanning a quarter of a wide screen. */
 .rl-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(7.5rem, 13rem)); gap: 0.6rem 0.9rem; align-items: end; }
 .rl-grid label { margin: 0; }

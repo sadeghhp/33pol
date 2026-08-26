@@ -129,9 +129,9 @@ flowchart LR
 
 ### Request path (inference)
 
-1. **Authenticate** — Inference API key (`Authorization: Bearer` or `X-API-Key`) when the database/bootstrap is enabled, unless the model has `publicAccess: true`.
+1. **Authenticate** — Inference API key (`Authorization: Bearer` or `X-API-Key`) when the database/bootstrap is enabled, unless the model has `publicAccess: true`. Rejected credentials are themselves rate limited, per client address, so a wrong key cannot be retried without a ceiling.
 2. **Authorize model** — Tenant ceiling and per-key allowlist must include the requested `model` (or alias); public models skip grant checks.
-3. **Policy** — Rate limit (RPM, burst, concurrent streams), then quota / budget checks.
+3. **Policy** — Rate limit (RPM, burst, concurrent streams) against the tenant's tier, then quota / budget checks.
 4. **Route** — Resolve backend URL from registry; apply circuit breaker and timeouts.
 5. **Forward** — Same path to upstream (`POST /v1/chat/completions` → `{backend}/v1/chat/completions`).
 6. **Record** — Usage event enqueued; tokens committed after completion; metrics updated.
@@ -139,8 +139,8 @@ flowchart LR
 Middleware order on the hot path:
 
 ```text
-Serilog → Routing → CORS → RequestId → Auth → Authorization
-  → Rate limit → Quota → Model router → upstream HTTP
+Serilog → Routing → CORS → RequestId → Auth-failure rate limit
+  → Auth → Authorization → Rate limit → Quota → Model router → upstream HTTP
 ```
 
 `/health/*`, `/metrics`, and `/admin` branches **do not** pass through the model router.

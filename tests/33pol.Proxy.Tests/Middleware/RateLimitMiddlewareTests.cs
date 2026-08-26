@@ -89,14 +89,14 @@ public sealed class RateLimitMiddlewareTests
     }
 
     /// <summary>
-    /// A body the router will reject anyway must not consume a request from the RPM bucket: with a
-    /// budget of one request, a malformed request followed by a valid one must let the valid one
-    /// through, and the malformed one gets the router's own error code rather than a 429.
+    /// A body the router will reject anyway is answered here rather than three middlewares later —
+    /// but only after the bucket has been debited. Answering ahead of the debit made an unroutable
+    /// body a free request, so a tenant could send malformed payloads without any ceiling at all.
     /// </summary>
     [Theory]
     [InlineData(true, "invalid_json")]
     [InlineData(false, "missing_model")]
-    public async Task InvokeAsync_CachedUnroutableBody_RejectsWithoutDebitingRateLimit(
+    public async Task InvokeAsync_CachedUnroutableBody_RejectsAndStillDebitsRateLimit(
         bool invalidJson,
         string expectedErrorCode)
     {
@@ -134,13 +134,88 @@ public sealed class RateLimitMiddlewareTests
         rejected.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
         rejected.Response.Headers[GatewayHeaders.ErrorCode].ToString().Should().Be(expectedErrorCode);
 
-        var valid = CreateInferenceContext();
-        InferenceRequestParseCache.SetParsed(valid, new InferenceRequestInfo(Model: "gpt", Stream: false));
+        var next = CreateInferenceContext();
+        InferenceRequestParseCache.SetParsed(next, new InferenceRequestInfo(Model: "gpt", Stream: false));
 
-        await middleware.InvokeAsync(valid);
+        await middleware.InvokeAsync(next);
 
-        nextCalls.Should().Be(1, "the malformed request must not have consumed the only permitted request");
-        valid.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        nextCalls.Should().Be(0, "the malformed request consumed the only permitted request");
+        next.Response.StatusCode.Should().Be(StatusCodes.Status429TooManyRequests);
+        next.Response.Headers[GatewayHeaders.ErrorCode].ToString().Should().Be("rate_limit_exceeded");
+    }
+
+    /// <summary>
+    /// With the master switch off the early answer is skipped entirely — the router gives the same
+    /// one a few frames later, and nothing here should run when rate limiting is not enforced.
+    /// </summary>
+    [Fact]
+    public async Task InvokeAsync_CachedUnroutableBody_WhenRateLimitingDisabled_FallsThroughToTheRouter()
+    {
+        var resolver = new RateLimitPolicyResolver(new StubConfigProvider(new GatewayConfigSnapshot
+        {
+            RateLimits = new RateLimitsConfigSection { Enabled = false, Default = new RateLimitPolicy(1, 0, 5) },
+        }));
+        var nextCalls = 0;
+        var middleware = new RateLimitMiddleware(
+            _ =>
+            {
+                nextCalls++;
+                return Task.CompletedTask;
+            },
+            resolver,
+            new InMemoryDistributedRateLimitStore(),
+            new OpenAiErrorResponseWriter(),
+            Substitute.For<IGatewayMetricsCollector>(),
+            TimeProvider.System);
+
+        var context = CreateInferenceContext();
+        InferenceRequestParseCache.SetInvalidJson(context);
+
+        await middleware.InvokeAsync(context);
+
+        nextCalls.Should().Be(1);
+        context.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+    }
+
+    /// <summary>
+    /// Every answer carries the partition's budget, so a client can pace itself rather than
+    /// discovering the limit by being refused.
+    /// </summary>
+    [Fact]
+    public async Task InvokeAsync_PublishesBudgetHeaders_OnAdmissionAndOnRejection()
+    {
+        var resolver = new RateLimitPolicyResolver(new StubConfigProvider(new GatewayConfigSnapshot
+        {
+            RateLimits = new RateLimitsConfigSection { Default = new RateLimitPolicy(60, 2, 5) },
+        }));
+        var store = new InMemoryDistributedRateLimitStore();
+        var middleware = new RateLimitMiddleware(
+            _ => Task.CompletedTask,
+            resolver,
+            store,
+            new OpenAiErrorResponseWriter(),
+            Substitute.For<IGatewayMetricsCollector>(),
+            TimeProvider.System);
+
+        var admitted = CreateInferenceContext();
+        await middleware.InvokeAsync(admitted);
+
+        admitted.Response.Headers[GatewayHeaders.RateLimitLimit].ToString().Should().Be("62");
+        admitted.Response.Headers[GatewayHeaders.RateLimitRemaining].ToString().Should().Be("61");
+        admitted.Response.Headers[GatewayHeaders.RateLimitReset].ToString().Should().Be("1");
+
+        // Drain the bucket, then confirm the refusal reports an empty one rather than no headers.
+        for (var i = 0; i < 61; i++)
+        {
+            await middleware.InvokeAsync(CreateInferenceContext());
+        }
+
+        var refused = CreateInferenceContext();
+        await middleware.InvokeAsync(refused);
+
+        refused.Response.StatusCode.Should().Be(StatusCodes.Status429TooManyRequests);
+        refused.Response.Headers[GatewayHeaders.RateLimitLimit].ToString().Should().Be("62");
+        refused.Response.Headers[GatewayHeaders.RateLimitRemaining].ToString().Should().Be("0");
     }
 
     /// <summary>Without a cached parse the middleware behaves as before: it does not parse itself.</summary>

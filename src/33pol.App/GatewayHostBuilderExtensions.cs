@@ -79,6 +79,9 @@ public static class GatewayHostBuilderExtensions
         // spends work on the body.
         app.UseInferenceResilience();
         app.UsePublicModelDetection();
+        // Outside the security middleware, so the requests it refuses are counted somewhere: the
+        // rate limiter proper runs behind authentication and never sees a rejected credential.
+        app.UseAuthFailureRateLimiting();
         app.UseGatewaySecurity(app.Configuration);
         // /metrics is an anonymous path to the authentication handler (probes and scrapers do not
         // carry gateway keys), so its gate lives here: scrape token, Operator key, or explicit opt-in.

@@ -42,20 +42,12 @@ public sealed class RateLimitMiddleware
             return;
         }
 
-        // Global master switch, read from the live snapshot so the admin toggle applies without a restart.
+        // Global master switch, read from the live snapshot so the admin toggle applies without a
+        // restart. With it off, nothing below runs — including the early answer for unroutable
+        // bodies, which the router gives identically a few frames later.
         if (!_policyResolver.IsEnabled())
         {
             await _next(context).ConfigureAwait(false);
-            return;
-        }
-
-        // A body the router is going to reject anyway must not debit the RPM bucket. The parse
-        // result is already cached by PublicModelDetectionMiddleware (which runs earlier), so this
-        // is a dictionary lookup, not a parse; when nothing is cached the router parses and rejects
-        // as before. Answering here means a burst of malformed requests cannot lock a tenant's valid
-        // traffic out of its own rate limit.
-        if (await RejectUnroutableBodyAsync(context).ConfigureAwait(false))
-        {
             return;
         }
 
@@ -70,10 +62,21 @@ public sealed class RateLimitMiddleware
         var policy = _policyResolver.Resolve(planSlug, tenantSlug);
         var now = _timeProvider.GetUtcNow();
         var acquire = _rateLimitStore.TryAcquireRequest(partitionKey, policy, now);
+        WriteBudgetHeaders(context, acquire);
+
         if (!acquire.IsAcquired)
         {
             _metrics.RecordRateLimitRejection(acquire.RejectionReason?.ToString() ?? "rate_limit", partitionKey, modelId: null);
             await WriteRateLimitErrorAsync(context, acquire).ConfigureAwait(false);
+            return;
+        }
+
+        // Answered here, after the debit, when the cached parse already says the router is going to
+        // refuse this body: it saves the rest of the pipeline for a request that cannot be served.
+        // The debit has to come first — answering ahead of it made an unroutable body a free request,
+        // so a tenant could send malformed 25 MB payloads at any rate it liked and never be limited.
+        if (await RejectUnroutableBodyAsync(context).ConfigureAwait(false))
+        {
             return;
         }
 
@@ -85,6 +88,11 @@ public sealed class RateLimitMiddleware
     /// cached parse already says the body cannot be routed. Returns false when the body is routable
     /// or nothing is cached yet.
     /// </summary>
+    /// <remarks>
+    /// The parse is cached only when <c>PublicModelDetectionMiddleware</c> ran a parse of its own,
+    /// which it does only while at least one model is public. With none, nothing is cached and the
+    /// router answers instead — same status, same body, one middleware later.
+    /// </remarks>
     private async Task<bool> RejectUnroutableBodyAsync(HttpContext context)
     {
         if (!InferenceRequestParseCache.TryGet(context, out var cached))
@@ -109,6 +117,22 @@ public sealed class RateLimitMiddleware
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Publishes the partition's remaining budget on every answer, admitted or not, so a client can
+    /// pace itself instead of discovering the limit by being refused.
+    /// </summary>
+    private static void WriteBudgetHeaders(HttpContext context, RateLimitAcquireResult acquire)
+    {
+        if (acquire.Limit is not { } limit)
+        {
+            return;
+        }
+
+        context.Response.Headers[GatewayHeaders.RateLimitLimit] = limit.ToString();
+        context.Response.Headers[GatewayHeaders.RateLimitRemaining] = (acquire.Remaining ?? 0).ToString();
+        context.Response.Headers[GatewayHeaders.RateLimitReset] = (acquire.ResetAfterSeconds ?? 0).ToString();
     }
 
     private Task WriteRateLimitErrorAsync(HttpContext context, RateLimitAcquireResult acquire)

@@ -71,7 +71,8 @@ public sealed class GatewayConfigStore(GatewayDbContext dbContext) : IGatewayCon
                 p => p.Slug,
                 p => new RateLimitPolicy(p.Rpm, p.Burst, p.MaxConcurrentStreams),
                 StringComparer.OrdinalIgnoreCase),
-            // TenantOverrides intentionally empty (reserved) — see RateLimitsConfigSection.
+            // TenantOverrides has no table yet, so it stays empty here. A database-less deployment
+            // gets its overrides from RateLimiting:Tenants instead — see RateLimitsConfigSection.
         };
     }
 

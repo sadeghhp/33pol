@@ -267,11 +267,15 @@ public sealed class ModelRouterMiddleware
         using (bulkheadLease)
         {
             var ratePartitionKey = RateLimitPartition.Resolve(context);
-            var planSlug = context.Items.TryGetValue(TenantContextKeys.HttpContextItemKey, out var rateTenantItem) &&
-                           rateTenantItem is TenantContext rateTenantContext
-                ? rateTenantContext.PlanSlug
+            var rateTenant = context.Items.TryGetValue(TenantContextKeys.HttpContextItemKey, out var rateTenantItem)
+                ? rateTenantItem as TenantContext
                 : null;
-            var ratePolicy = _rateLimitPolicyResolver.Resolve(planSlug, ratePartitionKey);
+
+            // Resolved from the tenant slug, not from the partition key. The two are the same string
+            // for authenticated traffic, but an anonymous partition is "anon:<address>" — passing it
+            // as a tenant slug would look for a per-tenant override under a key no tenant can have,
+            // and would disagree with the tier RateLimitMiddleware picked for the same request.
+            var ratePolicy = _rateLimitPolicyResolver.Resolve(rateTenant?.PlanSlug, rateTenant?.TenantId);
 
             // The stream-concurrency cap is part of rate limiting, so the same master switch governs it;
             // otherwise "rate limiting off" would still throttle streaming requests.

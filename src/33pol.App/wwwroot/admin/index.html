@@ -1639,7 +1639,19 @@
           <div class="card" x-show="isSettingsLimits">
             <span class="eyebrow">Throttling</span>
             <h3>Rate limits</h3>
-            <p class="hint">Default tier and plan tiers (RPM, burst, max concurrent streams). Stored in the database and applied without a restart.</p>
+            <p class="hint">Default tier and plan tiers (RPM, burst, max concurrent streams). Stored in the database and applied without a restart. A tier is a <strong>tenant-wide</strong> budget &mdash; every API key a tenant holds draws on the same one.</p>
+            <dl class="setting-defs">
+              <dt>Default</dt>
+              <dd>The tier every tenant gets unless a plan (or a tenant override) matches them.</dd>
+              <dt>Plan slug</dt>
+              <dd>Name of a plan, such as <code>standard</code>. Tenants on that plan use the tier on this row instead of the default.</dd>
+              <dt>RPM</dt>
+              <dd>Requests per minute the tenant may keep up over time &mdash; the sustained ceiling. Minimum 1; there is no &ldquo;unlimited&rdquo; value.</dd>
+              <dt>Burst</dt>
+              <dd>The maximum number of extra requests allowed in a short period before rate limiting kicks in. A tenant that has been idle can send <strong>RPM + Burst</strong> requests back-to-back, then drops to the RPM pace. 0 means no spike allowance beyond one minute&rsquo;s worth of requests.</dd>
+              <dt>Max streams</dt>
+              <dd>Streaming responses the tenant may hold open at the same time. <strong>0 means unlimited</strong>, not &ldquo;streaming off&rdquo; &mdash; there is no per-tier way to refuse streaming.</dd>
+            </dl>
             <p class="notice error" x-show="rateLimitsLoadError" x-text="rateLimitsLoadError"></p>
             <p class="hint" x-show="rateLimitsLoading">Loading rate limits…</p>
             <template x-if="rateLimits">
@@ -1652,16 +1664,16 @@
                 <p class="notice error" x-show="rateLimitsDisabled">Rate limiting is disabled — clients can send unlimited requests. Quotas and budgets still apply.</p>
                 <div class="rl-grid">
                   <span class="rl-name">Default</span>
-                  <label>RPM <input type="number" min="1" x-model.number="mdl.rateLimits.default.rpm" /></label>
-                  <label>Burst <input type="number" min="0" x-model.number="mdl.rateLimits.default.burst" /></label>
-                  <label>Max streams <input type="number" min="0" x-model.number="mdl.rateLimits.default.maxConcurrentStreams" /></label>
+                  <label>RPM <input type="number" min="1" title="Sustained requests per minute for this tier. Minimum 1." x-model.number="mdl.rateLimits.default.rpm" /></label>
+                  <label>Burst <input type="number" min="0" title="Extra requests allowed in a short spike, on top of RPM. An idle tenant may send RPM + Burst at once. 0 = no spike allowance." x-model.number="mdl.rateLimits.default.burst" /></label>
+                  <label>Max streams <input type="number" min="0" title="Concurrent streaming responses per tenant. 0 = unlimited." x-model.number="mdl.rateLimits.default.maxConcurrentStreams" /></label>
                 </div>
                 <template x-for="row in rateLimitPlanViewRows" :key="row.key">
                   <div class="rl-grid rl-plan">
-                    <label>Plan slug <input type="text" x-model="row.slug" placeholder="standard" /></label>
-                    <label>RPM <input type="number" min="1" x-model.number="row.rpm" /></label>
-                    <label>Burst <input type="number" min="0" x-model.number="row.burst" /></label>
-                    <label>Max streams <input type="number" min="0" x-model.number="row.maxConcurrentStreams" /></label>
+                    <label>Plan slug <input type="text" title="Plan name this tier applies to, e.g. standard." x-model="row.slug" placeholder="standard" /></label>
+                    <label>RPM <input type="number" min="1" title="Sustained requests per minute for this tier. Minimum 1." x-model.number="row.rpm" /></label>
+                    <label>Burst <input type="number" min="0" title="Extra requests allowed in a short spike, on top of RPM. An idle tenant may send RPM + Burst at once. 0 = no spike allowance." x-model.number="row.burst" /></label>
+                    <label>Max streams <input type="number" min="0" title="Concurrent streaming responses per tenant. 0 = unlimited." x-model.number="row.maxConcurrentStreams" /></label>
                     <button type="button" class="action secondary" @click="row.remove"><span class="icon" x-html="icons.trash"></span> Remove</button>
                   </div>
                 </template>

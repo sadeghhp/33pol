@@ -37,8 +37,9 @@ public sealed record CorsConfigSection
 /// <summary>
 /// Rate-limit section of the config snapshot. The resolver picks a tier in precedence order:
 /// per-tenant override, then plan, then default. Plan/tenant keys are compared OrdinalIgnoreCase.
-/// TenantOverrides is currently always empty (reserved), matching the pre-migration behavior where
-/// the RateLimiting:Tenants map was never populated.
+/// TenantOverrides comes from the <c>RateLimiting:Tenants</c> map and is therefore populated only on
+/// a database-less deployment, where appsettings is the whole of the configuration; the
+/// database-backed snapshot has no table for it yet and always leaves it empty.
 /// </summary>
 public sealed record RateLimitsConfigSection
 {
