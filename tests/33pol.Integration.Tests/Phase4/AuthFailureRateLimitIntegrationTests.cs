@@ -107,9 +107,15 @@ public sealed class AuthFailureRateLimitIntegrationTests
     }
 
     /// <summary>
-    /// A budget of exactly one request, so a single rejection spends it. Rate limits for the admin
-    /// key's own traffic stay generous, which is what separates the two budgets in these tests.
+    /// A guessing budget of exactly one request, so a single rejection spends it.
     /// </summary>
+    /// <remarks>
+    /// Set explicitly rather than inherited from the default tier. These tests used to lower
+    /// <c>Default</c> alone and rely on the auth-failure tier falling through to it — which it did,
+    /// because the configured <c>AuthFailure</c> tier was never seeded into the database and so was
+    /// never in force. Now that it is, the fall-through no longer happens and the budget under test
+    /// has to be the one the test names.
+    /// </remarks>
     private static WebApplicationFactory<Program> CreateFactory(bool trustForwardedHeaders = false) =>
         GatewayWebApplicationFactory.CreateWithInMemoryDatabase(
             AdminKey,
@@ -117,6 +123,8 @@ public sealed class AuthFailureRateLimitIntegrationTests
             {
                 settings["RateLimiting:Default:Rpm"] = "1";
                 settings["RateLimiting:Default:Burst"] = "0";
+                settings["RateLimiting:AuthFailure:Rpm"] = "1";
+                settings["RateLimiting:AuthFailure:Burst"] = "0";
 
                 if (trustForwardedHeaders)
                 {

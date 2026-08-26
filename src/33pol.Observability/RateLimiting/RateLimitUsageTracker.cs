@@ -70,13 +70,17 @@ public sealed class RateLimitUsageTracker : IRateLimitUsageTracker
         var minute = now.ToUnixTimeSeconds() / 60;
         var admitted = usageEvent.Admitted;
 
+        // Only meaningful on a refusal: an admitted decision carries the rate control by default
+        // whether or not a concurrency cap was involved.
+        var concurrencyRejection = !admitted && usageEvent.Control == RateLimitControl.Concurrency;
+
         var tenant = usageEvent.TenantId;
         var model = usageEvent.ModelId;
         var apiKey = usageEvent.ApiKeyId;
 
         if (!string.IsNullOrEmpty(tenant))
         {
-            _byTenant.Add(tenant, minute, admitted, usageEvent.ConfiguredRpm, usageEvent.EffectiveRpm);
+            _byTenant.Add(tenant, minute, admitted, concurrencyRejection, usageEvent.ConfiguredRpm, usageEvent.EffectiveRpm);
 
             if (!string.IsNullOrEmpty(model))
             {
@@ -84,6 +88,7 @@ public sealed class RateLimitUsageTracker : IRateLimitUsageTracker
                     RateLimitKeys.Pair(tenant, model),
                     minute,
                     admitted,
+                    concurrencyRejection,
                     usageEvent.ConfiguredRpm,
                     usageEvent.EffectiveRpm);
             }
@@ -91,12 +96,12 @@ public sealed class RateLimitUsageTracker : IRateLimitUsageTracker
 
         if (!string.IsNullOrEmpty(model))
         {
-            _byModel.Add(model, minute, admitted, usageEvent.ConfiguredRpm, usageEvent.EffectiveRpm);
+            _byModel.Add(model, minute, admitted, concurrencyRejection, usageEvent.ConfiguredRpm, usageEvent.EffectiveRpm);
         }
 
         if (!string.IsNullOrEmpty(apiKey))
         {
-            _byApiKey.Add(apiKey, minute, admitted, usageEvent.ConfiguredRpm, usageEvent.EffectiveRpm);
+            _byApiKey.Add(apiKey, minute, admitted, concurrencyRejection, usageEvent.ConfiguredRpm, usageEvent.EffectiveRpm);
         }
 
         if (!admitted && usageEvent.Scope is { } scope)
@@ -238,7 +243,13 @@ public sealed class RateLimitUsageTracker : IRateLimitUsageTracker
 
         public bool IsEmpty => _keys.IsEmpty;
 
-        public void Add(string key, long minute, bool admitted, int configuredRpm, int effectiveRpm)
+        public void Add(
+            string key,
+            long minute,
+            bool admitted,
+            bool concurrencyRejection,
+            int configuredRpm,
+            int effectiveRpm)
         {
             if (!_keys.TryGetValue(key, out var ring))
             {
@@ -250,23 +261,31 @@ public sealed class RateLimitUsageTracker : IRateLimitUsageTracker
                 ring = _keys.GetOrAdd(key, static _ => new Ring());
             }
 
-            ring.Add(minute, admitted, configuredRpm, effectiveRpm);
+            ring.Add(minute, admitted, concurrencyRejection, configuredRpm, effectiveRpm);
         }
 
         public RateLimitUsageTotals Totals(long oldest, long newest)
         {
-            long requests = 0, admitted = 0;
+            long requests = 0, admitted = 0, concurrencyRejected = 0;
             foreach (var ring in _keys.Values)
             {
                 var sum = ring.Sum(oldest, newest);
                 requests += sum.Requests;
                 admitted += sum.Admitted;
+                concurrencyRejected += sum.ConcurrencyRejected;
             }
 
-            // The rate/concurrency split lives on the violation rows, which key by the scope that
-            // refused; totalling it here would double-count a request refused by one scope and
-            // counted under several sections.
-            return new RateLimitUsageTotals(requests, admitted, requests - admitted, 0, 0);
+            // Counted from one dimension only — the caller picks a single one — so a request
+            // refused once is counted once, however many sections it also appears under. The
+            // remainder is by construction the token-bucket refusals: those are the only other way
+            // a decision here can be a refusal.
+            var rejected = requests - admitted;
+            return new RateLimitUsageTotals(
+                requests,
+                admitted,
+                rejected,
+                rejected - concurrencyRejected,
+                concurrencyRejected);
         }
 
         public IReadOnlyList<RateLimitUsageRow> Top(
@@ -320,6 +339,7 @@ public sealed class RateLimitUsageTracker : IRateLimitUsageTracker
             private readonly long[] _minutes = new long[WindowMinutes];
             private readonly long[] _requests = new long[WindowMinutes];
             private readonly long[] _admitted = new long[WindowMinutes];
+            private readonly long[] _concurrencyRejected = new long[WindowMinutes];
             private readonly object _sync = new();
 
             private int _configuredRpm;
@@ -330,7 +350,12 @@ public sealed class RateLimitUsageTracker : IRateLimitUsageTracker
 
             public int EffectiveRpm => Volatile.Read(ref _effectiveRpm);
 
-            public void Add(long minute, bool admitted, int configuredRpm, int effectiveRpm)
+            public void Add(
+                long minute,
+                bool admitted,
+                bool concurrencyRejection,
+                int configuredRpm,
+                int effectiveRpm)
             {
                 var slot = (int)(((minute % WindowMinutes) + WindowMinutes) % WindowMinutes);
                 lock (_sync)
@@ -342,6 +367,7 @@ public sealed class RateLimitUsageTracker : IRateLimitUsageTracker
                         _minutes[slot] = minute;
                         _requests[slot] = 0;
                         _admitted[slot] = 0;
+                        _concurrencyRejected[slot] = 0;
                     }
 
                     _requests[slot]++;
@@ -349,17 +375,26 @@ public sealed class RateLimitUsageTracker : IRateLimitUsageTracker
                     {
                         _admitted[slot]++;
                     }
+                    else if (concurrencyRejection)
+                    {
+                        _concurrencyRejected[slot]++;
+                    }
                 }
 
-                // Last writer wins. These describe the tier in force, which changes only on an admin
-                // edit or an adaptive step, so a torn read across the two is not a state that lasts.
-                Volatile.Write(ref _configuredRpm, configuredRpm);
-                Volatile.Write(ref _effectiveRpm, effectiveRpm);
+                // Last writer wins, and only a decision that actually carries a rate writes at all.
+                // A concurrency decision reports zero rpm — it was made against a slot count — and
+                // letting that through would blank the key's "usage against limit" columns until
+                // the next rate decision happened to restore them.
+                if (effectiveRpm > 0)
+                {
+                    Volatile.Write(ref _configuredRpm, configuredRpm);
+                    Volatile.Write(ref _effectiveRpm, effectiveRpm);
+                }
             }
 
-            public (long Requests, long Admitted) Sum(long oldest, long newest)
+            public (long Requests, long Admitted, long ConcurrencyRejected) Sum(long oldest, long newest)
             {
-                long requests = 0, admitted = 0;
+                long requests = 0, admitted = 0, concurrencyRejected = 0;
                 lock (_sync)
                 {
                     for (var i = 0; i < WindowMinutes; i++)
@@ -368,11 +403,12 @@ public sealed class RateLimitUsageTracker : IRateLimitUsageTracker
                         {
                             requests += _requests[i];
                             admitted += _admitted[i];
+                            concurrencyRejected += _concurrencyRejected[i];
                         }
                     }
                 }
 
-                return (requests, admitted);
+                return (requests, admitted, concurrencyRejected);
             }
         }
     }

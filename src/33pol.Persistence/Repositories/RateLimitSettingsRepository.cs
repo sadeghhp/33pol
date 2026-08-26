@@ -41,6 +41,11 @@ public sealed class RateLimitSettingsRepository(GatewayDbContext dbContext) : IR
         defaults.MaxConcurrentStreams = defaultTier.MaxConcurrentStreams;
         defaults.UpdatedAt = now;
 
+        // An admin write is itself a definitive rule set, so it closes the one-shot seed window even
+        // if the defaults row was created here rather than by the bootstrap. Without it, a restart
+        // would seed the appsettings rules on top of what the operator just submitted.
+        defaults.RulesSeededAt ??= now;
+
         // Replace the plan set wholesale (small, bounded). RemoveRange keeps this provider-agnostic
         // (the EF InMemory provider used by tests does not support ExecuteDelete).
         var existingPlans = await dbContext.RateLimitPlans

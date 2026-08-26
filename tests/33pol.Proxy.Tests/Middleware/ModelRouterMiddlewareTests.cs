@@ -1344,12 +1344,16 @@ public sealed class ModelRouterMiddlewareTests
         Pol33.Registry.Services.ModelRegistryService registry,
         IInferenceHttpForwarder forwarder,
         IRateLimitPolicyResolver? rateLimitPolicyResolver = null,
-        IDistributedRateLimitStore? rateLimitStore = null) =>
+        IDistributedRateLimitStore? rateLimitStore = null,
+        IAdaptiveRateLimitGovernor? rateLimitGovernor = null,
+        IRateLimitUsageTracker? rateLimitUsage = null) =>
         CreateMiddleware(
             registry: registry,
             forwarder: forwarder,
             rateLimitPolicyResolver: rateLimitPolicyResolver,
-            rateLimitStore: rateLimitStore);
+            rateLimitStore: rateLimitStore,
+            rateLimitGovernor: rateLimitGovernor,
+            rateLimitUsage: rateLimitUsage);
 
     private static ModelRouterMiddleware CreateMiddleware(
         RequestDelegate? next = null,
@@ -1368,7 +1372,9 @@ public sealed class ModelRouterMiddlewareTests
         ModelCircuitBreakerRegistry? circuitBreakers = null,
         IGatewayErrorRecorder? errorRecorder = null,
         IRateLimitPolicyResolver? rateLimitPolicyResolver = null,
-        IDistributedRateLimitStore? rateLimitStore = null)
+        IDistributedRateLimitStore? rateLimitStore = null,
+        IAdaptiveRateLimitGovernor? rateLimitGovernor = null,
+        IRateLimitUsageTracker? rateLimitUsage = null)
     {
         next ??= _ => Task.CompletedTask;
         registry ??= Substitute.For<IModelRegistry>();
@@ -1411,7 +1417,7 @@ public sealed class ModelRouterMiddlewareTests
         if (rateLimitPolicyResolver is null)
         {
             var defaultResolver = Substitute.For<IRateLimitPolicyResolver>();
-            defaultResolver.Resolve(Arg.Any<string?>(), Arg.Any<string?>())
+            defaultResolver.Resolve(Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>())
                 .Returns(new RateLimitPolicy(10_000, 1_000, 1_000));
             // Must be stubbed explicitly: an unconfigured substitute returns false, which would
             // silently bypass the stream-slot path these tests exercise.
@@ -1451,7 +1457,9 @@ public sealed class ModelRouterMiddlewareTests
             upstreamTokenResolver ?? Substitute.For<IUpstreamBearerTokenResolver>(),
             budgetEnforcement ?? CreateAllowAllBudgetEnforcement(),
             errorRecorder ?? Substitute.For<IGatewayErrorRecorder>(),
-            NullLogger<ModelRouterMiddleware>.Instance);
+            NullLogger<ModelRouterMiddleware>.Instance,
+            rateLimitUsage: rateLimitUsage,
+            rateLimitGovernor: rateLimitGovernor);
     }
 
     private static IBudgetEnforcementService CreateAllowAllBudgetEnforcement()

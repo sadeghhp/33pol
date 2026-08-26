@@ -69,12 +69,13 @@ public static class RateLimitPartition
         {
             return new RateLimitSubject(
                 tenant.TenantId,
+                string.IsNullOrEmpty(tenant.TenantSlug) ? null : tenant.TenantSlug,
                 tenant.PlanSlug,
                 string.IsNullOrEmpty(tenant.ApiKeyId) ? null : tenant.ApiKeyId,
                 tenant.TenantId);
         }
 
-        return new RateLimitSubject(null, null, null, AnonymousPrefix + ResolveClientAddress(context));
+        return new RateLimitSubject(null, null, null, null, AnonymousPrefix + ResolveClientAddress(context));
     }
 
     /// <summary>

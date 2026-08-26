@@ -15,7 +15,7 @@ public sealed class RateLimitPolicyResolverTests
             Default = new RateLimitPolicy(42, 7, 3),
         });
 
-        var policy = resolver.Resolve(null, null);
+        var policy = resolver.Resolve(null, null, null);
 
         policy.Rpm.Should().Be(42);
         policy.Burst.Should().Be(7);
@@ -34,7 +34,7 @@ public sealed class RateLimitPolicyResolverTests
             },
         });
 
-        var policy = resolver.Resolve("enterprise", null);
+        var policy = resolver.Resolve("enterprise", null, null);
 
         policy.Rpm.Should().Be(500);
         policy.Burst.Should().Be(50);
@@ -53,7 +53,7 @@ public sealed class RateLimitPolicyResolverTests
             },
         });
 
-        resolver.Resolve("ENTERPRISE", null).Rpm.Should().Be(500);
+        resolver.Resolve("ENTERPRISE", null, null).Rpm.Should().Be(500);
     }
 
     [Fact]
@@ -72,7 +72,7 @@ public sealed class RateLimitPolicyResolverTests
             },
         });
 
-        resolver.Resolve("standard", "tenant-a").Rpm.Should().Be(999);
+        resolver.Resolve("standard", "tenant-a", null).Rpm.Should().Be(999);
     }
 
     [Fact]
@@ -83,7 +83,7 @@ public sealed class RateLimitPolicyResolverTests
             Default = new RateLimitPolicy(0, -5, -1),
         });
 
-        var policy = resolver.Resolve(null, null);
+        var policy = resolver.Resolve(null, null, null);
 
         policy.Rpm.Should().Be(1);
         policy.Burst.Should().Be(0);

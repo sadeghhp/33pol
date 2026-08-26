@@ -797,6 +797,9 @@ namespace Pol33.Persistence.Migrations
                     b.Property<int>("Rpm")
                         .HasColumnType("INTEGER");
 
+                    b.Property<long?>("RulesSeededAt")
+                        .HasColumnType("INTEGER");
+
                     b.Property<long>("UpdatedAt")
                         .HasColumnType("INTEGER");
 

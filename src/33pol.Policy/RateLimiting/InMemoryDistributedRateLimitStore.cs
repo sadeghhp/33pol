@@ -85,7 +85,15 @@ public sealed class InMemoryDistributedRateLimitStore : IDistributedRateLimitSto
         // Refill, the limit decision and the debit happen under one lock, so a rejected request
         // never consumes a token and the decision is always made against the current fill.
         var reading = state.Apply(TokenOperation.TakeIfAvailable, now, capacity, refill);
-        return ToResult(reading, capacity, refill, scope: null, partitionKey, adaptiveFactor: 1.0);
+        return ToResult(
+            reading,
+            capacity,
+            refill,
+            scope: null,
+            partitionKey,
+            adaptiveFactor: 1.0,
+            policy.Rpm,
+            policy.Rpm);
     }
 
     /// <inheritdoc />
@@ -117,7 +125,15 @@ public sealed class InMemoryDistributedRateLimitStore : IDistributedRateLimitSto
                 // pinned by its narrowest limit would still spend its tenant-wide and gateway-wide
                 // budget on each attempt, so one over-limit key would rate-limit its whole tenant.
                 RefundRange(rules[..i], now);
-                return ToResult(reading, capacity, refill, rule.Scope, rule.PartitionKey, rule.AdaptiveFactor);
+                return ToResult(
+                    reading,
+                    capacity,
+                    refill,
+                    rule.Scope,
+                    rule.PartitionKey,
+                    rule.AdaptiveFactor,
+                    rule.ConfiguredRpm,
+                    rule.Policy.Rpm);
             }
 
             taken++;
@@ -126,7 +142,15 @@ public sealed class InMemoryDistributedRateLimitStore : IDistributedRateLimitSto
             if (ratio < tightestRatio)
             {
                 tightestRatio = ratio;
-                tightest = ToResult(reading, capacity, refill, rule.Scope, rule.PartitionKey, rule.AdaptiveFactor);
+                tightest = ToResult(
+                    reading,
+                    capacity,
+                    refill,
+                    rule.Scope,
+                    rule.PartitionKey,
+                    rule.AdaptiveFactor,
+                    rule.ConfiguredRpm,
+                    rule.Policy.Rpm);
             }
         }
 
@@ -177,11 +201,21 @@ public sealed class InMemoryDistributedRateLimitStore : IDistributedRateLimitSto
                 Limit: capacity,
                 Remaining: capacity,
                 ResetAfterSeconds: 0,
-                PartitionKey: partitionKey);
+                PartitionKey: partitionKey,
+                ConfiguredRpm: policy.Rpm,
+                EffectiveRpm: policy.Rpm);
         }
 
         var reading = state.Apply(TokenOperation.Peek, now, capacity, refill);
-        return ToResult(reading, capacity, refill, scope: null, partitionKey, adaptiveFactor: 1.0);
+        return ToResult(
+            reading,
+            capacity,
+            refill,
+            scope: null,
+            partitionKey,
+            adaptiveFactor: 1.0,
+            policy.Rpm,
+            policy.Rpm);
     }
 
     /// <inheritdoc />
@@ -280,7 +314,7 @@ public sealed class InMemoryDistributedRateLimitStore : IDistributedRateLimitSto
     }
 
     /// <inheritdoc />
-    public void ReleaseStreamSlots(in RateLimitSlotLease held) => ReleaseSlots(held.Keys);
+    public void ReleaseStreamSlots(RateLimitSlotLease held) => ReleaseSlots(held.Keys);
 
     /// <inheritdoc />
     public RateLimitStoreStats GetStats() => new(
@@ -359,13 +393,25 @@ public sealed class InMemoryDistributedRateLimitStore : IDistributedRateLimitSto
         return state;
     }
 
+    /// <summary>
+    /// Turns a bucket reading into the result every caller sees.
+    /// </summary>
+    /// <param name="configuredRpm">The operator-configured sustained rate, before adaptation.</param>
+    /// <param name="effectiveRpm">
+    /// The sustained rate enforced. Carried separately from <paramref name="capacity"/> because the
+    /// two answer different questions: capacity is the budget a client's remaining count is measured
+    /// against, the rate is what a usage report compares an observed rate to. Reporting capacity as
+    /// the rate understates utilisation by the entire burst allowance.
+    /// </param>
     private static RateLimitAcquireResult ToResult(
         BucketReading reading,
         int capacity,
         double refillPerSecond,
         RateLimitScope? scope,
         string partitionKey,
-        double adaptiveFactor)
+        double adaptiveFactor,
+        int configuredRpm,
+        int effectiveRpm)
     {
         var remaining = (int)Math.Floor(Math.Max(0, reading.Tokens));
         var resetAfter = (int)Math.Ceiling(Math.Max(0, capacity - reading.Tokens) / refillPerSecond);
@@ -379,7 +425,9 @@ public sealed class InMemoryDistributedRateLimitStore : IDistributedRateLimitSto
                 ResetAfterSeconds: resetAfter,
                 Scope: scope,
                 PartitionKey: partitionKey,
-                AdaptiveFactor: adaptiveFactor);
+                AdaptiveFactor: adaptiveFactor,
+                ConfiguredRpm: configuredRpm,
+                EffectiveRpm: effectiveRpm);
         }
 
         return new RateLimitAcquireResult(
@@ -391,7 +439,9 @@ public sealed class InMemoryDistributedRateLimitStore : IDistributedRateLimitSto
             ResetAfterSeconds: resetAfter,
             Scope: scope,
             PartitionKey: partitionKey,
-            AdaptiveFactor: adaptiveFactor);
+            AdaptiveFactor: adaptiveFactor,
+            ConfiguredRpm: configuredRpm,
+            EffectiveRpm: effectiveRpm);
     }
 
     private static RateLimitAcquireResult ToSlotResult(

@@ -345,7 +345,7 @@ public sealed class ModelRouterBudgetReservationTests
         var options = Options.Create(new GatewayOptions());
 
         var rateLimitResolver = Substitute.For<IRateLimitPolicyResolver>();
-        rateLimitResolver.Resolve(Arg.Any<string?>(), Arg.Any<string?>())
+        rateLimitResolver.Resolve(Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>())
             .Returns(new RateLimitPolicy(10_000, 1_000, 1_000));
         rateLimitResolver.IsEnabled().Returns(true);
 

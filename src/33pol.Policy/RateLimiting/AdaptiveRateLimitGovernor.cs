@@ -39,6 +39,14 @@ namespace Pol33.Policy.RateLimiting;
 /// </remarks>
 public sealed class AdaptiveRateLimitGovernor : IAdaptiveRateLimitGovernor
 {
+    /// <summary>
+    /// Ceiling on tracked partitions. One entry per partition being refused, and the partition key
+    /// for anonymous traffic is a client address block, so without a ceiling a spray of rejected
+    /// requests from many sources grows this table without bound between maintenance ticks — the
+    /// exact failure the store's own partition table is capped against.
+    /// </summary>
+    private const int MaxBackoffPartitions = 20_000;
+
     private readonly IGatewayConfigProvider _configProvider;
     private readonly IBulkheadStateSource? _bulkheads;
     private readonly ICircuitBreakerStateSource? _breakers;
@@ -47,6 +55,10 @@ public sealed class AdaptiveRateLimitGovernor : IAdaptiveRateLimitGovernor
 
     private readonly ConcurrentDictionary<string, ModelFactor> _modelFactors = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, PartitionBackoff> _backoff = new(StringComparer.Ordinal);
+
+    // Tracked alongside the dictionary rather than read from it: ConcurrentDictionary.Count takes
+    // every bucket lock, and this is consulted on the request path once per rejection.
+    private int _backoffCount;
 
     private long _lastEvaluatedTicks;
 
@@ -131,11 +143,37 @@ public sealed class AdaptiveRateLimitGovernor : IAdaptiveRateLimitGovernor
         {
             // Cleared rather than decremented: one success means the client is inside its budget
             // again, and holding a penalty past that would punish recovery.
-            _backoff.TryRemove(partitionKey, out _);
+            if (_backoff.TryRemove(partitionKey, out _))
+            {
+                Interlocked.Decrement(ref _backoffCount);
+            }
+
             return;
         }
 
-        var entry = _backoff.GetOrAdd(partitionKey, static _ => new PartitionBackoff());
+        if (_backoff.TryGetValue(partitionKey, out var existing))
+        {
+            existing.RecordRejection(now);
+            return;
+        }
+
+        // At the ceiling a partition simply is not tracked, rather than an existing one being
+        // evicted to make room: eviction here would let a flood of one-off sources push out the
+        // repeat offender the escalation exists for. An untracked partition still gets the bucket's
+        // own Retry-After, just not a lengthened one, and the maintenance tick trims the table back
+        // under the ceiling within a few seconds.
+        if (Volatile.Read(ref _backoffCount) >= MaxBackoffPartitions)
+        {
+            return;
+        }
+
+        var created = new PartitionBackoff();
+        var entry = _backoff.GetOrAdd(partitionKey, created);
+        if (ReferenceEquals(entry, created))
+        {
+            Interlocked.Increment(ref _backoffCount);
+        }
+
         entry.RecordRejection(now);
     }
 
@@ -150,6 +188,7 @@ public sealed class AdaptiveRateLimitGovernor : IAdaptiveRateLimitGovernor
             {
                 _modelFactors.Clear();
                 _backoff.Clear();
+                Interlocked.Exchange(ref _backoffCount, 0);
                 _logger.LogInformation("Adaptive rate limiting disabled; model factors reset to configured limits.");
             }
 
@@ -173,6 +212,7 @@ public sealed class AdaptiveRateLimitGovernor : IAdaptiveRateLimitGovernor
         }
 
         ExpireBackoff(now);
+        EnforceBackoffCeiling();
     }
 
     public AdaptiveRateLimitSnapshot Snapshot()
@@ -198,7 +238,7 @@ public sealed class AdaptiveRateLimitGovernor : IAdaptiveRateLimitGovernor
         return new AdaptiveRateLimitSnapshot(
             IsEnabled,
             models,
-            _backoff.Count,
+            Volatile.Read(ref _backoffCount),
             lastEvaluated == 0 ? null : new DateTimeOffset(lastEvaluated, TimeSpan.Zero));
     }
 
@@ -305,9 +345,43 @@ public sealed class AdaptiveRateLimitGovernor : IAdaptiveRateLimitGovernor
         var cutoff = now - TimeSpan.FromSeconds(Math.Max(60, _options.MaxRetryAfterSeconds * 2));
         foreach (var pair in _backoff)
         {
-            if (pair.Value.LastRejectionUtc < cutoff)
+            if (pair.Value.LastRejectionUtc < cutoff &&
+                _backoff.TryRemove(new KeyValuePair<string, PartitionBackoff>(pair.Key, pair.Value)))
             {
-                _backoff.TryRemove(new KeyValuePair<string, PartitionBackoff>(pair.Key, pair.Value));
+                Interlocked.Decrement(ref _backoffCount);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Trims the table back under <see cref="MaxBackoffPartitions"/>, dropping the partitions that
+    /// were refused longest ago.
+    /// </summary>
+    /// <remarks>
+    /// Ordering by last rejection is what makes this safe: a partition actively being refused is
+    /// touched on every refusal, so it sorts to the end and cannot be dropped — and therefore
+    /// handed a fresh, un-escalated <c>Retry-After</c> — by a flood of new partitions. Running on
+    /// the maintenance tick rather than on the request path keeps the O(n log n) sort off the hot
+    /// path, which is the same trade the store's partition ceiling makes.
+    /// </remarks>
+    private void EnforceBackoffCeiling()
+    {
+        var excess = Volatile.Read(ref _backoffCount) - MaxBackoffPartitions;
+        if (excess <= 0)
+        {
+            return;
+        }
+
+        var victims = _backoff
+            .ToArray()
+            .OrderBy(static pair => pair.Value.LastRejectionUtc)
+            .Take(excess);
+
+        foreach (var victim in victims)
+        {
+            if (_backoff.TryRemove(victim))
+            {
+                Interlocked.Decrement(ref _backoffCount);
             }
         }
     }

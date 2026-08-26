@@ -84,7 +84,7 @@ public interface IDistributedRateLimitStore
     void ReleaseStreamSlot(string partitionKey);
 
     /// <summary>Releases every slot taken by a successful <see cref="TryAcquireStreamSlots"/>.</summary>
-    void ReleaseStreamSlots(in RateLimitSlotLease held);
+    void ReleaseStreamSlots(RateLimitSlotLease held);
 
     /// <summary>
     /// Sweeps partitions no request has touched inside the retention window and enforces the

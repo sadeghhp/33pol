@@ -1590,3 +1590,12 @@ html.wallboard body::after {
   content: 'Esc to exit wallboard'; position: fixed; right: var(--space-4); bottom: var(--space-3);
   font-size: var(--text-2xs); color: var(--text-tertiary); font-family: var(--font-mono);
 }
+
+/* Rate-limit settings: section headings inside the tier and rule editor. The rule rows reuse
+   .rl-grid unchanged — its auto-fit tracks already handle the two extra columns and stay responsive,
+   which a fixed template would not. */
+.rl-subhead {
+  margin: var(--space-6) 0 var(--space-2);
+  font-size: 0.95rem;
+  font-weight: 600;
+}

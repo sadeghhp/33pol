@@ -1,8 +1,11 @@
+using System.Security.Claims;
 using System.Text.Json;
 using Microsoft.AspNetCore.Http;
 using Pol33.Core.Abstractions;
 using Pol33.Core.Errors;
+using Pol33.Core.Models;
 using Pol33.Core.RateLimiting;
+using Pol33.Core.Security;
 using Pol33.Proxy.Errors;
 using Pol33.Proxy.Parsing;
 using Pol33.Proxy.Routing;
@@ -29,6 +32,14 @@ namespace Pol33.Proxy.Middleware;
 ///
 /// <para>The parse is skipped entirely when no model-scoped rule is configured anywhere, which is
 /// the default. A deployment that does not use per-model limits pays nothing for them.</para>
+///
+/// <para><b>Only granted models are charged.</b> The <c>model</c> bucket is shared by every caller
+/// of that model, and grants are enforced downstream in the router. Charging the bucket before the
+/// grant is checked meant any authenticated key could drain a model's gateway-wide budget with
+/// requests it was always going to be refused — a tenant denying a model to every other tenant at
+/// its own request rate. Stage two is therefore skipped for a caller the model is not granted to;
+/// its identity scopes are still charged, so the attempts are not free, and the router still gives
+/// the 403.</para>
 /// </remarks>
 public sealed class RateLimitMiddleware
 {
@@ -42,6 +53,17 @@ public sealed class RateLimitMiddleware
     private readonly IRateLimitUsageTracker? _usage;
     private readonly TimeProvider _timeProvider;
 
+    /// <summary>
+    /// Answers "may this key use this model?" from an in-memory cache, so the check that keeps an
+    /// ungranted caller off a shared model bucket costs two cache lookups on the hot path. Optional
+    /// only so the tests that build this middleware by hand keep compiling; when either it or
+    /// <see cref="_authState"/> is absent no grant check is made and every model scope is charged,
+    /// which is the behaviour these two exist to correct.
+    /// </summary>
+    private readonly IModelGrantService? _modelGrants;
+
+    private readonly IGatewayAuthenticationState? _authState;
+
     public RateLimitMiddleware(
         RequestDelegate next,
         IRateLimitPlanResolver planResolver,
@@ -51,7 +73,9 @@ public sealed class RateLimitMiddleware
         IModelRegistry registry,
         IAdaptiveRateLimitGovernor? governor = null,
         IRateLimitUsageTracker? usage = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        IModelGrantService? modelGrants = null,
+        IGatewayAuthenticationState? authState = null)
     {
         _next = next;
         _planResolver = planResolver;
@@ -62,6 +86,8 @@ public sealed class RateLimitMiddleware
         _governor = governor;
         _usage = usage;
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _modelGrants = modelGrants;
+        _authState = authState;
     }
 
     public async Task InvokeAsync(HttpContext context)
@@ -103,24 +129,28 @@ public sealed class RateLimitMiddleware
             // The canonical id, not what the client typed: per-model rules are configured against
             // canonical ids, so matching on the raw name would let an alias walk straight past the
             // limit set for the model behind it.
-            modelId = await ResolveCanonicalModelAsync(context).ConfigureAwait(false);
+            var model = await ResolveCanonicalModelAsync(context).ConfigureAwait(false);
+            modelId = model?.Id;
 
-            if (modelId is not null)
+            // Charged only for a model this caller may actually use. The grant is re-checked by the
+            // router, which is what produces the 403; this one exists purely so an ungranted request
+            // cannot spend a bucket shared with every other tenant.
+            if (model is not null && await IsModelChargeableAsync(context, model).ConfigureAwait(false))
             {
                 // --- Stage two: the scopes that do. ---
-                var model = AcquireModelScopes(subject, modelId, now);
-                if (!model.IsAcquired)
+                var modelScopes = AcquireModelScopes(subject, model.Id, now);
+                if (!modelScopes.IsAcquired)
                 {
-                    await RejectAsync(context, subject, modelId, model, now).ConfigureAwait(false);
+                    await RejectAsync(context, subject, model.Id, modelScopes, now).ConfigureAwait(false);
                     return;
                 }
 
-                tightest = Tighter(tightest, model);
+                tightest = Tighter(tightest, modelScopes);
             }
         }
 
         WriteBudgetHeaders(context, tightest);
-        RecordAdmission(subject, modelId, tightest, now);
+        RecordAdmission(subject, modelId, tightest);
 
         // Answered here, after the debit, when the cached parse already says the router is going to
         // refuse this body: it saves the rest of the pipeline for a request that cannot be served.
@@ -170,8 +200,9 @@ public sealed class RateLimitMiddleware
     }
 
     /// <summary>
-    /// The canonical id of the model this request asks for, or null when the body is unparseable,
-    /// names no model, or names one the registry does not know.
+    /// The model this request asks for, resolved through the registry so an alias lands on the same
+    /// entry the canonical id does, or null when the body is unparseable, names no model, or names
+    /// one the registry does not know.
     /// </summary>
     /// <remarks>
     /// A null is not an error here. An unroutable body is answered a few lines later by
@@ -180,7 +211,7 @@ public sealed class RateLimitMiddleware
     /// against the scopes that do apply to it, which is the point: a caller cannot get free requests
     /// by naming a model that does not exist.
     /// </remarks>
-    private async Task<string?> ResolveCanonicalModelAsync(HttpContext context)
+    private async Task<ModelConfig?> ResolveCanonicalModelAsync(HttpContext context)
     {
         if (!InferenceRequestParseCache.TryGet(context, out var cached))
         {
@@ -193,9 +224,47 @@ public sealed class RateLimitMiddleware
             return null;
         }
 
-        return _registry.TryGetModel(requested, out var model) && model is not null
-            ? model.Id
-            : null;
+        return _registry.TryGetModel(requested, out var model) ? model : null;
+    }
+
+    /// <summary>
+    /// Whether this caller's request may be charged against the model-scoped buckets — that is,
+    /// whether the router is going to let it through the grant check rather than answering 403.
+    /// </summary>
+    /// <remarks>
+    /// <para>The <c>model</c> scope's bucket is shared by every caller of that model. Charging it
+    /// for a request that will be refused is a cross-tenant denial of service: one key can spend a
+    /// model's entire gateway-wide budget on requests it has no access to, and every other tenant
+    /// sees 429s for a model they are granted.</para>
+    ///
+    /// <para>The same conditions as the router's own check, so the two cannot disagree about who is
+    /// granted what: grants only apply where authentication is required and the model is not public.
+    /// A request carrying no usable identity is not chargeable either — the router refuses it, and
+    /// treating it as chargeable would hand the same denial of service to unauthenticated traffic.
+    /// The check is an in-memory cache lookup on all but the first request for a key.</para>
+    /// </remarks>
+    private async Task<bool> IsModelChargeableAsync(HttpContext context, ModelConfig model)
+    {
+        if (_modelGrants is null || _authState is null)
+        {
+            return true;
+        }
+
+        if (!_authState.IsAuthenticationRequired || model.AllowsPublicGatewayAccess())
+        {
+            return true;
+        }
+
+        if (context.User.Identity?.IsAuthenticated != true ||
+            !Guid.TryParse(context.User.FindFirstValue(GatewayAuthClaims.TenantId), out var tenantId) ||
+            !Guid.TryParse(context.User.FindFirstValue(GatewayAuthClaims.ApiKeyId), out var apiKeyId))
+        {
+            return false;
+        }
+
+        return await _modelGrants
+            .IsModelAllowedAsync(tenantId, apiKeyId, model.Id, context.RequestAborted)
+            .ConfigureAwait(false);
     }
 
     /// <summary>
@@ -311,10 +380,13 @@ public sealed class RateLimitMiddleware
             headers[GatewayHeaders.RateLimitScope] = scope.ToLabel();
         }
 
-        if (acquire.AdaptiveFactor < 1.0 && acquire.Scope is not null)
+        if (acquire.AdaptiveFactor < 1.0 && acquire.ConfiguredRpm > 0)
         {
-            var configured = (int)Math.Round(limit / Math.Max(0.01, acquire.AdaptiveFactor));
-            headers[GatewayHeaders.RateLimitAdaptive] = $"{limit}/{configured}";
+            // The two rates the governor moved between, read straight off the rule rather than
+            // reconstructed from the capacity: Scale() rounds rpm and burst independently, so
+            // dividing the capacity by the factor does not invert it and the header was off by a
+            // few whenever either rounding went the other way.
+            headers[GatewayHeaders.RateLimitAdaptive] = $"{acquire.EffectiveRpm}/{acquire.ConfiguredRpm}";
         }
     }
 
@@ -341,8 +413,8 @@ public sealed class RateLimitMiddleware
             Admitted: false,
             scope,
             acquire.Control,
-            ConfiguredRpm(acquire),
-            acquire.Limit ?? 0));
+            acquire.ConfiguredRpm,
+            acquire.EffectiveRpm));
 
         var code = acquire.RejectionReason switch
         {
@@ -365,13 +437,21 @@ public sealed class RateLimitMiddleware
             retryAfter).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Records the admission for the usage report — but deliberately not for the governor.
+    /// </summary>
+    /// <remarks>
+    /// An admission here is provisional. A streaming request still faces the concurrency cap in the
+    /// router, and clearing the partition's retry backoff at this point would undo, a few frames
+    /// early, the rejection the router is about to record: the counter would go to zero on every
+    /// attempt and a client pinned on a concurrency cap could never escalate past one consecutive
+    /// rejection. The router owns the governor's admitted signal because it is the last gate.
+    /// </remarks>
     private void RecordAdmission(
         RateLimitSubject subject,
         string? modelId,
-        RateLimitAcquireResult acquire,
-        DateTimeOffset now)
+        RateLimitAcquireResult acquire)
     {
-        _governor?.RecordOutcome(subject.PartitionKey, admitted: true, now);
         _usage?.Record(new RateLimitUsageEvent(
             subject.PartitionKey,
             subject.ApiKeyId,
@@ -379,19 +459,7 @@ public sealed class RateLimitMiddleware
             Admitted: true,
             acquire.Scope,
             acquire.Control,
-            ConfiguredRpm(acquire),
-            acquire.Limit ?? 0));
+            acquire.ConfiguredRpm,
+            acquire.EffectiveRpm));
     }
-
-    /// <summary>
-    /// The configured capacity behind an effective one, reversing whatever the governor scaled it
-    /// by. Reported alongside the effective number so a report can show "600 configured, 420 in
-    /// force" rather than presenting the reduced figure as the limit.
-    /// </summary>
-    private static int ConfiguredRpm(RateLimitAcquireResult acquire) =>
-        acquire.Limit is not { } limit
-            ? 0
-            : acquire.AdaptiveFactor >= 1.0
-                ? limit
-                : (int)Math.Round(limit / Math.Max(0.01, acquire.AdaptiveFactor));
 }

@@ -32,13 +32,13 @@ One URL for every model. Policy, tenancy, and FinOps built in — without changi
 
 It is **not** a model runtime (that is vLLM/Ollama) and **not** a hosted model marketplace (that is OpenRouter and similar)—though you can **route through** those as upstreams.
 
-Behind the proxy sits a **modular monolith**: hashed API keys and tenants, per-key model grants, rate limits and quotas, circuit breakers, FinOps rollups and exports, Prometheus metrics, admin UI, and optional operator console—in **one deployable process**.
+Behind the proxy sits a **modular monolith**: hashed API keys and tenants, per-key model grants, scoped and load-aware rate limits, quotas, circuit breakers, FinOps rollups and exports, Prometheus metrics, admin UI, and optional operator console—in **one deployable process**.
 
 | You get | You keep |
 |--------|----------|
 | Central routing via `models.json` or live registry CRUD | Existing OpenAI SDKs (Python, Node, LangChain, LiteLLM, …) |
 | Multi-tenant API keys with hashed storage; per-key model grants | Upstream servers unchanged |
-| Rate limits (admin-configurable), concurrency caps, monthly quotas | Standard paths (`POST /v1/chat/completions`, etc.) |
+| Rate limits per model, user and combination; concurrency caps; monthly quotas | Standard paths (`POST /v1/chat/completions`, etc.) |
 | FinOps rollups, exports, budget webhooks | SSE streaming end-to-end |
 | Grafana dashboards and alert rules; optional `publicAccess` for local upstreams | Health probes for Kubernetes |
 

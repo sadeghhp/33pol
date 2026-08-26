@@ -18,6 +18,12 @@ namespace Pol33.Persistence.Migrations
                 nullable: false,
                 defaultValue: false);
 
+            migrationBuilder.AddColumn<long>(
+                name: "RulesSeededAt",
+                table: "rate_limit_defaults",
+                type: "INTEGER",
+                nullable: true);
+
             migrationBuilder.CreateTable(
                 name: "rate_limit_rules",
                 columns: table => new
@@ -50,6 +56,10 @@ namespace Pol33.Persistence.Migrations
 
             migrationBuilder.DropColumn(
                 name: "AdaptiveEnabled",
+                table: "rate_limit_defaults");
+
+            migrationBuilder.DropColumn(
+                name: "RulesSeededAt",
                 table: "rate_limit_defaults");
         }
     }

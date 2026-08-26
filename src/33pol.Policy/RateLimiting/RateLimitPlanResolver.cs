@@ -63,6 +63,7 @@ public sealed class RateLimitPlanResolver(
             snapshot.Version,
             subject.PartitionKey,
             subject.TenantId,
+            subject.TenantSlug,
             subject.PlanSlug,
             subject.ApiKeyId,
             modelId,
@@ -112,7 +113,11 @@ public sealed class RateLimitPlanResolver(
 
         // The tenant scope always produces a rule: it is the gateway's universal limit, and the
         // default tier stands in when nothing more specific is configured.
-        var tenantTier = RateLimitPolicyResolver.ResolveTenantTier(rateLimits, subject.PlanSlug, subject.TenantId);
+        var tenantTier = RateLimitPolicyResolver.ResolveTenantTier(
+            rateLimits,
+            subject.PlanSlug,
+            subject.TenantId,
+            subject.TenantSlug);
         rules.Add(new RateLimitRule(
             RateLimitScope.Tenant,
             RateLimitKeys.Tenant(subject.PartitionKey),
@@ -138,8 +143,11 @@ public sealed class RateLimitPlanResolver(
                 rules.Add(Adapt(RateLimitScope.Model, RateLimitKeys.Model(modelId), modelTier, factor));
             }
 
-            if (!string.IsNullOrEmpty(subject.TenantId) &&
-                rateLimits.TenantModels.TryGetValue(RateLimitKeys.Pair(subject.TenantId, modelId), out var tenantModelTier) &&
+            // Matched on the tenant id first and its slug second, for the same reason the tenant
+            // scope matches both: the id is what the request carries, the slug is what an operator
+            // writes. The partition key stays the id either way, so which spelling the rule was
+            // found by never changes which bucket it counts against.
+            if (TryFindTenantModelTier(rateLimits, subject, modelId, out var tenantModelTier) &&
                 !tenantModelTier.EnforcesNothing)
             {
                 rules.Add(Adapt(
@@ -162,6 +170,28 @@ public sealed class RateLimitPlanResolver(
         }
 
         return new RateLimitPlan([.. rules], modelStageIndex);
+    }
+
+    private static bool TryFindTenantModelTier(
+        RateLimitsConfigSection rateLimits,
+        in RateLimitSubject subject,
+        string modelId,
+        out RateLimitPolicy tier)
+    {
+        if (!string.IsNullOrEmpty(subject.TenantId) &&
+            rateLimits.TenantModels.TryGetValue(RateLimitKeys.Pair(subject.TenantId, modelId), out tier!))
+        {
+            return true;
+        }
+
+        if (!string.IsNullOrEmpty(subject.TenantSlug) &&
+            rateLimits.TenantModels.TryGetValue(RateLimitKeys.Pair(subject.TenantSlug, modelId), out tier!))
+        {
+            return true;
+        }
+
+        tier = default!;
+        return false;
     }
 
     /// <summary>
@@ -191,6 +221,7 @@ public sealed class RateLimitPlanResolver(
         long ConfigVersion,
         string PartitionKey,
         string? TenantId,
+        string? TenantSlug,
         string? PlanSlug,
         string? ApiKeyId,
         string? ModelId,

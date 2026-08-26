@@ -1679,11 +1679,144 @@
                 </template>
                 <div class="toolbar" style="margin-top: var(--space-4); margin-bottom: 0">
                   <button type="button" class="action secondary" @click="addRateLimitPlanRow"><span class="icon" x-html="icons.plus"></span> Add plan</button>
+                </div>
+
+                <h4 class="rl-subhead">Scoped rules</h4>
+                <p class="hint">
+                  Limits on a single model, a single API key, or one caller&rsquo;s use of one model. Scoped rules
+                  <strong>compose</strong> with the tiers above rather than replacing them: a request needs room in
+                  <em>every</em> rule that applies to it, so adding one here can only ever tighten what a caller may do.
+                  Targets are the canonical model id, the tenant id, or the API key id;
+                  <code>tenant&nbsp;&amp;&nbsp;model</code> and <code>key&nbsp;&amp;&nbsp;model</code> take
+                  <code>subject|model</code>. Leave RPM at 0 for a rule that only caps concurrent streams.
+                </p>
+                <template x-for="row in rateLimitRuleViewRows" :key="row.key">
+                  <div class="rl-grid rl-rule">
+                    <label>Scope
+                      <select x-model="row.scope" title="Which dimension this rule counts against.">
+                        <option value="model">Model</option>
+                        <option value="api_key">API key</option>
+                        <option value="tenant">Tenant</option>
+                        <option value="tenant_model">Tenant &amp; model</option>
+                        <option value="api_key_model">Key &amp; model</option>
+                        <option value="global">Whole gateway</option>
+                        <option value="auth_failure">Failed auth</option>
+                      </select>
+                    </label>
+                    <label>Target <input type="text" title="Model id, tenant id, key id, or subject|model. Use * for the gateway-wide and failed-auth scopes." x-model="row.target" placeholder="gpt-4" /></label>
+                    <label>RPM <input type="number" min="0" title="Sustained requests per minute for this rule. 0 = this rule does not limit the rate." x-model.number="row.rpm" /></label>
+                    <label>Burst <input type="number" min="0" title="Extra requests allowed in a short spike, on top of RPM." x-model.number="row.burst" /></label>
+                    <label>Max streams <input type="number" min="0" title="Concurrent streaming responses in this scope. 0 = unlimited." x-model.number="row.maxConcurrentStreams" /></label>
+                    <button type="button" class="action secondary" @click="row.remove"><span class="icon" x-html="icons.trash"></span> Remove</button>
+                  </div>
+                </template>
+                <div class="toolbar" style="margin-top: var(--space-4); margin-bottom: 0">
+                  <button type="button" class="action secondary" @click="addRateLimitRuleRow"><span class="icon" x-html="icons.plus"></span> Add rule</button>
+                </div>
+
+                <h4 class="rl-subhead">Load-aware enforcement</h4>
+                <label class="checkbox">
+                  <input type="checkbox" x-model="mdl.rateLimits.adaptiveEnabled" />
+                  Adapt model limits to load
+                </label>
+                <p class="hint">
+                  While a model is saturated, its per-model rules are held below their configured rate and clients that keep
+                  being refused are told to wait longer. It <strong>never raises a limit</strong> above what you configured, and
+                  never below the floor in <code>RateLimiting:Adaptive:MinFactor</code>. Turn it off to enforce exactly the
+                  numbers above; the usage report below shows what it is doing and why.
+                </p>
+
+                <div class="toolbar" style="margin-top: var(--space-4); margin-bottom: 0">
                   <span class="spacer"></span>
                   <button type="button" class="action secondary" @click="loadRateLimits" :disabled="loadingSettings">Reload</button>
                   <button type="button" class="action" @click="saveRateLimits" :disabled="loadingSettings">Save rate limits</button>
                 </div>
                 <p class="field-error" x-show="rateLimitFieldError" x-text="rateLimitFieldError"></p>
+              </div>
+            </template>
+          </div>
+
+          <!-- Rate-limit usage report -->
+          <div class="card" x-show="isSettingsLimits">
+            <span class="eyebrow">Who is using what</span>
+            <h3>Rate-limit usage</h3>
+            <p class="hint">
+              Live admission counters: requests per user and model, how each sits against the limit actually in force, and where
+              limits are being hit. In-memory and reset by a restart &mdash; durable spend per tenant and model lives in the
+              billing rollups.
+            </p>
+            <div class="toolbar" style="margin-bottom: var(--space-4)">
+              <label>Window
+                <select x-model.number="mdl.rateLimits.usageMinutes">
+                  <option value="15">Last 15 min</option>
+                  <option value="60">Last hour</option>
+                  <option value="180">Last 3 hours</option>
+                </select>
+              </label>
+              <span class="spacer"></span>
+              <button type="button" class="action secondary" @click="loadRateLimitUsage">Refresh</button>
+            </div>
+            <p class="notice error" x-show="rateLimitUsageError" x-text="rateLimitUsageError"></p>
+            <template x-if="rateLimitUsage">
+              <div>
+                <div class="stat-row">
+                  <span class="mini-stat"><span class="ms-label">Requests</span><span class="ms-value" x-text="rateLimitUsageTotals.requests"></span></span>
+                  <span class="mini-stat"><span class="ms-label">Admitted</span><span class="ms-value" x-text="rateLimitUsageTotals.admitted"></span></span>
+                  <span class="mini-stat"><span class="ms-label">Refused</span><span class="ms-value" x-text="rateLimitUsageTotals.refusedText"></span></span>
+                  <span class="mini-stat"><span class="ms-label">Partitions</span><span class="ms-value" x-text="rateLimitUsageTotals.partitionsText"></span></span>
+                </div>
+
+                <h4 class="rl-subhead">Per user and model</h4>
+                <table class="data">
+                  <thead><tr><th>Tenant</th><th>Model</th><th>Requests</th><th>Refused</th><th>req/min</th><th>Limit in force</th></tr></thead>
+                  <tbody>
+                    <template x-for="row in rateLimitUsageTenantModelRows" :key="row.key">
+                      <tr>
+                        <td x-text="row.tenant"></td>
+                        <td x-text="row.model"></td>
+                        <td x-text="row.requests"></td>
+                        <td x-text="row.rejected"></td>
+                        <td x-text="row.rpmText"></td>
+                        <td x-text="row.limitText"></td>
+                      </tr>
+                    </template>
+                  </tbody>
+                </table>
+
+                <h4 class="rl-subhead">Limits being hit</h4>
+                <p class="hint" x-show="rateLimitNoViolations">Nothing has been refused in this window.</p>
+                <table class="data" x-show="rateLimitHasViolations">
+                  <thead><tr><th>Scope</th><th>Target</th><th>Control</th><th>Hits</th></tr></thead>
+                  <tbody>
+                    <template x-for="v in rateLimitViolationRows" :key="v.key">
+                      <tr>
+                        <td x-text="v.scope"></td>
+                        <td x-text="v.target"></td>
+                        <td x-text="v.control"></td>
+                        <td x-text="v.hits"></td>
+                      </tr>
+                    </template>
+                  </tbody>
+                </table>
+
+                <template x-if="rateLimitAdaptiveActive">
+                  <div>
+                    <h4 class="rl-subhead">Load-aware adjustments</h4>
+                    <table class="data">
+                      <thead><tr><th>Model</th><th>Enforcing</th><th>Saturation</th><th>Why</th></tr></thead>
+                      <tbody>
+                        <template x-for="m in rateLimitAdaptiveRows" :key="m.key">
+                          <tr>
+                            <td x-text="m.modelId"></td>
+                            <td x-text="m.factorText"></td>
+                            <td x-text="m.saturationText"></td>
+                            <td x-text="m.reason"></td>
+                          </tr>
+                        </template>
+                      </tbody>
+                    </table>
+                  </div>
+                </template>
               </div>
             </template>
           </div>

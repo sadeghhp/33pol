@@ -11,7 +11,7 @@ using Pol33.Persistence;
 namespace Pol33.Persistence.Migrations
 {
     [DbContext(typeof(GatewayDbContext))]
-    [Migration("20260826134606_ScopedRateLimitRules")]
+    [Migration("20260826163906_ScopedRateLimitRules")]
     partial class ScopedRateLimitRules
     {
         /// <inheritdoc />
@@ -798,6 +798,9 @@ namespace Pol33.Persistence.Migrations
                         .HasColumnType("INTEGER");
 
                     b.Property<int>("Rpm")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long?>("RulesSeededAt")
                         .HasColumnType("INTEGER");
 
                     b.Property<long>("UpdatedAt")

@@ -23,9 +23,25 @@ namespace Pol33.Core.RateLimiting;
 /// </param>
 /// <param name="PartitionKey">The bucket the reading came from, for logs and reports; never sent to the client.</param>
 /// <param name="AdaptiveFactor">
-/// What the adaptive governor multiplied the configured rate by to reach <paramref name="Limit"/>.
+/// What the adaptive governor multiplied the configured rate by to reach <paramref name="EffectiveRpm"/>.
 /// <c>1.0</c> means the configured limit is being enforced unchanged.
 /// </param>
+/// <param name="ConfiguredRpm">
+/// The operator-configured sustained rate of the scope this reading came from, before adaptation.
+/// Zero when the reading describes a concurrency cap, which has no rate to report — reporting the
+/// slot count here would put a number of streams into a per-minute column.
+/// </param>
+/// <param name="EffectiveRpm">
+/// The sustained rate actually enforced, after adaptation. Equal to <paramref name="ConfiguredRpm"/>
+/// when nothing was adapted, and zero for the same reason it is on a concurrency reading.
+/// </param>
+/// <remarks>
+/// <paramref name="Limit"/> and <paramref name="EffectiveRpm"/> are deliberately separate numbers.
+/// The former is bucket <em>capacity</em> — <c>Rpm + Burst</c> — which is what a client's remaining
+/// budget is measured against and therefore what the response headers carry. The latter is the
+/// sustained rate, which is what a usage report must compare an observed rate to. Using capacity for
+/// both understates utilisation by the whole burst allowance.
+/// </remarks>
 public sealed record RateLimitAcquireResult(
     bool IsAcquired,
     GatewayRateLimitReason? RejectionReason = null,
@@ -35,7 +51,9 @@ public sealed record RateLimitAcquireResult(
     int? ResetAfterSeconds = null,
     RateLimitScope? Scope = null,
     string? PartitionKey = null,
-    double AdaptiveFactor = 1.0)
+    double AdaptiveFactor = 1.0,
+    int ConfiguredRpm = 0,
+    int EffectiveRpm = 0)
 {
     /// <summary>Admitted, with nothing to report — no scope in the rule set enforces this control.</summary>
     public static RateLimitAcquireResult Unlimited { get; } = new(true);

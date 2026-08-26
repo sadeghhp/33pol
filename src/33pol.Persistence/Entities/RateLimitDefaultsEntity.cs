@@ -27,5 +27,18 @@ public sealed class RateLimitDefaultsEntity
     /// </summary>
     public bool AdaptiveEnabled { get; set; }
 
+    /// <summary>
+    /// When the scoped rules in <c>rate_limit_rules</c> were seeded from configuration, or null if
+    /// they never have been.
+    /// </summary>
+    /// <remarks>
+    /// A one-shot marker rather than an "is the table empty" check. Seeding on an empty table would
+    /// re-create every appsettings rule the next time the gateway restarted after an operator
+    /// deleted them all through the admin API — a configuration change silently undone by a restart.
+    /// The marker is null on databases created before the rules table existed, so those are backfilled
+    /// from configuration exactly once on upgrade.
+    /// </remarks>
+    public DateTimeOffset? RulesSeededAt { get; set; }
+
     public DateTimeOffset UpdatedAt { get; set; }
 }

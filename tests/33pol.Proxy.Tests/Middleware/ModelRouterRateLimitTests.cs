@@ -38,12 +38,15 @@ public sealed class ModelRouterRateLimitTests
                 rateLimitPolicyResolver: resolver);
 
             var tenantId = Guid.NewGuid();
-            var context = CreateContext("""{"model":"m1"}""");
+
+            // Streaming: the tier is resolved where it is needed, and the only control the router
+            // enforces is the concurrency cap, which non-streaming requests never touch.
+            var context = CreateContext("""{"model":"m1","stream":true}""");
             SetInferenceTenant(context, tenantId, planSlug: "enterprise");
 
             await middleware.InvokeAsync(context);
 
-            resolver.Received().Resolve("enterprise", tenantId.ToString());
+            resolver.Received().Resolve("enterprise", tenantId.ToString(), null);
         });
     }
 
@@ -59,9 +62,9 @@ public sealed class ModelRouterRateLimitTests
                 forwarder: CreateForwarderReturning(ForwarderError.None),
                 rateLimitPolicyResolver: resolver);
 
-            await middleware.InvokeAsync(CreateContext("""{"model":"m1"}"""));
+            await middleware.InvokeAsync(CreateContext("""{"model":"m1","stream":true}"""));
 
-            resolver.Received().Resolve(null, null);
+            resolver.Received().Resolve(null, null, null);
         });
     }
 
@@ -86,13 +89,20 @@ public sealed class ModelRouterRateLimitTests
                     Arg.Any<CancellationToken>())
                 .Returns<ForwarderError>(_ => throw new InvalidOperationException("boom"));
 
-            var store = Substitute.For<IDistributedRateLimitStore>();
-            store.TryAcquireStreamSlot(Arg.Any<string>(), Arg.Any<RateLimitPolicy>())
-                .Returns(new RateLimitAcquireResult(true));
+            // A real store rather than a substitute: what matters is that the slot is genuinely
+            // free afterwards, not that some particular release method was called. Asserting the
+            // call would have to be rewritten every time the release path changes shape, and would
+            // still pass if the release named the wrong partition.
+            var store = new Pol33.Policy.RateLimiting.InMemoryDistributedRateLimitStore();
+            var oneStreamOnly = new RateLimitPolicy(10_000, 0, MaxConcurrentStreams: 1);
+            var resolver = Substitute.For<IRateLimitPolicyResolver>();
+            resolver.IsEnabled().Returns(true);
+            resolver.Resolve(Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>()).Returns(oneStreamOnly);
 
             var middleware = ModelRouterMiddlewareTests.CreateMiddlewareForRateLimitTests(
                 registry: registry,
                 forwarder: forwarder,
+                rateLimitPolicyResolver: resolver,
                 rateLimitStore: store);
 
             var tenantId = Guid.NewGuid();
@@ -102,7 +112,9 @@ public sealed class ModelRouterRateLimitTests
             var act = () => middleware.InvokeAsync(context);
 
             await act.Should().ThrowAsync<InvalidOperationException>();
-            store.Received(1).ReleaseStreamSlot(tenantId.ToString());
+
+            store.TryAcquireStreamSlot(tenantId.ToString(), oneStreamOnly).IsAcquired.Should()
+                .BeTrue("the slot the failed forward held must be back");
         });
     }
 
@@ -128,10 +140,93 @@ public sealed class ModelRouterRateLimitTests
         });
     }
 
+
+    /// <summary>
+    /// A streaming request refused by the concurrency cap is a refused request, and the governor has
+    /// to hear about it. It never used to: the rate limiter reported an admission a few frames
+    /// earlier, which clears the partition's backoff, and the router reported nothing at all — so a
+    /// client pinned on a concurrency cap sat at zero consecutive rejections forever and its
+    /// <c>Retry-After</c> never escalated, however hard it retried.
+    /// </summary>
+    [Fact]
+    public async Task InvokeAsync_WhenTheConcurrencyCapRefuses_TheGovernorHearsAboutIt()
+    {
+        await WithSingleModelRegistryAsync(async registry =>
+        {
+            var governor = Substitute.For<IAdaptiveRateLimitGovernor>();
+            var usage = new RecordingUsageTracker();
+
+            var store = Substitute.For<IDistributedRateLimitStore>();
+            store.TryAcquireStreamSlot(Arg.Any<string>(), Arg.Any<RateLimitPolicy>())
+                .Returns(new RateLimitAcquireResult(
+                    false,
+                    GatewayRateLimitReason.ConcurrencyLimitExceeded,
+                    RetryAfterSeconds: 1,
+                    Limit: 4,
+                    Remaining: 0,
+                    Scope: RateLimitScope.Tenant));
+
+            var middleware = ModelRouterMiddlewareTests.CreateMiddlewareForRateLimitTests(
+                registry: registry,
+                forwarder: CreateForwarderReturning(ForwarderError.None),
+                rateLimitStore: store,
+                rateLimitGovernor: governor,
+                rateLimitUsage: usage);
+
+            var context = CreateContext("""{"model":"m1","stream":true}""");
+            await middleware.InvokeAsync(context);
+
+            context.Response.StatusCode.Should().Be(StatusCodes.Status429TooManyRequests);
+            governor.Received(1).RecordOutcome(Arg.Any<string>(), false, Arg.Any<DateTimeOffset>());
+            governor.DidNotReceive().RecordOutcome(Arg.Any<string>(), true, Arg.Any<DateTimeOffset>());
+
+            // The slot count is not a per-minute rate. Passing it as one wrote MaxConcurrentStreams
+            // into the usage report's rpm columns, and the tier a key is held to is last-writer-wins.
+            var recorded = usage.Events.Should().ContainSingle().Subject;
+            recorded.Control.Should().Be(RateLimitControl.Concurrency);
+            recorded.ConfiguredRpm.Should().Be(0);
+            recorded.EffectiveRpm.Should().Be(0);
+        });
+    }
+
+    /// <summary>
+    /// The mirror image: a request that clears every gate the router applies is the one that clears
+    /// the backoff, because this is the last place a request can still be refused.
+    /// </summary>
+    [Fact]
+    public async Task InvokeAsync_WhenTheRequestPassesEveryGate_TheGovernorSeesTheAdmission()
+    {
+        await WithSingleModelRegistryAsync(async registry =>
+        {
+            var governor = Substitute.For<IAdaptiveRateLimitGovernor>();
+
+            var middleware = ModelRouterMiddlewareTests.CreateMiddlewareForRateLimitTests(
+                registry: registry,
+                forwarder: CreateForwarderReturning(ForwarderError.None),
+                rateLimitGovernor: governor);
+
+            await middleware.InvokeAsync(CreateContext("""{"model":"m1"}"""));
+
+            governor.Received(1).RecordOutcome(Arg.Any<string>(), true, Arg.Any<DateTimeOffset>());
+        });
+    }
+
+    private sealed class RecordingUsageTracker : IRateLimitUsageTracker
+    {
+        public List<RateLimitUsageEvent> Events { get; } = [];
+
+        public void Record(in RateLimitUsageEvent usageEvent) => Events.Add(usageEvent);
+
+        public RateLimitUsageReport BuildReport(int minutes, int take, DateTimeOffset now) =>
+            throw new NotSupportedException();
+
+        public void Reset() => Events.Clear();
+    }
+
     private static IRateLimitPolicyResolver CreateResolver()
     {
         var resolver = Substitute.For<IRateLimitPolicyResolver>();
-        resolver.Resolve(Arg.Any<string?>(), Arg.Any<string?>())
+        resolver.Resolve(Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>())
             .Returns(new RateLimitPolicy(10_000, 1_000, 1_000));
         resolver.IsEnabled().Returns(true);
         return resolver;

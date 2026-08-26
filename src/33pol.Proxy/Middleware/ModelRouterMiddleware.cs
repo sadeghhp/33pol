@@ -55,6 +55,15 @@ public sealed class ModelRouterMiddleware
 
     private readonly IRateLimitUsageTracker? _rateLimitUsage;
 
+    /// <summary>
+    /// The final say on whether a request was admitted. The rate limiter earlier in the pipeline
+    /// reports its own rejections, but an admission there is provisional: a streaming request can
+    /// still be refused by the concurrency cap below. Recording the admission there and the refusal
+    /// here would clear the partition's backoff a few frames before adding to it, so a client stuck
+    /// on a concurrency cap could never escalate past one consecutive rejection.
+    /// </summary>
+    private readonly IAdaptiveRateLimitGovernor? _rateLimitGovernor;
+
     public ModelRouterMiddleware(
         RequestDelegate next,
         IModelRegistry registry,
@@ -77,7 +86,8 @@ public sealed class ModelRouterMiddleware
         IGatewayErrorRecorder errorRecorder,
         ILogger<ModelRouterMiddleware> logger,
         IRateLimitPlanResolver? rateLimitPlanResolver = null,
-        IRateLimitUsageTracker? rateLimitUsage = null)
+        IRateLimitUsageTracker? rateLimitUsage = null,
+        IAdaptiveRateLimitGovernor? rateLimitGovernor = null)
     {
         _next = next;
         _registry = registry;
@@ -101,6 +111,7 @@ public sealed class ModelRouterMiddleware
         _logger = logger;
         _rateLimitPlanResolver = rateLimitPlanResolver;
         _rateLimitUsage = rateLimitUsage;
+        _rateLimitGovernor = rateLimitGovernor;
     }
 
     public async Task InvokeAsync(HttpContext context)
@@ -303,6 +314,11 @@ public sealed class ModelRouterMiddleware
                         "stream_concurrency:" + scopeLabel,
                         ratePartitionKey,
                         modelConfig.Id);
+                    // Zero rpm on purpose, not a missing value: this decision came from a slot
+                    // count, and a slot count is not a per-minute rate. Passing streamAcquire.Limit
+                    // here wrote MaxConcurrentStreams into the report's rpm columns, and because a
+                    // key's tier is last-writer-wins, one streaming refusal corrupted that key's
+                    // "usage against limit" until the next rate decision overwrote it.
                     _rateLimitUsage?.Record(new RateLimitUsageEvent(
                         ratePartitionKey,
                         rateSubject.ApiKeyId,
@@ -310,8 +326,12 @@ public sealed class ModelRouterMiddleware
                         Admitted: false,
                         streamAcquire.Scope,
                         RateLimitControl.Concurrency,
-                        streamAcquire.Limit ?? 0,
-                        streamAcquire.Limit ?? 0));
+                        streamAcquire.ConfiguredRpm,
+                        streamAcquire.EffectiveRpm));
+                    _rateLimitGovernor?.RecordOutcome(
+                        ratePartitionKey,
+                        admitted: false,
+                        DateTimeOffset.UtcNow);
                     await RejectAtAdmissionAsync(
                         context,
                         modelConfig.Id,
@@ -322,6 +342,10 @@ public sealed class ModelRouterMiddleware
                     return;
                 }
             }
+
+            // Past every admission gate: this is the first point at which the request is genuinely
+            // admitted, so it is the point that clears the partition's retry backoff.
+            _rateLimitGovernor?.RecordOutcome(ratePartitionKey, admitted: true, DateTimeOffset.UtcNow);
 
             // Declared outside the try so the catch below can mark it failed. Every exception that
             // escapes the forward would otherwise dispose a scope with no outcome, which the tracker
@@ -722,7 +746,7 @@ public sealed class ModelRouterMiddleware
         if (_rateLimitPlanResolver is null)
         {
             lease = RateLimitSlotLease.Empty;
-            var tier = _rateLimitPolicyResolver.Resolve(subject.PlanSlug, subject.TenantId);
+            var tier = _rateLimitPolicyResolver.Resolve(subject.PlanSlug, subject.TenantId, subject.TenantSlug);
             var single = _rateLimitStore.TryAcquireStreamSlot(subject.PartitionKey, tier);
             if (single.IsAcquired && tier.EnforcesConcurrency)
             {

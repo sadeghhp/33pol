@@ -7,8 +7,8 @@ public sealed class RateLimitPolicyResolver(IGatewayConfigProvider configProvide
 {
     public bool IsEnabled() => configProvider.Current.RateLimits.Enabled;
 
-    public RateLimitPolicy Resolve(string? planSlug, string? tenantSlug) =>
-        ResolveTenantTier(configProvider.Current.RateLimits, planSlug, tenantSlug);
+    public RateLimitPolicy Resolve(string? planSlug, string? tenantId, string? tenantSlug) =>
+        ResolveTenantTier(configProvider.Current.RateLimits, planSlug, tenantId, tenantSlug);
 
     public RateLimitPolicy ResolveAuthFailure() =>
         ResolveAuthFailureTier(configProvider.Current.RateLimits);
@@ -18,18 +18,25 @@ public sealed class RateLimitPolicyResolver(IGatewayConfigProvider configProvide
     /// over the tenant's plan, which wins over the default.
     /// </summary>
     /// <remarks>
-    /// Shared with <see cref="RateLimitPlanResolver"/> so the tenant scope of a rule set and the
-    /// standalone tier lookup can never drift apart — two implementations of the same precedence
+    /// <para>Shared with <see cref="RateLimitPlanResolver"/> so the tenant scope of a rule set and
+    /// the standalone tier lookup can never drift apart — two implementations of the same precedence
     /// would eventually disagree, and the symptom would be one middleware admitting what the next
-    /// one refuses.
+    /// one refuses.</para>
+    ///
+    /// <para>A <c>tenant</c> rule may be written against the tenant id or its slug. The id is what
+    /// the request carries and what the bucket is keyed on, so it is tried first; but an operator
+    /// knows the customer by its slug, and a rule written that way was previously accepted,
+    /// persisted, shown in the admin UI, and then silently never matched anything. Accepting both is
+    /// what makes the configuration mean what it looks like it means.</para>
     /// </remarks>
     internal static RateLimitPolicy ResolveTenantTier(
         Core.Configuration.RateLimitsConfigSection rateLimits,
         string? planSlug,
+        string? tenantId,
         string? tenantSlug)
     {
-        if (!string.IsNullOrWhiteSpace(tenantSlug) &&
-            rateLimits.TenantOverrides.TryGetValue(tenantSlug, out var tenantTier))
+        if (TryResolveTenantOverride(rateLimits, tenantId, out var tenantTier) ||
+            TryResolveTenantOverride(rateLimits, tenantSlug, out tenantTier))
         {
             return Clamp(tenantTier);
         }
@@ -41,6 +48,20 @@ public sealed class RateLimitPolicyResolver(IGatewayConfigProvider configProvide
         }
 
         return Clamp(rateLimits.Default);
+    }
+
+    private static bool TryResolveTenantOverride(
+        Core.Configuration.RateLimitsConfigSection rateLimits,
+        string? target,
+        out RateLimitPolicy tier)
+    {
+        if (!string.IsNullOrWhiteSpace(target))
+        {
+            return rateLimits.TenantOverrides.TryGetValue(target, out tier!);
+        }
+
+        tier = default!;
+        return false;
     }
 
     /// <summary>

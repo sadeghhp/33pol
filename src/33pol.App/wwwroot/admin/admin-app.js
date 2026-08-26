@@ -202,6 +202,10 @@ function adminApp() {
     errorOccurrences: {},
     configStatus: null,
     rateLimits: null,
+    rateLimitRuleRows: [],
+    rateLimitUsage: null,
+    rateLimitUsageError: '',
+    rateLimitUsageMinutes: 60,
     rateLimitPlanRows: [],
     rateLimitFieldError: '',
     rateLimitsLoadError: '',
@@ -450,6 +454,12 @@ function adminApp() {
 
     setSettingsSubTab(sub) {
       this.settingsSubTab = sub;
+
+      // The usage report is a separate read from the tiers, so it is fetched when its tab is opened
+      // rather than on every settings load — an operator who never opens it never pays for it.
+      if (sub === 'limits' && !this.rateLimitUsage) {
+        void this.loadRateLimitUsage();
+      }
     },
 
     icon(name) {
@@ -2204,13 +2214,22 @@ function adminApp() {
         burst: t.burst ?? t.Burst ?? 0,
         maxConcurrentStreams: t.maxConcurrentStreams ?? t.MaxConcurrentStreams ?? 0
       });
+      const rules = data.rules ?? data.Rules ?? [];
       return {
         // ?? not || so an explicit false is preserved; absent means enforcing, matching the server default.
         enabled: data.enabled ?? data.Enabled ?? true,
+        // Absent means off: a gateway enforces exactly what it was configured to until someone asks
+        // for something cleverer.
+        adaptiveEnabled: data.adaptiveEnabled ?? data.AdaptiveEnabled ?? false,
         default: tier(d),
         plans: Object.fromEntries(
           Object.entries(plans).map(([slug, t]) => [slug, tier(t)])
-        )
+        ),
+        rules: (Array.isArray(rules) ? rules : []).map((r) => ({
+          scope: r.scope ?? r.Scope ?? 'model',
+          target: r.target ?? r.Target ?? '',
+          ...tier(r)
+        }))
       };
     },
 
@@ -2227,6 +2246,7 @@ function adminApp() {
         burst: t.burst,
         maxConcurrentStreams: t.maxConcurrentStreams
       }));
+      this.rateLimitRuleRows = normalized.rules.map((r) => ({ ...r }));
       this.rateLimitFieldError = '';
       this.rateLimitsLoadError = '';
     },
@@ -2243,6 +2263,7 @@ function adminApp() {
       } catch (e) {
         this.rateLimits = null;
         this.rateLimitPlanRows = [];
+        this.rateLimitRuleRows = [];
         if (String(e.title || '').startsWith('404') || e.message?.includes('404') || /not found/i.test(e.message || '')) {
           this.rateLimitsLoadError =
             'Rate limit API is not available on this gateway (rebuild/restart the server with the latest image).';
@@ -2265,6 +2286,17 @@ function adminApp() {
       this.rateLimitPlanRows = this.rateLimitPlanRows.filter((_, i) => i !== index);
     },
 
+    addRateLimitRuleRow() {
+      this.rateLimitRuleRows = [
+        ...this.rateLimitRuleRows,
+        { scope: 'model', target: '', rpm: 60, burst: 10, maxConcurrentStreams: 0 }
+      ];
+    },
+
+    removeRateLimitRuleRow(index) {
+      this.rateLimitRuleRows = this.rateLimitRuleRows.filter((_, i) => i !== index);
+    },
+
     buildRateLimitsPayload() {
       const plans = {};
       for (const row of this.rateLimitPlanRows) {
@@ -2277,15 +2309,43 @@ function adminApp() {
         };
       }
       const d = this.rateLimits?.default || {};
+
+      // Rows with no target are dropped rather than sent: an empty target is the half-typed state of
+      // a row the operator has not finished, and the server would reject the whole save for it.
+      const rules = this.rateLimitRuleRows
+        .filter((row) => String(row.target ?? '').trim() !== '')
+        .map((row) => ({
+          scope: String(row.scope ?? '').trim(),
+          target: String(row.target ?? '').trim(),
+          rpm: Number(row.rpm) || 0,
+          burst: Number(row.burst) || 0,
+          maxConcurrentStreams: Number(row.maxConcurrentStreams) || 0
+        }));
+
       return {
         enabled: this.rateLimits?.enabled !== false,
+        adaptiveEnabled: this.rateLimits?.adaptiveEnabled === true,
         default: {
           rpm: Number(d.rpm),
           burst: Number(d.burst),
           maxConcurrentStreams: Number(d.maxConcurrentStreams)
         },
-        plans
+        plans,
+        rules
       };
+    },
+
+    async loadRateLimitUsage() {
+      this.rateLimitUsageError = '';
+      try {
+        const minutes = Number(this.rateLimitUsageMinutes) || 60;
+        this.rateLimitUsage = await this.apiJson(
+          '/admin/api/rate-limits/usage?minutes=' + minutes + '&take=25'
+        );
+      } catch (e) {
+        this.rateLimitUsage = null;
+        this.rateLimitUsageError = e.message || 'Could not load the rate-limit usage report.';
+      }
     },
 
     async saveRateLimits() {
@@ -2872,6 +2932,8 @@ function adminApp() {
         },
         rateLimits: {
           enabled: b('rateLimits.enabled'),
+          adaptiveEnabled: b('rateLimits.adaptiveEnabled'),
+          usageMinutes: b('rateLimitUsageMinutes'),
           default: {
             rpm: b('rateLimits.default.rpm'),
             burst: b('rateLimits.default.burst'),
@@ -4949,6 +5011,88 @@ function adminApp() {
         maxConcurrentStreams: this.bindPath('rateLimitPlanRows.' + index + '.maxConcurrentStreams'),
         remove: () => this.removeRateLimitPlanRow(index)
       }));
+    },
+
+    get rateLimitRuleViewRows() {
+      return this.rateLimitRuleRows.map((_, index) => ({
+        key: index,
+        scope: this.bindPath('rateLimitRuleRows.' + index + '.scope'),
+        target: this.bindPath('rateLimitRuleRows.' + index + '.target'),
+        rpm: this.bindPath('rateLimitRuleRows.' + index + '.rpm'),
+        burst: this.bindPath('rateLimitRuleRows.' + index + '.burst'),
+        maxConcurrentStreams: this.bindPath('rateLimitRuleRows.' + index + '.maxConcurrentStreams'),
+        remove: () => this.removeRateLimitRuleRow(index)
+      }));
+    },
+
+    // The admin page runs under a CSP-friendly Alpine build that evaluates property paths only, so
+    // every formatted cell below is precomputed here rather than in the template.
+
+    get rateLimitUsageTotals() {
+      const u = this.rateLimitUsage;
+      if (!u) return { requests: 0, admitted: 0, rejected: 0, refusedText: '0', partitionsText: '—' };
+      const rejected = u.totals?.rejected ?? 0;
+      const rate = u.totals?.rateRejected ?? 0;
+      const concurrency = u.totals?.concurrencyRejected ?? 0;
+      return {
+        requests: u.totals?.requests ?? 0,
+        admitted: u.totals?.admitted ?? 0,
+        rejected: rejected,
+        // The split says which control is biting, and they call for opposite responses: a rate
+        // refusal means the tier is too small for the traffic, a concurrency refusal means too many
+        // streams are held open at once.
+        refusedText: rejected === 0 ? '0' : rejected + ' (' + rate + ' rate / ' + concurrency + ' streams)',
+        partitionsText: (u.store?.requestPartitions ?? 0) + ' / ' + (u.store?.maxPartitions ?? 0)
+      };
+    },
+
+    /// "600" when nothing is adapting it, "420 of 600" when something is, "—" when no limit governs
+    /// the row — presenting a reduced figure as the limit would be a lie an operator cannot see.
+    rateLimitLimitText(row) {
+      if (!row || !(row.effectiveRpm > 0)) return '—';
+      return row.effectiveRpm === row.configuredRpm
+        ? String(row.effectiveRpm)
+        : row.effectiveRpm + ' of ' + row.configuredRpm;
+    },
+
+    get rateLimitUsageTenantModelRows() {
+      return (this.rateLimitUsage?.byTenantModel || []).map((row) => ({
+        key: row.key,
+        tenant: row.tenantId || '—',
+        model: row.modelId || '—',
+        requests: row.requests,
+        rejected: row.rejected,
+        rpmText: (row.requestsPerMinute ?? 0).toFixed(1),
+        limitText: this.rateLimitLimitText(row)
+      }));
+    },
+
+    get rateLimitViolationRows() {
+      return (this.rateLimitUsage?.violations || []).map((v) => ({
+        key: v.scope + '|' + v.key + '|' + v.control,
+        scope: v.scope,
+        target: v.key,
+        control: v.control,
+        hits: v.hits
+      }));
+    },
+
+    get rateLimitHasViolations() { return this.rateLimitViolationRows.length > 0; },
+    get rateLimitNoViolations() { return !!this.rateLimitUsage && this.rateLimitViolationRows.length === 0; },
+
+    get rateLimitAdaptiveRows() {
+      return (this.rateLimitUsage?.adaptive?.models || []).map((m) => ({
+        key: m.modelId,
+        modelId: m.modelId,
+        factorText: Math.round((m.factor ?? 1) * 100) + '% of configured',
+        saturationText: Math.round((m.saturation ?? 0) * 100) + '%',
+        reason: m.reason
+      }));
+    },
+
+    /// Only worth showing while something is actually adapted; a table of 100% rows is noise.
+    get rateLimitAdaptiveActive() {
+      return !!this.rateLimitUsage?.adaptive?.enabled && this.rateLimitAdaptiveRows.length > 0;
     },
 
     get corsLoading() {

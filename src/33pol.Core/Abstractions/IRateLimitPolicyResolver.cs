@@ -4,7 +4,12 @@ namespace Pol33.Core.Abstractions;
 
 public interface IRateLimitPolicyResolver
 {
-    RateLimitPolicy Resolve(string? planSlug, string? tenantSlug);
+    /// <summary>
+    /// The tier a tenant is held to. <paramref name="tenantId"/> is what the request carries and
+    /// what the bucket is keyed on; <paramref name="tenantSlug"/> is the spelling an operator is
+    /// more likely to have written a per-tenant rule against. Both are matched.
+    /// </summary>
+    RateLimitPolicy Resolve(string? planSlug, string? tenantId, string? tenantSlug);
 
     /// <summary>
     /// Whether rate limiting is enforced at all. Read per request from the live config snapshot, so
@@ -22,5 +27,5 @@ public interface IRateLimitPolicyResolver
     /// a limit on guessing in any useful sense. The default body returns the default tier, which is
     /// what the gateway enforced before the setting existed.
     /// </remarks>
-    RateLimitPolicy ResolveAuthFailure() => Resolve(planSlug: null, tenantSlug: null);
+    RateLimitPolicy ResolveAuthFailure() => Resolve(planSlug: null, tenantId: null, tenantSlug: null);
 }

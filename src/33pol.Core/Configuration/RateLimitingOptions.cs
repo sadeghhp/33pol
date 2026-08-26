@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace Pol33.Core.Configuration;
 
 public sealed class RateLimitingOptions
@@ -169,5 +171,10 @@ public sealed class RateLimitTierOptions
     /// <summary>A tier that enforces nothing — the shape an unset optional scope takes.</summary>
     public static RateLimitTierOptions Unset() => new() { Rpm = 0, Burst = 0, MaxConcurrentStreams = 0 };
 
+    /// <summary>
+    /// Neither control is on. Not serialised: this type is the admin API's tier shape, and a derived
+    /// flag on the wire is a field clients would start reading and the gateway would have to keep.
+    /// </summary>
+    [JsonIgnore]
     public bool EnforcesNothing => Rpm + Burst <= 0 && MaxConcurrentStreams <= 0;
 }

@@ -56,6 +56,15 @@ public sealed record CorsConfigSection
 public sealed record RateLimitsConfigSection
 {
     /// <summary>
+    /// Declared before <see cref="Defaults"/> on purpose. Static field initialisers run in
+    /// declaration order, so a <c>Defaults</c> built above this line captures a null for every map
+    /// that defaults to it — and the symptom is a NullReferenceException from whichever consumer
+    /// first enumerates one, far from the cause.
+    /// </summary>
+    private static readonly IReadOnlyDictionary<string, RateLimitPolicy> EmptyMap =
+        new Dictionary<string, RateLimitPolicy>(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
     /// Global master switch. When false, neither request-rate limits nor stream-concurrency limits are
     /// enforced for any tier. Lives on the section rather than on <see cref="RateLimitPolicy"/> because
     /// it is gateway-wide; the per-tier numbers stay meaningful and are restored when re-enabled.
@@ -99,9 +108,6 @@ public sealed record RateLimitsConfigSection
     public RateLimitPolicy AuthFailure { get; init; } = RateLimitPolicy.Unlimited;
 
     public static RateLimitsConfigSection Defaults { get; } = new();
-
-    private static readonly IReadOnlyDictionary<string, RateLimitPolicy> EmptyMap =
-        new Dictionary<string, RateLimitPolicy>(StringComparer.OrdinalIgnoreCase);
 }
 
 /// <summary>

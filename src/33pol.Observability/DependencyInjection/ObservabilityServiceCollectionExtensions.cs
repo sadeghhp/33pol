@@ -70,6 +70,7 @@ public static class ObservabilityServiceCollectionExtensions
         services.AddHostedService(sp => sp.GetRequiredService<ChannelUsageRecorder>());
         services.AddHostedService<GatewayBackendHealthMetricsExporter>();
         services.AddHostedService<GatewayCircuitBreakerMetricsExporter>();
+        services.AddHostedService<GatewayRateLimitMetricsExporter>();
 
         return services;
     }
