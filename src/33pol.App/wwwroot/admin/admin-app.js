@@ -15,6 +15,20 @@ function adminApp() {
    */
   const LIVE_STALE_MS = 3 * 15000;
 
+  /**
+   * How still the pointer and keyboard have to be before the wallboard hides its cursor and its
+   * exit button. Long enough that an operator walking up to the screen is not fighting a vanishing
+   * control, short enough that a mouse parked on a NOC panel does not burn into it.
+   */
+  const WALLBOARD_IDLE_MS = 8000;
+
+  /**
+   * How old the Overview's figures may get before the wallboard says so instead of displaying them
+   * as if they were current. Generous next to the 2s poll and the 15s stream heartbeat: this fires
+   * only when data has genuinely stopped arriving, not on one missed tick.
+   */
+  const WALLBOARD_STALE_MS = 20000;
+
   /** Time-range presets for the Errors tab, in hours. `all` drops the lower bound entirely. */
   const ERROR_RANGES = [
     ['1h', 'Last hour', 1],
@@ -89,8 +103,17 @@ function adminApp() {
     /** Per-section load failure text ('' when fine), keyed finops|policy|controlPlane|activity|tenants. */
     overviewSectionErrors: { finops: '', policy: '', controlPlane: '', activity: '', tenants: '' },
     overviewSlowLoadedAt: null,
-    /** Wallboard mode: chrome hidden, vitals scaled up (`#dashboard?wall=1`). */
+    /** Wallboard mode: chrome hidden, type scaled to room-reading size (`#dashboard?wall=1`). */
     wallboard: false,
+    /** Screen Wake Lock state while the wallboard is up: '' | 'held' | 'released' | 'denied' | 'unsupported'. */
+    wallboardWakeLock: '',
+    /** True once the pointer and keyboard have been still for WALLBOARD_IDLE_MS; hides the cursor and the exit button. */
+    wallboardIdle: false,
+    /** True only while the wallboard is the one that put the document into fullscreen. */
+    wallboardFullscreen: false,
+    _wbWakeLock: null,
+    _wbIdleTimer: null,
+    _wbActivityHandler: null,
     /** Live tail filters, pause and pins. */
     requestsModelFilter: '',
     requestsTenantFilter: '',
@@ -267,7 +290,14 @@ function adminApp() {
       this.restoreTab();
       this.restoreDismissedAttention();
       window.addEventListener('hashchange', () => this.applyHashTab());
-      document.addEventListener('visibilitychange', () => { this.syncPoll(); this.syncLive(); });
+      document.addEventListener('visibilitychange', () => {
+        this.syncPoll();
+        this.syncLive();
+        // The browser drops a screen wake lock whenever the document is hidden and never gives it
+        // back on its own, so a wallboard behind another tab for a minute would quietly lose it.
+        if (!document.hidden) this.syncWallboardEffects();
+      });
+      document.addEventListener('fullscreenchange', () => this.onFullscreenChange());
       // Safety net: an API failure that escapes a fire-and-forget call site still lands in the
       // banner instead of only in the devtools console.
       window.addEventListener('unhandledrejection', ev => {
@@ -284,6 +314,9 @@ function adminApp() {
         if (this.tab === 'dashboard' && this.apiKey) {
           this._nowTick = Date.now();
           this.checkLiveStale();
+          // The wallboard's staleness and severity switches live on <html>, out of reach of any
+          // binding inside the panel, so the clock is what keeps them honest.
+          if (this.wallboard) this.applyWallboard();
         }
       }, 500);
       if (this.apiKey) {
@@ -367,19 +400,255 @@ function adminApp() {
       const next = !!on;
       if (next === this.wallboard) return;
       this.wallboard = next;
+      if (next) this.prepareWallboard();
+      else this.restoreFromWallboard();
       this.applyWallboard();
+      this.syncWallboardEffects();
       if (updateHash && this.tab === 'dashboard') {
         const hash = this.dashboardHash();
         if (location.hash !== hash) location.hash = hash;
       }
     },
-    applyWallboard() {
-      document.documentElement.classList.toggle('wallboard', this.wallboard && this.tab === 'dashboard');
+
+    /**
+     * Resolves the transient state a desk session accumulates, because the controls for it are
+     * about to disappear. A paused feed is the one that actually breaks a board — Pause lives in
+     * the filter row the wallboard hides, so a frozen tail would sit there with nothing to say it
+     * is frozen and no way to release it. Tail filters are kept: a board deliberately pinned to one
+     * model is a legitimate setup, and it is stated at board scale instead (wallboardFilterText).
+     */
+    prepareWallboard() {
+      this.expandedRequestId = null;
+      if (this.requestsPaused) {
+        this.toggleRequestsPause();
+        this.toast('Live tail resumed — the wallboard has no pause control.');
+      }
     },
-    toggleWallboard() { this.setWallboard(!this.wallboard); },
+
+    /** Leaving gives back everything the board switched off: fullscreen, and the sections it stopped polling. */
+    restoreFromWallboard() {
+      this.exitPresentationFullscreen();
+      this.loadOverviewSlow(true).catch(() => {});
+    },
+
+    /**
+     * The wallboard's switches live on <html>, not in bindings, because they gate CSS across the
+     * whole document — rail, topbar, cursor, type scale — which no directive inside the panel
+     * reaches. `wallboard-stale` and `wallboard-critical` are re-evaluated by the 500ms tick.
+     */
+    applyWallboard() {
+      const on = this.wallboard && this.tab === 'dashboard';
+      const el = document.documentElement;
+      el.classList.toggle('wallboard', on);
+      el.classList.toggle('wallboard-idle', on && this.wallboardIdle);
+      el.classList.toggle('wallboard-stale', on && this.wallboardStale);
+      el.classList.toggle('wallboard-critical', on && this.hasCriticalAttention);
+    },
+
+    /** Side effects follow the mode actually in force — wallboard AND on the Overview — not the flag alone. */
+    syncWallboardEffects() {
+      if (this.wallboard && this.tab === 'dashboard') {
+        this.startWallboardIdleWatch();
+        void this.acquireWallboardWakeLock();
+      } else {
+        this.stopWallboardIdleWatch();
+        this.releaseWallboardWakeLock();
+      }
+    },
+
+    toggleWallboard() {
+      const entering = !this.wallboard;
+      this.setWallboard(entering);
+      // Fullscreen needs a user gesture, and this click is one. Entering from #dashboard?wall=1 on
+      // load cannot have one, so a URL-driven wallboard stays windowed and offers the button.
+      if (entering) this.enterPresentationFullscreen();
+    },
     exitWallboard() { if (this.wallboard) this.setWallboard(false); },
     get wallboardButtonText() { return this.wallboard ? 'Exit wallboard' : 'Wallboard'; },
     get wallboardButtonIcon() { return this.icon(this.wallboard ? 'minimize' : 'maximize'); },
+
+    // ---- presentation: fullscreen, wake lock, idle chrome ----
+
+    /**
+     * A refusal is not worth a banner: kiosk shells, embedded webviews and permission policies all
+     * say no to fullscreen, and the wallboard is perfectly usable in a window.
+     */
+    enterPresentationFullscreen() {
+      const el = document.documentElement;
+      if (!el.requestFullscreen || document.fullscreenElement) return;
+      Promise.resolve(el.requestFullscreen()).then(
+        () => { this.wallboardFullscreen = true; },
+        () => { this.wallboardFullscreen = false; }
+      );
+    },
+
+    exitPresentationFullscreen() {
+      if (!this.wallboardFullscreen) return;
+      // Cleared before the call: exitFullscreen fires fullscreenchange, and the handler must not
+      // read our own exit as the operator leaving fullscreen and drop the wallboard twice.
+      this.wallboardFullscreen = false;
+      if (document.fullscreenElement && document.exitFullscreen) {
+        document.exitFullscreen().catch(() => { /* already leaving */ });
+      }
+    },
+
+    /** F11 or the browser's own Esc leaves fullscreen without telling us; treat it as leaving the board. */
+    onFullscreenChange() {
+      if (document.fullscreenElement || !this.wallboardFullscreen) return;
+      this.wallboardFullscreen = false;
+      this.setWallboard(false);
+    },
+
+    /**
+     * A wallboard whose screen sleeps is not a wallboard. The lock is dropped by the browser every
+     * time the document is hidden, so it is re-taken from visibilitychange for as long as the mode
+     * is on. Firefox and pre-16.4 Safari have no wakeLock at all — the mode still works, the screen
+     * just follows the OS timeout, and the exit hint says which of those is happening.
+     */
+    async acquireWallboardWakeLock() {
+      if (!navigator.wakeLock) { this.wallboardWakeLock = 'unsupported'; return; }
+      if (this._wbWakeLock || document.hidden) return;
+      try {
+        const lock = await navigator.wakeLock.request('screen');
+        // The mode can have been switched off while the request was in flight.
+        if (!this.wallboard) { lock.release().catch(() => {}); return; }
+        this._wbWakeLock = lock;
+        this.wallboardWakeLock = 'held';
+        lock.addEventListener('release', () => {
+          if (this._wbWakeLock !== lock) return;
+          this._wbWakeLock = null;
+          this.wallboardWakeLock = this.wallboard ? 'released' : '';
+        });
+      } catch {
+        this.wallboardWakeLock = 'denied';
+      }
+    },
+
+    releaseWallboardWakeLock() {
+      const lock = this._wbWakeLock;
+      this._wbWakeLock = null;
+      this.wallboardWakeLock = '';
+      if (lock) lock.release().catch(() => { /* already released */ });
+    },
+
+    startWallboardIdleWatch() {
+      if (this._wbActivityHandler) return;
+      const handler = () => this.noteWallboardActivity();
+      this._wbActivityHandler = handler;
+      window.addEventListener('mousemove', handler, { passive: true });
+      window.addEventListener('mousedown', handler, { passive: true });
+      window.addEventListener('keydown', handler, { passive: true });
+      window.addEventListener('touchstart', handler, { passive: true });
+      this.noteWallboardActivity();
+    },
+
+    stopWallboardIdleWatch() {
+      const handler = this._wbActivityHandler;
+      if (handler) {
+        window.removeEventListener('mousemove', handler);
+        window.removeEventListener('mousedown', handler);
+        window.removeEventListener('keydown', handler);
+        window.removeEventListener('touchstart', handler);
+        this._wbActivityHandler = null;
+      }
+      if (this._wbIdleTimer) { clearTimeout(this._wbIdleTimer); this._wbIdleTimer = null; }
+      if (!this.wallboardIdle) return;
+      this.wallboardIdle = false;
+      this.applyWallboard();
+    },
+
+    noteWallboardActivity() {
+      if (this._wbIdleTimer) clearTimeout(this._wbIdleTimer);
+      if (this.wallboardIdle) { this.wallboardIdle = false; this.applyWallboard(); }
+      this._wbIdleTimer = setTimeout(() => {
+        this._wbIdleTimer = null;
+        this.wallboardIdle = true;
+        this.applyWallboard();
+      }, WALLBOARD_IDLE_MS);
+    },
+
+    // ---- wallboard readouts ----
+
+    /**
+     * Reads the reactive tick, so the board's clock advances with the rest of it. Forced to 24-hour
+     * regardless of locale: an ops display wants the same reading as every log line beside it, and
+     * a wrapping "06:27:03 PM" is a worse clock than "18:27:03" in every locale that has one.
+     */
+    get wallboardClockText() {
+      return new Date(this._nowTick).toLocaleTimeString([], {
+        hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit'
+      });
+    },
+
+    /** The one line that says what population the giant numbers cover, and how the fleet is doing. */
+    get wallboardScopeText() {
+      const parts = [];
+      if (this.hasBackendsSection) parts.push(this.backendsHealthText);
+      const queued = this.queuedCount;
+      if (queued > 0) parts.push(queued + ' queued');
+      return parts.join(' · ');
+    },
+
+    get wallboardWindowText() { return this.windowLabel; },
+
+    /**
+     * Coarser than summaryAgeText, which is written for a line that is only ever a few seconds old:
+     * a board that has been stale since last night must not report "48210s ago".
+     */
+    wallboardAgeText() {
+      if (!this.summaryUpdatedAt) return '';
+      const sec = Math.max(0, Math.floor((this._nowTick - this.summaryUpdatedAt) / 1000));
+      if (sec < 90) return sec + 's';
+      const min = Math.floor(sec / 60);
+      if (min < 90) return min + ' min';
+      return Math.floor(min / 60) + ' h';
+    },
+
+    /**
+     * "The numbers on this screen are not current." A desk session gets a one-line notice for that;
+     * a board has to say it at the size of the figures it is contradicting, because nobody standing
+     * in front of it can read a hint. A rejected key, a failed refresh, or simply nothing arriving
+     * for WALLBOARD_STALE_MS all count.
+     */
+    get wallboardStale() {
+      if (!this.wallboard) return false;
+      if (this.connectionStatus === 'fail') return true;
+      if (this.overviewStale) return true;
+      if (!this.summaryUpdatedAt) return false;
+      return this._nowTick - this.summaryUpdatedAt >= WALLBOARD_STALE_MS;
+    },
+    get wallboardStaleTitle() { return this.connectionStatus === 'fail' ? 'DISCONNECTED' : 'STALE'; },
+    get wallboardStaleText() {
+      if (this.connectionStatus === 'fail') return 'The admin API key was rejected — these figures are frozen.';
+      const age = this.wallboardAgeText();
+      return age ? 'Last update ' + age + ' ago — these figures are not current.' : 'No data has reached this board yet.';
+    },
+
+    /**
+     * The wallboard hides the filter row, so a tail narrowed to one model would otherwise read as
+     * the whole gateway. This states the narrowing at board scale rather than silently lying.
+     */
+    get hasWallboardFilters() { return this.wallboard && this.hasRequestFilters; },
+    get wallboardFilterText() {
+      const parts = [];
+      if (this.requestsModelFilter) parts.push('model ' + this.requestsModelFilter);
+      if (this.requestsTenantFilter) parts.push('tenant ' + this.requestsTenantFilter);
+      if (this.requestsStatusClass) parts.push('status ' + this.requestsStatusClass);
+      if (this.requestsSlowOnly) parts.push('slow only');
+      if (this.requestsErrorsOnly) parts.push('errors only');
+      return parts.length ? 'Tail filtered · ' + parts.join(' · ') : '';
+    },
+
+    /** Corner hint. It also reports whether the screen is actually being held awake, which is not guessable. */
+    get wallboardHintText() {
+      if (this.wallboardWakeLock === 'held') return 'Esc to exit · screen kept awake';
+      if (this.wallboardWakeLock === 'unsupported') return 'Esc to exit · this browser cannot hold the screen awake';
+      if (this.wallboardWakeLock === 'denied' || this.wallboardWakeLock === 'released') return 'Esc to exit · the screen may sleep';
+      return 'Esc to exit';
+    },
+
+    /** Offered only while the board is not already the fullscreen element — a URL-driven wallboard never is. */
+    get wallboardCanGoFullscreen() { return !this.wallboardFullscreen; },
 
     setOverviewWindow(id, updateHash = true) {
       if (!OVERVIEW_WINDOWS.some(([key]) => key === id)) return;
@@ -403,6 +672,7 @@ function adminApp() {
       sessionStorage.setItem('33pol-admin-tab', name);
       sessionStorage.setItem('33pol-admin-routing-sub', this.routingSubTab);
       this.applyWallboard();
+      this.syncWallboardEffects();
       if (updateHash) {
         const next = name === 'dashboard' ? this.dashboardHash() : '#' + name;
         if (location.hash !== next) location.hash = next;
@@ -1452,7 +1722,7 @@ function adminApp() {
       await this.runApi('overview', 'Loading overview…', async () => {
         const summaryP = this.apiJson('/admin/api/summary');
         const healthP = this.loadHealth();
-        const requestsP = this.apiJson('/admin/api/requests?limit=25');
+        const requestsP = this.apiJson('/admin/api/requests?limit=' + this.requestsFeedLimit);
         await healthP;
         this.summary = await summaryP;
         this.requests = (await requestsP) ?? [];
@@ -1466,20 +1736,31 @@ function adminApp() {
     },
 
     /**
+     * Which database-backed sections are worth fetching. The wallboard keeps only the policy card,
+     * so the other four queries would otherwise run every 30s, for ever, against cards that are
+     * display:none — on a screen left up for weeks that is the bulk of what the console costs the
+     * gateway. Leaving the mode re-runs the full set (restoreFromWallboard).
+     */
+    overviewSlowLoaders() {
+      if (this.wallboard) return [() => this.loadOverviewPolicy()];
+      return [
+        () => this.loadOverviewFinops(),
+        () => this.loadOverviewPolicy(),
+        () => this.loadOverviewControlPlane(),
+        () => this.loadOverviewActivity(),
+        () => this.loadOverviewTenants()
+      ];
+    },
+
+    /**
      * Loads the slow Overview sections together. Each one fails on its own — a FinOps query error
      * leaves the backends and policy cards intact — and a 204 (the gateway has no such data) hides
      * the card rather than warning about it.
      */
     async loadOverviewSlow(quiet) {
-      const results = await Promise.allSettled([
-        this.loadOverviewFinops(),
-        this.loadOverviewPolicy(),
-        this.loadOverviewControlPlane(),
-        this.loadOverviewActivity(),
-        this.loadOverviewTenants()
-      ]);
+      const results = await Promise.allSettled(this.overviewSlowLoaders().map(load => load()));
       this.overviewSlowLoadedAt = Date.now();
-      if (!quiet && results.every(r => r.status === 'rejected')) {
+      if (!quiet && results.length > 0 && results.every(r => r.status === 'rejected')) {
         throw results[0].reason;
       }
     },
@@ -1893,6 +2174,8 @@ function adminApp() {
         else if (this.keyAccessDrawerOpen) this.closeKeyAccessDrawer();
         else if (this.keysEditDrawerOpen) this.closeKeyEditDrawer();
         else if (this.keysDrawerOpen) this.closeKeysDrawer();
+        // Last, so a dialog opened on top of a wallboard closes first and one Esc never does both.
+        else if (this.wallboard) this.exitWallboard();
       }
     },
 
@@ -2459,10 +2742,17 @@ function adminApp() {
       });
     },
 
+    /**
+     * The tail's row budget. The wallboard renders ten rows, so asking for twenty-five and hiding
+     * fifteen is work the gateway does for nothing. The push stream sizes its own frames, which is
+     * why the ten-row trim is enforced in CSS as well and not only here.
+     */
+    get requestsFeedLimit() { return this.wallboard ? 12 : 25; },
+
     /** @param quiet true for the 2s poll tick, which must not flash the loading state or raise a banner. */
     async loadRequests(quiet) {
       const fetchRequests = async () => {
-        const rows = (await this.apiJson('/admin/api/requests?limit=25')) ?? [];
+        const rows = (await this.apiJson('/admin/api/requests?limit=' + this.requestsFeedLimit)) ?? [];
         if (this.requestsPaused) this._pausedFrame = rows;
         else this.requests = rows;
       };
@@ -3226,13 +3516,18 @@ function adminApp() {
 
     toggleAttention() { this.attentionCollapsed = !this.attentionCollapsed; },
 
-    /** Server attention items minus the ones dismissed this session, already ranked by the gateway. */
+    /**
+     * Server attention items minus the ones dismissed this session, already ranked by the gateway.
+     * The wallboard ignores dismissals: they are a desk gesture made by someone who could see the
+     * item, and an unattended board that quietly drops alerts because of a click made hours ago on
+     * the same browser profile is worse than no board.
+     */
     get attentionRows() {
       const items = Array.isArray(this.summary?.attention) ? this.summary.attention : [];
       const iconFor = { critical: 'x-circle', warning: 'alert-triangle', info: 'lightbulb' };
       return items
         .map(item => ({ item, key: this.attentionKey(item) }))
-        .filter(({ key }) => !this.attentionDismissed.includes(key))
+        .filter(({ key }) => this.wallboard || !this.attentionDismissed.includes(key))
         .map(({ item, key }) => ({
           key,
           cls: 'attention-item is-' + (item.severity || 'info'),
@@ -3248,8 +3543,13 @@ function adminApp() {
         }));
     },
     get hasAttention() { return this.attentionRows.length > 0; },
-    get hasDismissedAttention() { return this.attentionDismissed.length > 0 && Array.isArray(this.summary?.attention) && this.summary.attention.length > 0; },
-    get attentionExpanded() { return !this.attentionCollapsed; },
+    get hasDismissedAttention() {
+      if (this.wallboard) return false;
+      return this.attentionDismissed.length > 0 && Array.isArray(this.summary?.attention) && this.summary.attention.length > 0;
+    },
+    /** Collapsing is a desk gesture; a board that came up folded shut would show nothing. */
+    get attentionExpanded() { return !this.attentionCollapsed || this.wallboard; },
+    get hasCriticalAttention() { return this.attentionRows.some(row => row.severity === 'critical'); },
     get attentionToggleText() { return this.attentionCollapsed ? 'Show' : 'Hide'; },
     get attentionBannerClass() {
       if (this.attentionRows.some(r => r.severity === 'critical')) return 'attention is-critical';

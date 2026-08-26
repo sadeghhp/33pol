@@ -14,6 +14,17 @@ public sealed class RateLimitPlanResolverTests
     private static readonly RateLimitSubject Acme =
         new("acme", null, "pro", "key-1", "acme");
 
+    /// <summary>
+    /// The shape a real authenticated request has: the id is a GUID, the slug is what an operator
+    /// calls the customer, and the partition key is the id.
+    /// </summary>
+    private static readonly RateLimitSubject TenantSubject = new(
+        "11111111-1111-1111-1111-111111111111",
+        "acme",
+        PlanSlug: null,
+        ApiKeyId: null,
+        "11111111-1111-1111-1111-111111111111");
+
     [Fact]
     public void Resolve_WithNothingConfigured_ProducesTheTenantRuleAlone()
     {
@@ -160,6 +171,95 @@ public sealed class RateLimitPlanResolverTests
 
         plan.Rules.Should().ContainSingle();
         plan.Rules[0].PartitionKey.Should().Be(RateLimitKeys.Tenant("anon:203.0.113.7"));
+    }
+
+
+    /// <summary>
+    /// A per-tenant rule may name the tenant by id or by slug.
+    /// </summary>
+    /// <remarks>
+    /// The request carries the id — a GUID — and that is what the bucket is keyed on, but an
+    /// operator knows the customer as "acme". A slug-targeted rule used to be accepted by
+    /// validation, written to the database, listed by the admin API and shown in the UI, and then
+    /// silently never match: configuration that looks applied and is not, which is the failure this
+    /// whole scope system exists to avoid.
+    /// </remarks>
+    [Theory]
+    [InlineData("11111111-1111-1111-1111-111111111111")]
+    [InlineData("acme")]
+    public void Resolve_TenantScope_MatchesARuleWrittenAgainstEitherTheIdOrTheSlug(string target)
+    {
+        var resolver = Create(new RateLimitsConfigSection
+        {
+            Default = new RateLimitPolicy(600, 0, 0),
+            TenantOverrides = Map((target, new RateLimitPolicy(5, 0, 0))),
+        });
+
+        var plan = resolver.Resolve(TenantSubject, modelId: null);
+
+        plan.Rules.Single(r => r.Scope == RateLimitScope.Tenant).Policy.Rpm.Should().Be(5);
+    }
+
+    [Theory]
+    [InlineData("11111111-1111-1111-1111-111111111111|gpt-4")]
+    [InlineData("acme|gpt-4")]
+    public void Resolve_TenantModelScope_MatchesARuleWrittenAgainstEitherTheIdOrTheSlug(string target)
+    {
+        var resolver = Create(new RateLimitsConfigSection
+        {
+            Default = new RateLimitPolicy(600, 0, 0),
+            TenantModels = Map((target, new RateLimitPolicy(3, 0, 0))),
+        });
+
+        var plan = resolver.Resolve(TenantSubject, modelId: "gpt-4");
+
+        var rule = plan.Rules.Single(r => r.Scope == RateLimitScope.TenantModel);
+        rule.Policy.Rpm.Should().Be(3);
+        rule.PartitionKey.Should().Be(
+            RateLimitKeys.TenantModel(TenantSubject.PartitionKey, "gpt-4"),
+            "which spelling the rule was found by must never change which bucket it counts against");
+    }
+
+    /// <summary>
+    /// With both spellings configured the id wins, so the more specific identifier is the one an
+    /// operator can rely on when a slug has been reused.
+    /// </summary>
+    [Fact]
+    public void Resolve_TenantScope_PrefersTheIdRuleOverTheSlugRule()
+    {
+        var resolver = Create(new RateLimitsConfigSection
+        {
+            Default = new RateLimitPolicy(600, 0, 0),
+            TenantOverrides = Map(
+                ("11111111-1111-1111-1111-111111111111", new RateLimitPolicy(5, 0, 0)),
+                ("acme", new RateLimitPolicy(90, 0, 0))),
+        });
+
+        var plan = resolver.Resolve(TenantSubject, modelId: null);
+
+        plan.Rules.Single(r => r.Scope == RateLimitScope.Tenant).Policy.Rpm.Should().Be(5);
+    }
+
+    /// <summary>
+    /// Renaming a tenant changes which rule matches it, and nothing else in the cache key moves when
+    /// it does — so the slug has to be part of that key or the old plan would be served on.
+    /// </summary>
+    [Fact]
+    public void Resolve_AfterATenantIsRenamed_DoesNotServeTheCachedPlan()
+    {
+        var resolver = Create(new RateLimitsConfigSection
+        {
+            Default = new RateLimitPolicy(600, 0, 0),
+            TenantOverrides = Map(("renamed", new RateLimitPolicy(5, 0, 0))),
+        });
+
+        resolver.Resolve(TenantSubject, modelId: null)
+            .Rules.Single(r => r.Scope == RateLimitScope.Tenant).Policy.Rpm.Should().Be(600);
+
+        var renamed = TenantSubject with { TenantSlug = "renamed" };
+
+        resolver.Resolve(renamed, modelId: null)
+            .Rules.Single(r => r.Scope == RateLimitScope.Tenant).Policy.Rpm.Should().Be(5);
     }
 
     private static RateLimitPlanResolver Create(RateLimitsConfigSection rateLimits) =>

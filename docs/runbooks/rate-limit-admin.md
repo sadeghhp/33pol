@@ -12,8 +12,12 @@ There are six scopes a request can be subject to:
 | `tenant` | One tenant, or one client address block for anonymous traffic | default tier / plan tier / `tenant` rule |
 | `api_key` | One credential | rule, target = key id |
 | `model` | One model, summed over every caller | rule, target = canonical model id |
-| `tenant_model` | One tenant's use of one model | rule, target = `tenantId\|modelId` |
+| `tenant_model` | One tenant's use of one model | rule, target = `tenant\|modelId` |
 | `api_key_model` | One key's use of one model | rule, target = `keyId\|modelId` |
+
+**Naming a tenant.** The `tenant` and `tenant_model` scopes accept the tenant **id** (the GUID the admin API returns) or its **slug** — whichever you write, the rule matches, and the bucket is keyed on the id either way. The id wins if both are configured. Key ids have no second spelling: use the `id` from `POST /admin/api/keys`.
+
+Targets are **not** checked against anything that exists. A rule for a model, tenant or key that is not there is stored and simply never matches — which is what you want while provisioning, and a trap when it is a typo. `GET /admin/api/rate-limits/usage` is the check: a rule that is doing something appears under `violations` or moves a row's `effectiveRpm`.
 
 **The scopes compose; they do not override one another.** A request is admitted only when *every* scope that applies to it admits it, so adding a narrower rule can only ever tighten what a caller may do. This is what makes the outcome deterministic regardless of the order rules were configured in — there is no "most specific wins" tie-break to reason about, because nothing ties.
 
@@ -117,7 +121,7 @@ What gets seeded, and when:
 
 The rule seed is a **one-shot**, not a top-up. Deleting every rule through the admin API is a configuration decision, and a restart must not quietly restore the appsettings set — so the stamp, not an empty table, is what decides. A database created before the rules table existed carries a null stamp and is backfilled from configuration exactly once on upgrade, without disturbing the tiers already in it.
 
-A malformed entry (a `tenant_model` target missing its `|`, say) is logged as a warning and skipped rather than refusing to start; the admin API rejects the same rule outright, because there a caller is waiting and can fix it.
+A malformed entry (a `tenant_model` target missing its `|`, say) is logged as a warning and skipped rather than refusing to start; the admin API rejects the same rule outright, because there a caller is waiting and can fix it. The same applies to two configuration keys that collapse to one rule — `"gpt-4"` and `"gpt-4 "` are distinct JSON keys but one `(scope, target)` — and to configuration past the 2 000-rule ceiling, which is truncated in scope-then-target order with a warning naming how many were dropped. Nothing in this path can stop the gateway starting.
 
 Without a configured database, rate limits are read-only and `PUT` answers **503**.
 

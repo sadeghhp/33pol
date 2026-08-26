@@ -42,16 +42,43 @@ public sealed class ConfiguredRateLimitSeedIntegrationTests
                 Rpm: r.GetProperty("rpm").GetInt32()))
             .ToList();
 
-        rules.Should().Contain(("model", "local-mock", 1));
-        rules.Should().Contain(("tenant_model", "default|local-mock", 900));
+        rules.Should().Contain(("model", "local-mock", 100));
+        rules.Should().Contain(("tenant_model", "default|local-mock", 2));
         rules.Should().Contain(("auth_failure", "*", 30));
+    }
+
+    /// <summary>
+    /// The tenant scopes are keyed on the tenant id — a GUID — but an operator writes the slug they
+    /// know the customer by. That rule was previously accepted, persisted, listed by the admin API
+    /// and never matched anything; the earlier version of this test asserted only that it came back
+    /// on a GET, which a rule that can never fire also does.
+    /// </summary>
+    [Fact]
+    public async Task AConfiguredTenantModelRule_WrittenAgainstTheTenantSlug_IsEnforced()
+    {
+        var handler = new MockUpstreamHandler();
+        await using var factory = CreateFactory(handler);
+        await GatewayWebApplicationFactory.EnsureAuthReadyAsync(factory);
+        var admin = CreateAuthenticatedClient(factory, AdminKey);
+
+        var client = await CreateInferenceClientAsync(factory, admin, granted: true);
+
+        // The tenant|model rule is 2 rpm and the model rule is 100, so the tenant rule is the one
+        // that must bite — and only if "default" resolved to the bootstrapped tenant.
+        (await PostChatAsync(client)).StatusCode.Should().BeOneOf(HttpStatusCode.OK, HttpStatusCode.BadGateway);
+        (await PostChatAsync(client)).StatusCode.Should().BeOneOf(HttpStatusCode.OK, HttpStatusCode.BadGateway);
+
+        var refused = await PostChatAsync(client);
+
+        refused.StatusCode.Should().Be(HttpStatusCode.TooManyRequests);
+        refused.Headers.GetValues("X-33pol-RateLimit-Scope").Single().Should().Be("tenant_model");
     }
 
     [Fact]
     public async Task AConfiguredPerModelRule_IsEnforcedOnInference()
     {
         var handler = new MockUpstreamHandler();
-        await using var factory = CreateFactory(handler);
+        await using var factory = CreateFactory(handler, modelRpm: 1);
         await GatewayWebApplicationFactory.EnsureAuthReadyAsync(factory);
         var admin = CreateAuthenticatedClient(factory, AdminKey);
 
@@ -76,7 +103,7 @@ public sealed class ConfiguredRateLimitSeedIntegrationTests
     public async Task AnUngrantedKey_CannotDrainTheSharedModelBudget()
     {
         var handler = new MockUpstreamHandler();
-        await using var factory = CreateFactory(handler);
+        await using var factory = CreateFactory(handler, modelRpm: 1);
         await GatewayWebApplicationFactory.EnsureAuthReadyAsync(factory);
         var admin = CreateAuthenticatedClient(factory, AdminKey);
 
@@ -138,11 +165,13 @@ public sealed class ConfiguredRateLimitSeedIntegrationTests
 
     /// <summary>
     /// Every scope is configured in appsettings and nowhere else — no admin write happens in these
-    /// tests, which is the whole point. The per-model rule is deliberately the tightest one, so a
-    /// rule that fails to reach the database shows up as a request being admitted rather than as a
-    /// missing row nobody looks at.
+    /// tests, which is the whole point. Each test makes the rule it is about the tightest one, so a
+    /// rule that fails to reach the database (or reaches it and never matches) shows up as a request
+    /// being admitted rather than as a missing row nobody looks at.
     /// </summary>
-    private static WebApplicationFactory<Program> CreateFactory(HttpMessageHandler? upstreamHandler = null)
+    private static WebApplicationFactory<Program> CreateFactory(
+        HttpMessageHandler? upstreamHandler = null,
+        int modelRpm = 100)
     {
         var contentRoot = Path.Combine(Path.GetTempPath(), "33pol-configured-rl-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(contentRoot);
@@ -154,10 +183,10 @@ public sealed class ConfiguredRateLimitSeedIntegrationTests
                 "Default": { "Rpm": 10000, "Burst": 0, "MaxConcurrentStreams": 100 },
                 "Plans": {},
                 "Models": {
-                  "local-mock": { "Rpm": 1, "Burst": 0, "MaxConcurrentStreams": 0 }
+                  "local-mock": { "Rpm": __MODEL_RPM__, "Burst": 0, "MaxConcurrentStreams": 0 }
                 },
                 "TenantModels": {
-                  "default|local-mock": { "Rpm": 900, "Burst": 0, "MaxConcurrentStreams": 0 }
+                  "default|local-mock": { "Rpm": 2, "Burst": 0, "MaxConcurrentStreams": 0 }
                 },
                 "AuthFailure": { "Rpm": 30, "Burst": 0, "MaxConcurrentStreams": 0 }
               },
@@ -166,7 +195,7 @@ public sealed class ConfiguredRateLimitSeedIntegrationTests
                 "ModelsConfigPath": "config/models.json"
               }
             }
-            """);
+            """.Replace("__MODEL_RPM__", modelRpm.ToString()));
 
         return GatewayWebApplicationFactory.CreateWithInMemoryDatabase(
             AdminKey,

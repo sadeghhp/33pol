@@ -1575,20 +1575,236 @@ tr.request-detail-row td { background: var(--bg-inset); padding-top: 0.75rem; }
 }
 .onboarding-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--space-2); }
 
-/* Wallboard: chrome hidden, vitals scaled, only the live cards remain. */
-html.wallboard .rail, html.wallboard .topbar, html.wallboard .app-header,
-html.wallboard .page-header .page-actions .action:not(.wallboard-toggle),
-html.wallboard .window-picker,
-html.wallboard .cp-strip, html.wallboard .finops-card, html.wallboard .policy-card,
-html.wallboard .activity-card, html.wallboard .tenants-card, html.wallboard .tail-filters,
-html.wallboard .request-detail-row, html.wallboard .cell-pin, html.wallboard .feed-strip { display: none !important; }
-html.wallboard .app-main, html.wallboard .page-content { max-width: none; padding: var(--space-4); }
-html.wallboard .vital-value { font-size: 3.25rem; }
-html.wallboard .vitals-grid { gap: var(--space-5); }
+/* ================================================================
+   WALLBOARD — the Overview as a NOC display
+   ================================================================
+   Read from three to eight metres, unattended, for weeks. Almost everything below follows from
+   those three words and from one property of the rest of this stylesheet:
+
+   1.  One type lever. Every size in the console is expressed in rem against the token scale, so
+       scaling the root scales the entire design system at once — labels, tables, chips, meters —
+       rather than the single figure this mode used to enlarge. The handful of sizes fixed in px
+       (status dots, icons, meter heights) are the exceptions, restated here in em.
+   2.  Subtract by intent. What leaves the board is what can only be acted on at a keyboard:
+       navigation, filters, per-row actions, anything destructive, and the FinOps and audit cards
+       that move on a scale of days rather than seconds. `.wb-hide` marks the parts that have no
+       selector of their own; the card-level list is kept here so one block still says what a
+       wallboard shows.
+   3.  Say when the board is wrong. `html.wallboard-stale` drains the figures and raises a band
+       across them, `html.wallboard-critical` rings the screen. Both are driven from the 500ms
+       tick in admin-app.js, because they gate CSS no binding inside the panel can reach.
+*/
+
+html.wallboard {
+  /* The lever. The floor keeps a laptop preview honest, the ceiling stops a 4K panel from
+     rendering the vitals at a size no room needs. */
+  font-size: clamp(17px, 1.05vw, 30px);
+}
+
+/* What does not travel to a wall. */
+html.wallboard .rail,
+html.wallboard .topbar,
+html.wallboard .page-header,
+html.wallboard .cp-strip,
+html.wallboard .finops-card,
+html.wallboard .activity-card,
+html.wallboard .tenants-card,
+html.wallboard .tail-filters,
+html.wallboard .feed-strip,
+html.wallboard .request-detail-row,
+html.wallboard .attention-actions,
+html.wallboard .attention-head .action,
+html.wallboard .wb-hide { display: none !important; }
+
+/*
+  The shell is a two-column grid whose first track is the rail's fixed width. Hiding the rail
+  removes its grid item, so the main column slid up into the 15rem track and the whole board
+  rendered in a 240px strip with the rest of the screen blank — the mode's own reason to exist,
+  undone by the first line of it. One track, because there is one column.
+*/
+html.wallboard .app-shell { grid-template-columns: minmax(0, 1fr); }
+html.wallboard .app-main,
+html.wallboard .page-content { max-width: none; }
+html.wallboard .page-content { padding: var(--space-4) var(--space-5) var(--space-5); }
+
+/* The px-fixed ornaments, restated in em so the one lever reaches them too. A size left in px is
+   the one way to break this mode: it holds still while everything around it grows, and at a 30px
+   root a 6px dot beside 20px type simply disappears. */
+html.wallboard .pulse-dot,
+html.wallboard .health-dot { width: 0.7em; height: 0.7em; }
+html.wallboard .status-chip { font-size: var(--text-sm); gap: 0.45em; }
+html.wallboard .status-chip::before { width: 0.55em; height: 0.55em; }
+html.wallboard .tag { font-size: var(--text-xs); }
+html.wallboard .vital-head .icon svg { width: 1.15em; height: 1.15em; }
+html.wallboard .load-track { height: 0.45em; }
+html.wallboard .hbar-track { height: 0.6em; }
+html.wallboard .icon-btn { width: 2em; height: 2em; }
+html.wallboard .icon-btn svg { width: 1em; height: 1em; }
+/* vector-effect: non-scaling-stroke pins the sparkline to CSS pixels on purpose, so the scale has
+   to be applied by hand or the trend under a 100px figure is a hairline. */
+html.wallboard .spark-line { stroke-width: 3; }
+html.wallboard .wallboard-bar .live-badge { font-size: var(--text-sm); padding: 0.35rem 0.8rem; }
+
+/* --- the board's own header --- */
+
+.wallboard-bar {
+  display: flex; align-items: center; gap: var(--space-4);
+  padding-bottom: var(--space-3); margin-bottom: var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+.wb-gap { flex: 1 1 auto; }
+.wb-brand {
+  display: inline-flex; align-items: center; gap: 0.4rem;
+  font-family: var(--font-display); font-weight: var(--fw-bold);
+  font-size: var(--text-xl); letter-spacing: -0.02em; color: var(--text-primary);
+}
+.wb-brand .icon { color: var(--accent-text); display: inline-flex; }
+.wb-brand .icon svg { width: 1.05em; height: 1.05em; }
+.wb-scope, .wb-window, .wb-filter {
+  font-family: var(--font-mono); font-size: var(--text-sm);
+  color: var(--text-secondary); white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; min-width: 0;
+}
+.wb-window { color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.06em; }
+/* A tail narrowed to one model would otherwise read as the whole gateway. */
+.wb-filter {
+  flex-shrink: 0; padding: 0.2rem 0.7rem; border-radius: var(--r-full);
+  color: var(--warn); border: 1px solid var(--warn-border); background: var(--warn-soft);
+}
+.wb-clock {
+  white-space: nowrap;
+  font-family: var(--font-mono); font-variant-numeric: tabular-nums;
+  font-size: var(--text-xl); font-weight: var(--fw-semi);
+  letter-spacing: 0.02em; color: var(--text-primary);
+}
+
+/* --- "these figures are not current" --- */
+
+.wallboard-stale-band {
+  display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-3);
+  padding: var(--space-3) var(--space-4); margin-bottom: var(--space-4);
+  border: 1px solid var(--error-border); border-left: 0.4rem solid var(--error);
+  border-radius: var(--r-lg); background: var(--error-soft); color: var(--error-text);
+  font-size: var(--text-md);
+}
+.wallboard-stale-band strong {
+  font-family: var(--font-mono); font-size: var(--text-xl); letter-spacing: 0.08em;
+}
+.wallboard-stale-band .icon { display: inline-flex; }
+.wallboard-stale-band .icon svg { width: 1.5em; height: 1.5em; }
+
+/*
+  Numbers that have stopped being updated must not look like numbers that are. Everything on the
+  panel drains, by exclusion rather than by listing the cards: naming them one by one is how the
+  next card added to the Overview ends up as the one confident-looking thing on a dead board. What
+  stays lit is what is still true — the band saying so, and the attention items, which describe the
+  gateway rather than counting it.
+*/
+html.wallboard-stale #panel-dashboard > *:not(.wallboard-bar):not(.wallboard-stale-band):not(.attention) {
+  opacity: 0.4; filter: grayscale(0.8);
+}
+
+/* One critical item, legible from the far end of the room before any text is. */
+html.wallboard-critical body::before {
+  content: ''; position: fixed; inset: 0; z-index: 300; pointer-events: none;
+  border: var(--space-1) solid var(--error);
+}
+
+/* --- what stays, at board scale --- */
+
+html.wallboard .vitals-grid { gap: var(--space-4); }
+html.wallboard .vitals-grid.vitals-5 { grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr)); }
+html.wallboard .vital { padding: var(--space-4); }
+html.wallboard .vital-value { font-size: 3.4rem; }
+html.wallboard .vital-value .unit { font-size: var(--text-2xl); }
+html.wallboard .vital-label { font-size: var(--text-sm); }
+html.wallboard .vital-foot { font-size: var(--text-sm); min-height: 1.6rem; }
+html.wallboard .vital-spark { height: 3.2rem; }
+
+html.wallboard .running-now-label { font-size: var(--text-sm); }
+html.wallboard .running-chip { font-size: var(--text-md); }
+
+/* The one card a NOC screen exists for: which route is up, which breaker is open, how loaded. */
+html.wallboard .attention { border-left-width: 0.4rem; padding: var(--space-4); }
+html.wallboard .attention-head > strong { font-size: var(--text-lg); }
+html.wallboard .attention-body { font-size: var(--text-md); }
+html.wallboard .attention-detail { font-size: var(--text-sm); }
+html.wallboard .attention-since { font-size: var(--text-xs); }
+
+html.wallboard .backend-row {
+  grid-template-columns: 0.7em minmax(9rem, 1.4fr) auto minmax(7rem, 1fr) 4.5rem 5rem auto;
+  font-size: var(--text-sm); padding: 0.5rem var(--space-2);
+}
+html.wallboard .backend-alias,
+html.wallboard .backend-load-text,
+html.wallboard .backend-checked,
+html.wallboard .backend-error { font-size: var(--text-xs); }
+
+html.wallboard .model-perf-table { font-size: var(--text-sm); }
+html.wallboard .model-perf-table th:last-child,
+html.wallboard .model-perf-table td.row-actions { display: none; }
+/* Eight models is what a board can be read for; the rest is a question for the Traffic page. */
+html.wallboard .model-perf-table tbody tr:nth-child(n+9) { display: none; }
+
+/*
+  The live tail, trimmed to what carries across a room: time, model, status, tokens, cost,
+  duration. Request id, route, cost centre, TTFT and tok/s are all desk columns. The fixed
+  layout and its colgroup go with them — column shares chosen for twelve columns misalign six —
+  and `min-width` goes because 66rem against a scaled root would exceed the panel itself.
+
+  The ten-row trim is enforced here as well as in requestsFeedLimit: the push stream sizes its
+  own frames, so the request limit only governs the polling path.
+*/
+html.wallboard .t-requests { table-layout: auto; min-width: 0; font-size: var(--text-sm); }
+html.wallboard .t-requests colgroup { display: none; }
 html.wallboard .t-requests tbody:nth-of-type(n+11) { display: none; }
-html.wallboard body::after {
-  content: 'Esc to exit wallboard'; position: fixed; right: var(--space-4); bottom: var(--space-3);
-  font-size: var(--text-2xs); color: var(--text-tertiary); font-family: var(--font-mono);
+html.wallboard .t-requests th:nth-child(1),  html.wallboard .t-requests td:nth-child(1),
+html.wallboard .t-requests th:nth-child(3),  html.wallboard .t-requests td:nth-child(3),
+html.wallboard .t-requests th:nth-child(4),  html.wallboard .t-requests td:nth-child(4),
+html.wallboard .t-requests th:nth-child(6),  html.wallboard .t-requests td:nth-child(6),
+html.wallboard .t-requests th:nth-child(10), html.wallboard .t-requests td:nth-child(10),
+html.wallboard .t-requests th:nth-child(11), html.wallboard .t-requests td:nth-child(11) { display: none; }
+
+/* --- endurance --- */
+
+/* A pointer parked on a NOC panel is a bright spot for the length of a shift, and the two buttons
+   that let you leave are the only chrome left — present when someone walks up, gone otherwise. */
+html.wallboard.wallboard-idle { cursor: none; }
+html.wallboard .wb-chrome,
+.wallboard-hint { transition: opacity var(--dur-slow) var(--ease-out); }
+html.wallboard.wallboard-idle .wb-chrome,
+html.wallboard.wallboard-idle .wallboard-hint { opacity: 0; }
+
+/* A chip, not bare text: it is fixed over a panel that scrolls, so without a ground of its own it
+   lands on top of whatever row happens to be underneath and both become unreadable. */
+.wallboard-hint {
+  position: fixed; right: var(--space-4); bottom: var(--space-3); margin: 0;
+  padding: 0.25rem 0.7rem; border-radius: var(--r-full);
+  border: 1px solid var(--border); background: var(--bg-elevated);
+  font-family: var(--font-mono); font-size: var(--text-xs);
+  color: var(--text-tertiary); pointer-events: none;
+}
+
+/*
+  Burn-in. Four positions over a quarter of an hour: invisible to anyone watching, but enough to
+  keep a figure that never changes off one set of subpixels for a shift. steps(1) holds each
+  position instead of sliding between them, so nothing on the board is ever caught mid-motion.
+  Modals, drawers, toasts and the corner hint all live outside .page-content, so the transform
+  creates no containing block that would capture their position:fixed.
+*/
+@keyframes wallboard-shift {
+  0%   { transform: translate(0, 0); }
+  25%  { transform: translate(2px, 1px); }
+  50%  { transform: translate(1px, 3px); }
+  75%  { transform: translate(-1px, 2px); }
+  100% { transform: translate(0, 0); }
+}
+html.wallboard .page-content { animation: wallboard-shift 900s steps(1) infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  html.wallboard .page-content { animation: none; }
+  html.wallboard .wb-chrome,
+  .wallboard-hint { transition: none; }
 }
 
 /* Rate-limit settings: section headings inside the tier and rule editor. The rule rows reuse

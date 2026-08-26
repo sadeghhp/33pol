@@ -17,11 +17,11 @@
        is that no expression below may contain an operator, a ternary or a call with arguments:
        every value comes from a getter, a zero-argument method, or a {get,set} pair on adminApp. -->
   <link rel="stylesheet" href="vendor/fonts.css?v=1" />
-  <link rel="stylesheet" href="admin.css?v=23" />
+  <link rel="stylesheet" href="admin.css?v=24" />
   <script defer src="admin-icons.js?v=11"></script>
   <script defer src="admin-errors.js?v=7"></script>
   <script defer src="admin-store.js?v=10"></script>
-  <script defer src="admin-app.js?v=36"></script>
+  <script defer src="admin-app.js?v=37"></script>
   <script defer src="vendor/alpine-csp-3.14.9.min.js"></script>
 </head>
 <body x-data="adminApp" x-cloak @keydown.window="onModalKeydown">
@@ -164,7 +164,42 @@
       <main class="page-content" role="main">
 
         <!-- ============================ OVERVIEW ============================ -->
-        <section x-show="isDashboard" role="tabpanel" aria-labelledby="tab-dashboard" id="panel-dashboard" @keydown.escape.window="exitWallboard">
+        <section x-show="isDashboard" role="tabpanel" aria-labelledby="tab-dashboard" id="panel-dashboard">
+
+          <!-- Wallboard header. It replaces the whole page header on a NOC screen: the eyebrow, the
+               title and the two explanatory paragraphs are all things you can only read from a
+               desk, while what a room actually needs — is this live, how fresh, which window, what
+               time is it — was previously carried in badges sized for one person at a keyboard. -->
+          <div class="wallboard-bar" x-show="wallboard">
+            <span class="wb-brand"><span class="icon" x-html="icons.zap"></span> 33pol</span>
+            <span class="wb-scope" x-text="wallboardScopeText"></span>
+            <span class="wb-gap"></span>
+            <span class="wb-filter" x-show="hasWallboardFilters" x-text="wallboardFilterText"></span>
+            <span class="wb-window" x-text="wallboardWindowText"></span>
+            <span :class="liveBadgeClass" :title="liveBadgeTitle" role="status">
+              <span class="pulse-dot" :class="liveBadgeDotClass"></span>
+              <span x-text="liveBadgeText"></span>
+            </span>
+            <span class="wb-clock" x-text="wallboardClockText"></span>
+            <button type="button" class="icon-btn wb-chrome" x-show="wallboardCanGoFullscreen"
+              @click="enterPresentationFullscreen" title="Fullscreen" aria-label="Fullscreen">
+              <span class="icon" x-html="icons.maximize"></span>
+            </button>
+            <button type="button" class="icon-btn wb-chrome" @click="exitWallboard"
+              title="Exit wallboard" aria-label="Exit wallboard">
+              <span class="icon" x-html="icons.minimize"></span>
+            </button>
+          </div>
+
+          <!-- After the figures themselves, the board's most important state is whether the figures
+               can be believed. At a desk that is a one-line .notice; on a wallboard it has to be
+               unreadable-past, and the vitals behind it are dimmed by html.wallboard-stale. -->
+          <div class="wallboard-stale-band" x-show="wallboardStale" role="status" aria-live="polite">
+            <span class="icon" x-html="icons.alert-triangle"></span>
+            <strong x-text="wallboardStaleTitle"></strong>
+            <span x-text="wallboardStaleText"></span>
+          </div>
+
           <div class="page-header">
             <div class="titles">
               <span class="eyebrow">Telemetry</span>
@@ -211,8 +246,8 @@
             </div>
           </div>
 
-          <p class="notice warn" x-show="showStaleNotice" role="status">Live data may be stale — the last refresh failed. Check your connection.</p>
-          <p class="notice error" x-show="connectionFailed" role="status">Your admin API key was rejected. Use <strong>Change key</strong> in the top bar to sign in again.</p>
+          <p class="notice warn wb-hide" x-show="showStaleNotice" role="status">Live data may be stale — the last refresh failed. Check your connection.</p>
+          <p class="notice error wb-hide" x-show="connectionFailed" role="status">Your admin API key was rejected. Use <strong>Change key</strong> in the top bar to sign in again.</p>
 
           <!-- Attention: what the gateway itself thinks needs an operator, ranked critical first.
                The conditions mirror the shipped Prometheus rules so the console is useful without
@@ -385,7 +420,7 @@
                 </template>
               </div>
               <p class="hint" x-show="noBackendHealthRows">No models registered — add one under <strong>Routing</strong>.</p>
-              <div class="card-foot-actions">
+              <div class="card-foot-actions wb-hide">
                 <button type="button" class="action secondary" @click="openBackends">
                   <span class="icon" x-html="icons.server"></span> All backends
                 </button>
@@ -415,7 +450,7 @@
                   </template>
                 </div>
               </div>
-              <div class="policy-columns">
+              <div class="policy-columns wb-hide">
                 <div class="policy-section" x-show="hasPolicyTenantBars">
                   <span class="eyebrow">By tenant</span>
                   <div class="hbars">
@@ -441,7 +476,7 @@
                   </div>
                 </div>
               </div>
-              <div class="policy-section" x-show="hasQuotaRows">
+              <div class="policy-section wb-hide" x-show="hasQuotaRows">
                 <span class="eyebrow">Monthly token quota</span>
                 <div class="quota-rows">
                   <template x-for="q in quotaRows" :key="q.key">
@@ -457,7 +492,7 @@
                   </template>
                 </div>
               </div>
-              <div class="policy-columns">
+              <div class="policy-columns wb-hide">
                 <div class="policy-section" x-show="hasUnknownModels">
                   <span class="eyebrow">Unknown models requested</span>
                   <div class="hbars">
@@ -561,7 +596,7 @@
             <div class="card">
               <span class="eyebrow">Reliability</span>
               <h3>Errors by model</h3>
-              <div class="card-head-actions">
+              <div class="card-head-actions wb-hide">
                 <button type="button" class="action secondary" @click="openErrorsAll">
                   <span class="icon" x-html="icons.bug"></span> View all
                 </button>
@@ -1890,6 +1925,12 @@
           </div>
         </section>
       </main>
+
+      <!-- A real element rather than the old body::after: the hint has to report something no fixed
+           string knows — whether the screen is actually being held awake. Outside <main> because
+           the burn-in shift transforms .page-content, and a transformed ancestor would turn this
+           position:fixed corner into a position:absolute one. -->
+      <p class="wallboard-hint" x-show="wallboard" x-text="wallboardHintText" aria-hidden="true"></p>
     </div>
   </div>
 

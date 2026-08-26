@@ -392,7 +392,23 @@ Filters (model, tenant, status class, slow, errors only) compose. **Pause** free
 
 ### Wallboard
 
-`#/dashboard?wall=1` (or the **Wallboard** button) hides the rail, header actions and slow cards, scales the vitals up and trims the tail to ten rows; `Esc` exits. Meant for a NOC screen.
+`#/dashboard?wall=1`, or the **Wallboard** button. Meant for a NOC panel: read from three to eight metres, unattended, for weeks.
+
+**What it shows.** The attention banner, the five vitals, "running now", backends & health, policy pressure (totals and rejections by reason), the per-model table (top eight) and ten rows of the live tail. Its own header bar carries the gateway, backend health, the trailing window, the live badge and a clock.
+
+**What it drops.** Everything that can only be acted on at a keyboard: the rail, the page header and its actions, tail filters, per-row actions and pins, request detail, and anything destructive (**Clear errors**). The FinOps, recent-activity and tenants cards go too — they move on a scale of days. The policy card keeps its totals and reason bars and drops the per-tenant, quota and unknown-model detail. The live tail keeps six of twelve columns: time, model, status, tokens, cost, duration.
+
+**Legibility.** The mode scales the *root* font size — `clamp(17px, 1.05vw, 30px)` — not one figure. Every size in the console is a `rem` against the token scale, so labels, tables, chips and meters all follow. Adding a size in `px` is what breaks this; the exceptions already fixed in px (status dots, icons, meter heights) are restated in `em` in the wallboard block.
+
+**Honesty.** A rejected key, a failed refresh, or nothing arriving for 20s drains the figures to grey and raises a band saying how old they are (`html.wallboard-stale`). One critical attention item rings the screen (`html.wallboard-critical`). Both classes are set from the 500ms tick, because they gate CSS no binding inside the panel can reach. Attention is always expanded on a board and ignores this session's dismissals.
+
+**Entering.** A paused live tail is resumed — **Pause** lives in the row the wallboard hides — and the console says so. Tail filters are kept and declared in the header bar, so a board pinned to one model never reads as the whole gateway.
+
+**Staying up.** The button takes fullscreen (the API needs a user gesture, so a board entered from `?wall=1` on load stays windowed and offers a button) and holds a Screen Wake Lock, re-taken on every `visibilitychange`. The corner hint reports whether the lock took; Firefox and pre-16.4 Safari have no `wakeLock` and it says so. The cursor and the two remaining buttons fade after 8s of stillness, and the content shifts a pixel or two between four positions over fifteen minutes for burn-in — off under `prefers-reduced-motion`.
+
+**Cost.** Only the policy section is polled while the board is up (the other four database-backed queries are for hidden cards); the full set is refetched on exit. The tail asks for twelve rows instead of twenty-five. The push stream sizes its own frames, so the ten-row trim is enforced in CSS as well.
+
+`Esc` exits, behind every dialog — a confirm opened over a board closes on the first press and the board drops on the second.
 
 ### First run
 
@@ -408,7 +424,11 @@ A gateway that has never routed a request shows a curl snippet (with **Copy curl
 - `POST /admin/api/maintenance/backup`: the **Backup** chip updates; `POST /admin/api/config/reload`: the **Config** chip shows "loaded just now"; both appear in Recent activity.
 - Per-model table is sorted by requests, error % colours above 1 % / 5 %, and the row actions open Errors / Routing.
 - Live tail: model / tenant / status / slow filters compose with **Errors only**; **Pause** freezes rows and counts new ones; **Resume** applies them; a pinned row stays on top across frames.
-- **Wallboard** (button or `?wall=1`) hides the chrome; `Esc` exits.
+- **Wallboard** (button or `?wall=1`): the chrome goes, the type scales with the window, the button takes fullscreen and the corner hint says whether the screen is being held awake. `Esc` exits; with a dialog open, the first `Esc` closes the dialog and the second leaves the board.
+- Pause the tail, filter it to one model, then enter the wallboard: the feed resumes with a toast and the header bar declares the filter.
+- Stop the gateway process with a wallboard up: within 20s the figures grey out and a **STALE** band gives the age. Restart it and the band clears on the next frame.
+- Trigger a critical attention item on a wallboard: the screen gains a red border and the banner is expanded even if it was collapsed — and stays visible even if that item was dismissed this session.
+- On a wallboard, `/admin/api/overview/{finops,activity,tenants,control-plane}` stop being requested and `/policy` continues; leaving re-requests all five.
 - A fresh database shows the onboarding curl; **Copy curl** copies; one request replaces it with the dashboard.
 - Every changed asset URL carries a bumped `?v=`.
 
