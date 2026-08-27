@@ -3156,12 +3156,15 @@ function adminApp() {
       const key = this.deleteConfirmKey;
       if (!key || !this.deleteConfirmMatches) return;
       const prefix = key.keyPrefix;
-      this.cancelDeleteKey();
+      // The dialog stays up until the server has actually accepted. A key that picked up its first
+      // request between the list load and this click comes back 409, and dismissing first would
+      // leave an error toast over an empty page with the prefix to type again.
       await this.runApi('keys', 'Deleting…', async () => {
         await this.store.apiFetch(
           '/admin/api/keys/' + key.id,
           { method: 'DELETE', body: JSON.stringify({ confirmKeyPrefix: prefix }) },
           this.editModelUrl());
+        this.cancelDeleteKey();
         this.selectedKeyIds = this.selectedKeyIds.filter(existingId => existingId !== key.id);
         this.toast('API key deleted permanently. Its history is kept.');
         await this.fetchKeys();

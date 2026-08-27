@@ -1,4 +1,5 @@
 using Pol33.Core.Identity;
+using Pol33.Core.RateLimiting;
 using Pol33.Persistence.Repositories;
 using Pol33.Persistence.Tests.Infrastructure;
 
@@ -236,6 +237,43 @@ public sealed class ApiKeyRepositoryTests
         (await sut.ListByTenantAsync(tenantId, includeArchived: true)).Should().BeEmpty();
         db.ApiKeyModelGrants.Should().BeEmpty("grants have no meaning without the key they were granted to");
     }
+
+    [Fact]
+    public async Task DeleteAsync_AlsoClearsRateLimitRulesTargetingTheKey()
+    {
+        const string Name = nameof(DeleteAsync_AlsoClearsRateLimitRulesTargetingTheKey);
+        await using var db = PersistenceTestDbContextFactory.CreateInMemory(Name);
+        var (sut, _, keyId) = await SeedKeyAsync(db, Name);
+
+        var otherKeyId = Guid.NewGuid();
+        db.RateLimitRules.AddRange(
+            // Both key-bearing scopes, and the id in the casing an admin might have typed rather than
+            // the one Guid.ToString() produces.
+            NewRule(RateLimitScopeNames.ApiKey, keyId.ToString()),
+            NewRule(RateLimitScopeNames.ApiKeyModel, keyId.ToString().ToUpperInvariant() + "|gpt-4o"),
+            // Must survive: a different key, and a scope that never names a key.
+            NewRule(RateLimitScopeNames.ApiKey, otherKeyId.ToString()),
+            NewRule(RateLimitScopeNames.Model, "gpt-4o"));
+        await db.SaveChangesAsync();
+
+        (await sut.DeleteAsync(keyId)).Should().BeTrue();
+
+        db.RateLimitRules.Select(r => r.TargetKey).Should().BeEquivalentTo(
+            [otherKeyId.ToString(), "gpt-4o"],
+            "a rule whose subject no longer exists is unreachable clutter, but only its own subject's");
+    }
+
+    private static Pol33.Persistence.Entities.RateLimitRuleEntity NewRule(string scope, string targetKey) =>
+        new()
+        {
+            Id = Guid.NewGuid(),
+            Scope = scope,
+            TargetKey = targetKey,
+            Rpm = 60,
+            Burst = 10,
+            MaxConcurrentStreams = 2,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        };
 
     [Fact]
     public async Task DeleteAsync_UnknownId_ReturnsFalse()

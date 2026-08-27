@@ -67,14 +67,8 @@ public sealed class OperatorConsoleKeysInteractor(
     }
 
     /// <summary>
-    /// The single word the Status column shows. Archived wins over revoked (an archived key is always
-    /// revoked, and "archived" is the more specific fact), and expiry is derived rather than stored.
+    /// The single word the Status column shows, from the same precedence rules the admin API applies.
     /// </summary>
-    public static string DescribeStatus(AdminApiKeyListItem key) => key switch
-    {
-        { IsArchived: true } => "archived",
-        { IsRevoked: true } => "revoked",
-        { ExpiresAt: { } expiry } when expiry <= DateTimeOffset.UtcNow => "expired",
-        _ => "active",
-    };
+    public static string DescribeStatus(AdminApiKeyListItem key) =>
+        ApiKeyStatus.Describe(key.IsArchived, key.IsRevoked, key.ExpiresAt);
 }

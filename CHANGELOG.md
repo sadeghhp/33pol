@@ -34,17 +34,26 @@ An API key is now in one of four states (`active`, `revoked`, `archived`, `delet
   not blank for the credentials an audit asks about first.
 - **Two guards on revocation**, both covering mistakes that cannot be undone from the console: a key
   may not revoke or delete **itself**, and a tenant's **last active admin key** may not be revoked.
-  Batch revoke skips protected keys rather than failing the whole batch.
+  Batch revoke skips protected keys rather than failing the whole batch. The last-admin count is
+  re-read after the write as well as before it, so two admins racing for the last two admin keys cost
+  each other a retry rather than locking the tenant out of its own control plane.
 - Audit gains `api_key.archive`, `api_key.unarchive` and `api_key.delete`. The delete entry carries
   the key's prefix, label, assignee, cost centre and timestamps, because after the row is gone its id
   resolves to nothing.
+- Deleting a key also clears rate-limit rules scoped to it (`api_key`, `api_key_model`). Those name
+  their subject in free text with no foreign key, so nothing else would ever have removed them.
 - The Overview's key count now reports archived keys separately instead of rolling them into the
   total, so filing keys away shrinks the headline rather than inflating it.
 - Admin console: a four-way status filter (active / revoked / archived / all), an Archived status
   chip, per-state row actions, and a delete dialog that requires the operator to type the key's
   prefix. Revoke and delete now use distinct icons — one leaves the key and its history behind, the
   other does not. Fixes a pre-existing clipping bug where the Status cell was too narrow for its own
-  "Revoked" chip.
+  "Revoked" chip. The delete dialog now stays open if the request is refused, so a key that picked up
+  its first request since the list loaded does not cost the operator the prefix they just typed.
+- The lifecycle members of `IApiKeyRepository` — archive, unarchive, delete, restore, and the active
+  admin count — throw `NotSupportedException` when an implementation has not provided them, rather
+  than defaulting to a silent no-op. A write that reports success without happening would let the
+  caller append a lifecycle event and an audit entry over a key it never touched.
 
 ### Added — model-, user- and combination-scoped rate limits
 

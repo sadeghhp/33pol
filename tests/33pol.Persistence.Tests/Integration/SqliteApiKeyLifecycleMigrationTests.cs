@@ -78,6 +78,8 @@ public sealed class SqliteApiKeyLifecycleMigrationTests
         revokedHistory.Select(e => e.Event).Should().Equal(
             [ApiKeyLifecycleEvent.Created, ApiKeyLifecycleEvent.Revoked]);
         revokedHistory[1].OccurredAt.Should().Be(RevokedAt);
+        revokedHistory[0].HadUsage.Should().BeFalse(
+            "HadUsage records what was true at the event, and no key has usage at the moment it is created");
         revokedHistory[1].HadUsage.Should().BeTrue("the key had a LastUsedAt when it was revoked");
 
         // Backfilled ids are real, distinct Guids in the casing every other row uses — a lowercase

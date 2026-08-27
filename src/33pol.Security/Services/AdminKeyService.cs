@@ -159,7 +159,11 @@ public sealed class AdminKeyService : IAdminKeyService
             cancellationToken).ConfigureAwait(false);
 
         _validator.InvalidateCache(keyId);
-        return ToListItem(updated);
+
+        // Same DTO the listing returns, so it has to carry the same truth. CanDelete stays false by
+        // construction: this method refuses revoked keys above, and deletion requires a revoked key.
+        var hasUsage = await HasUsageHistoryAsync(updated, cancellationToken).ConfigureAwait(false);
+        return ToListItem(updated, hasUsage: hasUsage);
     }
 
     public async Task<AdminApiKeyUsageResponse> GetUsageAsync(
@@ -261,7 +265,19 @@ public sealed class AdminKeyService : IAdminKeyService
                 continue;
             }
 
-            await RevokeCoreAsync(record, actorKeyId, cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await RevokeCoreAsync(record, actorKeyId, cancellationToken).ConfigureAwait(false);
+            }
+            catch (ApiKeyLifecycleException)
+            {
+                // The pre-flight check above already skips the sequential case; this catches the
+                // concurrent one, where RevokeCoreAsync's post-write recheck finds the key was the
+                // last admin after all and reverts it. Skip, as with every other protected key —
+                // one contended key must not cost the caller the rest of the batch.
+                continue;
+            }
+
             revokedCount++;
         }
 
@@ -420,6 +436,20 @@ public sealed class AdminKeyService : IAdminKeyService
         // but nothing about the key's state. In DeleteAsync the row is what disappears, which is why
         // the tombstone has to be written before the thing it describes is gone.
         await _apiKeys.RevokeAsync(record.Id, now, cancellationToken).ConfigureAwait(false);
+
+        // The pre-flight count in GuardTransitionAsync is a read on one connection and this write is
+        // another, so two admins revoking the tenant's last two admin keys at the same moment can
+        // both see a count of two and both pass. Re-reading after the write is what actually decides
+        // it: whoever now sees zero puts their key back. Under a genuine race both revert and both
+        // are told to try again, which costs a retry and never costs the tenant its way in.
+        if (IsAdminRole(record.Role) &&
+            await _apiKeys.CountActiveAdminKeysAsync(record.TenantId, cancellationToken).ConfigureAwait(false) == 0)
+        {
+            await _apiKeys.RestoreRevokedAsync(record.Id, cancellationToken).ConfigureAwait(false);
+            _validator.InvalidateCache(record.Id);
+            throw ApiKeyLifecycleException.LastAdminKey();
+        }
+
         await _lifecycle.AppendAsync(
             NewEvent(record, ApiKeyLifecycleEvent.Revoked, now, actorKeyId, hadUsage),
             cancellationToken).ConfigureAwait(false);
@@ -455,12 +485,17 @@ public sealed class AdminKeyService : IAdminKeyService
     private static bool IsAdminRole(ApiKeyRole role) => role is ApiKeyRole.Admin or ApiKeyRole.Both;
 
     /// <summary>
-    /// Whether the key has ever been used. Three independent signals, OR-ed, because each covers a
-    /// gap in the others: <c>LastUsedAt</c> is written on the first successful authentication (before
-    /// the tracker's debounce window opens, so there is no blind spot), billing events are the
-    /// authoritative ledger but are written asynchronously and may lag, and a key whose only trace is
-    /// a failed request left an error record and no billing row at all.
+    /// Whether the key has ever been used. Three signals, OR-ed, in descending order of how often
+    /// they settle it: <c>LastUsedAt</c> is written on the first successful authentication, billing
+    /// events are the authoritative ledger but are written asynchronously and may lag behind it, and
+    /// a gateway error record proves a request reached the pipeline even if it then failed.
     /// </summary>
+    /// <remarks>
+    /// The error signal is deliberately the weakest of the three and mostly redundant: a gateway
+    /// error carries an api key id only when the request authenticated, and authenticating is what
+    /// sets <c>LastUsedAt</c>. It covers the narrow window where the touch has not landed yet. It
+    /// stays because the cost of a false "never used" here is an irreversible deletion.
+    /// </remarks>
     private async Task<bool> HasUsageHistoryAsync(ApiKeyRecord key, CancellationToken cancellationToken)
     {
         if (key.LastUsedAt is not null)
@@ -550,14 +585,13 @@ public sealed class AdminKeyService : IAdminKeyService
             HadUsage = record.HadUsage,
         };
 
-    private static string DescribeStatus(ApiKeyRecord? record) => record switch
-    {
-        null => "deleted",
-        { ArchivedAt: not null } => "archived",
-        { RevokedAt: not null } => "revoked",
-        { ExpiresAt: { } expiry } when expiry <= DateTimeOffset.UtcNow => "expired",
-        _ => "active",
-    };
+    private static string DescribeStatus(ApiKeyRecord? record) =>
+        record is null
+            ? ApiKeyStatus.Deleted
+            : ApiKeyStatus.Describe(
+                record.ArchivedAt is not null,
+                record.RevokedAt is not null,
+                record.ExpiresAt);
 
     private async Task<ApiKeyRecord> RequireTenantKeyAsync(
         Guid tenantId,

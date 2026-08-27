@@ -276,13 +276,13 @@ public sealed class InMemoryGatewayErrorStoreTests
     }
 
     [Fact]
-    public void Record_WhenDisabled_DoesNothing()
+    public async Task Record_WhenDisabled_DoesNothing()
     {
         var store = CreateStore(o => o.Enabled = false);
 
         store.Record(Error(requestId: "a"));
 
-        store.QueryAsync(new GatewayErrorQuery()).Result.Items.Should().BeEmpty();
+        (await store.QueryAsync(new GatewayErrorQuery())).Items.Should().BeEmpty();
     }
 
     [Fact]

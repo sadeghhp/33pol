@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Pol33.Core.Abstractions;
 using Pol33.Core.Identity;
+using Pol33.Core.RateLimiting;
 using Pol33.Persistence.Mapping;
 
 namespace Pol33.Persistence.Repositories;
@@ -113,6 +114,15 @@ public sealed class ApiKeyRepository : IApiKeyRepository
         await _db.SaveChangesAsync(cancellationToken);
     }
 
+    public async Task RestoreRevokedAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        var entity = await _db.ApiKeys.FirstOrDefaultAsync(k => k.Id == id, cancellationToken)
+            ?? throw new KeyNotFoundException($"API key '{id}' was not found.");
+
+        entity.RevokedAt = null;
+        await _db.SaveChangesAsync(cancellationToken);
+    }
+
     public async Task ArchiveAsync(Guid id, DateTimeOffset archivedAt, CancellationToken cancellationToken = default)
     {
         var entity = await _db.ApiKeys.FirstOrDefaultAsync(k => k.Id == id, cancellationToken)
@@ -151,6 +161,23 @@ public sealed class ApiKeyRepository : IApiKeyRepository
         if (grants.Count > 0)
         {
             _db.ApiKeyModelGrants.RemoveRange(grants);
+        }
+
+        // Rate-limit rules name their subject in a free-text TargetKey with no foreign key, so nothing
+        // in the schema clears them when the subject goes. Left behind they are permanent clutter in
+        // the rules admin surface, pointing at an id that resolves to nothing. Both key-bearing scopes
+        // are covered: "api_key" targets the id alone, "api_key_model" the "id|model" pair.
+        // Lowered on both sides because TargetKey is stored exactly as an admin typed it while the
+        // scopes that carry a key id match it case-insensitively.
+        var keyId = id.ToString().ToLowerInvariant();
+        var targetPrefix = keyId + "|";
+        var orphanedRules = await _db.RateLimitRules
+            .Where(r => (r.Scope == RateLimitScopeNames.ApiKey && r.TargetKey.ToLower() == keyId) ||
+                        (r.Scope == RateLimitScopeNames.ApiKeyModel && r.TargetKey.ToLower().StartsWith(targetPrefix)))
+            .ToListAsync(cancellationToken);
+        if (orphanedRules.Count > 0)
+        {
+            _db.RateLimitRules.RemoveRange(orphanedRules);
         }
 
         _db.ApiKeys.Remove(entity);

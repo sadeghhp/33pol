@@ -32,9 +32,6 @@ public sealed class ApiKeyLifecycleException : Exception
     public static ApiKeyLifecycleException NotArchived() =>
         new("not_archived", "The key is not archived.");
 
-    public static ApiKeyLifecycleException AlreadyRevoked() =>
-        new("already_revoked", "The key is already revoked.");
-
     public static ApiKeyLifecycleException HasUsage(int billingEventCount, DateTimeOffset? lastUsedAt) =>
         new(
             "key_has_usage",

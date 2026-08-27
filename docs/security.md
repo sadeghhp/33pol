@@ -53,16 +53,35 @@ Once `RevokedAt` is set the validator rejects the credential, so no new usage ca
 eligibility check. The request must additionally echo the key's prefix back as `confirmKeyPrefix`, so
 an irreversible action is not reachable from a mis-routed click or a replayed id.
 
+One residual window is accepted rather than locked: billing events are written asynchronously, so a
+request already in flight when the key was revoked can flush its row *after* the eligibility check
+returns "never used". The key is then deleted and that row names an id nothing resolves to. The
+ledger keeps the money and the tombstone keeps the history, so nothing is lost — but a
+`billing_events` row with an unresolvable `ApiKeyId` is expected and is not corruption.
+
 Two further guards apply to revocation, both covering mistakes an admin cannot undo from the console:
 a key may not act on **itself** (the credential the caller is authenticating with), and the tenant's
 **last active admin key** may not be revoked. Batch revoke skips protected keys rather than failing
 the whole batch — the response's `revokedCount` reports how many actually went.
+
+The last-admin guard checks twice. The pre-flight count and the revoke are separate statements, so
+two admins revoking a tenant's last two admin keys at the same moment could both pass the first
+check; the count is therefore re-read after the write, and whoever now sees zero puts their key back
+and is told to try again. The cost of the race is a retry, never a tenant locked out of its own
+control plane.
 
 `api_key_lifecycle_events` records every transition with its actor, and deliberately holds **no
 foreign key** to `api_keys`: the record of a credential that once existed has to outlive the
 credential. It stores the prefix and label as snapshots for the same reason. `GET
 /admin/api/keys/{id}/lifecycle` reads it, and resolves for deleted keys too — scoped by
 `(tenantId, apiKeyId)` together, since a deleted key has no row left to check ownership against.
+
+Because it is the only record of keys that no longer exist, rolling the `ApiKeyArchiveAndLifecycle`
+migration back destroys history that cannot be reconstructed. Copy the table first on anything but a
+scratch database.
+
+Permanent deletion also clears rate-limit rules scoped to the key (`api_key` and `api_key_model`).
+Those name their subject in free text with no foreign key, so nothing else would ever remove them.
 
 ## Transport
 

@@ -772,6 +772,178 @@ public sealed class AdminKeyServiceTests
         }
     }
 
+    [Fact]
+    public async Task UpdateAsync_ReportsUsageTheSameWayTheListingDoes()
+    {
+        var (sut, tenantId, _, db) = await CreateSutAsync();
+        await using (db)
+        {
+            var created = await sut.CreateAsync(
+                tenantId,
+                new CreateAdminApiKeyRequest { Role = ApiKeyRole.Inference, Label = "before" });
+            await AppendUsageAsync(db, tenantId, created.Id, "req-update-usage");
+
+            var updated = await sut.UpdateAsync(
+                tenantId,
+                created.Id,
+                new UpdateAdminApiKeyRequest { Label = "after" });
+
+            // The same DTO the listing returns, so it has to agree with it. Reporting a used key as
+            // never-used would tell an API client the key is a deletion candidate.
+            updated.HasUsage.Should().BeTrue();
+            updated.HasUsage.Should().Be(
+                (await sut.ListAsync(tenantId)).Single(k => k.Id == created.Id).HasUsage);
+
+            // Still false, and correctly so: the key is not revoked, so it is not deletable.
+            updated.CanDelete.Should().BeFalse();
+        }
+    }
+
+    /// <summary>
+    /// The last-admin guard reads the count on one connection and writes on another, so two admins
+    /// revoking the last two admin keys at once can both pass the pre-flight check. The recheck after
+    /// the write is what actually decides it.
+    /// </summary>
+    [Fact]
+    public async Task RevokeAsync_WhenAnotherRequestTookTheLastAdminKeyConcurrently_RevertsAndThrows()
+    {
+        var options = new DbContextOptionsBuilder<GatewayDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString())
+            .Options;
+        await using var db = new GatewayDbContext(options);
+
+        var tenantId = Guid.NewGuid();
+        db.Tenants.Add(new Persistence.Entities.TenantEntity
+        {
+            Id = tenantId,
+            Slug = "t1",
+            Name = "Tenant",
+            IsActive = true,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        });
+        await db.SaveChangesAsync();
+
+        var real = new ApiKeyRepository(db);
+        // Answers the pre-flight check as though a second admin key were still active, then tells the
+        // truth — exactly what the losing side of the race observes.
+        var apiKeys = new StaleAdminCountApiKeyRepository(real, firstAnswer: 2);
+        var securityOptions = Options.Create(new GatewaySecurityOptions { KeyPepper = Pepper });
+        var memoryCache = new Microsoft.Extensions.Caching.Memory.MemoryCache(
+            new Microsoft.Extensions.Caching.Memory.MemoryCacheOptions());
+        var validator = new ApiKeyValidator(apiKeys, new TenantRepository(db), memoryCache, securityOptions);
+        var sut = new AdminKeyService(
+            apiKeys,
+            validator,
+            new BillingEventRepository(db),
+            new ApiKeyLifecycleEventRepository(db),
+            securityOptions,
+            new GatewayErrorRepository(db));
+
+        var onlyAdmin = await sut.CreateAsync(tenantId, new CreateAdminApiKeyRequest { Role = ApiKeyRole.Admin });
+
+        var act = () => sut.RevokeAsync(tenantId, onlyAdmin.Id);
+
+        (await act.Should().ThrowAsync<ApiKeyLifecycleException>())
+            .Which.Code.Should().Be("last_admin_key");
+
+        // Reverted, not left half-applied: the tenant keeps its way in.
+        var after = (await sut.ListAsync(tenantId)).Single(k => k.Id == onlyAdmin.Id);
+        after.IsRevoked.Should().BeFalse();
+
+        // And no Revoked event was written for a revocation that did not stand.
+        var lifecycle = await sut.GetLifecycleAsync(tenantId, onlyAdmin.Id);
+        lifecycle.Events.Should().NotContain(e => e.Event == "Revoked");
+    }
+
+    [Fact]
+    public async Task RevokeManyAsync_StopsAtTheLastAdminKeyWithoutFailingTheBatch()
+    {
+        var (sut, tenantId, _, db) = await CreateSutAsync();
+        await using (db)
+        {
+            var adminA = await sut.CreateAsync(tenantId, new CreateAdminApiKeyRequest { Role = ApiKeyRole.Admin });
+            var adminB = await sut.CreateAsync(tenantId, new CreateAdminApiKeyRequest { Role = ApiKeyRole.Admin });
+            var inference = await sut.CreateAsync(tenantId, new CreateAdminApiKeyRequest { Role = ApiKeyRole.Inference });
+
+            // Both admin keys plus an ordinary one, in a single batch. The second admin key is the
+            // tenant's last, and the batch must skip it rather than abort on it.
+            var revoked = await sut.RevokeManyAsync(tenantId, [adminA.Id, adminB.Id, inference.Id]);
+
+            revoked.Should().Be(2);
+
+            var keys = (await sut.ListAsync(tenantId)).ToDictionary(k => k.Id);
+            keys[inference.Id].IsRevoked.Should().BeTrue("an unprotected key in the batch still goes");
+            new[] { keys[adminA.Id].IsRevoked, keys[adminB.Id].IsRevoked }
+                .Should().ContainSingle(r => r, "exactly one admin key survives, whichever came second");
+        }
+    }
+
+    private sealed class StaleAdminCountApiKeyRepository(IApiKeyRepository inner, int firstAnswer)
+        : IApiKeyRepository
+    {
+        private bool _answered;
+
+        public Task<int> CountActiveAdminKeysAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        {
+            if (_answered)
+            {
+                return inner.CountActiveAdminKeysAsync(tenantId, cancellationToken);
+            }
+
+            _answered = true;
+            return Task.FromResult(firstAnswer);
+        }
+
+        public Task<ApiKeyRecord?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) =>
+            inner.GetByIdAsync(id, cancellationToken);
+
+        public Task<IReadOnlyList<ApiKeyRecord>> GetByIdsAsync(IReadOnlyCollection<Guid> ids, CancellationToken cancellationToken = default) =>
+            inner.GetByIdsAsync(ids, cancellationToken);
+
+        public Task<ApiKeyRecord?> FindByPrefixAsync(string keyPrefix, CancellationToken cancellationToken = default) =>
+            inner.FindByPrefixAsync(keyPrefix, cancellationToken);
+
+        public Task<IReadOnlyList<ApiKeyRecord>> FindByPrefixesAsync(IReadOnlyCollection<string> keyPrefixes, CancellationToken cancellationToken = default) =>
+            inner.FindByPrefixesAsync(keyPrefixes, cancellationToken);
+
+        public Task<IReadOnlyList<ApiKeyRecord>> ListByTenantAsync(Guid tenantId, bool includeArchived = false, CancellationToken cancellationToken = default) =>
+            inner.ListByTenantAsync(tenantId, includeArchived, cancellationToken);
+
+        public Task<ApiKeyRecord> CreateAsync(ApiKeyRecord apiKey, CancellationToken cancellationToken = default) =>
+            inner.CreateAsync(apiKey, cancellationToken);
+
+        public Task RevokeAsync(Guid id, DateTimeOffset revokedAt, CancellationToken cancellationToken = default) =>
+            inner.RevokeAsync(id, revokedAt, cancellationToken);
+
+        public Task RestoreRevokedAsync(Guid id, CancellationToken cancellationToken = default) =>
+            inner.RestoreRevokedAsync(id, cancellationToken);
+
+        public Task ArchiveAsync(Guid id, DateTimeOffset archivedAt, CancellationToken cancellationToken = default) =>
+            inner.ArchiveAsync(id, archivedAt, cancellationToken);
+
+        public Task UnarchiveAsync(Guid id, CancellationToken cancellationToken = default) =>
+            inner.UnarchiveAsync(id, cancellationToken);
+
+        public Task<bool> DeleteAsync(Guid id, CancellationToken cancellationToken = default) =>
+            inner.DeleteAsync(id, cancellationToken);
+
+        public Task<ApiKeyRecord> UpdateMetadataAsync(Guid id, ApiKeyMetadataUpdate update, CancellationToken cancellationToken = default) =>
+            inner.UpdateMetadataAsync(id, update, cancellationToken);
+
+        public Task TouchLastUsedAsync(Guid id, DateTimeOffset atUtc, CancellationToken cancellationToken = default) =>
+            inner.TouchLastUsedAsync(id, atUtc, cancellationToken);
+
+        public Task<IReadOnlyList<ApiKeyRecord>> ListExpiringAsync(DateTimeOffset before, CancellationToken cancellationToken = default) =>
+            inner.ListExpiringAsync(before, cancellationToken);
+
+        public Task<IReadOnlyList<ApiKeyRecord>> ListIdleAsync(DateTimeOffset idleSince, CancellationToken cancellationToken = default) =>
+            inner.ListIdleAsync(idleSince, cancellationToken);
+
+        public Task<(int Total, int Revoked, int Archived)> CountAsync(CancellationToken cancellationToken = default) =>
+            inner.CountAsync(cancellationToken);
+    }
+
     private static Task AppendUsageAsync(
         GatewayDbContext db,
         Guid tenantId,

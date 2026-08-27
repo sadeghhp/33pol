@@ -59,12 +59,13 @@ namespace Pol33.Persistence.Migrations
             // it, "when was this key created / who revoked it" is answerable only for keys minted
             // after this migration, which is precisely the population an audit is least interested in.
             // Actor is left null: nothing recorded who acted before this table existed, and inventing
-            // one would be worse than an honest gap.
+            // one would be worse than an honest gap. HadUsage is what was true at the moment of the
+            // event, not now — so a Created row is always 0, matching what CreateAsync writes, while
+            // a Revoked row reads today's LastUsedAt as the best available approximation.
             migrationBuilder.Sql($"""
                 INSERT INTO api_key_lifecycle_events
                     (Id, ApiKeyId, TenantId, KeyPrefix, Label, Event, OccurredAt, ActorApiKeyId, HadUsage)
-                SELECT {NewGuidSql}, Id, TenantId, KeyPrefix, Label, 'Created', CreatedAt, NULL,
-                       CASE WHEN LastUsedAt IS NULL THEN 0 ELSE 1 END
+                SELECT {NewGuidSql}, Id, TenantId, KeyPrefix, Label, 'Created', CreatedAt, NULL, 0
                 FROM api_keys;
                 """);
 
@@ -95,7 +96,12 @@ namespace Pol33.Persistence.Migrations
             "substr(hex(randomblob(2)), 2, 3) || '-' || " +
             "hex(randomblob(6))";
 
-        /// <inheritdoc />
+        /// <summary>
+        /// Reverting drops <c>api_key_lifecycle_events</c> outright, and with it the only record of
+        /// keys that were permanently deleted while it existed — those have no <c>api_keys</c> row to
+        /// reconstruct from. Take a copy of the table before rolling this back on anything but a
+        /// scratch database.
+        /// </summary>
         protected override void Down(MigrationBuilder migrationBuilder)
         {
             migrationBuilder.DropTable(
