@@ -29,7 +29,9 @@ public sealed class OperatorConsoleKeysInteractor(
             return;
         }
 
-        var keys = await adminKeys.ListAsync(tenant.Id, includeUsageSummary: false, cancellationToken).ConfigureAwait(false);
+        var keys = await adminKeys
+            .ListAsync(tenant.Id, includeUsageSummary: false, cancellationToken: cancellationToken)
+            .ConfigureAwait(false);
         AnsiConsole.Write(BuildKeysTable(keys));
     }
 
@@ -53,7 +55,7 @@ public sealed class OperatorConsoleKeysInteractor(
                 Markup.Escape(key.Role.ToString()),
                 key.CreatedAt.ToString("u"),
                 key.LastUsedAt?.ToString("u") ?? "-",
-                key.IsRevoked ? "revoked" : "active");
+                DescribeStatus(key));
         }
 
         if (keys.Count == 0)
@@ -63,4 +65,16 @@ public sealed class OperatorConsoleKeysInteractor(
 
         return table;
     }
+
+    /// <summary>
+    /// The single word the Status column shows. Archived wins over revoked (an archived key is always
+    /// revoked, and "archived" is the more specific fact), and expiry is derived rather than stored.
+    /// </summary>
+    public static string DescribeStatus(AdminApiKeyListItem key) => key switch
+    {
+        { IsArchived: true } => "archived",
+        { IsRevoked: true } => "revoked",
+        { ExpiresAt: { } expiry } when expiry <= DateTimeOffset.UtcNow => "expired",
+        _ => "active",
+    };
 }

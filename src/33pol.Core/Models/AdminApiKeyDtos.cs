@@ -108,9 +108,91 @@ public sealed class AdminApiKeyListItem
 
     public string? CostCenter { get; init; }
 
+    public DateTimeOffset? ArchivedAt { get; init; }
+
     public ApiKeyUsageSummary? UsageSummary { get; init; }
 
     public bool IsRevoked => RevokedAt is not null;
+
+    public bool IsArchived => ArchivedAt is not null;
+
+    /// <summary>
+    /// Whether the key has ever authenticated a request or left a billing or error record.
+    /// </summary>
+    public bool HasUsage { get; init; }
+
+    /// <summary>
+    /// Whether this key is eligible for permanent deletion right now: revoked, never used, and not
+    /// the caller's own key.
+    /// </summary>
+    /// <remarks>
+    /// Computed server-side and shipped with the list so the console can render the right affordance
+    /// without a second round trip, and — more importantly — without a second copy of the eligibility
+    /// rule in JavaScript that could drift from the one the endpoint enforces.
+    /// </remarks>
+    public bool CanDelete { get; init; }
+
+    /// <summary>Whether the key can be archived right now: revoked and not already archived.</summary>
+    public bool CanArchive => IsRevoked && !IsArchived;
+}
+
+public sealed class DeleteAdminApiKeyRequest
+{
+    /// <summary>
+    /// Must equal the key's stored prefix. A destructive, irreversible action should not be reachable
+    /// by a mis-routed click or a replayed id alone.
+    /// </summary>
+    public string? ConfirmKeyPrefix { get; init; }
+}
+
+public sealed class AdminApiKeyLifecycleEntry
+{
+    public required Guid Id { get; init; }
+
+    public required string Event { get; init; }
+
+    public required DateTimeOffset OccurredAt { get; init; }
+
+    public string? KeyPrefix { get; init; }
+
+    public string? Label { get; init; }
+
+    public Guid? ActorApiKeyId { get; init; }
+
+    public string? Reason { get; init; }
+
+    public bool HadUsage { get; init; }
+}
+
+public sealed class AdminApiKeyLifecycleResponse
+{
+    public required Guid Id { get; init; }
+
+    public required string KeyPrefix { get; init; }
+
+    public string? Label { get; init; }
+
+    /// <summary>One of <c>active</c>, <c>expired</c>, <c>revoked</c>, <c>archived</c>, <c>deleted</c>.</summary>
+    public required string Status { get; init; }
+
+    /// <summary>False once the key row itself has been permanently deleted; its history remains.</summary>
+    public required bool Exists { get; init; }
+
+    public required IReadOnlyList<AdminApiKeyLifecycleEntry> Events { get; init; }
+}
+
+/// <summary>Body of the 409 returned when a lifecycle transition conflicts with the key's state.</summary>
+public sealed class ApiKeyLifecycleConflictResponse
+{
+    public required string Code { get; init; }
+
+    public required string Message { get; init; }
+
+    /// <summary>Set for <c>key_has_usage</c>, so the console can say how much usage is at stake.</summary>
+    public int? BillingEventCount { get; init; }
+
+    /// <summary>Set for <c>key_has_usage</c>.</summary>
+    public DateTimeOffset? LastUsedAt { get; init; }
 }
 
 public sealed class AdminApiKeyUsageResponse

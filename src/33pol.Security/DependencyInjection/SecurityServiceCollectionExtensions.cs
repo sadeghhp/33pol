@@ -236,6 +236,8 @@ internal sealed class NullAdminKeyService : IAdminKeyService
     public Task<IReadOnlyList<AdminApiKeyListItem>> ListAsync(
         Guid tenantId,
         bool includeUsageSummary = false,
+        bool includeArchived = false,
+        Guid? actorKeyId = null,
         CancellationToken cancellationToken = default) =>
         throw NotConfigured();
 
@@ -254,12 +256,45 @@ internal sealed class NullAdminKeyService : IAdminKeyService
         CancellationToken cancellationToken = default) =>
         throw NotConfigured();
 
-    public Task RevokeAsync(Guid tenantId, Guid keyId, CancellationToken cancellationToken = default) =>
+    public Task RevokeAsync(
+        Guid tenantId,
+        Guid keyId,
+        Guid? actorKeyId = null,
+        CancellationToken cancellationToken = default) =>
         throw NotConfigured();
 
     public Task<int> RevokeManyAsync(
         Guid tenantId,
         IReadOnlyCollection<Guid> keyIds,
+        Guid? actorKeyId = null,
+        CancellationToken cancellationToken = default) =>
+        throw NotConfigured();
+
+    public Task ArchiveAsync(
+        Guid tenantId,
+        Guid keyId,
+        Guid? actorKeyId = null,
+        CancellationToken cancellationToken = default) =>
+        throw NotConfigured();
+
+    public Task UnarchiveAsync(
+        Guid tenantId,
+        Guid keyId,
+        Guid? actorKeyId = null,
+        CancellationToken cancellationToken = default) =>
+        throw NotConfigured();
+
+    public Task<AdminApiKeyListItem> DeleteAsync(
+        Guid tenantId,
+        Guid keyId,
+        Guid? actorKeyId,
+        string? confirmKeyPrefix,
+        CancellationToken cancellationToken = default) =>
+        throw NotConfigured();
+
+    public Task<AdminApiKeyLifecycleResponse> GetLifecycleAsync(
+        Guid tenantId,
+        Guid keyId,
         CancellationToken cancellationToken = default) =>
         throw NotConfigured();
 }

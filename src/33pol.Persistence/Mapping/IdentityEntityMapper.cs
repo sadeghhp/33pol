@@ -44,7 +44,8 @@ internal static class IdentityEntityMapper
             entity.Label,
             entity.Assignee,
             entity.Description,
-            entity.CostCenter);
+            entity.CostCenter,
+            entity.ArchivedAt);
 
     public static ApiKeyEntity ToEntity(ApiKeyRecord record) =>
         new()
@@ -63,6 +64,35 @@ internal static class IdentityEntityMapper
             Assignee = record.Assignee,
             Description = record.Description,
             CostCenter = record.CostCenter,
+            ArchivedAt = record.ArchivedAt,
+        };
+
+    public static ApiKeyLifecycleEventRecord ToRecord(ApiKeyLifecycleEventEntity entity) =>
+        new(
+            entity.Id,
+            entity.ApiKeyId,
+            entity.TenantId,
+            entity.KeyPrefix,
+            entity.Event,
+            entity.OccurredAt,
+            entity.Label,
+            entity.ActorApiKeyId,
+            entity.Reason,
+            entity.HadUsage);
+
+    public static ApiKeyLifecycleEventEntity ToEntity(ApiKeyLifecycleEventRecord record) =>
+        new()
+        {
+            Id = record.Id,
+            ApiKeyId = record.ApiKeyId,
+            TenantId = record.TenantId,
+            KeyPrefix = record.KeyPrefix,
+            Label = record.Label,
+            Event = record.Event,
+            OccurredAt = record.OccurredAt,
+            ActorApiKeyId = record.ActorApiKeyId,
+            Reason = record.Reason,
+            HadUsage = record.HadUsage,
         };
 
     public static ModelGrantRecord ToRecord(ModelGrantEntity entity) =>

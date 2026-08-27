@@ -245,6 +245,72 @@ public sealed class ApiKeyValidatorTests
         (await sut.ValidateAsync(secret)).Failure.Should().Be(ApiKeyValidationFailure.Expired);
     }
 
+    /// <summary>
+    /// A permanently deleted key must fail as <c>Invalid</c>, not <c>Revoked</c>. The difference is
+    /// load-bearing: <c>IsRecognizedCredential</c> decides whether an unusable key must fail loudly on
+    /// anonymous-capable routes, and only <c>Invalid</c> reaches the negative cache. Reporting a key the
+    /// gateway no longer holds as "recognised" would also confirm it once existed.
+    /// </summary>
+    [Fact]
+    public async Task ValidateAsync_DeletedKey_IsInvalidRatherThanRevoked()
+    {
+        await using var db = CreateDb();
+        var tenantId = await SeedTenantAsync(db);
+        var secret = "sk-33pol-deleted-key";
+        var keyId = Guid.NewGuid();
+        var keys = new ApiKeyRepository(db);
+        await keys.CreateAsync(new ApiKeyRecord(
+            keyId,
+            tenantId,
+            ApiKeyHashing.Hash(secret, Pepper),
+            ApiKeyHashing.CreatePrefix(secret),
+            ApiKeyRole.Inference,
+            [],
+            null,
+            RevokedAt: DateTimeOffset.UtcNow,
+            DateTimeOffset.UtcNow,
+            null));
+
+        // While the row is there, its holder is told the credential was withdrawn.
+        (await CreateValidator(db).ValidateAsync(secret)).Failure
+            .Should().Be(ApiKeyValidationFailure.Revoked);
+
+        await keys.DeleteAsync(keyId);
+
+        var failure = (await CreateValidator(db).ValidateAsync(secret)).Failure;
+        failure.Should().Be(ApiKeyValidationFailure.Invalid);
+        failure!.Value.IsRecognizedCredential().Should().BeFalse();
+    }
+
+    /// <summary>
+    /// Archiving requires a prior revoke, so this can only fail if that coupling is broken elsewhere —
+    /// which is exactly why the validator does not take it on trust.
+    /// </summary>
+    [Fact]
+    public async Task ValidateAsync_ArchivedKey_IsRejected()
+    {
+        await using var db = CreateDb();
+        var tenantId = await SeedTenantAsync(db);
+        var secret = "sk-33pol-archived-key";
+        db.ApiKeys.Add(new Pol33.Persistence.Entities.ApiKeyEntity
+        {
+            Id = Guid.NewGuid(),
+            TenantId = tenantId,
+            KeyHash = ApiKeyHashing.Hash(secret, Pepper),
+            KeyPrefix = ApiKeyHashing.CreatePrefix(secret),
+            Role = ApiKeyRole.Inference,
+            Scopes = [],
+            CreatedAt = DateTimeOffset.UtcNow,
+            // Deliberately archived without RevokedAt, the state the service refuses to create.
+            ArchivedAt = DateTimeOffset.UtcNow,
+        });
+        await db.SaveChangesAsync();
+
+        var sut = CreateValidator(db);
+
+        (await sut.ValidateAsync(secret)).Failure.Should().Be(ApiKeyValidationFailure.Revoked);
+    }
+
     private sealed class CountingApiKeyRepository(IApiKeyRepository inner) : IApiKeyRepository
     {
         public int Lookups { get; private set; }
@@ -268,8 +334,11 @@ public sealed class ApiKeyValidatorTests
             CancellationToken cancellationToken = default) =>
             inner.GetByIdsAsync(ids, cancellationToken);
 
-        public Task<IReadOnlyList<ApiKeyRecord>> ListByTenantAsync(Guid tenantId, CancellationToken cancellationToken = default) =>
-            inner.ListByTenantAsync(tenantId, cancellationToken);
+        public Task<IReadOnlyList<ApiKeyRecord>> ListByTenantAsync(
+            Guid tenantId,
+            bool includeArchived = false,
+            CancellationToken cancellationToken = default) =>
+            inner.ListByTenantAsync(tenantId, includeArchived, cancellationToken);
 
         public Task<ApiKeyRecord> CreateAsync(ApiKeyRecord apiKey, CancellationToken cancellationToken = default) =>
             inner.CreateAsync(apiKey, cancellationToken);

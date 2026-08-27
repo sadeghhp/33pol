@@ -32,6 +32,44 @@ public sealed class OperatorConsoleKeysInteractorTests
         OperatorConsoleKeysInteractor.BuildKeysTable([]).Rows.Count.Should().Be(1);
     }
 
+    [Theory]
+    [MemberData(nameof(StatusCases))]
+    public void DescribeStatus_NamesTheKeysCurrentState(AdminApiKeyListItem key, string expected)
+    {
+        OperatorConsoleKeysInteractor.DescribeStatus(key).Should().Be(expected);
+    }
+
+    public static TheoryData<AdminApiKeyListItem, string> StatusCases()
+    {
+        var now = DateTimeOffset.UtcNow;
+
+        return new TheoryData<AdminApiKeyListItem, string>
+        {
+            { Key(now), "active" },
+            { Key(now, expiresAt: now.AddDays(1)), "active" },
+            { Key(now, expiresAt: now.AddDays(-1)), "expired" },
+            { Key(now, revokedAt: now), "revoked" },
+            // Archived wins: an archived key is always revoked, and "archived" is the more specific fact.
+            { Key(now, revokedAt: now, archivedAt: now), "archived" },
+        };
+    }
+
+    private static AdminApiKeyListItem Key(
+        DateTimeOffset createdAt,
+        DateTimeOffset? expiresAt = null,
+        DateTimeOffset? revokedAt = null,
+        DateTimeOffset? archivedAt = null) =>
+        new()
+        {
+            Id = Guid.NewGuid(),
+            KeyPrefix = "sk-abc12",
+            Role = ApiKeyRole.Inference,
+            CreatedAt = createdAt,
+            ExpiresAt = expiresAt,
+            RevokedAt = revokedAt,
+            ArchivedAt = archivedAt,
+        };
+
     [Fact]
     public void AdminApiKeyListItem_DoesNotExposeSecretProperty()
     {
@@ -62,6 +100,8 @@ public sealed class OperatorConsoleKeysInteractorTests
         public Task<IReadOnlyList<AdminApiKeyListItem>> ListAsync(
             Guid tenantId,
             bool includeUsageSummary = false,
+            bool includeArchived = false,
+            Guid? actorKeyId = null,
             CancellationToken cancellationToken = default) =>
             Task.FromResult<IReadOnlyList<AdminApiKeyListItem>>([]);
 
@@ -80,14 +120,47 @@ public sealed class OperatorConsoleKeysInteractorTests
             CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 
-        public Task RevokeAsync(Guid tenantId, Guid keyId, CancellationToken cancellationToken = default) =>
+        public Task RevokeAsync(
+            Guid tenantId,
+            Guid keyId,
+            Guid? actorKeyId = null,
+            CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 
         public Task<int> RevokeManyAsync(
             Guid tenantId,
             IReadOnlyCollection<Guid> keyIds,
+            Guid? actorKeyId = null,
             CancellationToken cancellationToken = default) =>
             Task.FromResult(0);
+
+        public Task ArchiveAsync(
+            Guid tenantId,
+            Guid keyId,
+            Guid? actorKeyId = null,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task UnarchiveAsync(
+            Guid tenantId,
+            Guid keyId,
+            Guid? actorKeyId = null,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<AdminApiKeyListItem> DeleteAsync(
+            Guid tenantId,
+            Guid keyId,
+            Guid? actorKeyId,
+            string? confirmKeyPrefix,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<AdminApiKeyLifecycleResponse> GetLifecycleAsync(
+            Guid tenantId,
+            Guid keyId,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
     }
 
     private sealed class FakeTenantRepository(TenantRecord? tenant) : ITenantRepository

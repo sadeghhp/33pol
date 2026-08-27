@@ -232,6 +232,44 @@ public sealed class BillingEventRepository(GatewayDbContext dbContext) : IBillin
         return dbQuery;
     }
 
+    public Task<bool> HasEventsForKeyAsync(Guid apiKeyId, CancellationToken cancellationToken = default) =>
+        // Rides the existing (ApiKeyId, RecordedAt) index; unbounded in time by design.
+        dbContext.BillingEvents
+            .AsNoTracking()
+            .AnyAsync(e => e.ApiKeyId == apiKeyId, cancellationToken);
+
+    public Task<int> CountEventsForKeyAsync(Guid apiKeyId, CancellationToken cancellationToken = default) =>
+        dbContext.BillingEvents
+            .AsNoTracking()
+            .CountAsync(e => e.ApiKeyId == apiKeyId, cancellationToken);
+
+    public async Task<IReadOnlySet<Guid>> FindKeysWithEventsAsync(
+        IReadOnlyCollection<Guid> apiKeyIds,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(apiKeyIds);
+        var found = new HashSet<Guid>();
+        if (apiKeyIds.Count == 0)
+        {
+            return found;
+        }
+
+        // Chunked to stay well under SQLite's default 999 bound-parameter limit.
+        foreach (var chunk in apiKeyIds.Distinct().Chunk(500))
+        {
+            var present = await dbContext.BillingEvents
+                .AsNoTracking()
+                .Where(e => e.ApiKeyId != null && chunk.Contains(e.ApiKeyId.Value))
+                .Select(e => e.ApiKeyId!.Value)
+                .Distinct()
+                .ToListAsync(cancellationToken)
+                .ConfigureAwait(false);
+            found.UnionWith(present);
+        }
+
+        return found;
+    }
+
     public async Task<IReadOnlyDictionary<Guid, ApiKeyUsageSummary>> GetUsageSummariesAsync(
         Guid tenantId,
         DateOnly fromDate,

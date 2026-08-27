@@ -9,6 +9,9 @@
 function adminApp() {
   const TABS = ['dashboard', 'usage', 'routing', 'keys', 'logs', 'errors', 'settings'];
 
+  /** Key status filters, in the order the select offers them. Also the allow-list for ?filter=. */
+  const KEY_FILTERS = ['active', 'revoked', 'archived', 'all'];
+
   /**
    * Push-stream staleness budget: 3x the server's idle heartbeat interval
    * (AdminControlPlaneEndpoints.LiveHeartbeat = 15s). See checkLiveStale().
@@ -240,6 +243,9 @@ function adminApp() {
     confirmDialog: null,
     _confirmReturnFocus: null,
     revokeConfirmId: null,
+    /** The key awaiting permanent deletion, plus the prefix the operator has to type back. */
+    deleteConfirmKey: null,
+    deleteConfirmText: '',
     modelTestDialog: null,
     editModel: {
       id: '', url: '', maxContextLength: 8192, aliasesText: '',
@@ -1961,15 +1967,25 @@ function adminApp() {
       return (list || []).map(k => ({
         ...k,
         role: this.normalizeApiKeyRole(k.role),
-        isRevoked: !!(k.isRevoked ?? k.revokedAt)
+        isRevoked: !!(k.isRevoked ?? k.revokedAt),
+        isArchived: !!(k.isArchived ?? k.archivedAt),
+        hasUsage: !!k.hasUsage,
+        // Both eligibility flags come from the server, which is the one place the rules are enforced.
+        // The `??` fallback matches how isRevoked is read: an older payload still renders sensibly.
+        canArchive: !!(k.canArchive ?? ((k.isRevoked ?? k.revokedAt) && !(k.isArchived ?? k.archivedAt))),
+        canDelete: !!k.canDelete
       }));
     },
 
     filteredKeys() {
       const list = this.keys || [];
       let filtered = list;
-      if (this.keysFilter === 'active') filtered = list.filter(k => !k.isRevoked);
-      else if (this.keysFilter === 'revoked') filtered = list.filter(k => k.isRevoked);
+      // Archived keys are out of the way everywhere except their own filter — that is what archiving
+      // buys. 'all' is the escape hatch for someone auditing the whole history.
+      if (this.keysFilter === 'active') filtered = list.filter(k => !k.isRevoked && !k.isArchived);
+      else if (this.keysFilter === 'revoked') filtered = list.filter(k => k.isRevoked && !k.isArchived);
+      else if (this.keysFilter === 'archived') filtered = list.filter(k => k.isArchived);
+      else if (this.keysFilter !== 'all') filtered = list.filter(k => !k.isArchived);
       const q = (this.keysTextFilter || '').trim().toLowerCase();
       if (q) {
         filtered = filtered.filter(k =>
@@ -1995,7 +2011,7 @@ function adminApp() {
     },
 
     selectableFilteredKeys() {
-      return this.filteredKeys().filter(k => !k.isRevoked);
+      return this.filteredKeys().filter(k => !k.isRevoked && !k.isArchived);
     },
 
     toggleKeySelection(id, shouldSelect) {
@@ -2033,7 +2049,8 @@ function adminApp() {
     },
 
     selectedActiveKeyIds() {
-      const activeIds = new Set((this.keys || []).filter(k => !k.isRevoked).map(k => k.id));
+      const activeIds = new Set(
+        (this.keys || []).filter(k => !k.isRevoked && !k.isArchived).map(k => k.id));
       return this.selectedKeyIds.filter(id => activeIds.has(id));
     },
 
@@ -2168,6 +2185,7 @@ function adminApp() {
     onModalKeydown(e) {
       if (e.key === 'Escape') {
         if (this.confirmDialog) this.cancelConfirm();
+        else if (this.deleteConfirmKey) this.cancelDeleteKey();
         else if (this.revokeConfirmId) this.cancelRevoke();
         else if (this.modelTestDialog) this.closeModelTestDialog();
         else if (this.modelDrawerOpen) this.closeModelDrawer();
@@ -3036,7 +3054,9 @@ function adminApp() {
     },
 
     async fetchKeys() {
-      const list = (await this.apiJson('/admin/api/keys?includeUsageSummary=true')) ?? [];
+      // Archived keys come down with the rest so the Archived filter needs no second round trip;
+      // filteredKeys() keeps them out of every other view.
+      const list = (await this.apiJson('/admin/api/keys?includeUsageSummary=true&includeArchived=true')) ?? [];
       this.keys = this.normalizeApiKeyList(list);
       const existingIds = new Set(this.keys.map(k => k.id));
       this.selectedKeyIds = this.selectedKeyIds.filter(id => existingIds.has(id));
@@ -3090,6 +3110,62 @@ function adminApp() {
 
     cancelRevoke() {
       this.revokeConfirmId = null;
+    },
+
+    confirmArchive(key) {
+      this.openConfirm({
+        title: 'Archive this API key?',
+        message: 'Archiving files ' + (key.label || key.keyPrefix) + ' out of the keys list. ' +
+          'Its usage history and billing records are kept, and you can restore it at any time.',
+        confirmLabel: 'Archive key',
+        onConfirm: () => this.archiveKey(key.id)
+      });
+    },
+
+    async archiveKey(id) {
+      await this.runApi('keys', 'Archiving…', async () => {
+        await this.store.apiFetch('/admin/api/keys/' + id + '/archive', { method: 'POST' }, this.editModelUrl());
+        this.toast('API key archived.');
+        await this.fetchKeys();
+      });
+    },
+
+    async unarchiveKey(id) {
+      await this.runApi('keys', 'Restoring…', async () => {
+        await this.store.apiFetch('/admin/api/keys/' + id + '/unarchive', { method: 'POST' }, this.editModelUrl());
+        this.toast('API key restored to the keys list.');
+        await this.fetchKeys();
+      });
+    },
+
+    /**
+     * Permanent deletion gets a dialog of its own rather than the shared confirm: the operator has to
+     * type the key's prefix back, which is the same confirmation the endpoint requires.
+     */
+    confirmDeleteKey(key) {
+      this.deleteConfirmKey = key;
+      this.deleteConfirmText = '';
+    },
+
+    cancelDeleteKey() {
+      this.deleteConfirmKey = null;
+      this.deleteConfirmText = '';
+    },
+
+    async deleteKeyConfirmed() {
+      const key = this.deleteConfirmKey;
+      if (!key || !this.deleteConfirmMatches) return;
+      const prefix = key.keyPrefix;
+      this.cancelDeleteKey();
+      await this.runApi('keys', 'Deleting…', async () => {
+        await this.store.apiFetch(
+          '/admin/api/keys/' + key.id,
+          { method: 'DELETE', body: JSON.stringify({ confirmKeyPrefix: prefix }) },
+          this.editModelUrl());
+        this.selectedKeyIds = this.selectedKeyIds.filter(existingId => existingId !== key.id);
+        this.toast('API key deleted permanently. Its history is kept.');
+        await this.fetchKeys();
+      });
     },
 
     async revokeKeyConfirmed() {
@@ -3190,6 +3266,7 @@ function adminApp() {
         backendsFilter: b('backendsFilter'),
         keysFilter: b('keysFilter'),
         keysTextFilter: b('keysTextFilter'),
+        deleteConfirmText: b('deleteConfirmText'),
         keysCreatedAck: b('keysCreatedAck'),
         logsSearch: b('logsSearch'),
         logsLevel: b('logsLevel'),
@@ -3458,7 +3535,7 @@ function adminApp() {
           break;
         case 'keys':
           this.keysTextFilter = p('q');
-          if (p('filter')) this.keysFilter = p('filter');
+          if (p('filter') && KEY_FILTERS.includes(p('filter'))) this.keysFilter = p('filter');
           break;
         case 'logs':
           if (p('search')) this.logsSearch = p('search');
@@ -4966,24 +5043,65 @@ function adminApp() {
           mtdCost: cost != null ? this.formatCost(cost, currency) : '—',
           mtdRequests: this.keyMtdRequests(k) ?? '—',
           created: this.formatTime(k.createdAt),
-          statusClass: k.isRevoked ? 'fail' : 'ok',
-          statusText: k.isRevoked ? 'Revoked' : 'Active',
-          active: !k.isRevoked,
+          statusClass: this.keyStatusClass(k),
+          statusText: this.keyStatusText(k),
+          active: !k.isRevoked && !k.isArchived,
           revoked: !!k.isRevoked,
+          archived: !!k.isArchived,
           selected: this.isKeySelected(k.id),
-          canGrant: k.role !== 'Admin',
+          // Model access is only meaningful while the credential can still authenticate; a revoked or
+          // archived key's grants can never be exercised again.
+          canGrant: k.role !== 'Admin' && !k.isRevoked && !k.isArchived,
+          canArchive: k.canArchive,
+          canUnarchive: k.isArchived,
+          // A key that cannot be deleted gets no button at all — a greyed-out one only invites
+          // re-clicking, and the usage view is where "why not" belongs.
+          canDelete: k.canDelete,
           selectLabel: 'Select key ' + k.keyPrefix,
           onSelect: event => this.toggleKeySelection(k.id, !!event?.target?.checked),
           edit: () => this.openKeyEditDrawer(k),
           access: () => this.openKeyAccess(k),
           usage: () => this.viewKeyUsage(k),
-          revoke: () => this.confirmRevoke(k.id)
+          revoke: () => this.confirmRevoke(k.id),
+          archive: () => this.confirmArchive(k),
+          unarchive: () => this.unarchiveKey(k.id),
+          remove: () => this.confirmDeleteKey(k)
         };
       });
     },
 
     get hasKeyRows() { return this.keyRows.length > 0; },
     get keysEmpty() { return !this.isLoading('keys') && this.keyRows.length === 0; },
+
+    keyStatusClass(key) {
+      if (key.isArchived) return 'muted';
+      if (key.isRevoked) return 'fail';
+      if (key.expiresAt && new Date(key.expiresAt) <= new Date()) return 'warn';
+      return 'ok';
+    },
+
+    keyStatusText(key) {
+      if (key.isArchived) return 'Archived';
+      if (key.isRevoked) return 'Revoked';
+      if (key.expiresAt && new Date(key.expiresAt) <= new Date()) return 'Expired';
+      return 'Active';
+    },
+
+    // ---- permanent-delete dialog (CSP build: every binding is a getter or a zero-arg method) ----
+
+    get deleteConfirmOpen() { return !!this.deleteConfirmKey; },
+    get deleteConfirmPrefix() { return this.deleteConfirmKey?.keyPrefix || ''; },
+    get deleteConfirmName() {
+      const key = this.deleteConfirmKey;
+      return key ? (key.label || key.keyPrefix) : '';
+    },
+    get deleteConfirmMatches() {
+      return !!this.deleteConfirmKey &&
+        this.deleteConfirmText.trim() === this.deleteConfirmKey.keyPrefix;
+    },
+    get deleteConfirmDisabled() {
+      return this.isLoading('keys') || !this.deleteConfirmMatches;
+    },
 
     get showCreateKeyForm() { return !this.createdKey; },
     get closeKeysDisabled() { return !!this.createdKey && !this.keysCreatedAck; },

@@ -22,6 +22,10 @@ internal sealed class ApiKeyEntityConfiguration : IEntityTypeConfiguration<ApiKe
 
         builder.HasIndex(k => k.KeyPrefix);
 
+        // The console's default view is "this tenant's keys that are not archived, newest first".
+        // Without ArchivedAt in the index that listing degrades into a scan as keys accumulate.
+        builder.HasIndex(k => new { k.TenantId, k.ArchivedAt, k.CreatedAt });
+
         builder.Property(k => k.Role)
             .HasConversion<string>()
             .HasMaxLength(32)

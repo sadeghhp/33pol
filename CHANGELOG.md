@@ -4,6 +4,48 @@ All notable changes to this project are documented here. Version tags follow [Se
 
 ## [Unreleased]
 
+### Added — API key archiving, and deletion only for keys that were never used
+
+Key management had one destructive verb: revoke. A revoked key stayed in the working set forever, so
+the list only ever grew, and the pressure that produces is a request for a delete button — which, if
+granted naively, would let an administrator erase the credential that a month of billing events point
+at.
+
+An API key is now in one of four states (`active`, `revoked`, `archived`, `deleted`), derived from
+`api_keys.RevokedAt`, a new `api_keys.ArchivedAt`, and the presence of the row itself. Migration
+`ApiKeyArchiveAndLifecycle`.
+
+- **A key with recorded usage can never be permanently deleted.** `DELETE /admin/api/keys/{id}`
+  answers `409 key_has_usage` with the billing-event count and last-used timestamp, and tells the
+  caller to archive it instead. Usage is three independent signals OR-ed — `LastUsedAt`, any
+  `billing_events` row **over all time**, any `gateway_errors` row — because each covers a gap in the
+  others. In particular the check does not go through the usage summaries, which are month-to-date
+  and would report "never used" for a key last used last year.
+- **A key that has never been used can be deleted**, once it is revoked and the request echoes the
+  key's prefix back as `confirmKeyPrefix`. Requiring the revoke first closes the window in which the
+  key could serve its first request between the eligibility check and the click.
+- **Archiving** (`POST …/{id}/archive`, `/unarchive`) files an already-revoked key out of the list
+  while keeping every usage record it earned. `GET /admin/api/keys` now omits archived keys unless
+  `?includeArchived=true` — the one observable change for existing clients.
+- **`api_key_lifecycle_events`** records every transition with its actor and survives the key: it
+  holds no foreign key to `api_keys`, and snapshots the prefix and label, so `GET
+  …/{id}/lifecycle` still answers for a key that has been deleted. The migration backfills a
+  `Created` row for every existing key and a `Revoked` row for every revoked one, so the history is
+  not blank for the credentials an audit asks about first.
+- **Two guards on revocation**, both covering mistakes that cannot be undone from the console: a key
+  may not revoke or delete **itself**, and a tenant's **last active admin key** may not be revoked.
+  Batch revoke skips protected keys rather than failing the whole batch.
+- Audit gains `api_key.archive`, `api_key.unarchive` and `api_key.delete`. The delete entry carries
+  the key's prefix, label, assignee, cost centre and timestamps, because after the row is gone its id
+  resolves to nothing.
+- The Overview's key count now reports archived keys separately instead of rolling them into the
+  total, so filing keys away shrinks the headline rather than inflating it.
+- Admin console: a four-way status filter (active / revoked / archived / all), an Archived status
+  chip, per-state row actions, and a delete dialog that requires the operator to type the key's
+  prefix. Revoke and delete now use distinct icons — one leaves the key and its history behind, the
+  other does not. Fixes a pre-existing clipping bug where the Status cell was too narrow for its own
+  "Revoked" chip.
+
 ### Added — model-, user- and combination-scoped rate limits
 
 Rate limiting had one dimension: the tenant. Every API key a tenant held drew on one bucket, there was no way to bound a single expensive model or a single runaway credential, and `TenantOverrides` — the only per-customer lever the resolver knew about — had no table behind it, so on any database-backed deployment (which is every real one) that code path was dead and the map was always empty.

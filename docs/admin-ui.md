@@ -62,7 +62,7 @@ directive that the evaluator could not resolve fails the build instead of the op
 | Overview | `#/dashboard` | Attention list, windowed vitals (requests, errors, latency p95, TTFT p95, in flight) with server-side sparklines, control-plane strip, backends & health, policy pressure, FinOps, per-model table, recent activity, tenants & keys, live tail with filters/pause/pin — pushed over SSE, 2s poll as fallback, slow cards polled every 30s |
 | Usage | `#/usage` | Date presets, cost center / API key filters, rollups, enriched billing events, forecast, export |
 | Routing | `#/routing` | **Models** (registry, quick-add drawer) and **Backends** (health table) |
-| API keys | `#/keys` | List (assignee, MTD usage, last used), create/edit metadata, per-key model access, revoke, view usage |
+| API keys | `#/keys` | List (assignee, MTD usage, last used), create/edit metadata, per-key model access, revoke, archive/restore, permanently delete a never-used key, view usage |
 | Logs | `#/logs` | In-memory diagnostic tail (warning and above), severity and search filters, expandable detail with hint and request ID, clear buffer |
 | Errors | `#/errors` | Persisted, grouped failures: time-range presets, model / status / code facets, occurrence drill-down with stack trace, request-ID cross-link, JSON+CSV export, clear all |
 | Settings | `#/settings` | Config status, rate limits (default + plans), tenant model allowlist, observability links |
@@ -202,7 +202,7 @@ GET requests retry once on network failure. Usage export uses `downloadBlob` wit
 | Usage | `GET /admin/api/usage?costCenter=`, `/usage/events?apiKeyId=&costCenter=`, `/usage/forecast`, `GET /usage/export` |
 | Routing — Models | `GET/POST/PATCH/DELETE /admin/api/models` (write body: `{ model, apiKey?, clearApiKey? }`; GET returns `{ model, hasUpstreamCredential }`), `POST /admin/api/models/{id}/stop` and `/start` (take a route out of service / put it back), `POST /admin/api/models/{id}/test` (type-specific health check) |
 | Routing — Backends | `GET /admin/api/backends` |
-| API keys | `GET/POST /admin/api/keys`, `PATCH …/keys/{id}`, `GET …/keys/{id}/usage`, `POST …/revoke`, `GET/PUT …/keys/{id}/model-grants` |
+| API keys | `GET/POST /admin/api/keys` (`?includeArchived=true` to see filed-away keys), `PATCH …/keys/{id}`, `GET …/keys/{id}/usage`, `GET …/keys/{id}/lifecycle`, `POST …/revoke`, `POST …/keys/{id}/archive` and `/unarchive`, `DELETE …/keys/{id}` (body `{ confirmKeyPrefix }`), `GET/PUT …/keys/{id}/model-grants` |
 | Tenant model access | `GET/PUT /admin/api/tenant/model-grants` (optional ceiling; empty = all registry models) |
 | Logs | `GET /admin/api/logs?limit=&level=&search=` (response carries `count`, `total`, `capacity`), `DELETE /admin/api/logs` (audited) |
 | Errors | `GET /admin/api/errors/groups`, `GET /admin/api/errors` (occurrences; `?fingerprint=`, `?requestId=`), `GET /admin/api/errors/{id}`, `GET /admin/api/errors/facets`, `GET /admin/api/errors/export?format=json\|csv`, `DELETE /admin/api/errors?confirm=true[&scope=all]` (audited) |
@@ -345,6 +345,12 @@ When the gateway runs in Docker, upstream URLs must use `http://host.docker.inte
 - [ ] **Routing:** Start it again → State reads **Serving** and both come back
 - [ ] **Backends:** unhealthy first; **Edit model** jumps to Models
 - [ ] **API keys:** create drawer → copy → acknowledge saved; revoke modal
+- [ ] **API keys:** revoke a key that has served traffic → **Archive** appears, **Delete** does not;
+      archive it → it leaves the default list and returns under **Show → Archived** with its MTD
+      usage intact; **Restore** brings it back still marked Revoked
+- [ ] **API keys:** revoke a key that has never been used → **Delete** appears; the dialog's confirm
+      button stays disabled until the key's prefix is typed exactly; after deleting, the row is gone
+      and the toast reads "Its history is kept"
 - [ ] **Settings:** config status; reload with confirm
 - [ ] **Logs:** typing in search neither flashes the skeleton nor raises the global banner; the
       truncation hint reads "Showing N of M matching entries"; Request ID is populated

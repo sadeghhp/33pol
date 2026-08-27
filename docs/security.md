@@ -12,6 +12,58 @@
 
 Keys are stored **hashed** (HMAC + pepper). Plaintext secrets are shown only once at creation.
 
+## API key lifecycle
+
+A key is in one of four stored states, derived from two nullable timestamps on `api_keys` plus the
+absence of the row itself; **expired** is a fifth, derived from `ExpiresAt` rather than stored. There
+is no status column: a status *and* timestamps would be two sources of truth that can disagree.
+
+| State | Stored as | Authenticates | Where it shows |
+|-------|-----------|---------------|----------------|
+| Active | `RevokedAt IS NULL AND ArchivedAt IS NULL` | Yes | Default list |
+| Expired | derived — active row with `ExpiresAt <= now` | No (`expired_api_key`) | Default list |
+| Revoked | `RevokedAt IS NOT NULL AND ArchivedAt IS NULL` | No (`invalid_api_key`, credential recognised) | Default list |
+| Archived | `ArchivedAt IS NOT NULL` (implies revoked) | No | Only under `?includeArchived=true` |
+| Deleted | row absent; `api_key_lifecycle_events` keeps the tombstone | No — indistinguishable from a key never issued | Only in the key's history |
+
+```
+ACTIVE ──revoke──▶ REVOKED ──archive──▶ ARCHIVED
+                      │    ◀─unarchive──┘
+                      └──delete──▶ DELETED   (only if the key has never been used)
+```
+
+Every transition requires an Admin key for the owning tenant. No transition returns a key to Active:
+revocation is terminal for the credential.
+
+**Keys with usage history are never permanently deleted.** A key counts as used if any of three
+independent signals says so, because each covers a gap in the others:
+
+1. `api_keys.LastUsedAt` is set — written the first time a request of the key's is billed.
+2. Any `billing_events` row names it, **over all time**. The month-to-date usage summary is not a
+   substitute: it reports "no usage" for a key last used last year, and acting on that would destroy
+   the ledger's only reference to it.
+3. Any `gateway_errors` row names it — a key whose only trace is a failed request still left an
+   auditable record.
+
+`daily_usage_rollups` carries no key id, so deletion can never orphan a rollup.
+
+Deleting also requires the key to be **revoked first**. That is not bureaucracy: it closes the window
+between reading the key list and clicking delete, in which the key could serve its first request.
+Once `RevokedAt` is set the validator rejects the credential, so no new usage can appear after the
+eligibility check. The request must additionally echo the key's prefix back as `confirmKeyPrefix`, so
+an irreversible action is not reachable from a mis-routed click or a replayed id.
+
+Two further guards apply to revocation, both covering mistakes an admin cannot undo from the console:
+a key may not act on **itself** (the credential the caller is authenticating with), and the tenant's
+**last active admin key** may not be revoked. Batch revoke skips protected keys rather than failing
+the whole batch — the response's `revokedCount` reports how many actually went.
+
+`api_key_lifecycle_events` records every transition with its actor, and deliberately holds **no
+foreign key** to `api_keys`: the record of a credential that once existed has to outlive the
+credential. It stores the prefix and label as snapshots for the same reason. `GET
+/admin/api/keys/{id}/lifecycle` reads it, and resolves for deleted keys too — scoped by
+`(tenantId, apiKeyId)` together, since a deleted key has no row left to check ownership against.
+
 ## Transport
 
 - Terminate TLS at ingress (Kubernetes Ingress, reverse proxy).
@@ -131,9 +183,14 @@ Every admin mutation calls `IAuditLogger`, implemented by `FileAuditLogger`, whi
 | `Gateway:Security:AuditLogMaxBytes` | `8388608` (8 MB) | At the cap the file rolls to `<path>.1`, keeping one generation. Floor: 64 KB. |
 
 Actions recorded: `api_key.create`, `api_key.update`, `api_key.revoke`, `api_key.revoke_batch`,
-`api_key.model_grants.replace`, `tenant.model_grants.replace`, `cors.update`, `rate_limits.update`,
-`config.reload`, `maintenance.backup`, `model.renamed`, `model.pricing.update`, and the
-`upstream_secret.*` lifecycle events.
+`api_key.archive`, `api_key.unarchive`, `api_key.delete`, `api_key.model_grants.replace`,
+`tenant.model_grants.replace`, `cors.update`, `rate_limits.update`, `config.reload`,
+`maintenance.backup`, `model.renamed`, `model.pricing.update`, and the `upstream_secret.*`
+lifecycle events.
+
+`api_key.delete` additionally carries the key's prefix, label, assignee, cost centre, role and
+timestamps: once the row is gone its id resolves to nothing, so an entry naming only the id would
+record that *a* key was destroyed without recording *which*.
 
 Call sites pass key **ids and prefixes**, model ids and counts — never a secret — which is what makes
 the file safe to retain and ship to a log collector. A write failure (read-only `config/` mount) is

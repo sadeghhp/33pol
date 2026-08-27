@@ -11,6 +11,34 @@ public interface IBillingEventRepository
         BillingEventQuery query,
         CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Whether the ledger holds any event for <paramref name="apiKeyId"/>, over all time.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately not expressed through <see cref="GetUsageSummariesAsync"/>: that method is
+    /// date-windowed, and its callers default to month-to-date, so it answers "no usage" for a key
+    /// last used last year. This backs the check that decides whether a key may be permanently
+    /// deleted, where that answer would destroy the ledger's only reference to the key.
+    /// </remarks>
+    Task<bool> HasEventsForKeyAsync(Guid apiKeyId, CancellationToken cancellationToken = default) =>
+        Task.FromResult(false);
+
+    /// <summary>Events recorded against <paramref name="apiKeyId"/>, over all time.</summary>
+    Task<int> CountEventsForKeyAsync(Guid apiKeyId, CancellationToken cancellationToken = default) =>
+        Task.FromResult(0);
+
+    /// <summary>
+    /// The subset of <paramref name="apiKeyIds"/> that the ledger holds at least one event for.
+    /// </summary>
+    /// <remarks>
+    /// The batch form exists so listing a tenant's keys stays one query rather than one per key —
+    /// a tenant with a few hundred retired keys would otherwise pay for a probe on each.
+    /// </remarks>
+    Task<IReadOnlySet<Guid>> FindKeysWithEventsAsync(
+        IReadOnlyCollection<Guid> apiKeyIds,
+        CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlySet<Guid>>(new HashSet<Guid>());
+
     Task<IReadOnlyDictionary<Guid, ApiKeyUsageSummary>> GetUsageSummariesAsync(
         Guid tenantId,
         DateOnly fromDate,

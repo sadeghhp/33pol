@@ -562,7 +562,7 @@ internal sealed partial class GatewayOverviewSectionService(
         var attention = gatewayOptions.Value.Overview.Attention;
         var tenantList = await tenants.ListActiveAsync(cancellationToken).ConfigureAwait(false);
         var byId = tenantList.ToDictionary(t => t.Id);
-        var (total, revoked) = await keys.CountAsync(cancellationToken).ConfigureAwait(false);
+        var (total, revoked, archived) = await keys.CountAsync(cancellationToken).ConfigureAwait(false);
         var expiring = await keys.ListExpiringAsync(now.AddDays(attention.KeyExpiringWithinDays), cancellationToken).ConfigureAwait(false);
         var idle = await keys.ListIdleAsync(now.AddDays(-attention.KeyIdleAfterDays), cancellationToken).ConfigureAwait(false);
 
@@ -616,6 +616,7 @@ internal sealed partial class GatewayOverviewSectionService(
             TenantCount = tenantList.Count,
             KeyCount = total,
             RevokedKeyCount = revoked,
+            ArchivedKeyCount = archived,
             TopConsumersMonthToDate = consumers,
             ExpiringKeys = expiring.Select(Summarise).ToList(),
             IdleKeys = idle.Select(Summarise).ToList(),

@@ -19,6 +19,8 @@ public sealed class GatewayDbContext : DbContext
 
     public DbSet<ApiKeyModelGrantEntity> ApiKeyModelGrants => Set<ApiKeyModelGrantEntity>();
 
+    public DbSet<ApiKeyLifecycleEventEntity> ApiKeyLifecycleEvents => Set<ApiKeyLifecycleEventEntity>();
+
     public DbSet<RateCardEntity> RateCards => Set<RateCardEntity>();
 
     public DbSet<PlanEntity> Plans => Set<PlanEntity>();

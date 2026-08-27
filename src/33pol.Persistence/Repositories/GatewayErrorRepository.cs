@@ -197,6 +197,44 @@ public sealed class GatewayErrorRepository(GatewayDbContext dbContext) : IGatewa
         };
     }
 
+    public Task<bool> HasEventsForKeyAsync(string apiKeyId, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(apiKeyId))
+        {
+            return Task.FromResult(false);
+        }
+
+        return dbContext.GatewayErrors
+            .AsNoTracking()
+            .AnyAsync(e => e.ApiKeyId == apiKeyId, cancellationToken);
+    }
+
+    public async Task<IReadOnlySet<string>> FindKeysWithEventsAsync(
+        IReadOnlyCollection<string> apiKeyIds,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(apiKeyIds);
+        var found = new HashSet<string>(StringComparer.Ordinal);
+        if (apiKeyIds.Count == 0)
+        {
+            return found;
+        }
+
+        foreach (var chunk in apiKeyIds.Distinct(StringComparer.Ordinal).Chunk(500))
+        {
+            var present = await dbContext.GatewayErrors
+                .AsNoTracking()
+                .Where(e => e.ApiKeyId != null && chunk.Contains(e.ApiKeyId))
+                .Select(e => e.ApiKeyId!)
+                .Distinct()
+                .ToListAsync(cancellationToken)
+                .ConfigureAwait(false);
+            found.UnionWith(present);
+        }
+
+        return found;
+    }
+
     public async Task<int> DeleteAllAsync(CancellationToken cancellationToken = default) =>
         await DeleteWhereAsync(dbContext.GatewayErrors, int.MaxValue, cancellationToken).ConfigureAwait(false);
 

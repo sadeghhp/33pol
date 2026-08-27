@@ -56,6 +56,7 @@ public static class PersistenceServiceCollectionExtensions
         services.AddScoped<IApiKeyRepository, ApiKeyRepository>();
         services.AddScoped<IModelGrantRepository, ModelGrantRepository>();
         services.AddScoped<IApiKeyModelGrantRepository, ApiKeyModelGrantRepository>();
+        services.AddScoped<IApiKeyLifecycleEventRepository, ApiKeyLifecycleEventRepository>();
         services.AddScoped<IDailyUsageRollupRepository, DailyUsageRollupRepository>();
         services.AddScoped<IBillingEventRepository, BillingEventRepository>();
         services.AddMemoryCache();

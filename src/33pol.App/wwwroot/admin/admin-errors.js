@@ -18,6 +18,25 @@
       };
     }
 
+    // API key lifecycle conflicts are expected, informative outcomes rather than faults: the server
+    // has already written the sentence the operator needs, so show that instead of "409 Conflict".
+    if (status === 409 && json?.code && json?.message) {
+      const titles = {
+        key_has_usage: 'This key has been used',
+        key_not_revoked: 'Revoke the key first',
+        already_archived: 'Already archived',
+        not_archived: 'Not archived',
+        self_action: 'Not allowed on your own key',
+        last_admin_key: 'Last admin key'
+      };
+      return {
+        title: titles[json.code] || 'Action not allowed',
+        message: json.message,
+        detail: null,
+        global: false
+      };
+    }
+
     if (json?.message) {
       const isEnvToken = status === 400 && /environment variable|Missing API token|envVar/i.test(json.message);
       return {

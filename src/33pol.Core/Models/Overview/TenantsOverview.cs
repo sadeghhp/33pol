@@ -13,6 +13,12 @@ public sealed record TenantsOverview
 
     public int RevokedKeyCount { get; init; }
 
+    /// <summary>
+    /// Archived keys, reported apart from <see cref="KeyCount"/> so filing keys away shrinks the
+    /// headline count instead of inflating it.
+    /// </summary>
+    public int ArchivedKeyCount { get; init; }
+
     public IReadOnlyList<TenantConsumer> TopConsumersMonthToDate { get; init; } = [];
 
     public IReadOnlyList<KeySummary> ExpiringKeys { get; init; } = [];

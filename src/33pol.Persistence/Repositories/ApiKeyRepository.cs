@@ -77,11 +77,19 @@ public sealed class ApiKeyRepository : IApiKeyRepository
 
     public async Task<IReadOnlyList<ApiKeyRecord>> ListByTenantAsync(
         Guid tenantId,
+        bool includeArchived = false,
         CancellationToken cancellationToken = default)
     {
-        var entities = await _db.ApiKeys
+        var query = _db.ApiKeys
             .AsNoTracking()
-            .Where(k => k.TenantId == tenantId)
+            .Where(k => k.TenantId == tenantId);
+
+        if (!includeArchived)
+        {
+            query = query.Where(k => k.ArchivedAt == null);
+        }
+
+        var entities = await query
             .OrderByDescending(k => k.CreatedAt)
             .ToListAsync(cancellationToken);
 
@@ -103,6 +111,65 @@ public sealed class ApiKeyRepository : IApiKeyRepository
 
         entity.RevokedAt = revokedAt;
         await _db.SaveChangesAsync(cancellationToken);
+    }
+
+    public async Task ArchiveAsync(Guid id, DateTimeOffset archivedAt, CancellationToken cancellationToken = default)
+    {
+        var entity = await _db.ApiKeys.FirstOrDefaultAsync(k => k.Id == id, cancellationToken)
+            ?? throw new KeyNotFoundException($"API key '{id}' was not found.");
+
+        entity.ArchivedAt = archivedAt;
+        await _db.SaveChangesAsync(cancellationToken);
+    }
+
+    public async Task UnarchiveAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        var entity = await _db.ApiKeys.FirstOrDefaultAsync(k => k.Id == id, cancellationToken)
+            ?? throw new KeyNotFoundException($"API key '{id}' was not found.");
+
+        // RevokedAt is deliberately untouched: unarchiving files a key back into the working set,
+        // it does not resurrect the credential.
+        entity.ArchivedAt = null;
+        await _db.SaveChangesAsync(cancellationToken);
+    }
+
+    public async Task<bool> DeleteAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        var entity = await _db.ApiKeys.FirstOrDefaultAsync(k => k.Id == id, cancellationToken);
+        if (entity is null)
+        {
+            return false;
+        }
+
+        // Remove rather than ExecuteDelete: the EF InMemory provider used across the test suite does
+        // not implement bulk delete. Model grants go with it through the configured FK cascade; on
+        // the InMemory provider, which enforces no FKs, they are removed explicitly first so both
+        // providers leave the same state behind.
+        var grants = await _db.ApiKeyModelGrants
+            .Where(g => g.ApiKeyId == id)
+            .ToListAsync(cancellationToken);
+        if (grants.Count > 0)
+        {
+            _db.ApiKeyModelGrants.RemoveRange(grants);
+        }
+
+        _db.ApiKeys.Remove(entity);
+        await _db.SaveChangesAsync(cancellationToken);
+        return true;
+    }
+
+    public async Task<int> CountActiveAdminKeysAsync(Guid tenantId, CancellationToken cancellationToken = default)
+    {
+        var now = DateTimeOffset.UtcNow;
+        return await _db.ApiKeys
+            .AsNoTracking()
+            .CountAsync(
+                k => k.TenantId == tenantId &&
+                     k.RevokedAt == null &&
+                     k.ArchivedAt == null &&
+                     (k.ExpiresAt == null || k.ExpiresAt > now) &&
+                     (k.Role == ApiKeyRole.Admin || k.Role == ApiKeyRole.Both),
+                cancellationToken);
     }
 
     public async Task<ApiKeyRecord> UpdateMetadataAsync(
@@ -149,7 +216,8 @@ public sealed class ApiKeyRepository : IApiKeyRepository
         var now = DateTimeOffset.UtcNow;
         var entities = await _db.ApiKeys
             .AsNoTracking()
-            .Where(k => k.RevokedAt == null && k.ExpiresAt != null && k.ExpiresAt <= before && k.ExpiresAt > now)
+            .Where(k => k.RevokedAt == null && k.ArchivedAt == null &&
+                        k.ExpiresAt != null && k.ExpiresAt <= before && k.ExpiresAt > now)
             .OrderBy(k => k.ExpiresAt)
             .Take(100)
             .ToListAsync(cancellationToken);
@@ -160,17 +228,22 @@ public sealed class ApiKeyRepository : IApiKeyRepository
     {
         var entities = await _db.ApiKeys
             .AsNoTracking()
-            .Where(k => k.RevokedAt == null && (k.LastUsedAt ?? k.CreatedAt) <= idleSince)
+            .Where(k => k.RevokedAt == null && k.ArchivedAt == null && (k.LastUsedAt ?? k.CreatedAt) <= idleSince)
             .OrderBy(k => k.LastUsedAt ?? k.CreatedAt)
             .Take(100)
             .ToListAsync(cancellationToken);
         return entities.Select(IdentityEntityMapper.ToRecord).ToList();
     }
 
-    public async Task<(int Total, int Revoked)> CountAsync(CancellationToken cancellationToken = default)
+    public async Task<(int Total, int Revoked, int Archived)> CountAsync(CancellationToken cancellationToken = default)
     {
-        var total = await _db.ApiKeys.CountAsync(cancellationToken);
-        var revoked = await _db.ApiKeys.CountAsync(k => k.RevokedAt != null, cancellationToken);
-        return (total, revoked);
+        // Total counts the working set only. Rolling archived keys into it would make the Overview
+        // headline creep upward as archiving is adopted, which is the opposite of what archiving is for.
+        var total = await _db.ApiKeys.CountAsync(k => k.ArchivedAt == null, cancellationToken);
+        var revoked = await _db.ApiKeys.CountAsync(
+            k => k.RevokedAt != null && k.ArchivedAt == null,
+            cancellationToken);
+        var archived = await _db.ApiKeys.CountAsync(k => k.ArchivedAt != null, cancellationToken);
+        return (total, revoked, archived);
     }
 }

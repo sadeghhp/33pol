@@ -501,6 +501,10 @@ h1, h2, h3, h4 { font-family: var(--font-display); }
 .status-chip.ok   { color: var(--live-text); border-color: var(--live-border); background: var(--live-soft); }
 .status-chip.fail { color: var(--error-text); border-color: var(--error-border); background: var(--error-soft); }
 .status-chip.warn { color: var(--warn); border-color: var(--warn-border); background: var(--warn-soft); }
+/* Archived: deliberately the quietest chip on the page. An archived key is not a problem to be
+   noticed, it is a key that has been put away — it should read as absent, not as a warning. Both
+   colours are theme tokens, so it stays legible on either ground. */
+.status-chip.muted { color: var(--text-secondary); border-color: var(--border-strong); background: var(--bg-sunken); }
 
 .health-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
 .health-dot.dot-ok   { background: var(--live); }

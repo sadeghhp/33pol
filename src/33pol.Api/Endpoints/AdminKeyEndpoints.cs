@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 using Pol33.Core.Abstractions;
 using Pol33.Core.Identity;
@@ -21,6 +22,10 @@ public static class AdminKeyEndpoints
         group.MapGet("/{id:guid}/usage", GetKeyUsageAsync);
         group.MapPost("/revoke", RevokeKeysAsync);
         group.MapPost("/{id:guid}/revoke", RevokeKeyAsync);
+        group.MapPost("/{id:guid}/archive", ArchiveKeyAsync);
+        group.MapPost("/{id:guid}/unarchive", UnarchiveKeyAsync);
+        group.MapDelete("/{id:guid}", DeleteKeyAsync);
+        group.MapGet("/{id:guid}/lifecycle", GetKeyLifecycleAsync);
         return endpoints;
     }
 
@@ -62,6 +67,7 @@ public static class AdminKeyEndpoints
         HttpContext httpContext,
         IAdminKeyService adminKeys,
         bool? includeUsageSummary,
+        bool? includeArchived,
         CancellationToken cancellationToken)
     {
         if (!TryGetTenantId(httpContext, out var tenantId))
@@ -70,7 +76,12 @@ public static class AdminKeyEndpoints
         }
 
         var keys = await adminKeys
-            .ListAsync(tenantId, includeUsageSummary == true, cancellationToken)
+            .ListAsync(
+                tenantId,
+                includeUsageSummary == true,
+                includeArchived == true,
+                GetActorKeyId(httpContext),
+                cancellationToken)
             .ConfigureAwait(false);
         return Results.Json(keys);
     }
@@ -169,7 +180,8 @@ public static class AdminKeyEndpoints
 
         try
         {
-            await adminKeys.RevokeAsync(tenantId, id, cancellationToken).ConfigureAwait(false);
+            await adminKeys.RevokeAsync(tenantId, id, GetActorKeyId(httpContext), cancellationToken)
+                .ConfigureAwait(false);
             audit.LogAdminAction(
                 "api_key.revoke",
                 new AuditLogEntry(
@@ -178,6 +190,175 @@ public static class AdminKeyEndpoints
                     new { KeyId = id }));
 
             return Results.NoContent();
+        }
+        catch (KeyNotFoundException)
+        {
+            return Results.NotFound();
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Results.Forbid();
+        }
+        catch (ApiKeyLifecycleException ex)
+        {
+            return Conflict(ex);
+        }
+    }
+
+    private static async Task<IResult> ArchiveKeyAsync(
+        Guid id,
+        HttpContext httpContext,
+        IAdminKeyService adminKeys,
+        IAuditLogger audit,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetTenantId(httpContext, out var tenantId))
+        {
+            return Results.Unauthorized();
+        }
+
+        try
+        {
+            await adminKeys.ArchiveAsync(tenantId, id, GetActorKeyId(httpContext), cancellationToken)
+                .ConfigureAwait(false);
+            audit.LogAdminAction(
+                "api_key.archive",
+                new AuditLogEntry(
+                    tenantId.ToString(),
+                    httpContext.User.FindFirst(GatewayAuthClaims.ApiKeyId)?.Value,
+                    new { KeyId = id }));
+
+            return Results.NoContent();
+        }
+        catch (KeyNotFoundException)
+        {
+            return Results.NotFound();
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Results.Forbid();
+        }
+        catch (ApiKeyLifecycleException ex)
+        {
+            return Conflict(ex);
+        }
+    }
+
+    private static async Task<IResult> UnarchiveKeyAsync(
+        Guid id,
+        HttpContext httpContext,
+        IAdminKeyService adminKeys,
+        IAuditLogger audit,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetTenantId(httpContext, out var tenantId))
+        {
+            return Results.Unauthorized();
+        }
+
+        try
+        {
+            await adminKeys.UnarchiveAsync(tenantId, id, GetActorKeyId(httpContext), cancellationToken)
+                .ConfigureAwait(false);
+            audit.LogAdminAction(
+                "api_key.unarchive",
+                new AuditLogEntry(
+                    tenantId.ToString(),
+                    httpContext.User.FindFirst(GatewayAuthClaims.ApiKeyId)?.Value,
+                    new { KeyId = id }));
+
+            return Results.NoContent();
+        }
+        catch (KeyNotFoundException)
+        {
+            return Results.NotFound();
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Results.Forbid();
+        }
+        catch (ApiKeyLifecycleException ex)
+        {
+            return Conflict(ex);
+        }
+    }
+
+    private static async Task<IResult> DeleteKeyAsync(
+        Guid id,
+        // Explicit: minimal APIs do not infer a body for DELETE, and the confirmation belongs in the
+        // body rather than the query string so it stays out of access logs.
+        [FromBody] DeleteAdminApiKeyRequest? request,
+        HttpContext httpContext,
+        IAdminKeyService adminKeys,
+        IAuditLogger audit,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetTenantId(httpContext, out var tenantId))
+        {
+            return Results.Unauthorized();
+        }
+
+        try
+        {
+            // The service hands back a snapshot of what it removed: after the row is gone the id
+            // resolves to nothing, so an audit entry carrying only the id records which credential
+            // was destroyed in name alone.
+            var deleted = await adminKeys
+                .DeleteAsync(tenantId, id, GetActorKeyId(httpContext), request?.ConfirmKeyPrefix, cancellationToken)
+                .ConfigureAwait(false);
+
+            audit.LogAdminAction(
+                "api_key.delete",
+                new AuditLogEntry(
+                    tenantId.ToString(),
+                    httpContext.User.FindFirst(GatewayAuthClaims.ApiKeyId)?.Value,
+                    new
+                    {
+                        KeyId = id,
+                        deleted.KeyPrefix,
+                        deleted.Label,
+                        deleted.Assignee,
+                        deleted.CostCenter,
+                        deleted.Role,
+                        deleted.CreatedAt,
+                        deleted.RevokedAt,
+                    }));
+
+            return Results.NoContent();
+        }
+        catch (KeyNotFoundException)
+        {
+            return Results.NotFound();
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Results.Forbid();
+        }
+        catch (ApiKeyLifecycleException ex)
+        {
+            return Conflict(ex);
+        }
+        catch (ArgumentException ex)
+        {
+            return Results.BadRequest(new { message = ex.Message });
+        }
+    }
+
+    private static async Task<IResult> GetKeyLifecycleAsync(
+        Guid id,
+        HttpContext httpContext,
+        IAdminKeyService adminKeys,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetTenantId(httpContext, out var tenantId))
+        {
+            return Results.Unauthorized();
+        }
+
+        try
+        {
+            var lifecycle = await adminKeys.GetLifecycleAsync(tenantId, id, cancellationToken).ConfigureAwait(false);
+            return Results.Json(lifecycle);
         }
         catch (KeyNotFoundException)
         {
@@ -211,7 +392,9 @@ public static class AdminKeyEndpoints
             return Results.BadRequest(new { message = "At least one key id is required." });
         }
 
-        var revokedCount = await adminKeys.RevokeManyAsync(tenantId, keyIds, cancellationToken).ConfigureAwait(false);
+        var revokedCount = await adminKeys
+            .RevokeManyAsync(tenantId, keyIds, GetActorKeyId(httpContext), cancellationToken)
+            .ConfigureAwait(false);
         audit.LogAdminAction(
             "api_key.revoke_batch",
             new AuditLogEntry(
@@ -225,6 +408,24 @@ public static class AdminKeyEndpoints
                 RevokedCount = revokedCount,
             });
     }
+
+    /// <summary>
+    /// The admin key on the request, when there is one. Recorded against every lifecycle event and
+    /// used to stop a key acting on itself.
+    /// </summary>
+    private static Guid? GetActorKeyId(HttpContext context) =>
+        Guid.TryParse(context.User.FindFirst(GatewayAuthClaims.ApiKeyId)?.Value, out var id) ? id : null;
+
+    private static IResult Conflict(ApiKeyLifecycleException ex) =>
+        Results.Json(
+            new ApiKeyLifecycleConflictResponse
+            {
+                Code = ex.Code,
+                Message = ex.Message,
+                BillingEventCount = ex.Code == "key_has_usage" ? ex.BillingEventCount : null,
+                LastUsedAt = ex.LastUsedAt,
+            },
+            statusCode: StatusCodes.Status409Conflict);
 
     private static bool TryGetTenantId(HttpContext context, out Guid tenantId)
     {

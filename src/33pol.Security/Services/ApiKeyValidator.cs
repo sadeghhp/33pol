@@ -79,7 +79,11 @@ public sealed class ApiKeyValidator : IApiKeyValidator
             return ApiKeyValidationResult.Fail(ApiKeyValidationFailure.Invalid);
         }
 
-        if (record.RevokedAt is not null)
+        // Archiving requires the key to be revoked first, so ArchivedAt should never be the deciding
+        // check. It is here anyway: the coupling lives in AdminKeyService, and a credential that still
+        // authenticates because a precondition was relaxed elsewhere is not a failure this layer should
+        // be able to have. Reported as Revoked because that is what an archived key is to its holder.
+        if (record.RevokedAt is not null || record.ArchivedAt is not null)
         {
             return ApiKeyValidationResult.Fail(ApiKeyValidationFailure.Revoked);
         }

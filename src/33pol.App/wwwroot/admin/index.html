@@ -1228,6 +1228,7 @@
               <select class="inline-select" x-model="mdl.keysFilter">
                 <option value="active">Active only</option>
                 <option value="revoked">Revoked only</option>
+                <option value="archived">Archived</option>
                 <option value="all">All</option>
               </select>
             </label>
@@ -1237,7 +1238,7 @@
             </label>
             <span class="spacer"></span>
             <button type="button" class="action danger" @click="confirmRevokeSelected" :disabled="revokeSelectedDisabled">
-              <span class="icon" x-html="icons.trash"></span> Revoke selected (<span x-text="selectedKeyCountText"></span>)
+              <span class="icon" x-html="icons.shield-off"></span> Revoke selected (<span x-text="selectedKeyCountText"></span>)
             </button>
             <button type="button" class="action secondary" @click="loadKeys" :disabled="loadingKeys">
               <span class="icon" x-html="icons.refresh"></span> Refresh
@@ -1245,10 +1246,12 @@
           </div>
           <div class="table-wrap">
             <table class="t-keys" x-show="hasKeyRows">
+              <!-- Status carries a nowrap chip in a cell that clips, so it has to fit the longest word
+                   it can hold ("Archived"). The 1.5% comes from Assignee, which truncates by design. -->
               <colgroup>
-                <col style="width:3.5%" /><col style="width:9%" /><col style="width:11%" /><col style="width:10%" />
+                <col style="width:3.5%" /><col style="width:9%" /><col style="width:11%" /><col style="width:8.5%" />
                 <col style="width:9%" /><col style="width:6%" /><col style="width:9%" /><col style="width:7%" />
-                <col style="width:6%" /><col style="width:9%" /><col style="width:7%" /><col style="width:11.5%" />
+                <col style="width:6%" /><col style="width:9%" /><col style="width:8.5%" /><col style="width:11.5%" />
               </colgroup>
               <thead>
                 <tr>
@@ -1290,11 +1293,18 @@
                     <td x-text="k.created"></td>
                     <td><span class="status-chip" :class="k.statusClass" x-text="k.statusText"></span></td>
                     <td class="cell-actions">
-                      <span class="row-actions" x-show="k.active">
-                        <button type="button" class="icon-btn" @click="k.edit" title="Edit key" aria-label="Edit key"><span class="icon" x-html="icons.edit"></span></button>
+                      <span class="row-actions">
+                        <button type="button" class="icon-btn" x-show="k.active" @click="k.edit" title="Edit key" aria-label="Edit key"><span class="icon" x-html="icons.edit"></span></button>
                         <button type="button" class="icon-btn" x-show="k.canGrant" @click="k.access" title="Model access" aria-label="Model access"><span class="icon" x-html="icons.cpu"></span></button>
                         <button type="button" class="icon-btn" @click="k.usage" title="View usage" aria-label="View usage"><span class="icon" x-html="icons.bar-chart"></span></button>
-                        <button type="button" class="icon-btn danger" @click="k.revoke" title="Revoke key" aria-label="Revoke key"><span class="icon" x-html="icons.trash"></span></button>
+                        <!-- Revoke stops the credential; delete removes the row. Distinct icons, because
+                             one leaves the key and its history behind and the other does not. -->
+                        <button type="button" class="icon-btn danger" x-show="k.active" @click="k.revoke" title="Revoke key" aria-label="Revoke key"><span class="icon" x-html="icons.shield-off"></span></button>
+                        <button type="button" class="icon-btn" x-show="k.canArchive" @click="k.archive" title="Archive key" aria-label="Archive key"><span class="icon" x-html="icons.archive"></span></button>
+                        <button type="button" class="icon-btn" x-show="k.canUnarchive" @click="k.unarchive" title="Restore key to the list" aria-label="Restore key to the list"><span class="icon" x-html="icons.archive-out"></span></button>
+                        <!-- Only when the key is actually deletable. A greyed-out delete would just
+                             invite re-clicking; the usage view is where "why not" belongs. -->
+                        <button type="button" class="icon-btn danger" x-show="k.canDelete" @click="k.remove" title="Delete key permanently" aria-label="Delete key permanently"><span class="icon" x-html="icons.trash"></span></button>
                       </span>
                     </td>
                   </tr>
@@ -2160,10 +2170,32 @@
   <div class="modal-backdrop" x-show="revokeConfirmId" @click.self="cancelRevoke" x-transition.opacity role="presentation">
     <div class="modal" role="alertdialog" aria-labelledby="revoke-title">
       <h3 id="revoke-title">Revoke API key?</h3>
-      <p class="muted">This cannot be undone. Clients using this key will be rejected immediately.</p>
+      <p class="muted">This cannot be undone. Clients using this key will be rejected immediately. The key keeps its usage history, and you can archive it afterwards to file it out of this list.</p>
       <div class="modal-actions">
         <button type="button" class="action secondary" @click="cancelRevoke">Cancel</button>
         <button type="button" class="action danger" @click="revokeKeyConfirmed" :disabled="loadingKeys">Revoke key</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Permanent-delete dialog. Its own dialog rather than the shared confirm, because it asks the
+       operator to type the key prefix back — the same confirmation the endpoint requires. -->
+  <div class="modal-backdrop" x-show="deleteConfirmOpen" @click.self="cancelDeleteKey" x-transition.opacity role="presentation">
+    <div class="modal" role="alertdialog" aria-labelledby="delete-key-title">
+      <h3 id="delete-key-title">Delete this API key permanently?</h3>
+      <p class="muted">
+        <strong x-text="deleteConfirmName"></strong> has never been used, so it can be removed
+        entirely. Its model access goes with it. A record of the key and of this deletion is kept in
+        the key history.
+      </p>
+      <label class="field">
+        <span>Type <code x-text="deleteConfirmPrefix"></code> to confirm</span>
+        <input x-model="mdl.deleteConfirmText" autocomplete="off" spellcheck="false"
+          placeholder="key prefix" aria-label="Type the key prefix to confirm deletion" />
+      </label>
+      <div class="modal-actions">
+        <button type="button" class="action secondary" @click="cancelDeleteKey">Cancel</button>
+        <button type="button" class="action danger" @click="deleteKeyConfirmed" :disabled="deleteConfirmDisabled">Delete permanently</button>
       </div>
     </div>
   </div>

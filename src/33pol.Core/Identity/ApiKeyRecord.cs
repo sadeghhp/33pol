@@ -14,4 +14,5 @@ public sealed record ApiKeyRecord(
     string? Label = null,
     string? Assignee = null,
     string? Description = null,
-    string? CostCenter = null);
+    string? CostCenter = null,
+    DateTimeOffset? ArchivedAt = null);

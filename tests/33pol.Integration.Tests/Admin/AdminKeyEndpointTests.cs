@@ -3,6 +3,9 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.Extensions.DependencyInjection;
+using Pol33.Core.Abstractions;
+using Pol33.Core.Billing;
 using Pol33.Integration.Tests.Support;
 
 namespace Pol33.Integration.Tests.Admin;
@@ -11,6 +14,8 @@ namespace Pol33.Integration.Tests.Admin;
 public sealed class AdminKeyEndpointTests
 {
     private const string AdminKey = "sk-33pol-integration-admin-key";
+
+    private const string InferenceRequestBody = @"{""model"":""gpt-local"",""stream"":false}";
 
     [Fact]
     public async Task PostKey_WithoutAuth_Returns401()
@@ -161,6 +166,235 @@ public sealed class AdminKeyEndpointTests
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }
 
+    // ---------------------------------------------------------------------------------------------
+    // Archive
+    // ---------------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task ArchiveKey_WhileActive_Returns409()
+    {
+        await using var factory = GatewayWebApplicationFactory.CreateWithInMemoryDatabase(AdminKey);
+        await GatewayWebApplicationFactory.EnsureAuthReadyAsync(factory);
+        var client = CreateAuthenticatedClient(factory, AdminKey);
+
+        var key = await CreateInferenceKeyAsync(client);
+
+        var response = await client.PostAsync($"/admin/api/keys/{key.Id}/archive", content: null);
+
+        // Archiving a live credential would hide the key an operator most needs to see.
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        json.RootElement.GetProperty("code").GetString().Should().Be("key_not_revoked");
+    }
+
+    [Fact]
+    public async Task ArchiveKey_HidesItFromTheDefaultListAndKeepsItsUsage()
+    {
+        await using var factory = GatewayWebApplicationFactory.CreateWithInMemoryDatabase(AdminKey);
+        await GatewayWebApplicationFactory.EnsureAuthReadyAsync(factory);
+        var client = CreateAuthenticatedClient(factory, AdminKey);
+
+        var key = await CreateInferenceKeyAsync(client);
+        await SeedUsageAsync(factory, key.Id);
+
+        (await client.PostAsync($"/admin/api/keys/{key.Id}/revoke", content: null))
+            .StatusCode.Should().Be(HttpStatusCode.NoContent);
+        (await client.PostAsync($"/admin/api/keys/{key.Id}/archive", content: null))
+            .StatusCode.Should().Be(HttpStatusCode.NoContent);
+
+        (await ListKeyIdsAsync(client)).Should().NotContain(key.Id);
+
+        var archived = (await ListKeysAsync(client, "?includeArchived=true&includeUsageSummary=true"))
+            .Single(k => k.GetProperty("id").GetGuid() == key.Id);
+        archived.GetProperty("isArchived").GetBoolean().Should().BeTrue();
+        archived.GetProperty("hasUsage").GetBoolean().Should().BeTrue();
+        archived.GetProperty("canDelete").GetBoolean().Should().BeFalse();
+        archived.GetProperty("usageSummary").GetProperty("requestCount").GetInt32()
+            .Should().Be(1, "archiving preserves the usage record, that is its purpose");
+    }
+
+    [Fact]
+    public async Task UnarchiveKey_BringsItBackStillRevoked()
+    {
+        await using var factory = GatewayWebApplicationFactory.CreateWithInMemoryDatabase(AdminKey);
+        await GatewayWebApplicationFactory.EnsureAuthReadyAsync(factory);
+        var client = CreateAuthenticatedClient(factory, AdminKey);
+
+        var key = await CreateInferenceKeyAsync(client);
+        await client.PostAsync($"/admin/api/keys/{key.Id}/revoke", content: null);
+        await client.PostAsync($"/admin/api/keys/{key.Id}/archive", content: null);
+
+        (await client.PostAsync($"/admin/api/keys/{key.Id}/unarchive", content: null))
+            .StatusCode.Should().Be(HttpStatusCode.NoContent);
+
+        var restored = (await ListKeysAsync(client)).Single(k => k.GetProperty("id").GetGuid() == key.Id);
+        restored.GetProperty("isArchived").GetBoolean().Should().BeFalse();
+        restored.GetProperty("isRevoked").GetBoolean()
+            .Should().BeTrue("unarchiving files a key back into view, it does not revive the credential");
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // Delete
+    // ---------------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task DeleteKey_WithoutAuth_Returns401()
+    {
+        await using var factory = GatewayWebApplicationFactory.CreateWithInMemoryDatabase(AdminKey);
+        await GatewayWebApplicationFactory.EnsureAuthReadyAsync(factory);
+        var admin = CreateAuthenticatedClient(factory, AdminKey);
+        var key = await CreateInferenceKeyAsync(admin);
+
+        var response = await factory.CreateClient().SendAsync(DeleteRequest(key.Id, "sk-33pol-anything"));
+
+        response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+    }
+
+    [Fact]
+    public async Task DeleteKey_WithInferenceKey_Returns403()
+    {
+        await using var factory = GatewayWebApplicationFactory.CreateWithInMemoryDatabase(AdminKey);
+        await GatewayWebApplicationFactory.EnsureAuthReadyAsync(factory);
+        var admin = CreateAuthenticatedClient(factory, AdminKey);
+
+        var target = await CreateInferenceKeyAsync(admin);
+        var caller = await CreateInferenceKeyAsync(admin);
+
+        var response = await CreateAuthenticatedClient(factory, caller.Secret)
+            .SendAsync(DeleteRequest(target.Id, "sk-33pol-anything"));
+
+        response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+    }
+
+    [Fact]
+    public async Task DeleteKey_NeverUsed_Returns204AndKeepsTheHistory()
+    {
+        await using var factory = GatewayWebApplicationFactory.CreateWithInMemoryDatabase(AdminKey);
+        await GatewayWebApplicationFactory.EnsureAuthReadyAsync(factory);
+        var client = CreateAuthenticatedClient(factory, AdminKey);
+
+        var key = await CreateInferenceKeyAsync(client);
+        var prefix = await GetKeyPrefixAsync(client, key.Id);
+
+        (await client.PostAsync($"/admin/api/keys/{key.Id}/revoke", content: null))
+            .StatusCode.Should().Be(HttpStatusCode.NoContent);
+
+        var response = await client.SendAsync(DeleteRequest(key.Id, prefix));
+
+        response.StatusCode.Should().Be(HttpStatusCode.NoContent);
+        (await ListKeyIdsAsync(client, "?includeArchived=true")).Should().NotContain(key.Id);
+
+        // Gone from the key table, but the history remains — that is the whole point of the design.
+        var lifecycle = await client.GetAsync($"/admin/api/keys/{key.Id}/lifecycle");
+        lifecycle.EnsureSuccessStatusCode();
+        using var history = JsonDocument.Parse(await lifecycle.Content.ReadAsStringAsync());
+        history.RootElement.GetProperty("exists").GetBoolean().Should().BeFalse();
+        history.RootElement.GetProperty("status").GetString().Should().Be("deleted");
+        history.RootElement.GetProperty("keyPrefix").GetString().Should().Be(prefix);
+        history.RootElement.GetProperty("events").EnumerateArray()
+            .Select(e => e.GetProperty("event").GetString())
+            .Should().Equal(["Created", "Revoked", "Deleted"]);
+    }
+
+    [Fact]
+    public async Task DeleteKey_WithUsageHistory_Returns409AndKeepsTheKey()
+    {
+        await using var factory = GatewayWebApplicationFactory.CreateWithInMemoryDatabase(AdminKey);
+        await GatewayWebApplicationFactory.EnsureAuthReadyAsync(factory);
+        var client = CreateAuthenticatedClient(factory, AdminKey);
+
+        var key = await CreateInferenceKeyAsync(client);
+        var prefix = await GetKeyPrefixAsync(client, key.Id);
+        await SeedUsageAsync(factory, key.Id);
+
+        (await client.PostAsync($"/admin/api/keys/{key.Id}/revoke", content: null))
+            .StatusCode.Should().Be(HttpStatusCode.NoContent);
+
+        var response = await client.SendAsync(DeleteRequest(key.Id, prefix));
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        json.RootElement.GetProperty("code").GetString().Should().Be("key_has_usage");
+        json.RootElement.GetProperty("billingEventCount").GetInt32().Should().Be(1);
+        json.RootElement.GetProperty("message").GetString().Should().Contain("Archive it instead");
+
+        (await ListKeyIdsAsync(client)).Should().Contain(key.Id);
+    }
+
+    [Fact]
+    public async Task DeleteKey_WhileStillActive_Returns409()
+    {
+        await using var factory = GatewayWebApplicationFactory.CreateWithInMemoryDatabase(AdminKey);
+        await GatewayWebApplicationFactory.EnsureAuthReadyAsync(factory);
+        var client = CreateAuthenticatedClient(factory, AdminKey);
+
+        var key = await CreateInferenceKeyAsync(client);
+        var prefix = await GetKeyPrefixAsync(client, key.Id);
+
+        var response = await client.SendAsync(DeleteRequest(key.Id, prefix));
+
+        // Revoke-first closes the window in which the key could serve its first request between the
+        // eligibility check and the delete.
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        json.RootElement.GetProperty("code").GetString().Should().Be("key_not_revoked");
+    }
+
+    [Fact]
+    public async Task DeleteKey_WithWrongPrefixConfirmation_Returns400()
+    {
+        await using var factory = GatewayWebApplicationFactory.CreateWithInMemoryDatabase(AdminKey);
+        await GatewayWebApplicationFactory.EnsureAuthReadyAsync(factory);
+        var client = CreateAuthenticatedClient(factory, AdminKey);
+
+        var key = await CreateInferenceKeyAsync(client);
+        (await client.PostAsync($"/admin/api/keys/{key.Id}/revoke", content: null))
+            .StatusCode.Should().Be(HttpStatusCode.NoContent);
+
+        var response = await client.SendAsync(DeleteRequest(key.Id, "sk-33pol-nope"));
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await ListKeyIdsAsync(client)).Should().Contain(key.Id);
+    }
+
+    [Fact]
+    public async Task DeleteKey_ThenPresentingTheSecret_LooksLikeAKeyThatNeverExisted()
+    {
+        await using var factory = GatewayWebApplicationFactory.CreateWithInMemoryDatabase(AdminKey);
+        await GatewayWebApplicationFactory.EnsureAuthReadyAsync(factory);
+        var client = CreateAuthenticatedClient(factory, AdminKey);
+
+        var key = await CreateInferenceKeyAsync(client);
+        var prefix = await GetKeyPrefixAsync(client, key.Id);
+        await client.PostAsync($"/admin/api/keys/{key.Id}/revoke", content: null);
+        (await client.SendAsync(DeleteRequest(key.Id, prefix)))
+            .StatusCode.Should().Be(HttpStatusCode.NoContent);
+
+        var inference = factory.CreateClient();
+        inference.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", key.Secret);
+        using var body = new StringContent(
+            InferenceRequestBody, System.Text.Encoding.UTF8, "application/json");
+        var response = await inference.PostAsync("/v1/chat/completions", body);
+
+        // Over the wire a deleted key looks like any other unusable one; that the gateway classifies it
+        // as never-issued rather than withdrawn — which is what reaches the negative cache and what
+        // anonymous-capable routes branch on — is pinned by
+        // ApiKeyValidatorTests.ValidateAsync_DeletedKey_IsInvalidRatherThanRevoked.
+        response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+    }
+
+    [Fact]
+    public async Task GetLifecycle_ForAKeyThisTenantNeverHad_Returns404()
+    {
+        await using var factory = GatewayWebApplicationFactory.CreateWithInMemoryDatabase(AdminKey);
+        await GatewayWebApplicationFactory.EnsureAuthReadyAsync(factory);
+        var client = CreateAuthenticatedClient(factory, AdminKey);
+
+        var response = await client.GetAsync($"/admin/api/keys/{Guid.NewGuid()}/lifecycle");
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
     [Fact]
     public async Task PostConfigReload_WithoutAuth_Returns401()
     {
@@ -178,6 +412,58 @@ public sealed class AdminKeyEndpointTests
         var client = factory.CreateClient();
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
         return client;
+    }
+
+    private static HttpRequestMessage DeleteRequest(Guid keyId, string confirmKeyPrefix) =>
+        new(HttpMethod.Delete, $"/admin/api/keys/{keyId}")
+        {
+            Content = JsonContent.Create(new { confirmKeyPrefix }),
+        };
+
+    private static async Task<IReadOnlyList<JsonElement>> ListKeysAsync(HttpClient client, string query = "")
+    {
+        var response = await client.GetAsync("/admin/api/keys" + query);
+        response.EnsureSuccessStatusCode();
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        return json.RootElement.EnumerateArray().Select(e => e.Clone()).ToList();
+    }
+
+    private static async Task<IReadOnlyList<Guid>> ListKeyIdsAsync(HttpClient client, string query = "") =>
+        (await ListKeysAsync(client, query)).Select(k => k.GetProperty("id").GetGuid()).ToList();
+
+    private static async Task<string> GetKeyPrefixAsync(HttpClient client, Guid keyId) =>
+        (await ListKeysAsync(client, "?includeArchived=true"))
+            .Single(k => k.GetProperty("id").GetGuid() == keyId)
+            .GetProperty("keyPrefix")
+            .GetString()!;
+
+    /// <summary>
+    /// Writes a ledger row for the key. The gateway stamps <c>LastUsedAt</c> only once a billing event
+    /// has been persisted, so a row here is what a used key actually looks like in the database.
+    /// </summary>
+    private static async Task SeedUsageAsync(WebApplicationFactory<Program> factory, Guid keyId)
+    {
+        await using var scope = factory.Services.CreateAsyncScope();
+        var apiKeys = scope.ServiceProvider.GetRequiredService<IApiKeyRepository>();
+        // Stamped with the key's own tenant so the per-tenant usage summaries pick the row up too,
+        // not just the tenant-agnostic "has this key ever been used" probe.
+        var tenantId = (await apiKeys.GetByIdAsync(keyId))!.TenantId;
+
+        var billingEvents = scope.ServiceProvider.GetRequiredService<IBillingEventRepository>();
+        await billingEvents.TryAppendAsync(new BillingEventRecord(
+            Guid.NewGuid(),
+            "req-" + Guid.NewGuid().ToString("N"),
+            tenantId,
+            keyId,
+            "gpt-local",
+            "eng",
+            10,
+            5,
+            null,
+            null,
+            0.10m,
+            100,
+            DateTimeOffset.UtcNow));
     }
 
     private static async Task<(Guid Id, string Secret)> CreateInferenceKeyAsync(HttpClient adminClient)

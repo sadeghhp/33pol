@@ -21,11 +21,42 @@ public interface IApiKeyRepository
         IReadOnlyCollection<string> keyPrefixes,
         CancellationToken cancellationToken = default);
 
-    Task<IReadOnlyList<ApiKeyRecord>> ListByTenantAsync(Guid tenantId, CancellationToken cancellationToken = default);
+    /// <summary>
+    /// Every key the tenant owns, newest first. Archived keys are excluded unless
+    /// <paramref name="includeArchived"/> is set, so the operational surfaces that call this get the
+    /// working set by default rather than every credential the tenant has ever held.
+    /// </summary>
+    Task<IReadOnlyList<ApiKeyRecord>> ListByTenantAsync(
+        Guid tenantId,
+        bool includeArchived = false,
+        CancellationToken cancellationToken = default);
 
     Task<ApiKeyRecord> CreateAsync(ApiKeyRecord apiKey, CancellationToken cancellationToken = default);
 
     Task RevokeAsync(Guid id, DateTimeOffset revokedAt, CancellationToken cancellationToken = default);
+
+    /// <summary>Files an already-revoked key away. Nothing else about the key changes.</summary>
+    Task ArchiveAsync(Guid id, DateTimeOffset archivedAt, CancellationToken cancellationToken = default) =>
+        Task.CompletedTask;
+
+    /// <summary>Clears the archive stamp. The key stays revoked — archiving is not a way back to active.</summary>
+    Task UnarchiveAsync(Guid id, CancellationToken cancellationToken = default) =>
+        Task.CompletedTask;
+
+    /// <summary>
+    /// Permanently removes the key row (and, by cascade, its model grants). Returns false when the id
+    /// no longer exists. Callers must have established that the key has no usage history first —
+    /// this method enforces nothing.
+    /// </summary>
+    Task<bool> DeleteAsync(Guid id, CancellationToken cancellationToken = default) =>
+        Task.FromResult(false);
+
+    /// <summary>
+    /// Keys for the tenant that can still authenticate as an admin: role Admin or Both, not revoked,
+    /// not archived, and not past their expiry. Backs the guard against revoking a tenant's last way in.
+    /// </summary>
+    Task<int> CountActiveAdminKeysAsync(Guid tenantId, CancellationToken cancellationToken = default) =>
+        Task.FromResult(0);
 
     Task<ApiKeyRecord> UpdateMetadataAsync(
         Guid id,
@@ -42,7 +73,10 @@ public interface IApiKeyRepository
     Task<IReadOnlyList<ApiKeyRecord>> ListIdleAsync(DateTimeOffset idleSince, CancellationToken cancellationToken = default) =>
         Task.FromResult<IReadOnlyList<ApiKeyRecord>>([]);
 
-    /// <summary>Total and revoked key counts across every tenant.</summary>
-    Task<(int Total, int Revoked)> CountAsync(CancellationToken cancellationToken = default) =>
-        Task.FromResult((0, 0));
+    /// <summary>
+    /// Key counts across every tenant. <c>Total</c> excludes archived keys so the Overview headline
+    /// means "keys that exist operationally"; archived keys are reported separately.
+    /// </summary>
+    Task<(int Total, int Revoked, int Archived)> CountAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult((0, 0, 0));
 }
