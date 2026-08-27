@@ -117,10 +117,6 @@ namespace Pol33.Persistence.Migrations
                     b.Property<long>("OccurredAt")
                         .HasColumnType("INTEGER");
 
-                    b.Property<string>("Reason")
-                        .HasMaxLength(512)
-                        .HasColumnType("TEXT");
-
                     b.Property<Guid>("TenantId")
                         .HasColumnType("TEXT");
 

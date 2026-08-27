@@ -77,7 +77,6 @@ internal static class IdentityEntityMapper
             entity.OccurredAt,
             entity.Label,
             entity.ActorApiKeyId,
-            entity.Reason,
             entity.HadUsage);
 
     public static ApiKeyLifecycleEventEntity ToEntity(ApiKeyLifecycleEventRecord record) =>
@@ -91,7 +90,6 @@ internal static class IdentityEntityMapper
             Event = record.Event,
             OccurredAt = record.OccurredAt,
             ActorApiKeyId = record.ActorApiKeyId,
-            Reason = record.Reason,
             HadUsage = record.HadUsage,
         };
 

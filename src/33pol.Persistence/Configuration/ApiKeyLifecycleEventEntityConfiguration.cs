@@ -24,9 +24,6 @@ internal sealed class ApiKeyLifecycleEventEntityConfiguration : IEntityTypeConfi
             .HasMaxLength(32)
             .IsRequired();
 
-        builder.Property(e => e.Reason)
-            .HasMaxLength(512);
-
         // No HasOne/HasForeignKey to ApiKeyEntity: a deleted key's tombstone has to survive it.
         builder.HasIndex(e => new { e.ApiKeyId, e.OccurredAt });
 

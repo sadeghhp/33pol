@@ -30,8 +30,6 @@ public sealed class ApiKeyLifecycleEventEntity
     /// <summary>The admin key that performed the transition, when one was on the request.</summary>
     public Guid? ActorApiKeyId { get; set; }
 
-    public string? Reason { get; set; }
-
     /// <summary>Whether the key had recorded usage at the moment of the transition.</summary>
     public bool HadUsage { get; set; }
 }

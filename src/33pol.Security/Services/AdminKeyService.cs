@@ -415,6 +415,10 @@ public sealed class AdminKeyService : IAdminKeyService
         var now = DateTimeOffset.UtcNow;
         var hadUsage = await HasUsageHistoryAsync(record, cancellationToken).ConfigureAwait(false);
 
+        // State first, history second — the reverse of DeleteAsync, and deliberately so. Here the key
+        // row survives and carries RevokedAt itself, so a failure between the two loses an audit line
+        // but nothing about the key's state. In DeleteAsync the row is what disappears, which is why
+        // the tombstone has to be written before the thing it describes is gone.
         await _apiKeys.RevokeAsync(record.Id, now, cancellationToken).ConfigureAwait(false);
         await _lifecycle.AppendAsync(
             NewEvent(record, ApiKeyLifecycleEvent.Revoked, now, actorKeyId, hadUsage),
@@ -532,7 +536,6 @@ public sealed class AdminKeyService : IAdminKeyService
             occurredAt,
             record.Label,
             actorKeyId,
-            Reason: null,
             hadUsage);
 
     private static AdminApiKeyLifecycleEntry ToLifecycleEntry(ApiKeyLifecycleEventRecord record) =>
@@ -544,7 +547,6 @@ public sealed class AdminKeyService : IAdminKeyService
             KeyPrefix = record.KeyPrefix,
             Label = record.Label,
             ActorApiKeyId = record.ActorApiKeyId,
-            Reason = record.Reason,
             HadUsage = record.HadUsage,
         };
 

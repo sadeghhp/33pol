@@ -33,7 +33,6 @@ namespace Pol33.Persistence.Migrations
                     Event = table.Column<string>(type: "TEXT", maxLength: 32, nullable: false),
                     OccurredAt = table.Column<long>(type: "INTEGER", nullable: false),
                     ActorApiKeyId = table.Column<Guid>(type: "TEXT", nullable: true),
-                    Reason = table.Column<string>(type: "TEXT", maxLength: 512, nullable: true),
                     HadUsage = table.Column<bool>(type: "INTEGER", nullable: false)
                 },
                 constraints: table =>
@@ -63,16 +62,16 @@ namespace Pol33.Persistence.Migrations
             // one would be worse than an honest gap.
             migrationBuilder.Sql($"""
                 INSERT INTO api_key_lifecycle_events
-                    (Id, ApiKeyId, TenantId, KeyPrefix, Label, Event, OccurredAt, ActorApiKeyId, Reason, HadUsage)
-                SELECT {NewGuidSql}, Id, TenantId, KeyPrefix, Label, 'Created', CreatedAt, NULL, NULL,
+                    (Id, ApiKeyId, TenantId, KeyPrefix, Label, Event, OccurredAt, ActorApiKeyId, HadUsage)
+                SELECT {NewGuidSql}, Id, TenantId, KeyPrefix, Label, 'Created', CreatedAt, NULL,
                        CASE WHEN LastUsedAt IS NULL THEN 0 ELSE 1 END
                 FROM api_keys;
                 """);
 
             migrationBuilder.Sql($"""
                 INSERT INTO api_key_lifecycle_events
-                    (Id, ApiKeyId, TenantId, KeyPrefix, Label, Event, OccurredAt, ActorApiKeyId, Reason, HadUsage)
-                SELECT {NewGuidSql}, Id, TenantId, KeyPrefix, Label, 'Revoked', RevokedAt, NULL, NULL,
+                    (Id, ApiKeyId, TenantId, KeyPrefix, Label, Event, OccurredAt, ActorApiKeyId, HadUsage)
+                SELECT {NewGuidSql}, Id, TenantId, KeyPrefix, Label, 'Revoked', RevokedAt, NULL,
                        CASE WHEN LastUsedAt IS NULL THEN 0 ELSE 1 END
                 FROM api_keys
                 WHERE RevokedAt IS NOT NULL;

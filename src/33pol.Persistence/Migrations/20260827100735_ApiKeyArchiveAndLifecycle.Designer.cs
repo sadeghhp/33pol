@@ -11,7 +11,7 @@ using Pol33.Persistence;
 namespace Pol33.Persistence.Migrations
 {
     [DbContext(typeof(GatewayDbContext))]
-    [Migration("20260827090515_ApiKeyArchiveAndLifecycle")]
+    [Migration("20260827100735_ApiKeyArchiveAndLifecycle")]
     partial class ApiKeyArchiveAndLifecycle
     {
         /// <inheritdoc />
@@ -119,10 +119,6 @@ namespace Pol33.Persistence.Migrations
 
                     b.Property<long>("OccurredAt")
                         .HasColumnType("INTEGER");
-
-                    b.Property<string>("Reason")
-                        .HasMaxLength(512)
-                        .HasColumnType("TEXT");
 
                     b.Property<Guid>("TenantId")
                         .HasColumnType("TEXT");

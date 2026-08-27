@@ -13,5 +13,4 @@ public sealed record ApiKeyLifecycleEventRecord(
     DateTimeOffset OccurredAt,
     string? Label = null,
     Guid? ActorApiKeyId = null,
-    string? Reason = null,
     bool HadUsage = false);

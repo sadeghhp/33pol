@@ -159,8 +159,6 @@ public sealed class AdminApiKeyLifecycleEntry
 
     public Guid? ActorApiKeyId { get; init; }
 
-    public string? Reason { get; init; }
-
     public bool HadUsage { get; init; }
 }
 
