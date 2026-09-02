@@ -392,6 +392,43 @@
             <span class="mini-stat" :class="quotaBlockedClass" x-show="noPolicySection"><span class="ms-label">Quota-blocked</span><span class="ms-value" x-text="quotaBlockedText"></span></span>
           </div>
 
+          <!-- At a glance: one small card per category (costs by cost center, tenants & keys,
+               model fleet, policy pressure), built from the slow sections that have loaded — a
+               gateway without a billing database simply shows fewer cards. The detail cards below
+               keep the bars, budgets and tables; this grid is the numbers an operator scans first.
+               Desk-only: the wallboard already leads with the vitals. -->
+          <div class="glance-grid wb-hide" x-show="showGlanceGrid">
+            <template x-for="g in glanceGroups" :key="g.key">
+              <section class="card glance-card">
+                <div class="card-title-row">
+                  <div><span class="eyebrow" x-text="g.eyebrow"></span><h3 x-text="g.title"></h3></div>
+                  <button type="button" class="icon-btn" x-show="g.hasOpen" @click="g.open" :title="g.openTitle" :aria-label="g.openTitle">
+                    <span class="icon" x-html="icons.arrow-right"></span>
+                  </button>
+                </div>
+                <dl class="glance-stats" x-show="g.hasStats">
+                  <template x-for="s in g.stats" :key="s.key">
+                    <div class="glance-stat" :title="s.title">
+                      <dt x-text="s.label"></dt>
+                      <dd :class="s.cls" x-text="s.value"></dd>
+                    </div>
+                  </template>
+                </dl>
+                <div class="glance-rows" x-show="g.hasRows">
+                  <template x-for="r in g.rows" :key="r.key">
+                    <button type="button" class="glance-row" @click="r.open" :title="r.title">
+                      <span class="glance-row-label" x-text="r.label" :title="r.label"></span>
+                      <span class="hbar-track"><span class="hbar-fill" :style="r.style"></span></span>
+                      <span class="glance-row-value" x-text="r.value"></span>
+                      <span class="glance-row-sub" x-text="r.sub"></span>
+                    </button>
+                  </template>
+                </div>
+                <p class="hint" x-show="g.hasHint" x-text="g.hint"></p>
+              </section>
+            </template>
+          </div>
+
           <!-- Routing health: probe result, circuit breaker and bulkhead occupancy per model. -->
           <div class="chart-row" x-show="hasBackendsSection">
             <div class="card backends-card">
@@ -555,18 +592,8 @@
                   </template>
                 </div>
               </div>
-              <div class="finops-bars" x-show="hasFinopsCostCenterBars">
-                <span class="eyebrow">By cost center · month to date</span>
-                <div class="hbars">
-                  <template x-for="row in finopsCostCenterBars" :key="row.key">
-                    <button type="button" class="hbar is-clickable" @click="row.open" :title="row.title">
-                      <span class="hbar-label" x-text="row.modelId" :title="row.modelId"></span>
-                      <span class="hbar-track"><span class="hbar-fill" :style="row.style"></span></span>
-                      <span class="hbar-value" x-text="row.countText"></span>
-                    </button>
-                  </template>
-                </div>
-              </div>
+              <!-- Cost centers moved to the "Costs by cost center" glance card above; this card
+                   stays focused on totals, per-model spend and budgets. -->
               <p class="hint" x-show="noFinopsSpend">No priced spend this month yet.</p>
               <div class="finops-budgets" x-show="hasFinopsBudgets">
                 <span class="eyebrow">Budgets · this period</span>
@@ -594,15 +621,18 @@
             </div>
             <p class="notice warn" x-show="hasFinopsError" x-text="finopsError"></p>
             <div class="card">
-              <span class="eyebrow">Reliability</span>
-              <h3>Errors by model</h3>
-              <div class="card-head-actions wb-hide">
-                <button type="button" class="action secondary" @click="openErrorsAll">
-                  <span class="icon" x-html="icons.bug"></span> View all
-                </button>
-                <button type="button" class="action danger" @click="confirmClearErrors" :disabled="clearErrorsDisabled">
-                  <span class="icon" x-html="icons.trash"></span> Clear errors
-                </button>
+              <!-- Same title-row shape as the Backends / Policy / FinOps cards so the row of
+                   cards reads as one family: eyebrow + h3 on the left, actions on the right. -->
+              <div class="card-title-row">
+                <div><span class="eyebrow">Reliability</span><h3>Errors by model</h3></div>
+                <div class="card-head-actions wb-hide">
+                  <button type="button" class="action secondary" @click="openErrorsAll">
+                    <span class="icon" x-html="icons.bug"></span> View all
+                  </button>
+                  <button type="button" class="action danger" @click="confirmClearErrors" :disabled="clearErrorsDisabled">
+                    <span class="icon" x-html="icons.trash"></span> Clear errors
+                  </button>
+                </div>
               </div>
               <div class="hbars" x-show="hasErrorModelBars">
                 <template x-for="row in errorModelBars" :key="row.key">

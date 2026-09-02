@@ -1493,6 +1493,64 @@ tr.request-detail-row td { background: var(--bg-inset); padding-top: 0.75rem; }
   .backend-row .backend-load, .backend-row .num, .backend-row .backend-checked { display: none; }
 }
 
+/* ================================================================
+   At a glance: grouped statistic cards
+   One small card per category between the control-plane strip and the
+   detail cards. Cards sit in the same auto-fit rhythm as .chart-row so
+   the whole page keeps one grid gutter.
+   ================================================================ */
+
+.glance-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  gap: var(--space-4);
+  margin-bottom: var(--space-4);
+}
+/* Cards laid out by a grid track their row height; the sibling-margin rule
+   (.card + .card) is for stacked cards and skews vertical alignment here. */
+.glance-grid > .card, .chart-row > .card { margin-top: 0; }
+.glance-card { display: flex; flex-direction: column; padding: var(--space-4); }
+.glance-card .card-title-row { margin-bottom: var(--space-2); }
+.glance-card h3 { font-size: var(--text-sm); }
+
+/* Label-over-value pairs, two to a row, aligned to one baseline grid. */
+.glance-stats {
+  display: grid; grid-template-columns: 1fr 1fr;
+  gap: var(--space-2) var(--space-3);
+  margin: 0;
+}
+.glance-stat { display: flex; flex-direction: column; gap: 0.1rem; min-width: 0; }
+.glance-stat dt {
+  color: var(--text-tertiary); font-family: var(--font-mono); font-size: var(--text-2xs);
+  text-transform: uppercase; letter-spacing: 0.06em;
+}
+.glance-stat dd {
+  margin: 0; font-size: var(--text-md); font-weight: var(--fw-semi);
+  font-variant-numeric: tabular-nums; color: var(--text-primary);
+}
+.glance-stat dd.is-warn { color: var(--warn); }
+.glance-stat dd.is-error { color: var(--error-text); }
+
+/* Ranked rows (cost centers): name, share bar, value, then a quiet sub-figure. */
+.glance-rows { display: flex; flex-direction: column; gap: 0.4rem; }
+.glance-row {
+  display: grid; align-items: center; gap: var(--space-2);
+  grid-template-columns: minmax(5.5rem, 9rem) 1fr auto auto;
+  width: 100%; text-align: left; padding: 0.3rem var(--space-2);
+  margin: 0 calc(-1 * var(--space-2));
+  border: 1px solid transparent; border-radius: var(--r-md); background: transparent;
+  color: var(--text-primary); font: inherit; font-size: var(--text-xs); cursor: pointer;
+}
+.glance-row:hover { background: var(--bg-sunken); border-color: var(--border); }
+.glance-row:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--bg-surface), 0 0 0 4px var(--accent); }
+.glance-row-label {
+  font-family: var(--font-mono); color: var(--text-secondary);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.glance-row-value { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-weight: var(--fw-medium); text-align: right; }
+.glance-row-sub { color: var(--text-tertiary); font-size: var(--text-2xs); font-variant-numeric: tabular-nums; min-width: 3.5rem; text-align: right; }
+.glance-card .hint { margin: var(--space-2) 0 0; }
+
 /* FinOps card */
 .finops-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: var(--space-2); margin-bottom: var(--space-3); }
 .finops-tiles .mini-stat { flex-direction: column; align-items: flex-start; gap: 0.1rem; }
@@ -1560,6 +1618,12 @@ tr.request-detail-row td { background: var(--bg-inset); padding-top: 0.75rem; }
 .consumer-who, .key-row-label { display: flex; align-items: center; gap: var(--space-2); min-width: 0; overflow: hidden; white-space: nowrap; }
 .consumer-row .num { text-align: right; font-variant-numeric: tabular-nums; }
 .consumer-recent, .key-row-when { font-size: var(--text-2xs); white-space: nowrap; text-align: right; }
+/* On a phone the five-track row is wider than the card: keep who / requests / cost and drop the
+   quiet columns (tokens, 24h recency), the same collapse .backend-row makes at this width. */
+@media (max-width: 720px) {
+  .consumer-row { grid-template-columns: minmax(6rem, 1.4fr) 4rem 5rem; }
+  .consumer-row .muted { display: none; }
+}
 
 /* Live tail filters, pins, pause */
 .tail-filters { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }

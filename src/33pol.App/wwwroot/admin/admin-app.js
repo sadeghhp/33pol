@@ -4127,10 +4127,6 @@ function adminApp() {
     },
     get finopsModelBars() { return this._costBars(this.overviewFinops?.topModelsMonthToDate); },
     get hasFinopsModelBars() { return this.finopsModelBars.length > 0; },
-    get finopsCostCenterBars() {
-      return this._costBars(this.overviewFinops?.topCostCentersMonthToDate, key => this.openLink({ tab: 'usage', params: { costCenter: key } }));
-    },
-    get hasFinopsCostCenterBars() { return this.finopsCostCenterBars.length > 0; },
     get noFinopsSpend() { return this.hasFinops && this.finopsModelBars.length === 0; },
 
     get finopsCoverageText() {
@@ -4219,6 +4215,160 @@ function adminApp() {
       });
     },
     get hasFinopsBudgets() { return this.finopsBudgetRows.length > 0; },
+
+    // ---- "At a glance" grid ----
+
+    /**
+     * The grouped-statistics grid under the control-plane strip: one card per category (costs by
+     * cost center, tenants & keys, model fleet, policy pressure), each built only from sections
+     * that have loaded — a gateway with no billing database simply shows fewer cards. Cost
+     * centers render without a per-model split because the FinOps rollup
+     * (CostBreakdownRow: key, cost, requests) does not carry one.
+     */
+    get glanceGroups() {
+      const groups = [];
+      // The CSP-friendly Alpine build throws on a bound property that is absent from the object,
+      // so every stat and row carries the full shape even where a field is empty.
+      const push = g => groups.push({
+        rows: [], hint: '', ...g,
+        stats: (g.stats || []).map(s => ({ cls: '', title: '', ...s })),
+        hasStats: (g.stats || []).length > 0,
+        hasRows: (g.rows || []).length > 0,
+        hasHint: !!g.hint,
+        hasOpen: !!g.open,
+        open: g.open || (() => {})
+      });
+
+      const f = this.overviewFinops;
+      if (f) {
+        const cur = this.finopsCurrency;
+        const centers = Array.isArray(f.topCostCentersMonthToDate) ? f.topCostCentersMonthToDate : [];
+        const max = Math.max(...centers.map(r => Number(r.cost ?? 0)), 1e-9);
+        push({
+          key: 'costCenters',
+          eyebrow: 'FinOps · month to date',
+          title: 'Costs by cost center',
+          openTitle: 'Open Usage & cost',
+          open: () => this.openLink({ tab: 'usage' }),
+          rows: centers.slice(0, 6).map(r => {
+            // "(none)" is the server's bucket for spend with no cost center recorded. Usage
+            // stores those rows with an EMPTY cost center, so filtering by the literal "(none)"
+            // would match nothing — that row opens Usage unfiltered instead.
+            const unassigned = r.key === '(none)';
+            return {
+              key: r.key,
+              label: r.key,
+              value: this.formatCost(r.cost, cur),
+              sub: this.formatCompact(r.requests ?? 0) + ' req',
+              style: 'width:' + Math.max(2, Math.round((Number(r.cost ?? 0) / max) * 100)) + '%',
+              title: (unassigned ? 'No cost center recorded' : r.key) + ' · ' + this.formatNum(r.requests ?? 0) + ' requests this month',
+              open: () => this.openLink({ tab: 'usage', params: unassigned ? {} : { costCenter: r.key } })
+            };
+          }),
+          hint: centers.length ? '' : 'No cost-center spend this month — set a cost center on API keys to attribute spend.'
+        });
+      }
+
+      const t = this.overviewTenants;
+      if (t) {
+        const anon = Number(t.anonymousRequestShare ?? 0);
+        const stats = [
+          { key: 'tenants', label: 'Tenants', value: this.formatNum(t.tenantCount ?? 0) },
+          { key: 'keys', label: 'Active keys', value: this.formatNum(t.keyCount ?? 0) },
+          { key: 'revoked', label: 'Revoked', value: this.formatNum(t.revokedKeyCount ?? 0), cls: Number(t.revokedKeyCount ?? 0) > 0 ? 'is-warn' : '' },
+          { key: 'archived', label: 'Archived', value: this.formatNum(t.archivedKeyCount ?? 0) }
+        ];
+        if (anon > 0) {
+          stats.push({
+            key: 'anon', label: 'Anonymous', value: (anon * 100).toFixed(anon < 0.1 ? 1 : 0) + '%',
+            title: 'Share of this month\'s requests made without an API key'
+          });
+        }
+        push({
+          key: 'tenants',
+          eyebrow: 'Population',
+          title: 'Tenants & keys',
+          openTitle: 'Open API keys',
+          open: () => this.openKeys(),
+          stats
+        });
+      }
+
+      const registered = Number(f?.registeredModelCount ?? this.summary?.controlPlane?.modelCount ?? 0);
+      const backends = this.hasBackendsSection ? this.summary.backends : null;
+      if (f || backends) {
+        const stats = [];
+        if (registered > 0 || f) {
+          stats.push({ key: 'registered', label: 'Models', value: this.formatNum(registered) });
+        }
+        if (f) {
+          const unpriced = (f.unpricedModelIds || []).length;
+          stats.push({ key: 'priced', label: 'Priced', value: this.formatNum(f.pricedModelCount ?? 0) });
+          stats.push({
+            key: 'unpriced', label: 'Unpriced', value: this.formatNum(unpriced),
+            cls: unpriced > 0 ? 'is-warn' : '',
+            title: unpriced > 0 ? 'Models with no rate card — their spend is recorded as zero' : ''
+          });
+        }
+        if (backends) {
+          const healthy = backends.filter(b => b.isHealthy).length;
+          const open = backends.filter(b => b.circuitState === 'open').length;
+          stats.push({
+            key: 'healthy', label: 'Healthy', value: healthy + '/' + backends.length,
+            cls: backends.length > 0 && healthy < backends.length ? 'is-warn' : ''
+          });
+          stats.push({
+            key: 'circuits', label: 'Circuits open', value: this.formatNum(open),
+            cls: open > 0 ? 'is-error' : ''
+          });
+        }
+        if (stats.length) {
+          push({
+            key: 'fleet',
+            eyebrow: 'Registry',
+            title: 'Model fleet',
+            openTitle: 'Open Routing',
+            open: () => this.openLink({ tab: 'routing' }),
+            stats
+          });
+        }
+      }
+
+      if (this.hasPolicy) {
+        const sum = rows => (Array.isArray(rows) ? rows : []).reduce((n, r) => n + Number(r.count ?? 0), 0);
+        // Unknown models and grant denials mirror the Pressure card's fallback: the live 1h
+        // counters when the summary carries them, else the slow policy section (unwindowed), so
+        // this card can never say "nothing refused" while the detail card lists rows. Only the
+        // live counts carry the "· 1h" qualifier; quotas and budgets are current-period state.
+        const rejections = sum(this.summary?.policy?.rejectionsByReason1h);
+        const liveUnknown = this.summary?.policy?.unknownModels1h?.length;
+        const unknown = liveUnknown ? sum(this.summary.policy.unknownModels1h) : sum(this.overviewPolicy?.unknownModels);
+        const liveDenials = this.summary?.policy?.grantDenials1h?.length;
+        const denials = liveDenials ? sum(this.summary.policy.grantDenials1h) : sum(this.overviewPolicy?.grantDenials);
+        const quotasHot = (this.overviewPolicy?.quotas || []).filter(q => q.nearLimit || q.exceeded).length;
+        const budgetsHot = (this.overviewPolicy?.budgetsNearLimit || []).length;
+        push({
+          key: 'policy',
+          eyebrow: 'Policy',
+          title: 'Pressure at a glance',
+          openTitle: 'Open Errors',
+          open: () => this.openLink({ tab: 'errors', params: { range: '1h' } }),
+          stats: [
+            { key: 'rejections', label: 'Rejections · 1h', value: this.formatNum(rejections), cls: rejections > 0 ? 'is-warn' : '' },
+            { key: 'unknown', label: 'Unknown models' + (liveUnknown ? ' · 1h' : ''), value: this.formatNum(unknown), cls: unknown > 0 ? 'is-warn' : '' },
+            { key: 'denials', label: 'Grant denials' + (liveDenials ? ' · 1h' : ''), value: this.formatNum(denials), cls: denials > 0 ? 'is-warn' : '' },
+            { key: 'quotas', label: 'Quotas near limit', value: this.formatNum(quotasHot), cls: quotasHot > 0 ? 'is-warn' : '' },
+            { key: 'budgets', label: 'Budgets near limit', value: this.formatNum(budgetsHot), cls: budgetsHot > 0 ? 'is-warn' : '' }
+          ],
+          hint: rejections + unknown + denials + quotasHot + budgetsHot === 0 ? 'Nothing is being refused right now.' : ''
+        });
+      }
+
+      return groups;
+    },
+    get hasGlanceGroups() { return this.glanceGroups.length > 0; },
+    /** Combined here rather than in the template: the CSP Alpine build cannot evaluate `a && b`. */
+    get showGlanceGrid() { return this.showOverviewBody && this.hasGlanceGroups; },
 
     // ---- overview ----
 
