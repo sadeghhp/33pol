@@ -26,6 +26,8 @@ public static partial class GatewayErrorFingerprint
     private const char Separator = '\u001f';
     private const int MaxNormalizedMessageLength = 200;
     private const string None = "none";
+    private const string AtKeyword = "at";
+    private const string OwnedPrefix = "Pol33.";
 
     /// <summary>Computes the fingerprint for a record. Called by the recorder, never by call sites.</summary>
     public static string Compute(GatewayErrorRecord record)
@@ -79,6 +81,12 @@ public static partial class GatewayErrorFingerprint
     /// The first frame in the gateway's own code, without file or line. Line numbers move with
     /// every edit, so including them would silently re-fingerprint every existing fault on release.
     /// </summary>
+    /// <remarks>
+    /// Parsed by hand rather than by regex. This runs on the error path, and a
+    /// <see cref="System.Text.RegularExpressions.Regex"/> match timeout is wall-clock, not
+    /// work-based: it fires whenever the thread loses its slice for longer than the budget, however
+    /// little the match actually did. Recording a fault must not fail because the box was busy.
+    /// </remarks>
     private static string FirstOwnedFrame(string? stackTrace)
     {
         if (string.IsNullOrWhiteSpace(stackTrace))
@@ -86,17 +94,121 @@ public static partial class GatewayErrorFingerprint
             return None;
         }
 
-        foreach (var line in stackTrace.Split('\n'))
+        var remaining = stackTrace.AsSpan();
+        while (!remaining.IsEmpty)
         {
-            var match = OwnedFramePattern().Match(line);
-            if (match.Success)
+            var newline = remaining.IndexOf('\n');
+            var line = newline < 0 ? remaining : remaining[..newline];
+            remaining = newline < 0 ? default : remaining[(newline + 1)..];
+
+            var frame = OwnedFrame(line);
+            if (frame is not null)
             {
-                return StripCompilerNames(match.Groups[1].Value);
+                return StripCompilerNames(frame);
             }
         }
 
         return None;
     }
+
+    /// <summary>
+    /// The qualified name of the first owned frame on one stack-trace line, or <c>null</c> when the
+    /// line names no owned frame. Equivalent to the former
+    /// <c>at\s+(Pol33\.[A-Za-z0-9_.&lt;&gt;`+]+\.[A-Za-z0-9_&lt;&gt;`]+)</c> match, including its
+    /// greedy choice of the last dot that still leaves a member segment behind it.
+    /// </summary>
+    /// <remarks>
+    /// One left-to-right pass. A name run never spans the whitespace that has to precede the next
+    /// candidate, so the scan stays linear in the length of the line.
+    /// </remarks>
+    private static string? OwnedFrame(ReadOnlySpan<char> line)
+    {
+        for (var start = 0; start + AtKeyword.Length <= line.Length; start++)
+        {
+            var found = line[start..].IndexOf(AtKeyword, StringComparison.Ordinal);
+            if (found < 0)
+            {
+                return null;
+            }
+
+            start += found;
+
+            // "at" has to be followed by at least one space before the frame name.
+            var cursor = start + AtKeyword.Length;
+            var afterSpace = cursor;
+            while (afterSpace < line.Length && char.IsWhiteSpace(line[afterSpace]))
+            {
+                afterSpace++;
+            }
+
+            if (afterSpace == cursor)
+            {
+                continue;
+            }
+
+            var candidate = line[afterSpace..];
+            if (!candidate.StartsWith(OwnedPrefix, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var frame = QualifiedName(candidate);
+            if (frame is not null)
+            {
+                return frame;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Reads <c>Pol33.Some.Type.Member</c> off the front of <paramref name="candidate"/>, stopping
+    /// at the first character that cannot appear in a frame name. Returns <c>null</c> when nothing
+    /// follows the namespace but a single segment, since a type without a member is not a frame.
+    /// </summary>
+    private static string? QualifiedName(ReadOnlySpan<char> candidate)
+    {
+        var nameEnd = OwnedPrefix.Length;
+        while (nameEnd < candidate.Length && IsNameChar(candidate[nameEnd]))
+        {
+            nameEnd++;
+        }
+
+        // The last dot inside the run that still has a member segment after it, mirroring the
+        // greedy quantifier the pattern used. Everything past that member (an argument list, the
+        // "in File.cs:line 42" tail) is deliberately dropped.
+        var memberDot = -1;
+        for (var i = nameEnd - 1; i > OwnedPrefix.Length; i--)
+        {
+            if (candidate[i] == '.' && i + 1 < candidate.Length && IsMemberChar(candidate[i + 1]))
+            {
+                memberDot = i;
+                break;
+            }
+        }
+
+        if (memberDot < 0)
+        {
+            return null;
+        }
+
+        var memberEnd = memberDot + 1;
+        while (memberEnd < candidate.Length && IsMemberChar(candidate[memberEnd]))
+        {
+            memberEnd++;
+        }
+
+        return candidate[..memberEnd].ToString();
+    }
+
+    // Namespace and type separators plus the mangling the compiler emits: "<>c__DisplayClass3_0",
+    // "<InvokeAsync>d__12", the "`1" of a generic arity, the "+" of a nested type. Deliberately
+    // ASCII-only, as the pattern's character classes were.
+    private static bool IsNameChar(char c) => c is '.' or '+' || IsMemberChar(c);
+
+    private static bool IsMemberChar(char c) =>
+        c is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or >= '0' and <= '9' or '_' or '<' or '>' or '`';
 
     /// <summary>
     /// <c>Ns.Type.&lt;&gt;c__DisplayClass3_0.&lt;Method&gt;b__0</c> and
@@ -121,30 +233,33 @@ public static partial class GatewayErrorFingerprint
         builder.Append(string.IsNullOrWhiteSpace(component) ? None : component.ToLowerInvariant());
     }
 
-    [GeneratedRegex(@"req_[0-9a-fA-F]{32}", RegexOptions.None, 100)]
+    // No match timeout on any of these. Each is linear in its input, and the inputs are capped
+    // upstream (GatewayErrorTrackingOptions caps a message at 1000 chars and a stack trace at
+    // 8000), so a timeout bought no protection against runaway backtracking. What it did buy was
+    // failure: the budget is wall-clock, so a match that needs microseconds still throws
+    // RegexMatchTimeoutException if the thread loses its slice to a GC pause or a busy box. That
+    // turned recording a fault into a second fault. Bound the input, not the clock.
+    [GeneratedRegex(@"req_[0-9a-fA-F]{32}")]
     private static partial Regex RequestIdPattern();
 
-    [GeneratedRegex(@"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b", RegexOptions.None, 100)]
+    [GeneratedRegex(@"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b")]
     private static partial Regex GuidPattern();
 
-    [GeneratedRegex(@"\b(https?)://([^/\s""']+)[^\s""']*", RegexOptions.None, 100)]
+    [GeneratedRegex(@"\b(https?)://([^/\s""']+)[^\s""']*")]
     private static partial Regex UrlPattern();
 
     // A digit run not glued to a letter (optionally through a hyphen): "HTTP 401" and "after 30s"
     // normalize, "gpt-4o" and "Qwen3" do not.
-    [GeneratedRegex(@"(?<![A-Za-z]-?)\d+", RegexOptions.None, 100)]
+    [GeneratedRegex(@"(?<![A-Za-z]-?)\d+")]
     private static partial Regex NumberPattern();
 
-    [GeneratedRegex(@"<>c__DisplayClass\d+_\d+\.", RegexOptions.None, 100)]
+    [GeneratedRegex(@"<>c__DisplayClass\d+_\d+\.")]
     private static partial Regex DisplayClassPattern();
 
     // "<Method>d__12.MoveNext" / "<Method>b__0" -> "Method"
-    [GeneratedRegex(@"<([A-Za-z0-9_]+)>[a-z]__\d+(?:_\d+)?(?:\.MoveNext)?", RegexOptions.None, 100)]
+    [GeneratedRegex(@"<([A-Za-z0-9_]+)>[a-z]__\d+(?:_\d+)?(?:\.MoveNext)?")]
     private static partial Regex StateMachinePattern();
 
-    [GeneratedRegex(@"\s+", RegexOptions.None, 100)]
+    [GeneratedRegex(@"\s+")]
     private static partial Regex WhitespacePattern();
-
-    [GeneratedRegex(@"at\s+(Pol33\.[A-Za-z0-9_.<>`+]+\.[A-Za-z0-9_<>`]+)", RegexOptions.None, 100)]
-    private static partial Regex OwnedFramePattern();
 }

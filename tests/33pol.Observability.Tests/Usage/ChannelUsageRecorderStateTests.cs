@@ -1,4 +1,3 @@
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Pol33.Core.Abstractions;
 using Pol33.Core.Models;
@@ -23,7 +22,7 @@ public sealed class ChannelUsageRecorderStateTests
     {
         var recorder = new ChannelUsageRecorder(
             Substitute.For<IQuotaService>(),
-            new ServiceCollection().BuildServiceProvider().GetRequiredService<IServiceScopeFactory>(),
+            Substitute.For<IUsagePersistenceHandler>(),
             Substitute.For<IGatewayMetricsCollector>(),
             NullLogger<ChannelUsageRecorder>.Instance);
 

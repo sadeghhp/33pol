@@ -1,4 +1,6 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Pol33.Core.Abstractions;
 using Pol33.Core.Configuration;
 using Pol33.Core.RateLimiting;
@@ -6,8 +8,12 @@ using Pol33.Persistence.Entities;
 
 namespace Pol33.Persistence.Repositories;
 
-public sealed class GatewayConfigStore(GatewayDbContext dbContext) : IGatewayConfigStore
+public sealed class GatewayConfigStore(
+    GatewayDbContext dbContext,
+    ILogger<GatewayConfigStore>? logger = null) : IGatewayConfigStore
 {
+    private readonly ILogger<GatewayConfigStore> _logger = logger ?? NullLogger<GatewayConfigStore>.Instance;
+
     // The config sections are singleton rows; the fixed keys keep reads and bumps a pure upsert.
     private const int ConfigVersionRowId = 1;
     private const int CorsSettingsRowId = 1;
@@ -82,7 +88,16 @@ public sealed class GatewayConfigStore(GatewayDbContext dbContext) : IGatewayCon
 
             // A schedule that cannot be read applies the base tier, never nothing: the rule stays
             // in force at its configured numbers and the windows are simply absent until fixed.
-            if (RateLimitScheduleJson.TryDeserialize(rule.ScheduleJson, out var windows) && windows.Count > 0)
+            // Logged, because from the outside "the windows vanished" is indistinguishable from a
+            // deliberate change and an operator needs the pointer to the row.
+            if (!RateLimitScheduleJson.TryDeserialize(rule.ScheduleJson, out var windows))
+            {
+                _logger.LogWarning(
+                    "Rate-limit rule {Scope}:{Target} has a schedule that cannot be read; its windows are ignored and the base tier applies until the schedule is saved again.",
+                    rule.Scope,
+                    rule.TargetKey);
+            }
+            else if (windows.Count > 0)
             {
                 schedules[RateLimitScheduleProjection.Identity(rule.Scope, rule.TargetKey)] = windows;
             }

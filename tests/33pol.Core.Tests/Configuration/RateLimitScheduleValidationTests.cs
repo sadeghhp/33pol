@@ -13,8 +13,40 @@ public sealed class RateLimitScheduleValidationTests
     private static RateLimitWindowDefinition Weekly(string name, string[] days, string start, string end, string zone = Berlin, int? priority = null) =>
         new(name, RateLimitWindowKinds.Weekly, 1200, 200, 80, Priority: priority, Days: days, Start: start, End: end, TimeZone: zone);
 
-    private static RateLimitWindowDefinition Once(string name, DateTimeOffset from, DateTimeOffset? until) =>
-        new(name, RateLimitWindowKinds.Once, 3000, 500, 120, From: from, Until: until);
+    private static RateLimitWindowDefinition Once(string name, DateTimeOffset from, DateTimeOffset? until, DateTimeOffset? validUntil = null) =>
+        new(name, RateLimitWindowKinds.Once, 3000, 500, 120, From: from, Until: until, ValidUntil: validUntil);
+
+    [Fact]
+    public void Validate_OverlappingWeeklyWindows_WithTheSamePriority_AreRefused()
+    {
+        var rule = Rule(
+            Weekly("off-peak", ["mon", "tue", "wed", "thu", "fri"], "19:00", "07:00", priority: 150),
+            Weekly("weekend", ["sat", "sun"], "00:00", "24:00", priority: 150));
+
+        RateLimitConfigValidation.TryValidateRules([rule], out var error).Should().BeFalse();
+        error.Should().Contain("off-peak").And.Contain("weekend").And.Contain("priority");
+    }
+
+    [Fact]
+    public void Validate_OverlappingWeeklyWindows_WithAnExplicitPriorityEqualToTheDefault_AreRefused()
+    {
+        // The weekly default rank is 100; an explicit 100 ties with it exactly as no priority would.
+        var rule = Rule(
+            Weekly("off-peak", ["mon", "tue", "wed", "thu", "fri"], "19:00", "07:00"),
+            Weekly("weekend", ["sat", "sun"], "00:00", "24:00", priority: 100));
+
+        RateLimitConfigValidation.TryValidateRules([rule], out var error).Should().BeFalse();
+    }
+
+    [Fact]
+    public void Validate_OnceWindows_WhoseValidityNeverMeets_AreAllowed()
+    {
+        var rule = Rule(
+            Once("launch", new DateTimeOffset(2026, 10, 1, 0, 0, 0, TimeSpan.Zero), new DateTimeOffset(2026, 10, 31, 0, 0, 0, TimeSpan.Zero), validUntil: new DateTimeOffset(2026, 10, 10, 0, 0, 0, TimeSpan.Zero)),
+            Once("new-baseline", new DateTimeOffset(2026, 10, 15, 0, 0, 0, TimeSpan.Zero), null));
+
+        RateLimitConfigValidation.TryValidateRules([rule], out var error).Should().BeTrue(error);
+    }
 
     [Fact]
     public void Validate_NullSchedule_IsUnspecifiedAndValid()

@@ -1725,14 +1725,14 @@
                 <!-- Status -->
                 <div class="card rl-status">
                   <label class="rl-switch" title="Enforce rate limits">
-                    <input type="checkbox" x-model="mdl.rlDraft.enabled" :disabled="rateLimitsLocked" aria-label="Enforce rate limits" />
+                    <input type="checkbox" role="switch" x-model="mdl.rlDraft.enabled" :aria-checked="rlStatusView.enabledAria" :disabled="rateLimitsLocked" aria-label="Enforce rate limits" />
                     <span class="rl-switch-track"></span>
                   </label>
                   <div class="rl-status-text">
                     <div class="rl-status-title" :class="rlStatusView.titleClass" x-text="rlStatusView.title"></div>
                     <div class="rl-status-sub">
                       <label class="rl-switch sm" title="Adapt model limits to load">
-                        <input type="checkbox" x-model="mdl.rlDraft.adaptiveEnabled" :disabled="rateLimitsLocked" aria-label="Adapt model limits to load" />
+                        <input type="checkbox" role="switch" x-model="mdl.rlDraft.adaptiveEnabled" :aria-checked="rlStatusView.adaptiveAria" :disabled="rateLimitsLocked" aria-label="Adapt model limits to load" />
                         <span class="rl-switch-track"></span>
                         <span x-text="rlStatusView.adaptiveText"></span>
                       </label>
@@ -1801,7 +1801,7 @@
                       <thead><tr><th class="rl-col-rule">Rule</th><th class="rl-col-tier">Base tier</th><th class="rl-col-sched">Schedule</th><th>In force now</th><th class="rl-col-chev"></th></tr></thead>
                       <tbody>
                         <template x-for="r in rlRuleRows" :key="r.key">
-                          <tr class="rl-row" :class="r.rowCls" @click="r.open" tabindex="0" @keydown.enter="r.open" role="button">
+                          <tr class="rl-row" :class="r.rowCls" @click="r.open" tabindex="0" @keydown.enter="r.open" @keydown.space.prevent="r.open" :aria-label="r.ariaLabel">
                             <td><span class="rl-target" x-text="r.target"></span><span class="rl-scope" x-text="r.scope"></span></td>
                             <td><span class="rl-nums" x-text="r.tier"></span></td>
                             <td><span :class="r.windowsCls" x-text="r.windowsText"></span></td>
@@ -2283,7 +2283,7 @@
 
   <!-- Rate limits: rule drawer (with the window form as a sub-panel) -->
   <div class="drawer-backdrop" x-show="rlRuleDrawerOpen" x-transition.opacity @click.self="closeRateLimitRule" role="presentation">
-    <div class="drawer rl-drawer" role="dialog" aria-modal="true" aria-labelledby="rl-rule-title" @click.stop>
+    <div class="drawer rl-drawer" role="dialog" aria-modal="true" :aria-labelledby="rlRuleDrawerLabel" @click.stop>
       <template x-if="rlWindowClosed">
         <div>
           <div class="drawer-header">
@@ -2472,7 +2472,7 @@
 
       <div x-show="rlNewRuleView.isStep1" class="rl-scopes" role="radiogroup" aria-label="Scope">
         <template x-for="s in rlNewRuleView.scopeCards" :key="s.key">
-          <button type="button" :class="s.cls" @click="s.select" role="radio"><b x-text="s.name"></b><span x-text="s.desc"></span></button>
+          <button type="button" :class="s.cls" @click="s.select" role="radio" :aria-checked="s.ariaChecked"><b x-text="s.name"></b><span x-text="s.desc"></span></button>
         </template>
       </div>
 

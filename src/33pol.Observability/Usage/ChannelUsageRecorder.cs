@@ -1,5 +1,4 @@
 using System.Threading.Channels;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Pol33.Core.Abstractions;
@@ -23,21 +22,37 @@ public sealed class ChannelUsageRecorder : IUsageRecorder, IHostedService, IUsag
             SingleWriter = false,
         });
 
+    /// <summary>
+    /// Upper bound on the final flush at shutdown, independent of the host's token. Mirrors the
+    /// deadline the batch handler gives its own last flush.
+    /// </summary>
+    private static readonly TimeSpan ShutdownFlushTimeout = TimeSpan.FromSeconds(5);
+
     private readonly IQuotaService _quotaService;
-    private readonly IServiceScopeFactory _scopeFactory;
+    private readonly IUsagePersistenceHandler _persistence;
     private readonly IGatewayMetricsCollector _metricsCollector;
     private readonly ILogger<ChannelUsageRecorder> _logger;
     private readonly CancellationTokenSource _stopping = new();
     private Task? _worker;
+    private int _stopped;
 
+    /// <remarks>
+    /// Takes <see cref="IUsagePersistenceHandler"/> itself rather than an
+    /// <see cref="IServiceScopeFactory"/> to resolve it from. Every registration of that handler is
+    /// a singleton, so the scope this used to open per event resolved the same root object and
+    /// disposed nothing — but it made the writer depend on the container still being alive. The
+    /// container's lifetime belongs to the host, not to this service, and the one place that
+    /// mattered was <see cref="StopAsync"/>: the final flush ran against a provider that could
+    /// already be disposed, and the billing events it was supposed to write were lost.
+    /// </remarks>
     public ChannelUsageRecorder(
         IQuotaService quotaService,
-        IServiceScopeFactory scopeFactory,
+        IUsagePersistenceHandler persistence,
         IGatewayMetricsCollector metricsCollector,
         ILogger<ChannelUsageRecorder> logger)
     {
         _quotaService = quotaService;
-        _scopeFactory = scopeFactory;
+        _persistence = persistence;
         _metricsCollector = metricsCollector;
         _logger = logger;
     }
@@ -85,8 +100,18 @@ public sealed class ChannelUsageRecorder : IUsageRecorder, IHostedService, IUsag
         return Task.CompletedTask;
     }
 
+    /// <remarks>
+    /// Stops once. A hosted service can be stopped more than once by the composition around it —
+    /// the test host does exactly that when a factory is disposed — and a second pass through the
+    /// body below would re-run the drain and dispose <c>_stopping</c> twice.
+    /// </remarks>
     public async Task StopAsync(CancellationToken cancellationToken)
     {
+        if (Interlocked.Exchange(ref _stopped, 1) == 1)
+        {
+            return;
+        }
+
         // Complete the writer first and let the loop drain what is already queued, so a graceful
         // shutdown does not discard billing events that were accepted from clients.
         _channel.Writer.TryComplete();
@@ -108,11 +133,14 @@ public sealed class ChannelUsageRecorder : IUsageRecorder, IHostedService, IUsag
         // consumer — is what actually gets the final partial batch to disk.
         try
         {
-            await using var scope = _scopeFactory.CreateAsyncScope();
-            var persistence = scope.ServiceProvider.GetRequiredService<IUsagePersistenceHandler>();
-            await persistence.FlushPendingAsync(cancellationToken).ConfigureAwait(false);
+            // Not on cancellationToken: by the time a hosted service is stopped that token is
+            // routinely already tripped — it is often what started the shutdown — and honouring it
+            // for the last write would discard accepted billing events instead of persisting them.
+            // The flush gets a short deadline of its own so shutdown stays bounded either way.
+            using var flushDeadline = new CancellationTokenSource(ShutdownFlushTimeout);
+            await _persistence.FlushPendingAsync(flushDeadline.Token).ConfigureAwait(false);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to flush pending usage events during shutdown");
         }
@@ -139,9 +167,7 @@ public sealed class ChannelUsageRecorder : IUsageRecorder, IHostedService, IUsag
                 _quotaService.CommitUsage(
                     partition, usage.ModelId, totalTokens, usage.RequestId, usage.TimestampUtc);
 
-                await using var scope = _scopeFactory.CreateAsyncScope();
-                var persistence = scope.ServiceProvider.GetRequiredService<IUsagePersistenceHandler>();
-                await persistence.PersistAsync(usage, cancellationToken).ConfigureAwait(false);
+                await _persistence.PersistAsync(usage, cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {

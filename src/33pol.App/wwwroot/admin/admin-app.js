@@ -241,6 +241,9 @@ function adminApp() {
     rlScheduleLoadedAt: 0,
     _rlScheduleTimer: null,
     _rlPreviewTimer: null,
+    _rlPreviewSeq: 0,
+    _rlTick: Date.now(),
+    _rlZoneCache: null,
     rlZone: '',
     rlRangeDays: 7,
     rlPreviewAt: '',
@@ -352,6 +355,11 @@ function adminApp() {
           // The wallboard's staleness and severity switches live on <html>, out of reach of any
           // binding inside the panel, so the clock is what keeps them honest.
           if (this.wallboard) this.applyWallboard();
+        }
+        // The Rate limits page draws a "now" line and "in 12 m" texts; a coarse tick keeps them
+        // moving without re-rendering the timeline twice a second.
+        if (this.tab === 'settings' && this.isSettingsLimits && this.apiKey && Date.now() - this._rlTick >= 30000) {
+          this._rlTick = Date.now();
         }
       }, 500);
       if (this.apiKey) {
@@ -767,6 +775,11 @@ function adminApp() {
       }
       if (sub === 'limits' && this.rlDraft && Date.now() - (this.rlScheduleLoadedAt || 0) > 30000) {
         void this.loadRateLimitSchedule();
+      }
+      // Tier cards and the new-rule flow name tenants and their plans from the overview's tenant
+      // section, which only the dashboard loads otherwise.
+      if (sub === 'limits' && !this.overviewTenants && this.apiKey) {
+        void this.loadOverviewTenants();
       }
     },
 
@@ -1313,6 +1326,17 @@ function adminApp() {
       this.createdKey = '';
       this.modelDrawerOpen = false;
       this.keysDrawerOpen = false;
+      // Rate limits: the drawers sit outside the signed-in shell, and the refresh timer would
+      // otherwise fire one more unauthenticated read after sign-out.
+      if (this._rlScheduleTimer) { clearTimeout(this._rlScheduleTimer); this._rlScheduleTimer = null; }
+      if (this._rlPreviewTimer) { clearTimeout(this._rlPreviewTimer); this._rlPreviewTimer = null; }
+      this.closeRateLimitDrawers();
+      this.rateLimits = null;
+      this.rlDraft = null;
+      this.rlSchedule = null;
+      this.rlPreview = null;
+      this.rlReadOnlyReason = '';
+      this.rateLimitUsage = null;
       this.clearMessages();
       this.toast('Signed out — API key cleared from this browser.');
     },
@@ -2636,22 +2660,37 @@ function adminApp() {
       this.rlDraft = this.rlClone(normalized);
       this.rateLimitFieldError = '';
       this.rateLimitsLoadError = '';
-      this.rlReadOnlyReason = '';
+      // The read-only reason is learnt from a refused write, so only a successful write clears it;
+      // a successful read says nothing about whether the gateway can persist.
     },
 
-    async fetchRateLimits() {
+    /**
+     * Fetches the saved configuration. A dirty draft is kept unless `force` says otherwise: the
+     * Settings tab reloads every section whenever it is entered, and an operator who stepped out
+     * to look something up must not come back to an empty draft. Reload and Save ask for a
+     * replacement explicitly.
+     */
+    async fetchRateLimits(force) {
+      if (!force && this.rlDraft && this.rateLimitsDirty) {
+        void this.loadRateLimitSchedule();
+        return;
+      }
       const data = await this.apiJson('/admin/api/rate-limits');
       this.applyRateLimitsData(data);
       void this.loadRateLimitSchedule();
     },
 
-    async loadRateLimits() {
+    async loadRateLimits(force) {
       this.rateLimitsLoadError = '';
       try {
-        await this.fetchRateLimits();
+        await this.fetchRateLimits(force);
       } catch (e) {
-        this.rateLimits = null;
-        this.rlDraft = null;
+        // A failed refresh keeps whatever the page already shows; only a first load has nothing
+        // to fall back on.
+        if (!this.rlDraft) {
+          this.rateLimits = null;
+          this.rlDraft = null;
+        }
         if (String(e.title || '').startsWith('404') || e.message?.includes('404') || /not found/i.test(e.message || '')) {
           this.rateLimitsLoadError =
             'Rate limit API is not available on this gateway (rebuild/restart the server with the latest image).';
@@ -2666,14 +2705,14 @@ function adminApp() {
     /** Reload from the server. A dirty draft is thrown away only after the operator agrees. */
     reloadRateLimits() {
       if (!this.rateLimitsDirty) {
-        void this.runApi('settings', 'Reloading rate limits…', () => this.loadRateLimits());
+        void this.runApi('settings', 'Reloading rate limits…', () => this.loadRateLimits(true));
         return;
       }
       this.openConfirm({
         title: 'Reload and discard changes?',
         message: 'Reloading fetches the saved configuration and throws away your unsaved edits.',
         confirmLabel: 'Reload',
-        onConfirm: () => this.runApi('settings', 'Reloading rate limits…', () => this.loadRateLimits())
+        onConfirm: () => this.runApi('settings', 'Reloading rate limits…', () => this.loadRateLimits(true))
       });
     },
 
@@ -2764,7 +2803,8 @@ function adminApp() {
             body: JSON.stringify(this.buildRateLimitsPayload())
           });
           this.toast(body?.message || 'Rate limits saved.');
-          await this.loadRateLimits();
+          this.rlReadOnlyReason = '';
+          await this.loadRateLimits(true);
         } catch (e) {
           const status = String(e.title || '') + ' ' + String(e.message || '');
           if (/503/.test(status) || /configured database/i.test(status)) {
@@ -2829,14 +2869,32 @@ function adminApp() {
       return Math.round((asUtc - date.getTime()) / 60000);
     },
 
-    /** A wall-clock time in a zone as an instant; a time inside a DST gap lands on the next valid hour. */
+    /**
+     * A wall-clock time in a zone as an instant. A time inside a DST gap does not exist; it is
+     * moved forward by an hour, exactly as the server reads it, whichever way the zone's offset
+     * happens to be signed. An ambiguous time (the repeated hour) takes the later, standard-time
+     * instant, again matching the server.
+     */
     rlZonedToDate(y, m, d, h, mi, zone) {
       const guess = Date.UTC(y, m - 1, d, h, mi, 0);
-      let t = guess - this.rlZoneOffset(new Date(guess), zone) * 60000;
-      const off2 = this.rlZoneOffset(new Date(t), zone);
-      const t2 = guess - off2 * 60000;
-      if (t2 !== t) t = t2;
-      return new Date(t);
+      // The zone's offsets a day either side of the requested time cover both sides of any
+      // transition; each gives one candidate instant, kept if it reads back as the same wall clock.
+      const offsets = [...new Set([-86400000, 0, 86400000].map(delta => this.rlZoneOffset(new Date(guess + delta), zone)))];
+      const wall = (t) => {
+        const z = this.rlZoneParts(new Date(t), zone);
+        return Date.UTC(z.year, z.month - 1, z.day, z.hour, z.minute, 0);
+      };
+      const valid = offsets.map(off => guess - off * 60000).filter(t => wall(t) === guess);
+      // Ambiguous (repeated hour): the later instant is the standard-time reading.
+      if (valid.length) return new Date(Math.max(...valid));
+      // In the gap: the requested wall clock exists under neither offset. Shift forward an hour
+      // and read it with the offset in force after the change (the larger one).
+      return new Date(guess + 3600000 - Math.max(...offsets) * 60000);
+    },
+
+    /** The instant the page treats as "now": ticks every 30 s while the page is open. */
+    rlNow() {
+      return this._rlTick || Date.now();
     },
 
     /** "2026-10-01T11:30" in a zone → ISO instant, or null when unparsable. */
@@ -2880,7 +2938,7 @@ function adminApp() {
 
     rlRelative(iso) {
       if (!iso) return '';
-      const ms = new Date(iso).getTime() - Date.now();
+      const ms = new Date(iso).getTime() - this.rlNow();
       const abs = Math.abs(ms);
       const min = Math.round(abs / 60000);
       let text;
@@ -2936,7 +2994,9 @@ function adminApp() {
       const today = this.rlZoneParts(new Date(), zone);
       const from = this.rlZonedToDate(today.year, today.month, today.day, 0, 0, zone);
       const days = Number(this.rlRangeDays) || 7;
-      const to = new Date(from.getTime() + days * 86400000);
+      // Local midnight `days` days on, not days × 24 h: a DST change inside the range would
+      // otherwise end the calendar an hour into the next day.
+      const to = this.rlZonedToDate(today.year, today.month, today.day + days, 0, 0, zone);
       return { from, to, days };
     },
 
@@ -2956,7 +3016,15 @@ function adminApp() {
           .filter(t => Number.isFinite(t) && t > Date.now());
         if (next.length) {
           const wait = Math.min(Math.min(...next) - Date.now() + 1500, 30 * 60000);
-          this._rlScheduleTimer = setTimeout(() => { if (this.isSettingsLimits) void this.loadRateLimitSchedule(); }, wait);
+          // Two loads in flight would each arm a timer; the later one wins.
+          if (this._rlScheduleTimer) clearTimeout(this._rlScheduleTimer);
+          this._rlScheduleTimer = setTimeout(() => {
+            this._rlScheduleTimer = null;
+            // Only while the page is actually being looked at: signed in, on this tab, visible.
+            if (this.apiKey && this.tab === 'settings' && this.isSettingsLimits && !document.hidden) {
+              void this.loadRateLimitSchedule();
+            }
+          }, wait);
         }
       } catch (e) {
         this.rlSchedule = null;
@@ -3100,7 +3168,6 @@ function adminApp() {
       const rule = this.rlFindDraftRule(this.rlRule.identity);
       if (!rule) return;
       const tier = this.rlTierPayload(this.rlRule);
-      const info = this.rlScopeInfo(rule.scope);
       if (tier.rpm === 0 && tier.maxConcurrentStreams === 0) {
         this.rlRuleError = 'A rule must limit something: set rpm or streams above zero.';
         return;
@@ -3109,7 +3176,6 @@ function adminApp() {
         this.rlRuleError = 'A tenant rule with rpm 0 keeps the plan rate; set burst to 0 as well.';
         return;
       }
-      void info;
       Object.assign(rule, tier, { schedule: this.rlClone(this.rlRule.schedule) });
       this.rlRuleDrawerOpen = false;
       this.rlWindowOpen = false;
@@ -3161,7 +3227,10 @@ function adminApp() {
           days: [...(existing.days || [])], start: existing.start || '19:00', end: existing.end || '07:00',
           timeZone: zone,
           validFromLocal: this.rlIsoToLocal(existing.validFrom, zone), validUntilLocal: this.rlIsoToLocal(existing.validUntil, zone),
-          showAdvanced: existing.priority != null || !!existing.validFrom || !!existing.validUntil
+          showAdvanced: existing.priority != null || !!existing.validFrom || !!existing.validUntil,
+          // The stored instants, so an untouched field round-trips to the same instant even when
+          // its wall-clock text is ambiguous (the repeated hour at the end of daylight saving).
+          _orig: { from: existing.from || null, until: existing.until || null, validFrom: existing.validFrom || null, validUntil: existing.validUntil || null, zone }
         });
       }
       this.rlWindow = form;
@@ -3195,20 +3264,27 @@ function adminApp() {
     rlWindowFromForm() {
       const f = this.rlWindow;
       const zone = f.timeZone || this.rlZoneOrDefault();
+      const orig = f._orig && f._orig.zone === zone ? f._orig : null;
+      // An untouched datetime field keeps its stored instant rather than being re-resolved from
+      // its wall-clock text, which is lossy inside the repeated hour of a DST change.
+      const instant = (local, key) => {
+        if (orig && orig[key] && this.rlIsoToLocal(orig[key], zone) === String(local || '')) return orig[key];
+        return this.rlLocalToIso(local, zone);
+      };
       return {
         name: String(f.name || '').trim(),
         kind: f.kind,
         rpm: Number(f.rpm) || 0, burst: Number(f.burst) || 0, maxConcurrentStreams: Number(f.maxConcurrentStreams) || 0,
         suspend: !!f.suspend,
         priority: f.priority === '' || f.priority == null ? null : Number(f.priority),
-        from: f.kind === 'once' ? this.rlLocalToIso(f.fromLocal, zone) : null,
-        until: f.kind === 'once' ? this.rlLocalToIso(f.untilLocal, zone) : null,
+        from: f.kind === 'once' ? instant(f.fromLocal, 'from') : null,
+        until: f.kind === 'once' ? instant(f.untilLocal, 'until') : null,
         days: f.kind === 'weekly' ? [...(f.days || [])] : [],
         start: f.kind === 'weekly' ? f.start : null,
         end: f.kind === 'weekly' ? f.end : null,
         timeZone: f.kind === 'weekly' ? zone : null,
-        validFrom: this.rlLocalToIso(f.validFromLocal, zone),
-        validUntil: this.rlLocalToIso(f.validUntilLocal, zone)
+        validFrom: instant(f.validFromLocal, 'validFrom'),
+        validUntil: instant(f.validUntilLocal, 'validUntil')
       };
     },
 
@@ -3227,42 +3303,71 @@ function adminApp() {
       this._rlPreviewTimer = setTimeout(() => { void this.refreshRateLimitWindowPreview(); }, 250);
     },
 
-    async refreshRateLimitWindowPreview() {
-      if (!this.rlWindowOpen) return;
+    /** The preview request body for the current form, and the fingerprint the answer is filed under. */
+    rlWindowPreviewRequest() {
       const candidate = this.rlWindowFromForm();
+      const others = this.rlRule.schedule.filter((_, i) => i !== this.rlWindowEditIndex);
+      const body = {
+        scope: this.rlRule.scope, target: this.rlRule.target,
+        ...this.rlTierPayload(this.rlRule),
+        windows: [...others, candidate].map(w => this.rlWindowPayload(w)),
+        candidate: candidate.name
+      };
+      return { candidate, body, fingerprint: JSON.stringify(body) };
+    },
+
+    /**
+     * Asks the server what the window as currently typed would do. Resolves to the preview for
+     * exactly that form state, or null when the form is incomplete or the answer is already
+     * stale; `rlWindowPreview` is only ever set to an answer for the form as it stands.
+     */
+    async refreshRateLimitWindowPreview() {
+      if (!this.rlWindowOpen) return null;
+      const { candidate, body, fingerprint } = this.rlWindowPreviewRequest();
       const local = this.rlWindowLocalCheck(candidate);
       this.rlWindowError = local;
-      if (local) { this.rlWindowPreview = null; return; }
-      const others = this.rlRule.schedule.filter((_, i) => i !== this.rlWindowEditIndex);
-      const windows = [...others, candidate].map(w => this.rlWindowPayload(w));
+      if (local) { this.rlWindowPreview = null; return null; }
+      if (this.rlWindowPreview && this.rlWindowPreview._for === fingerprint) return this.rlWindowPreview;
+      const seq = ++this._rlPreviewSeq;
       try {
         const preview = await this.apiJson('/admin/api/rate-limits/windows/preview', {
           method: 'POST',
-          body: JSON.stringify({
-            scope: this.rlRule.scope, target: this.rlRule.target,
-            ...this.rlTierPayload(this.rlRule),
-            windows, candidate: candidate.name
-          })
+          body: JSON.stringify(body)
         });
-        // A stale answer must not overwrite a newer form state.
-        if (this.rlWindowOpen && this.rlWindowFromForm().name === candidate.name) this.rlWindowPreview = preview;
+        // Answers can land out of order; only the newest request may write, and only if the
+        // form still reads the way it did when the request left.
+        if (seq !== this._rlPreviewSeq || !this.rlWindowOpen) return null;
+        if (this.rlWindowPreviewRequest().fingerprint !== fingerprint) return null;
+        preview._for = fingerprint;
+        this.rlWindowPreview = preview;
+        return preview;
       } catch (e) {
+        if (seq !== this._rlPreviewSeq) return null;
         this.rlWindowPreview = null;
         this.rlWindowError = e.message || 'Could not check the window.';
+        return null;
       }
     },
 
-    applyRateLimitWindow() {
+    async applyRateLimitWindow() {
       const candidate = this.rlWindowFromForm();
       const local = this.rlWindowLocalCheck(candidate);
       if (local) { this.rlWindowError = local; return; }
-      const preview = this.rlWindowPreview;
-      if (preview && preview.valid === false) {
+      const duplicate = this.rlRule.schedule.some((w, i) => i !== this.rlWindowEditIndex && w.name.toLowerCase() === candidate.name.toLowerCase());
+      if (duplicate) { this.rlWindowError = 'Another window on this rule already has that name.'; return; }
+      // The gate is the server's verdict on the form as it stands now, never a cached one for an
+      // earlier keystroke; a click inside the debounce waits for the fresh answer.
+      if (this._rlPreviewTimer) { clearTimeout(this._rlPreviewTimer); this._rlPreviewTimer = null; }
+      const preview = await this.refreshRateLimitWindowPreview();
+      if (!this.rlWindowOpen) return;
+      if (!preview) {
+        if (!this.rlWindowError) this.rlWindowError = 'Could not check the window; try again.';
+        return;
+      }
+      if (preview.valid === false) {
         this.rlWindowError = preview.error || 'This window conflicts with another one.';
         return;
       }
-      const duplicate = this.rlRule.schedule.some((w, i) => i !== this.rlWindowEditIndex && w.name.toLowerCase() === candidate.name.toLowerCase());
-      if (duplicate) { this.rlWindowError = 'Another window on this rule already has that name.'; return; }
       if (this.rlWindowEditIndex >= 0) this.rlRule.schedule.splice(this.rlWindowEditIndex, 1, candidate);
       else this.rlRule.schedule.push(candidate);
       this.rlWindowOpen = false;
@@ -3270,8 +3375,19 @@ function adminApp() {
 
     removeRateLimitWindow() {
       if (this.rlWindowEditIndex < 0) { this.rlWindowOpen = false; return; }
-      this.rlRule.schedule.splice(this.rlWindowEditIndex, 1);
-      this.rlWindowOpen = false;
+      const index = this.rlWindowEditIndex;
+      const name = this.rlRule.schedule[index]?.name || 'this window';
+      this.openConfirm({
+        title: 'Remove window?',
+        message: "'" + name + "' will be removed from this rule's schedule. The change is staged; nothing is saved until you press Save.",
+        confirmLabel: 'Remove',
+        danger: true,
+        onConfirm: () => {
+          if (!this.rlRuleDrawerOpen) return;
+          this.rlRule.schedule.splice(index, 1);
+          this.rlWindowOpen = false;
+        }
+      });
     },
 
     // ---- new rule flow ----
@@ -6357,13 +6473,16 @@ function adminApp() {
       const windows = rules.reduce((n, r) => n + (r.schedule || []).length, 0);
       const statuses = this.rlSchedule?.rules || [];
       const active = statuses.filter(r => r.activeWindow).length;
+      const now = this.rlNow();
       const nexts = statuses
         .map(r => r.nextChangeAt ? new Date(r.nextChangeAt).getTime() : NaN)
-        .filter(t => Number.isFinite(t) && t > Date.now());
+        .filter(t => Number.isFinite(t) && t > now);
       const next = nexts.length ? new Date(Math.min(...nexts)).toISOString() : null;
       return {
         title: d.enabled === false ? 'Rate limits are not enforced' : 'Rate limits are enforced',
         titleClass: d.enabled === false ? 'off' : '',
+        enabledAria: d.enabled === false ? 'false' : 'true',
+        adaptiveAria: d.adaptiveEnabled ? 'true' : 'false',
         adaptiveText: d.adaptiveEnabled ? 'Adaptive load shedding on' : 'Adaptive load shedding off',
         rules: this.formatNum(rules.length),
         windows: this.formatNum(windows),
@@ -6371,23 +6490,37 @@ function adminApp() {
         activeClass: active > 0 ? 'live' : '',
         next: next ? this.rlRelative(next) : '—',
         nextSub: next ? 'Next change · ' + this.rlFmtShort(next) : 'Next change',
-        scheduleStale: !!this.rlScheduleError,
         scheduleError: this.rlScheduleError || ''
       };
+    },
+
+    /** Tenants the overview knows about, as {slug, id, plan}; empty until that section has loaded. */
+    rlKnownTenants() {
+      const seen = new Set();
+      const out = [];
+      for (const c of this.overviewTenants?.topConsumersMonthToDate || []) {
+        const slug = c.tenantSlug || null;
+        const id = c.tenantId || null;
+        const value = slug || id;
+        if (!value || seen.has(value)) continue;
+        seen.add(value);
+        out.push({ slug, id, value, plan: c.planSlug || '' });
+      }
+      return out;
     },
 
     get rlTierCards() {
       const d = this.rlDraft;
       if (!d) return [];
+      // Who is on each plan, from the overview's tenant section (the key list does not carry plans).
       const usage = new Map();
-      for (const k of this.keys || []) {
-        const slug = k.planSlug || k.plan || null;
-        if (slug) usage.set(String(slug).toLowerCase(), (usage.get(String(slug).toLowerCase()) || 0) + 1);
+      for (const t of this.rlKnownTenants()) {
+        if (t.plan) usage.set(t.plan.toLowerCase(), (usage.get(t.plan.toLowerCase()) || 0) + 1);
       }
       const card = (kind, slug, t) => ({
         key: kind + ':' + slug,
         name: kind === 'default' ? 'default' : slug,
-        who: kind === 'default' ? 'tenants without a plan' : (usage.has(slug.toLowerCase()) ? usage.get(slug.toLowerCase()) + ' key' + (usage.get(slug.toLowerCase()) === 1 ? '' : 's') : 'plan tier'),
+        who: kind === 'default' ? 'tenants without a plan' : (usage.has(slug.toLowerCase()) ? usage.get(slug.toLowerCase()) + ' tenant' + (usage.get(slug.toLowerCase()) === 1 ? '' : 's') : 'plan tier'),
         rpm: this.formatNum(t.rpm), burst: this.formatNum(t.burst),
         streams: t.maxConcurrentStreams > 0 ? this.formatNum(t.maxConcurrentStreams) : '∞',
         streamsTitle: t.maxConcurrentStreams > 0 ? 'Concurrent streams' : 'Streams unlimited',
@@ -6479,7 +6612,7 @@ function adminApp() {
             forceText: force.text,
             forceSub: force.sub,
             forceTitle: force.title,
-            changed,
+            ariaLabel: 'Open rule ' + target + (info.singleton ? '' : ' (' + info.name + ')') + ', ' + force.text,
             rowCls: 'rl-row' + (changed ? ' changed' : ''),
             open: () => this.openRateLimitRule(identity)
           };
@@ -6491,12 +6624,21 @@ function adminApp() {
     get rlNoFilteredRules() { return this.rlHasRules && this.rlRuleRows.length === 0; },
 
     get rlZoneOptions() {
+      // ~420 entries that never change: built once, or the two zone selects would be re-diffed
+      // on every keystroke in the window form.
+      if (this._rlZoneCache) return this._rlZoneCache;
       const browser = this.rlBrowserZone();
       let all = [];
       try { all = Intl.supportedValuesOf('timeZone'); } catch { all = []; }
       const head = [browser, 'UTC'].filter((z, i, arr) => arr.indexOf(z) === i);
       const rest = all.filter(z => !head.includes(z));
-      return [...head, ...rest].map(z => ({ value: z, label: z === browser ? z + ' (browser)' : z }));
+      this._rlZoneCache = [...head, ...rest].map(z => ({ value: z, label: z === browser ? z + ' (browser)' : z }));
+      return this._rlZoneCache;
+    },
+
+    /** Which heading labels the rule drawer: the window pane's while it is showing. */
+    get rlRuleDrawerLabel() {
+      return this.rlWindowOpen ? 'rl-window-title' : 'rl-rule-title';
     },
 
     get rlRangeOptions() {
@@ -6511,7 +6653,7 @@ function adminApp() {
       const report = this.rlSchedule;
       const { from, to } = this.rlRangeFromTo();
       const span = to.getTime() - from.getTime();
-      const now = Date.now();
+      const now = this.rlNow();
       const pct = (t) => Math.max(0, Math.min(100, ((t - from.getTime()) / span) * 100));
       const zone = this.rlZoneOrDefault();
       const days = Number(this.rlRangeDays) || 7;
@@ -6525,7 +6667,6 @@ function adminApp() {
         if (days > 14 && i % 2 === 1) continue;
         axis.push({
           key: i,
-          left: pct(dayStart.getTime()) + '%',
           style: 'left: ' + pct(dayStart.getTime()) + '%',
           label: new Intl.DateTimeFormat(undefined, { timeZone: zone, weekday: 'short', day: 'numeric' }).format(dayStart)
         });
@@ -6547,8 +6688,6 @@ function adminApp() {
             legendMap.set(id + '|' + o.window, { cls, text: o.window + ' · ' + this.rlTierText(o.tier) });
             return {
               key: i,
-              left: pct(s) + '%',
-              width: Math.max(0.4, pct(e) - pct(s)) + '%',
               style: 'left: ' + pct(s) + '%; width: ' + Math.max(0.4, pct(e) - pct(s)) + '%',
               cls: 'rl-band ' + cls + ' ' + state + (o.clippedStart ? ' clip-start' : '') + (o.clippedEnd ? ' clip-end' : ''),
               title: o.window + ': ' + this.rlFmtLong(o.start) + ' → ' + this.rlFmtLong(o.end) + ' · ' + this.rlTierText(o.tier)
@@ -6567,10 +6706,8 @@ function adminApp() {
       return {
         hasRows: rows.length > 0,
         empty: rows.length === 0,
-        hasReport: !!report,
         rows,
         axis,
-        nowLeft: pct(now) + '%',
         nowStyle: 'left: ' + pct(now) + '%',
         showNow: now >= from.getTime() && now <= to.getTime(),
         legend: [...legendMap.values()].map((l, i) => ({ key: i, cls: 'rl-legend-swatch ' + l.cls, text: l.text })),
@@ -6602,14 +6739,12 @@ function adminApp() {
     },
 
     get rlTransitionsView() {
-      const all = (this.rlSchedule?.transitions || []).filter(t => new Date(t.at).getTime() >= Date.now() - 60000);
+      const all = (this.rlSchedule?.transitions || []).filter(t => new Date(t.at).getTime() >= this.rlNow() - 60000);
       const total = this.rlSchedule?.transitionsTruncated ? (this.rlSchedule.transitionsTotal || all.length) : all.length;
-      const hidden = all.length - Math.min(all.length, this.rlShowAllTransitions ? all.length : 6);
       return {
         empty: !!this.rlSchedule && all.length === 0,
         showToggle: all.length > 6,
         toggleText: this.rlShowAllTransitions ? 'Show fewer' : 'Show all ' + total + ' changes',
-        hidden,
         truncatedNote: this.rlSchedule?.transitionsTruncated ? 'Only the first ' + all.length + ' of ' + total + ' changes are listed; narrow the range to see the rest.' : ''
       };
     },
@@ -6671,7 +6806,7 @@ function adminApp() {
       const id = this.rlIdentity(r.scope, r.target);
       const { from, to } = this.rlRangeFromTo();
       const span = to.getTime() - from.getTime();
-      const now = Date.now();
+      const now = this.rlNow();
       const names = (r.schedule || []).map(w => w.name);
       const pct = (t) => Math.max(0, Math.min(100, ((t - from.getTime()) / span) * 100));
       const bands = (this.rlSchedule?.occurrences || [])
@@ -6681,9 +6816,9 @@ function adminApp() {
           const e = new Date(o.end).getTime();
           const state = e <= now ? 'past' : (s <= now ? 'current' : 'future');
           return {
-            key: i, left: pct(s) + '%', width: Math.max(0.4, pct(e) - pct(s)) + '%',
+            key: i,
             style: 'left: ' + pct(s) + '%; width: ' + Math.max(0.4, pct(e) - pct(s)) + '%',
-            cls: 'rl-band ' + this.rlBandClass(Math.max(0, names.indexOf(o.window))) + ' ' + state,
+            cls: 'rl-band ' + this.rlBandClass(Math.max(0, names.indexOf(o.window))) + ' ' + state + (o.clippedStart ? ' clip-start' : '') + (o.clippedEnd ? ' clip-end' : ''),
             title: o.window + ': ' + this.rlFmtLong(o.start) + ' → ' + this.rlFmtLong(o.end)
           };
         });
@@ -6702,17 +6837,13 @@ function adminApp() {
         forceBig: force.text,
         forceSub: force.dot === 'on' ? 'Enforcing ' + force.sub : force.sub,
         windows,
-        hasWindows: windows.length > 0,
         noWindows: windows.length === 0,
         bands,
         hasBands: bands.length > 0,
-        nowLeft: pct(now) + '%',
         nowStyle: 'left: ' + pct(now) + '%',
         usageText: row ? this.formatNum(row.requests) + ' requests · ' + this.formatNum(row.rejected) + ' refused · ' + (row.requestsPerMinute ?? 0).toFixed(1) + ' req/min' : 'No traffic recorded for this rule',
         usageWindow: 'Last ' + windowMinutes + ' min',
-        hasUsage: !!usage,
-        error: this.rlRuleError || '',
-        editable: this.rateLimitsEditable
+        error: this.rlRuleError || ''
       };
     },
 
@@ -6766,14 +6897,12 @@ function adminApp() {
         overlapText: overlaps.length ? 'Overlaps ' + overlaps.join(', ') : preview ? 'No overlap' : 'Checking…',
         precedence,
         error: this.rlWindowError || (preview && preview.valid === false ? preview.error : '') || '',
-        canApply: !this.rlWindowError && !(preview && preview.valid === false),
         applyDisabled: !!this.rlWindowError || !!(preview && preview.valid === false),
         applyLabel: this.rlWindowEditIndex >= 0 ? 'Apply' : 'Add window',
         showTier: !f.suspend,
         isEdit: this.rlWindowEditIndex >= 0,
         advancedLabel: f.showAdvanced ? 'Hide advanced' : 'Advanced · priority, valid from / until',
         showAdvanced: !!f.showAdvanced,
-        suspend: !!f.suspend,
         zoneOptions: this.rlZoneOptions
       };
     },
@@ -6801,16 +6930,20 @@ function adminApp() {
           }
         }
       } else if (kind === 'tenants') {
+        // Tenants the overview has seen this month, then any tenant an existing rule already
+        // names, so a target can be picked rather than typed even before the overview loads.
         const seen = new Set();
-        for (const k of this.keys || []) {
-          const slug = k.tenantSlug || k.tenant || null;
-          const id = k.tenantId || null;
-          const value = slug || id;
-          if (!value || seen.has(value)) continue;
-          seen.add(value);
-          if (!q || String(value).toLowerCase().includes(q) || String(id || '').toLowerCase().includes(q)) {
-            out.push({ value, text: value, sub: id && slug ? id : 'tenant' });
+        for (const t of this.rlKnownTenants()) {
+          seen.add(String(t.value).toLowerCase());
+          if (!q || String(t.value).toLowerCase().includes(q) || String(t.id || '').toLowerCase().includes(q)) {
+            out.push({ value: t.value, text: t.value, sub: t.plan ? 'plan ' + t.plan : (t.id && t.slug ? t.id : 'tenant') });
           }
+        }
+        for (const r of this.rlDraft?.rules || []) {
+          const value = r.scope === 'tenant' ? r.target : r.scope === 'tenant_model' ? String(r.target || '').split('|')[0] : '';
+          if (!value || seen.has(value.toLowerCase())) continue;
+          seen.add(value.toLowerCase());
+          if (!q || value.toLowerCase().includes(q)) out.push({ value, text: value, sub: 'has a rule' });
         }
       }
       return out.slice(0, 6);
@@ -6853,6 +6986,7 @@ function adminApp() {
         scopeCards: this.rlScopeCatalog().map(s => ({
           key: s.id, name: s.name, desc: s.desc,
           cls: 'rl-scope-card' + (n.scope === s.id ? ' sel' : ''),
+          ariaChecked: n.scope === s.id ? 'true' : 'false',
           select: () => this.setRateLimitNewRuleScope(s.id)
         })),
         isStep1: step === 1, isStep2: step === 2, isStep3: step === 3, notStep3: step !== 3,

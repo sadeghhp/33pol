@@ -279,7 +279,7 @@ public static partial class RateLimitConfigValidation
         if (overlaps.Count > 0)
         {
             var (first, second) = overlaps[0];
-            error = $"rule '{rule.Identity}': windows '{first}' and '{second}' are the same kind and can be active at the same time; give one a different span or a priority.";
+            error = $"rule '{rule.Identity}': windows '{first}' and '{second}' are the same kind and can be active at the same time; give one a different span or a higher priority than the other.";
             return false;
         }
 
@@ -287,10 +287,11 @@ public static partial class RateLimitConfigValidation
     }
 
     /// <summary>
-    /// The pairs of same-kind windows that can be active at the same instant. Two <c>once</c>
-    /// windows overlap when their spans intersect; two <c>weekly</c> windows when any minute of the
-    /// week falls in both. Windows with an explicit priority are exempt: the operator has said
-    /// which wins.
+    /// The pairs of same-kind windows that can be active at the same instant without a clear
+    /// winner. Two <c>once</c> windows overlap when their spans intersect; two <c>weekly</c>
+    /// windows when any minute of the week falls in both. A pair whose ranks differ is exempt: the
+    /// operator has said which wins. Equal ranks — both unset, or both set to the same number —
+    /// are not, because the evaluator would then pick by start time and name, which nobody asked for.
     /// </summary>
     public static IReadOnlyList<(string First, string Second)> FindWindowOverlaps(
         IReadOnlyList<RateLimitWindowDefinition> windows)
@@ -303,12 +304,17 @@ public static partial class RateLimitConfigValidation
             {
                 var a = windows[i];
                 var b = windows[j];
-                if (a is null || b is null || a.Priority is not null || b.Priority is not null)
+                if (a is null || b is null)
                 {
                     continue;
                 }
 
                 if (!string.Equals(a.Kind, b.Kind, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (a.Rank != b.Rank)
                 {
                     continue;
                 }
@@ -330,9 +336,31 @@ public static partial class RateLimitConfigValidation
 
     private static bool OnceOverlap(RateLimitWindowDefinition a, RateLimitWindowDefinition b)
     {
-        var aEnd = a.Until ?? DateTimeOffset.MaxValue;
-        var bEnd = b.Until ?? DateTimeOffset.MaxValue;
-        return a.From < bEnd && b.From < aEnd;
+        // The span a once window actually occupies: its own bounds, narrowed by its validity
+        // bounds the same way the evaluator narrows them, so a window whose validity ends before
+        // the other begins is not reported as a clash it can never have.
+        var (aStart, aEnd) = OnceSpan(a);
+        var (bStart, bEnd) = OnceSpan(b);
+        return aStart < bEnd && bStart < aEnd;
+    }
+
+    private static (DateTimeOffset Start, DateTimeOffset End) OnceSpan(RateLimitWindowDefinition window)
+    {
+        var start = window.From ?? DateTimeOffset.MinValue;
+        var end = window.Until ?? DateTimeOffset.MaxValue;
+        if (window.ValidUntil is { } validUntil && validUntil < end)
+        {
+            end = validUntil;
+        }
+
+        // A start before ValidFrom means the occurrence does not happen at all (the evaluator
+        // drops it), so the window occupies nothing.
+        if (window.ValidFrom is { } validFrom && start < validFrom)
+        {
+            return (start, start);
+        }
+
+        return (start, end);
     }
 
     private static bool WeeklyOverlap(RateLimitWindowDefinition a, RateLimitWindowDefinition b)
