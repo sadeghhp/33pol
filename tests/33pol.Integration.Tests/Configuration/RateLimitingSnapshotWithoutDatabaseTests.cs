@@ -50,6 +50,10 @@ public sealed class RateLimitingSnapshotWithoutDatabaseTests
         snapshot.Anonymous.Rpm.Should().Be(9);
         snapshot.Anonymous.Burst.Should().Be(3);
         snapshot.Anonymous.MaxConcurrentStreams.Should().Be(1);
-        factory.Services.GetRequiredService<IRateLimitPolicyResolver>().ResolveAnonymous().Rpm.Should().Be(9);
+
+        // Carried, but not applied: with no database nothing requires a key, so nobody is anonymous
+        // in the sense the tier exists for, and every caller keeps the default tier.
+        factory.Services.GetRequiredService<IRateLimitPolicyResolver>().ResolveAnonymous().Rpm.Should()
+            .Be(snapshot.Default.Rpm, "the anonymous tier applies only where a caller could have presented a key");
     }
 }
