@@ -65,6 +65,34 @@ They are vendor-prefixed on purpose — the upstream provider's own `X-RateLimit
 
 `Scope` matters once more than one limit can apply: a bare `Remaining: 4` is ambiguous, because a client cannot tell whether it is its own key, its whole organisation, or the model it chose that is nearly exhausted — and those call for three different responses. On a rejection the header names the scope that refused; on a success, the one closest to refusing. `Adaptive` is present **only** while the load-aware governor is holding that scope below its configured rate, so its absence is the answer to "am I being enforced as configured?".
 
+## Scheduled windows
+
+A scoped rule keeps a **base tier** and may carry up to 16 **windows**: a different tier for a span of time. The base tier applies whenever no window is active, and whenever a window cannot be evaluated. Nothing about a window ever means "unlimited" by accident: a window that enforces nothing is refused unless it is explicitly marked `suspend`, which pauses the rule for the span (other scopes still apply).
+
+| Kind | Fields | Meaning |
+|------|--------|---------|
+| `once` | `from`, optional `until` | One span. No `until` is an open-ended step change: the tier from that instant on, for good. |
+| `weekly` | `days` (`mon`…`sun`, the days it *starts*), `start`, `end` (`HH:mm`, `24:00` allowed), `timeZone` (IANA) | Recurs each listed day. An end at or before the start runs into the next day. |
+
+Both kinds accept `name` (unique per rule), the tier (`rpm`, `burst`, `maxConcurrentStreams`, same rules as the base tier), `suspend`, an optional `priority` (0–1000) and optional `validFrom` / `validUntil` bounds.
+
+**Precedence.** When several windows are active at once, the highest `priority` wins; without priorities a `once` window outranks a `weekly` one. Two windows of the same kind that can be active at the same instant are refused at save time (a same-kind overlap is an ambiguity, not a tie-break), unless one carries a priority. Every weekly window on a rule must use the same time zone, so that overlap check stays a static question.
+
+**Time zones and daylight saving.** Weekly windows are read in their zone with that zone's rules: a start inside a spring gap moves to the first valid instant; a window across the autumn repeat lasts an hour longer. A zone the host cannot resolve makes the window invalid: it never applies, the base tier does, the schedule report says why, and the console marks the rule.
+
+**At a boundary.** Tightening applies on the partition's next request (the bucket clamps to the new capacity). A raised limit does not refill the bucket to the new capacity at once; it refills at the new rate. Lowering a stream cap never aborts open streams. The adaptive governor scales whatever tier the schedule put in force. With the master switch off, nothing is enforced, windows included.
+
+**How it runs.** The stored configuration (base tiers plus windows) is projected into the effective configuration lazily, on the next read after a window boundary passes, with a new effective version so cached plans miss. There is no timer to keep alive and nothing persisted about "the current window": a restart recomputes it from the stored windows and the clock.
+
+Windows are stored with their rule (`rate_limit_rules.ScheduleJson`), replaced with the rule set on every `PUT`, and travel on each rule as `schedule`. **`schedule` on a rule is optional, and omitting it is not the same as sending `[]`:** omitted keeps the windows stored for that rule, an empty array removes them, so a client written against the older contract cannot delete windows it cannot see.
+
+Two read-only endpoints serve the console's calendar:
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `GET` | `/admin/api/rate-limits/schedule?at=&atLocal=&timeZone=&from=&to=&take=` | What every rule enforces at `at` (or the wall-clock `atLocal` in `timeZone`), every window occurrence in `[from, to)` clipped to the range, and the moments a rule's tier changes; `transitionsTotal`/`transitionsTruncated` say whether `take` cut the list. |
+| `POST` | `/admin/api/rate-limits/windows/preview` | The rule as it would be with a candidate window, plus `candidate`: whether it is valid, its next occurrence, which windows it overlaps, outranks or is outranked by. Persists nothing. |
+
 ## API
 
 | Method | Path | Auth |
@@ -84,7 +112,11 @@ Body shape (camelCase JSON):
     "standard": { "rpm": 120, "burst": 20, "maxConcurrentStreams": 10 }
   },
   "rules": [
-    { "scope": "model",         "target": "gpt-4",              "rpm": 600, "burst": 60, "maxConcurrentStreams": 40 },
+    { "scope": "model",         "target": "gpt-4",              "rpm": 600, "burst": 60, "maxConcurrentStreams": 40,
+      "schedule": [
+        { "name": "off-peak", "kind": "weekly", "days": ["mon","tue","wed","thu","fri"], "start": "19:00", "end": "07:00", "timeZone": "Europe/Berlin", "rpm": 1200, "burst": 200, "maxConcurrentStreams": 80 },
+        { "name": "launch",   "kind": "once",   "from": "2026-10-01T00:00:00Z", "until": "2026-10-03T00:00:00Z", "rpm": 3000, "burst": 500, "maxConcurrentStreams": 120 }
+      ] },
     { "scope": "tenant_model",  "target": "acme|gpt-4",         "rpm": 60,  "burst": 10, "maxConcurrentStreams": 4 },
     { "scope": "api_key",       "target": "6f1c…",              "rpm": 30,  "burst": 0,  "maxConcurrentStreams": 2 },
     { "scope": "model",         "target": "llama-70b",          "rpm": 0,   "burst": 0,  "maxConcurrentStreams": 8 },
@@ -140,7 +172,7 @@ Without a configured database, rate limits are read-only and `PUT` answers **503
 
 ## Admin UI
 
-**Settings → Rate limits** — toggle enforcement, edit the default tier, plan rows and scoped rules, toggle load-aware enforcement, then **Save rate limits**. Validation errors appear inline under the card. The **Rate-limit usage** card below it shows the live report.
+**Settings → Rate limits** is a summary you read first and edit on demand. The status band carries the enforcement and load-aware switches and four numbers: rules, windows, windows active now, next scheduled change. Tiers are cards; rules are one table with the base tier, the schedule and an **In force now** column that turns over on its own when a window begins or ends. Clicking a tier or a rule opens a drawer; **New rule** is a short flow that picks the scope from descriptive cards and suggests registered models and keys for the target. Windows are added from the rule drawer, with a live sentence restating the window, its next occurrence, and the overlap and precedence check before it is committed. The **Calendar** draws the next 7, 14 or 30 days in a chosen zone, lists what is coming up, and answers **Preview at** for any instant. Edits are staged; a sticky bar appears while anything is unsaved with **Discard**, **Review changes** and **Save**. Reload (in the band, or **Reload all**) refetches the saved configuration. The **Rate-limit usage** card below shows the live report.
 
 ## Rollback
 

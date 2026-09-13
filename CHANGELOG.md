@@ -4,6 +4,12 @@ All notable changes to this project are documented here. Version tags follow [Se
 
 ## [Unreleased]
 
+### Scheduled rate-limit windows and a redesigned Rate limits page
+
+- Scoped rules can carry **schedule windows**: `once` (from an instant, optionally until another; open-ended is a step change) and `weekly` (days, local start and end, IANA zone). The base tier applies whenever no window is active or a window cannot be evaluated; a `once` window outranks a `weekly` one unless a `priority` says otherwise; same-kind overlaps are refused at save time. Windows are projected into the live configuration lazily, with daylight-saving handled by the zone, and every plan cache misses when a window begins or ends.
+- `GET /admin/api/rate-limits` carries `schedule` per rule (omitted on a `PUT` keeps the stored windows, `[]` removes them); `GET /admin/api/rate-limits/schedule` reports effective tiers, clipped occurrences and transitions for a range; `POST /admin/api/rate-limits/windows/preview` checks a window before it is saved.
+- **Settings → Rate limits** is redesigned around *read first, edit on demand*: a status band with real enforcement and adaptive switches, tier cards, one rules table with an **In force now** column, a calendar with a current-time marker, past and clipped segments, **Preview at** and **Coming up**, and drawers for tiers, rules, windows and a four-step new-rule flow with target suggestions. A sticky bar appears only while there are unsaved changes (Discard, Review changes, Save); reload and read-only states are preserved.
+
 ### Security — credential guessing could still make the gateway pay for every guess
 
 An address past its `auth_failure` budget is refused unless it can prove a credential, so a shared

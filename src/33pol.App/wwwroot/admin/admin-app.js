@@ -228,13 +228,42 @@ function adminApp() {
     errorOccurrences: {},
     configStatus: null,
     rateLimits: null,
-    rateLimitRuleRows: [],
+    rlDraft: null,
     rateLimitUsage: null,
     rateLimitUsageError: '',
     rateLimitUsageMinutes: 60,
-    rateLimitPlanRows: [],
     rateLimitFieldError: '',
     rateLimitsLoadError: '',
+    rlReadOnlyReason: '',
+    rlSaving: false,
+    rlSchedule: null,
+    rlScheduleError: '',
+    rlScheduleLoadedAt: 0,
+    _rlScheduleTimer: null,
+    _rlPreviewTimer: null,
+    rlZone: '',
+    rlRangeDays: 7,
+    rlPreviewAt: '',
+    rlPreview: null,
+    rlPreviewError: '',
+    rlShowAllTransitions: false,
+    rlFilterText: '',
+    rlFilterScope: 'all',
+    rlReviewOpen: false,
+    rlRuleDrawerOpen: false,
+    rlRule: { identity: '', scope: 'model', target: '', rpm: 0, burst: 0, maxConcurrentStreams: 0, schedule: [] },
+    rlRuleError: '',
+    rlTierDrawerOpen: false,
+    rlTier: { kind: 'default', slug: '', originalSlug: '', isNew: false, rpm: 0, burst: 0, maxConcurrentStreams: 0 },
+    rlTierError: '',
+    rlWindowOpen: false,
+    rlWindowEditIndex: -1,
+    rlWindow: { name: '', kind: 'weekly', rpm: 0, burst: 0, maxConcurrentStreams: 0, suspend: false, priority: '', fromLocal: '', untilLocal: '', days: [], start: '19:00', end: '07:00', timeZone: '', validFromLocal: '', validUntilLocal: '', showAdvanced: false },
+    rlWindowPreview: null,
+    rlWindowError: '',
+    rlNewRuleOpen: false,
+    rlNewRule: { step: 1, scope: 'model', subject: '', model: '', target: '', rpm: 600, burst: 60, maxConcurrentStreams: 0 },
+    rlNewRuleError: '',
     corsOrigins: null,
     corsFieldError: '',
     corsLoadError: '',
@@ -735,6 +764,9 @@ function adminApp() {
       // rather than on every settings load — an operator who never opens it never pays for it.
       if (sub === 'limits' && !this.rateLimitUsage) {
         void this.loadRateLimitUsage();
+      }
+      if (sub === 'limits' && this.rlDraft && Date.now() - (this.rlScheduleLoadedAt || 0) > 30000) {
+        void this.loadRateLimitSchedule();
       }
     },
 
@@ -2185,6 +2217,10 @@ function adminApp() {
     onModalKeydown(e) {
       if (e.key === 'Escape') {
         if (this.confirmDialog) this.cancelConfirm();
+        else if (this.rlWindowOpen) this.closeRateLimitWindow();
+        else if (this.rlNewRuleOpen) this.closeRateLimitNewRule();
+        else if (this.rlTierDrawerOpen) this.closeRateLimitTier();
+        else if (this.rlRuleDrawerOpen) this.closeRateLimitRule();
         else if (this.deleteConfirmKey) this.cancelDeleteKey();
         else if (this.revokeConfirmId) this.cancelRevoke();
         else if (this.modelTestDialog) this.closeModelTestDialog();
@@ -2506,6 +2542,55 @@ function adminApp() {
       this.configStatus = await this.apiJson('/admin/api/config/status');
     },
 
+    // ---- rate limits: server state, draft, schedule ----
+    //
+    // Read first, edit on demand. `rateLimits` is the last server-backed configuration and
+    // `rlDraft` the copy the drawers edit; the page shows the draft, the sticky bar appears while
+    // the two differ, and Save sends the whole draft (the API replaces the set wholesale). The
+    // schedule report (`rlSchedule`) is read-only and always from the saved configuration.
+
+    rlScopeCatalog() {
+      return [
+        { id: 'model', name: 'A model', short: 'Model', desc: 'Its whole capacity, shared by every caller.', hint: 'Model id', suggest: 'models' },
+        { id: 'tenant', name: 'A tenant', short: 'Tenant', desc: 'Overrides the tenant’s plan tier.', hint: 'Tenant id or slug', suggest: 'tenants' },
+        { id: 'api_key', name: 'An API key', short: 'API key', desc: 'One credential inside its tenant’s allowance.', hint: 'Key id', suggest: 'keys' },
+        { id: 'global', name: 'Whole gateway', short: 'Gateway', desc: 'Every inference request, whoever sends it.', singleton: true },
+        { id: 'tenant_model', name: 'A tenant on a model', short: 'Tenant & model', desc: 'One customer’s share of one model.', pair: true, hint: 'Tenant id or slug', suggest: 'tenants' },
+        { id: 'api_key_model', name: 'A key on a model', short: 'Key & model', desc: 'The narrowest scope there is.', pair: true, hint: 'Key id', suggest: 'keys' },
+        { id: 'anonymous', name: 'Anonymous callers', short: 'Anonymous', desc: 'Per client address, on public models.', singleton: true },
+        { id: 'auth_failure', name: 'Failed sign-ins', short: 'Failed sign-ins', desc: 'Credential guessing, per address. The failed-auth budget.', singleton: true }
+      ];
+    },
+
+    rlScopeInfo(id) {
+      return this.rlScopeCatalog().find(s => s.id === id) || { id, name: id, short: id, desc: '' };
+    },
+
+    rlIdentity(scope, target) {
+      return String(scope || '').toLowerCase() + ':' + String(target || '').toLowerCase();
+    },
+
+    normalizeRateLimitWindow(w) {
+      const iso = (v) => (v ? new Date(v).toISOString() : null);
+      return {
+        name: String(w.name ?? w.Name ?? ''),
+        kind: String(w.kind ?? w.Kind ?? 'weekly').toLowerCase(),
+        rpm: Number(w.rpm ?? w.Rpm ?? 0),
+        burst: Number(w.burst ?? w.Burst ?? 0),
+        maxConcurrentStreams: Number(w.maxConcurrentStreams ?? w.MaxConcurrentStreams ?? 0),
+        suspend: !!(w.suspend ?? w.Suspend),
+        priority: (w.priority ?? w.Priority) == null ? null : Number(w.priority ?? w.Priority),
+        from: iso(w.from ?? w.From),
+        until: iso(w.until ?? w.Until),
+        days: Array.isArray(w.days ?? w.Days) ? (w.days ?? w.Days).map(d => String(d).toLowerCase()) : [],
+        start: w.start ?? w.Start ?? null,
+        end: w.end ?? w.End ?? null,
+        timeZone: w.timeZone ?? w.TimeZone ?? null,
+        validFrom: iso(w.validFrom ?? w.ValidFrom),
+        validUntil: iso(w.validUntil ?? w.ValidUntil)
+      };
+    },
+
     normalizeRateLimitsPayload(data) {
       if (!data) return null;
       const d = data.default || data.Default || {};
@@ -2529,32 +2614,35 @@ function adminApp() {
         rules: (Array.isArray(rules) ? rules : []).map((r) => ({
           scope: r.scope ?? r.Scope ?? 'model',
           target: r.target ?? r.Target ?? '',
-          ...tier(r)
+          ...tier(r),
+          schedule: (Array.isArray(r.schedule ?? r.Schedule) ? (r.schedule ?? r.Schedule) : [])
+            .map((w) => this.normalizeRateLimitWindow(w))
         }))
       };
+    },
+
+    rlClone(value) {
+      return value == null ? value : JSON.parse(JSON.stringify(value));
     },
 
     applyRateLimitsData(data) {
       const normalized = this.normalizeRateLimitsPayload(data);
       if (!normalized) {
         this.rateLimits = null;
+        this.rlDraft = null;
         return;
       }
       this.rateLimits = normalized;
-      this.rateLimitPlanRows = Object.entries(normalized.plans).map(([slug, t]) => ({
-        slug,
-        rpm: t.rpm,
-        burst: t.burst,
-        maxConcurrentStreams: t.maxConcurrentStreams
-      }));
-      this.rateLimitRuleRows = normalized.rules.map((r) => ({ ...r }));
+      this.rlDraft = this.rlClone(normalized);
       this.rateLimitFieldError = '';
       this.rateLimitsLoadError = '';
+      this.rlReadOnlyReason = '';
     },
 
     async fetchRateLimits() {
       const data = await this.apiJson('/admin/api/rate-limits');
       this.applyRateLimitsData(data);
+      void this.loadRateLimitSchedule();
     },
 
     async loadRateLimits() {
@@ -2563,12 +2651,11 @@ function adminApp() {
         await this.fetchRateLimits();
       } catch (e) {
         this.rateLimits = null;
-        this.rateLimitPlanRows = [];
-        this.rateLimitRuleRows = [];
+        this.rlDraft = null;
         if (String(e.title || '').startsWith('404') || e.message?.includes('404') || /not found/i.test(e.message || '')) {
           this.rateLimitsLoadError =
             'Rate limit API is not available on this gateway (rebuild/restart the server with the latest image).';
-        } else if (e.title === 'Authentication failed' || e.message?.includes('401')) {
+        } else if (e.title === 'Authentication failed' || e.message?.includes('401') || e.message?.includes('403')) {
           this.rateLimitsLoadError = 'Connect with an Admin API key to load rate limits.';
         } else {
           this.rateLimitsLoadError = e.message || 'Could not load rate limits.';
@@ -2576,64 +2663,121 @@ function adminApp() {
       }
     },
 
-    addRateLimitPlanRow() {
-      this.rateLimitPlanRows = [
-        ...this.rateLimitPlanRows,
-        { slug: '', rpm: 60, burst: 10, maxConcurrentStreams: 5 }
-      ];
-    },
-
-    removeRateLimitPlanRow(index) {
-      this.rateLimitPlanRows = this.rateLimitPlanRows.filter((_, i) => i !== index);
-    },
-
-    addRateLimitRuleRow() {
-      this.rateLimitRuleRows = [
-        ...this.rateLimitRuleRows,
-        { scope: 'model', target: '', rpm: 60, burst: 10, maxConcurrentStreams: 0 }
-      ];
-    },
-
-    removeRateLimitRuleRow(index) {
-      this.rateLimitRuleRows = this.rateLimitRuleRows.filter((_, i) => i !== index);
-    },
-
-    buildRateLimitsPayload() {
-      const plans = {};
-      for (const row of this.rateLimitPlanRows) {
-        const slug = (row.slug || '').trim();
-        if (!slug) continue;
-        plans[slug] = {
-          rpm: Number(row.rpm),
-          burst: Number(row.burst),
-          maxConcurrentStreams: Number(row.maxConcurrentStreams)
-        };
+    /** Reload from the server. A dirty draft is thrown away only after the operator agrees. */
+    reloadRateLimits() {
+      if (!this.rateLimitsDirty) {
+        void this.runApi('settings', 'Reloading rate limits…', () => this.loadRateLimits());
+        return;
       }
-      const d = this.rateLimits?.default || {};
+      this.openConfirm({
+        title: 'Reload and discard changes?',
+        message: 'Reloading fetches the saved configuration and throws away your unsaved edits.',
+        confirmLabel: 'Reload',
+        onConfirm: () => this.runApi('settings', 'Reloading rate limits…', () => this.loadRateLimits())
+      });
+    },
 
+    /** Back to the last server-backed state without a round trip. */
+    discardRateLimitChanges() {
+      if (!this.rateLimits) return;
+      this.rlDraft = this.rlClone(this.rateLimits);
+      this.rateLimitFieldError = '';
+      this.closeRateLimitDrawers();
+      this.toast('Changes discarded.');
+    },
+
+    closeRateLimitDrawers() {
+      this.rlRuleDrawerOpen = false;
+      this.rlTierDrawerOpen = false;
+      this.rlWindowOpen = false;
+      this.rlNewRuleOpen = false;
+    },
+
+    rlTierPayload(t) {
+      return {
+        rpm: Number(t?.rpm) || 0,
+        burst: Number(t?.burst) || 0,
+        maxConcurrentStreams: Number(t?.maxConcurrentStreams) || 0
+      };
+    },
+
+    rlWindowPayload(w) {
+      const isOnce = w.kind === 'once';
+      const payload = {
+        name: String(w.name ?? '').trim(),
+        kind: w.kind,
+        rpm: w.suspend ? 0 : (Number(w.rpm) || 0),
+        burst: w.suspend ? 0 : (Number(w.burst) || 0),
+        maxConcurrentStreams: w.suspend ? 0 : (Number(w.maxConcurrentStreams) || 0),
+        suspend: !!w.suspend,
+        priority: w.priority === '' || w.priority == null ? null : Number(w.priority),
+        from: isOnce ? (w.from || null) : null,
+        until: isOnce ? (w.until || null) : null,
+        days: isOnce ? null : (w.days || []),
+        start: isOnce ? null : (w.start || null),
+        end: isOnce ? null : (w.end || null),
+        timeZone: isOnce ? null : (w.timeZone || null),
+        validFrom: w.validFrom || null,
+        validUntil: w.validUntil || null
+      };
+      return payload;
+    },
+
+    buildRateLimitsPayload(source) {
+      const cfg = source || this.rlDraft || {};
+      const plans = {};
+      for (const [slug, t] of Object.entries(cfg.plans || {})) {
+        const key = String(slug || '').trim();
+        if (!key) continue;
+        plans[key] = this.rlTierPayload(t);
+      }
       // Rows with no target are dropped rather than sent: an empty target is the half-typed state of
-      // a row the operator has not finished, and the server would reject the whole save for it.
-      const rules = this.rateLimitRuleRows
+      // a rule the operator has not finished, and the server would reject the whole save for it.
+      const rules = (cfg.rules || [])
         .filter((row) => String(row.target ?? '').trim() !== '')
         .map((row) => ({
           scope: String(row.scope ?? '').trim(),
           target: String(row.target ?? '').trim(),
-          rpm: Number(row.rpm) || 0,
-          burst: Number(row.burst) || 0,
-          maxConcurrentStreams: Number(row.maxConcurrentStreams) || 0
+          ...this.rlTierPayload(row),
+          // Always an array: the draft is the complete truth, and an absent field would tell the
+          // server to keep whatever windows it has stored.
+          schedule: (row.schedule || []).map((w) => this.rlWindowPayload(w))
         }));
-
       return {
-        enabled: this.rateLimits?.enabled !== false,
-        adaptiveEnabled: this.rateLimits?.adaptiveEnabled === true,
-        default: {
-          rpm: Number(d.rpm),
-          burst: Number(d.burst),
-          maxConcurrentStreams: Number(d.maxConcurrentStreams)
-        },
+        enabled: cfg.enabled !== false,
+        adaptiveEnabled: cfg.adaptiveEnabled === true,
+        default: this.rlTierPayload(cfg.default),
         plans,
         rules
       };
+    },
+
+    async saveRateLimits() {
+      if (!this.rlDraft) return;
+      this.closeRateLimitDrawers();
+      await this.runApi('settings', 'Saving rate limits…', async () => {
+        this.rateLimitFieldError = '';
+        this.rlSaving = true;
+        try {
+          const body = await this.apiJson('/admin/api/rate-limits', {
+            method: 'PUT',
+            body: JSON.stringify(this.buildRateLimitsPayload())
+          });
+          this.toast(body?.message || 'Rate limits saved.');
+          await this.loadRateLimits();
+        } catch (e) {
+          const status = String(e.title || '') + ' ' + String(e.message || '');
+          if (/503/.test(status) || /configured database/i.test(status)) {
+            this.rlReadOnlyReason = 'This gateway has no database, so rate limits are read-only here.';
+          } else if (/403/.test(status)) {
+            this.rlReadOnlyReason = 'This key may view rate limits but not change them.';
+          }
+          this.rateLimitFieldError = e.message || 'Failed to save rate limits.';
+          throw e;
+        } finally {
+          this.rlSaving = false;
+        }
+      }, { localOnly: true });
     },
 
     async loadRateLimitUsage() {
@@ -2649,22 +2793,583 @@ function adminApp() {
       }
     },
 
-    async saveRateLimits() {
-      await this.runApi('settings', 'Saving rate limits…', async () => {
-        this.rateLimitFieldError = '';
-        try {
-          const body = await this.apiJson('/admin/api/rate-limits', {
-            method: 'PUT',
-            body: JSON.stringify(this.buildRateLimitsPayload())
-          });
-          this.toast(body?.message || 'Rate limits saved.');
-          await this.loadRateLimits();
-        } catch (e) {
-          this.rateLimitFieldError = e.message || 'Failed to save rate limits.';
-          throw e;
-        }
-      }, { localOnly: true });
+    scrollToRateLimitUsage() {
+      if (!this.rateLimitUsage) void this.loadRateLimitUsage();
+      const el = document.getElementById('rate-limit-usage');
+      if (el && el.scrollIntoView) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
     },
+
+    // ---- time helpers (display zone aware) ----
+
+    rlZoneOrDefault() {
+      return this.rlZone || this.rlBrowserZone();
+    },
+
+    rlBrowserZone() {
+      try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; } catch { return 'UTC'; }
+    },
+
+    rlZoneParts(date, zone) {
+      const fmt = new Intl.DateTimeFormat('en-US', {
+        timeZone: zone, hourCycle: 'h23',
+        year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit'
+      });
+      const p = {};
+      for (const part of fmt.formatToParts(date)) p[part.type] = part.value;
+      return {
+        year: Number(p.year), month: Number(p.month), day: Number(p.day),
+        hour: Number(p.hour) % 24, minute: Number(p.minute), second: Number(p.second)
+      };
+    },
+
+    /** The zone's UTC offset in minutes at an instant. */
+    rlZoneOffset(date, zone) {
+      const z = this.rlZoneParts(date, zone);
+      const asUtc = Date.UTC(z.year, z.month - 1, z.day, z.hour, z.minute, z.second);
+      return Math.round((asUtc - date.getTime()) / 60000);
+    },
+
+    /** A wall-clock time in a zone as an instant; a time inside a DST gap lands on the next valid hour. */
+    rlZonedToDate(y, m, d, h, mi, zone) {
+      const guess = Date.UTC(y, m - 1, d, h, mi, 0);
+      let t = guess - this.rlZoneOffset(new Date(guess), zone) * 60000;
+      const off2 = this.rlZoneOffset(new Date(t), zone);
+      const t2 = guess - off2 * 60000;
+      if (t2 !== t) t = t2;
+      return new Date(t);
+    },
+
+    /** "2026-10-01T11:30" in a zone → ISO instant, or null when unparsable. */
+    rlLocalToIso(local, zone) {
+      const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(String(local || ''));
+      if (!m) return null;
+      const date = this.rlZonedToDate(+m[1], +m[2], +m[3], +m[4], +m[5], zone || this.rlZoneOrDefault());
+      return Number.isNaN(date.getTime()) ? null : date.toISOString();
+    },
+
+    /** ISO instant → "yyyy-MM-ddTHH:mm" in a zone, for a datetime-local input. */
+    rlIsoToLocal(iso, zone) {
+      if (!iso) return '';
+      const date = new Date(iso);
+      if (Number.isNaN(date.getTime())) return '';
+      const z = this.rlZoneParts(date, zone || this.rlZoneOrDefault());
+      const pad = (n) => String(n).padStart(2, '0');
+      return z.year + '-' + pad(z.month) + '-' + pad(z.day) + 'T' + pad(z.hour) + ':' + pad(z.minute);
+    },
+
+    rlFmt(iso, opts) {
+      if (!iso) return '—';
+      try {
+        return new Intl.DateTimeFormat(undefined, { timeZone: this.rlZoneOrDefault(), hourCycle: 'h23', ...opts }).format(new Date(iso));
+      } catch { return String(iso); }
+    },
+
+    /** "Sat 07:00", with the date once the instant is more than a week out. */
+    rlFmtShort(iso) {
+      if (!iso) return '—';
+      const delta = new Date(iso).getTime() - Date.now();
+      const far = Math.abs(delta) > 6 * 86400000;
+      return this.rlFmt(iso, far
+        ? { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }
+        : { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+    },
+
+    rlFmtLong(iso) {
+      return this.rlFmt(iso, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+    },
+
+    rlRelative(iso) {
+      if (!iso) return '';
+      const ms = new Date(iso).getTime() - Date.now();
+      const abs = Math.abs(ms);
+      const min = Math.round(abs / 60000);
+      let text;
+      if (min < 1) text = 'now';
+      else if (min < 60) text = min + ' m';
+      else if (min < 48 * 60) text = Math.floor(min / 60) + ' h ' + (min % 60) + ' m';
+      else text = Math.round(min / 1440) + ' d';
+      if (text === 'now') return text;
+      return ms >= 0 ? 'in ' + text : text + ' ago';
+    },
+
+    rlTierText(t) {
+      if (!t) return '—';
+      if (t.suspended) return 'paused';
+      const parts = [];
+      if (t.rpm > 0) parts.push(this.formatNum(t.rpm) + ' rpm');
+      if (t.burst > 0) parts.push(this.formatNum(t.burst) + ' burst');
+      if (t.maxConcurrentStreams > 0) parts.push(this.formatNum(t.maxConcurrentStreams) + ' streams');
+      return parts.length ? parts.join(' · ') : 'rate unlimited';
+    },
+
+    rlDayLabels() {
+      return [['mon', 'Mon'], ['tue', 'Tue'], ['wed', 'Wed'], ['thu', 'Thu'], ['fri', 'Fri'], ['sat', 'Sat'], ['sun', 'Sun']];
+    },
+
+    rlDaysText(days) {
+      const order = this.rlDayLabels().map(d => d[0]);
+      const set = new Set((days || []).map(d => String(d).toLowerCase()));
+      const list = order.filter(d => set.has(d));
+      if (list.length === 7) return 'every day';
+      if (list.join() === 'mon,tue,wed,thu,fri') return 'Mon–Fri';
+      if (list.join() === 'sat,sun') return 'Sat and Sun';
+      return list.map(d => this.rlDayLabels().find(x => x[0] === d)[1]).join(', ');
+    },
+
+    /** A window as a sentence: "Mon–Fri 19:00 → 07:00 next day · Europe/Berlin". */
+    rlWindowWhen(w) {
+      if (!w) return '';
+      if (w.kind === 'once') {
+        const from = w.from ? this.rlFmtLong(w.from) : '?';
+        if (!w.until) return 'From ' + from + ', open-ended';
+        return from + ' → ' + this.rlFmtLong(w.until);
+      }
+      const overnight = w.start && w.end && w.end !== '24:00' && w.end <= w.start;
+      return this.rlDaysText(w.days) + ' ' + (w.start || '?') + ' → ' + (w.end || '?') +
+        (overnight ? ' next day' : '') + ' · ' + (w.timeZone || 'UTC');
+    },
+
+    // ---- schedule report ----
+
+    rlRangeFromTo() {
+      const zone = this.rlZoneOrDefault();
+      const today = this.rlZoneParts(new Date(), zone);
+      const from = this.rlZonedToDate(today.year, today.month, today.day, 0, 0, zone);
+      const days = Number(this.rlRangeDays) || 7;
+      const to = new Date(from.getTime() + days * 86400000);
+      return { from, to, days };
+    },
+
+    async loadRateLimitSchedule() {
+      this.rlScheduleError = '';
+      if (this._rlScheduleTimer) { clearTimeout(this._rlScheduleTimer); this._rlScheduleTimer = null; }
+      try {
+        const { from, to } = this.rlRangeFromTo();
+        this.rlSchedule = await this.apiJson(
+          '/admin/api/rate-limits/schedule?from=' + encodeURIComponent(from.toISOString()) +
+          '&to=' + encodeURIComponent(to.toISOString()) + '&take=200');
+        this.rlScheduleLoadedAt = Date.now();
+        // Re-read when the next window boundary passes so the "in force" column turns over on
+        // its own; capped so a distant change does not pin a multi-day timer.
+        const next = (this.rlSchedule?.rules || [])
+          .map(r => r.nextChangeAt ? new Date(r.nextChangeAt).getTime() : NaN)
+          .filter(t => Number.isFinite(t) && t > Date.now());
+        if (next.length) {
+          const wait = Math.min(Math.min(...next) - Date.now() + 1500, 30 * 60000);
+          this._rlScheduleTimer = setTimeout(() => { if (this.isSettingsLimits) void this.loadRateLimitSchedule(); }, wait);
+        }
+      } catch (e) {
+        this.rlSchedule = null;
+        this.rlScheduleError = e.message || 'Could not load the schedule.';
+      }
+    },
+
+    setRateLimitZone(zone) {
+      this.rlZone = zone;
+      void this.loadRateLimitSchedule();
+      if (this.rlPreview) void this.runRateLimitPreview();
+    },
+
+    setRateLimitRange(days) {
+      this.rlRangeDays = Number(days) || 7;
+      void this.loadRateLimitSchedule();
+    },
+
+    async runRateLimitPreview() {
+      this.rlPreviewError = '';
+      const local = String(this.rlPreviewAt || '').trim();
+      if (!local) { this.rlPreview = null; return; }
+      try {
+        this.rlPreview = await this.apiJson(
+          '/admin/api/rate-limits/schedule?atLocal=' + encodeURIComponent(local) +
+          '&timeZone=' + encodeURIComponent(this.rlZoneOrDefault()) + '&take=1');
+      } catch (e) {
+        this.rlPreview = null;
+        this.rlPreviewError = e.message || 'Could not evaluate that instant.';
+      }
+    },
+
+    clearRateLimitPreview() {
+      this.rlPreviewAt = '';
+      this.rlPreview = null;
+      this.rlPreviewError = '';
+    },
+
+    toggleRateLimitTransitions() {
+      this.rlShowAllTransitions = !this.rlShowAllTransitions;
+    },
+
+    setRateLimitScopeFilter(id) {
+      this.rlFilterScope = id;
+    },
+
+    // ---- tiers ----
+
+    openRateLimitTier(kind, slug) {
+      if (!this.rlDraft || !this.rateLimitsEditable) return;
+      const tier = kind === 'default' ? this.rlDraft.default : (this.rlDraft.plans[slug] || { rpm: 60, burst: 10, maxConcurrentStreams: 5 });
+      this.rlTier = {
+        kind,
+        slug: slug || '',
+        originalSlug: slug || '',
+        isNew: kind === 'plan' && !slug,
+        rpm: tier.rpm, burst: tier.burst, maxConcurrentStreams: tier.maxConcurrentStreams
+      };
+      this.rlTierError = '';
+      this.rlTierDrawerOpen = true;
+    },
+
+    closeRateLimitTier() {
+      this.rlTierDrawerOpen = false;
+    },
+
+    applyRateLimitTier() {
+      const t = this.rlTier;
+      const tier = this.rlTierPayload(t);
+      if (t.kind === 'default' && tier.rpm < 1) {
+        this.rlTierError = 'The default tier needs at least 1 rpm; there is no unlimited value.';
+        return;
+      }
+      if (t.kind === 'plan') {
+        const slug = String(t.slug || '').trim();
+        if (!/^[A-Za-z][A-Za-z0-9_-]*$/.test(slug)) {
+          this.rlTierError = 'Plan slug: letters, digits, hyphen or underscore, starting with a letter.';
+          return;
+        }
+        if (tier.rpm < 1) {
+          this.rlTierError = 'A plan tier needs at least 1 rpm.';
+          return;
+        }
+        const clash = Object.keys(this.rlDraft.plans).find(k => k.toLowerCase() === slug.toLowerCase() && k !== t.originalSlug);
+        if (clash) {
+          this.rlTierError = 'A plan called “' + clash + '” already exists.';
+          return;
+        }
+        if (t.originalSlug && t.originalSlug !== slug) delete this.rlDraft.plans[t.originalSlug];
+        this.rlDraft.plans[slug] = tier;
+      } else {
+        this.rlDraft.default = tier;
+      }
+      this.rlTierDrawerOpen = false;
+    },
+
+    confirmRemoveRateLimitPlan() {
+      const slug = this.rlTier.originalSlug;
+      if (!slug) return;
+      this.openConfirm({
+        title: 'Remove plan tier “' + slug + '”?',
+        message: 'Tenants on this plan fall back to the default tier once you save.',
+        confirmLabel: 'Remove plan',
+        danger: true,
+        onConfirm: () => {
+          delete this.rlDraft.plans[slug];
+          this.rlTierDrawerOpen = false;
+        }
+      });
+    },
+
+    // ---- rules ----
+
+    rlFindDraftRule(identity) {
+      return (this.rlDraft?.rules || []).find(r => this.rlIdentity(r.scope, r.target) === identity);
+    },
+
+    openRateLimitRule(identity) {
+      const rule = this.rlFindDraftRule(identity);
+      if (!rule) return;
+      this.rlRule = {
+        identity,
+        scope: rule.scope,
+        target: rule.target,
+        rpm: rule.rpm, burst: rule.burst, maxConcurrentStreams: rule.maxConcurrentStreams,
+        schedule: this.rlClone(rule.schedule || [])
+      };
+      this.rlRuleError = '';
+      this.rlWindowOpen = false;
+      this.rlRuleDrawerOpen = true;
+      if (!this.rateLimitUsage) void this.loadRateLimitUsage();
+    },
+
+    closeRateLimitRule() {
+      this.rlRuleDrawerOpen = false;
+      this.rlWindowOpen = false;
+    },
+
+    /** Writes the drawer's working copy back into the draft. */
+    applyRateLimitRule() {
+      const rule = this.rlFindDraftRule(this.rlRule.identity);
+      if (!rule) return;
+      const tier = this.rlTierPayload(this.rlRule);
+      const info = this.rlScopeInfo(rule.scope);
+      if (tier.rpm === 0 && tier.maxConcurrentStreams === 0) {
+        this.rlRuleError = 'A rule must limit something: set rpm or streams above zero.';
+        return;
+      }
+      if (rule.scope === 'tenant' && tier.rpm === 0 && tier.burst !== 0) {
+        this.rlRuleError = 'A tenant rule with rpm 0 keeps the plan rate; set burst to 0 as well.';
+        return;
+      }
+      void info;
+      Object.assign(rule, tier, { schedule: this.rlClone(this.rlRule.schedule) });
+      this.rlRuleDrawerOpen = false;
+      this.rlWindowOpen = false;
+    },
+
+    confirmDeleteRateLimitRule() {
+      const identity = this.rlRule.identity;
+      const info = this.rlScopeInfo(this.rlRule.scope);
+      this.openConfirm({
+        title: 'Delete this rule?',
+        message: info.short + ' “' + this.rlRule.target + '” stops being limited by this rule once you save. Windows on it are deleted with it.',
+        confirmLabel: 'Delete rule',
+        danger: true,
+        onConfirm: () => {
+          this.rlDraft.rules = this.rlDraft.rules.filter(r => this.rlIdentity(r.scope, r.target) !== identity);
+          this.rlRuleDrawerOpen = false;
+          this.rlWindowOpen = false;
+        }
+      });
+    },
+
+    // ---- windows ----
+
+    rlBlankWindow() {
+      return {
+        name: '', kind: 'weekly',
+        rpm: this.rlRule.rpm || 60, burst: this.rlRule.burst || 0, maxConcurrentStreams: this.rlRule.maxConcurrentStreams || 0,
+        suspend: false, priority: '',
+        fromLocal: '', untilLocal: '',
+        days: ['mon', 'tue', 'wed', 'thu', 'fri'], start: '19:00', end: '07:00',
+        timeZone: this.rlZoneOrDefault(),
+        validFromLocal: '', validUntilLocal: '',
+        showAdvanced: false
+      };
+    },
+
+    openRateLimitWindow(index) {
+      if (!this.rlRuleDrawerOpen) return;
+      const existing = index != null && index >= 0 ? this.rlRule.schedule[index] : null;
+      this.rlWindowEditIndex = existing ? index : -1;
+      const form = this.rlBlankWindow();
+      if (existing) {
+        const zone = existing.timeZone || this.rlZoneOrDefault();
+        Object.assign(form, {
+          name: existing.name, kind: existing.kind,
+          rpm: existing.rpm, burst: existing.burst, maxConcurrentStreams: existing.maxConcurrentStreams,
+          suspend: existing.suspend, priority: existing.priority == null ? '' : String(existing.priority),
+          fromLocal: this.rlIsoToLocal(existing.from, zone), untilLocal: this.rlIsoToLocal(existing.until, zone),
+          days: [...(existing.days || [])], start: existing.start || '19:00', end: existing.end || '07:00',
+          timeZone: zone,
+          validFromLocal: this.rlIsoToLocal(existing.validFrom, zone), validUntilLocal: this.rlIsoToLocal(existing.validUntil, zone),
+          showAdvanced: existing.priority != null || !!existing.validFrom || !!existing.validUntil
+        });
+      }
+      this.rlWindow = form;
+      this.rlWindowError = '';
+      this.rlWindowPreview = null;
+      this.rlWindowOpen = true;
+      this.queueRateLimitWindowPreview();
+    },
+
+    closeRateLimitWindow() {
+      this.rlWindowOpen = false;
+    },
+
+    setRateLimitWindowKind(kind) {
+      this.rlWindow.kind = kind;
+      this.queueRateLimitWindowPreview();
+    },
+
+    toggleRateLimitWindowDay(day) {
+      const days = new Set(this.rlWindow.days || []);
+      if (days.has(day)) days.delete(day); else days.add(day);
+      this.rlWindow.days = this.rlDayLabels().map(d => d[0]).filter(d => days.has(d));
+      this.queueRateLimitWindowPreview();
+    },
+
+    toggleRateLimitWindowAdvanced() {
+      this.rlWindow.showAdvanced = !this.rlWindow.showAdvanced;
+    },
+
+    /** The form as the API sees it: local wall-clock times resolved in the window's zone. */
+    rlWindowFromForm() {
+      const f = this.rlWindow;
+      const zone = f.timeZone || this.rlZoneOrDefault();
+      return {
+        name: String(f.name || '').trim(),
+        kind: f.kind,
+        rpm: Number(f.rpm) || 0, burst: Number(f.burst) || 0, maxConcurrentStreams: Number(f.maxConcurrentStreams) || 0,
+        suspend: !!f.suspend,
+        priority: f.priority === '' || f.priority == null ? null : Number(f.priority),
+        from: f.kind === 'once' ? this.rlLocalToIso(f.fromLocal, zone) : null,
+        until: f.kind === 'once' ? this.rlLocalToIso(f.untilLocal, zone) : null,
+        days: f.kind === 'weekly' ? [...(f.days || [])] : [],
+        start: f.kind === 'weekly' ? f.start : null,
+        end: f.kind === 'weekly' ? f.end : null,
+        timeZone: f.kind === 'weekly' ? zone : null,
+        validFrom: this.rlLocalToIso(f.validFromLocal, zone),
+        validUntil: this.rlLocalToIso(f.validUntilLocal, zone)
+      };
+    },
+
+    rlWindowLocalCheck(w) {
+      if (!w.name) return 'Give the window a name.';
+      if (w.kind === 'once' && !w.from) return 'Pick when the window starts.';
+      if (w.kind === 'once' && w.until && w.until <= w.from) return 'Until must be after From. Leave Until empty for a change that stays in force.';
+      if (w.kind === 'weekly' && !w.days.length) return 'Pick at least one day.';
+      if (w.kind === 'weekly' && (!w.start || !w.end)) return 'Set a start and an end time.';
+      if (!w.suspend && w.rpm <= 0 && w.maxConcurrentStreams <= 0) return 'Set rpm or streams above zero, or pause the rule instead.';
+      return '';
+    },
+
+    queueRateLimitWindowPreview() {
+      if (this._rlPreviewTimer) clearTimeout(this._rlPreviewTimer);
+      this._rlPreviewTimer = setTimeout(() => { void this.refreshRateLimitWindowPreview(); }, 250);
+    },
+
+    async refreshRateLimitWindowPreview() {
+      if (!this.rlWindowOpen) return;
+      const candidate = this.rlWindowFromForm();
+      const local = this.rlWindowLocalCheck(candidate);
+      this.rlWindowError = local;
+      if (local) { this.rlWindowPreview = null; return; }
+      const others = this.rlRule.schedule.filter((_, i) => i !== this.rlWindowEditIndex);
+      const windows = [...others, candidate].map(w => this.rlWindowPayload(w));
+      try {
+        const preview = await this.apiJson('/admin/api/rate-limits/windows/preview', {
+          method: 'POST',
+          body: JSON.stringify({
+            scope: this.rlRule.scope, target: this.rlRule.target,
+            ...this.rlTierPayload(this.rlRule),
+            windows, candidate: candidate.name
+          })
+        });
+        // A stale answer must not overwrite a newer form state.
+        if (this.rlWindowOpen && this.rlWindowFromForm().name === candidate.name) this.rlWindowPreview = preview;
+      } catch (e) {
+        this.rlWindowPreview = null;
+        this.rlWindowError = e.message || 'Could not check the window.';
+      }
+    },
+
+    applyRateLimitWindow() {
+      const candidate = this.rlWindowFromForm();
+      const local = this.rlWindowLocalCheck(candidate);
+      if (local) { this.rlWindowError = local; return; }
+      const preview = this.rlWindowPreview;
+      if (preview && preview.valid === false) {
+        this.rlWindowError = preview.error || 'This window conflicts with another one.';
+        return;
+      }
+      const duplicate = this.rlRule.schedule.some((w, i) => i !== this.rlWindowEditIndex && w.name.toLowerCase() === candidate.name.toLowerCase());
+      if (duplicate) { this.rlWindowError = 'Another window on this rule already has that name.'; return; }
+      if (this.rlWindowEditIndex >= 0) this.rlRule.schedule.splice(this.rlWindowEditIndex, 1, candidate);
+      else this.rlRule.schedule.push(candidate);
+      this.rlWindowOpen = false;
+    },
+
+    removeRateLimitWindow() {
+      if (this.rlWindowEditIndex < 0) { this.rlWindowOpen = false; return; }
+      this.rlRule.schedule.splice(this.rlWindowEditIndex, 1);
+      this.rlWindowOpen = false;
+    },
+
+    // ---- new rule flow ----
+
+    openRateLimitNewRule() {
+      if (!this.rlDraft || !this.rateLimitsEditable) return;
+      this.rlNewRule = { step: 1, scope: 'model', subject: '', model: '', target: '', rpm: 600, burst: 60, maxConcurrentStreams: 0 };
+      this.rlNewRuleError = '';
+      this.rlNewRuleOpen = true;
+    },
+
+    closeRateLimitNewRule() {
+      this.rlNewRuleOpen = false;
+    },
+
+    setRateLimitNewRuleScope(id) {
+      this.rlNewRule.scope = id;
+      this.rlNewRuleError = '';
+    },
+
+    rlNewRuleTarget() {
+      const info = this.rlScopeInfo(this.rlNewRule.scope);
+      if (info.singleton) return '*';
+      if (info.pair) return String(this.rlNewRule.subject || '').trim() + '|' + String(this.rlNewRule.model || '').trim();
+      return String(this.rlNewRule.target || '').trim();
+    },
+
+    rateLimitNewRuleBack() {
+      if (this.rlNewRule.step > 1) this.rlNewRule.step -= 1;
+      this.rlNewRuleError = '';
+    },
+
+    rateLimitNewRuleNext() {
+      const n = this.rlNewRule;
+      const info = this.rlScopeInfo(n.scope);
+      this.rlNewRuleError = '';
+      if (n.step === 1) {
+        n.step = info.singleton ? 3 : 2;
+        return;
+      }
+      if (n.step === 2) {
+        const target = this.rlNewRuleTarget();
+        if (info.pair ? (!n.subject.trim() || !n.model.trim()) : !target) {
+          this.rlNewRuleError = info.pair ? 'Both halves are needed.' : 'Name the ' + info.hint.toLowerCase() + '.';
+          return;
+        }
+        if (this.rlFindDraftRule(this.rlIdentity(n.scope, target))) {
+          this.rlNewRuleError = 'A rule for this ' + info.short.toLowerCase() + ' already exists; open it from the list instead.';
+          return;
+        }
+        n.step = 3;
+        return;
+      }
+    },
+
+    pickRateLimitSuggestion(field, value) {
+      this.rlNewRule[field] = value;
+    },
+
+    /** Creates the rule in the draft; with `andSchedule` the rule drawer opens straight onto Add window. */
+    createRateLimitRule(andSchedule) {
+      const n = this.rlNewRule;
+      const info = this.rlScopeInfo(n.scope);
+      const target = this.rlNewRuleTarget();
+      const tier = this.rlTierPayload(n);
+      if (!info.singleton && (info.pair ? (!n.subject.trim() || !n.model.trim()) : !target)) {
+        this.rlNewRuleError = 'The rule needs a target.';
+        return;
+      }
+      if (this.rlFindDraftRule(this.rlIdentity(n.scope, target))) {
+        this.rlNewRuleError = 'A rule for this ' + info.short.toLowerCase() + ' already exists.';
+        return;
+      }
+      if (tier.rpm === 0 && tier.maxConcurrentStreams === 0) {
+        this.rlNewRuleError = 'A rule must limit something: set rpm or streams above zero.';
+        return;
+      }
+      if (n.scope === 'tenant' && tier.rpm === 0 && tier.burst !== 0) {
+        this.rlNewRuleError = 'A tenant rule with rpm 0 keeps the plan rate; set burst to 0 as well.';
+        return;
+      }
+      this.rlDraft.rules.push({ scope: n.scope, target, ...tier, schedule: [] });
+      this.rlNewRuleOpen = false;
+      if (andSchedule) {
+        this.openRateLimitRule(this.rlIdentity(n.scope, target));
+        this.openRateLimitWindow(-1);
+      }
+    },
+
+    createRateLimitRuleWithSchedule() {
+      this.createRateLimitRule(true);
+    },
+
+    openRateLimitNewPlan() { this.openRateLimitTier('plan', ''); },
+    openRateLimitNewWindow() { this.openRateLimitWindow(-1); },
+    onRateLimitRangeChange() { this.setRateLimitRange(this.rlRangeDays); },
+    onRateLimitZoneChange() { this.setRateLimitZone(this.rlZone); },
+    toggleRateLimitReview() { this.rlReviewOpen = !this.rlReviewOpen; },
 
     applyCorsData(data) {
       if (!data) {
@@ -3301,14 +4006,25 @@ function adminApp() {
           aliasesText: b('editModel.aliasesText')
         },
         rateLimits: {
-          enabled: b('rateLimits.enabled'),
-          adaptiveEnabled: b('rateLimits.adaptiveEnabled'),
-          usageMinutes: b('rateLimitUsageMinutes'),
-          default: {
-            rpm: b('rateLimits.default.rpm'),
-            burst: b('rateLimits.default.burst'),
-            maxConcurrentStreams: b('rateLimits.default.maxConcurrentStreams')
-          }
+          usageMinutes: b('rateLimitUsageMinutes')
+        },
+        rlDraft: { enabled: b('rlDraft.enabled'), adaptiveEnabled: b('rlDraft.adaptiveEnabled') },
+        rlFilterText: b('rlFilterText'),
+        rlZone: b('rlZone'),
+        rlRangeDays: b('rlRangeDays'),
+        rlPreviewAt: b('rlPreviewAt'),
+        rlRule: { rpm: b('rlRule.rpm'), burst: b('rlRule.burst'), maxConcurrentStreams: b('rlRule.maxConcurrentStreams') },
+        rlTier: { slug: b('rlTier.slug'), rpm: b('rlTier.rpm'), burst: b('rlTier.burst'), maxConcurrentStreams: b('rlTier.maxConcurrentStreams') },
+        rlWindow: {
+          name: b('rlWindow.name'), rpm: b('rlWindow.rpm'), burst: b('rlWindow.burst'), maxConcurrentStreams: b('rlWindow.maxConcurrentStreams'),
+          suspend: b('rlWindow.suspend'), priority: b('rlWindow.priority'),
+          fromLocal: b('rlWindow.fromLocal'), untilLocal: b('rlWindow.untilLocal'),
+          start: b('rlWindow.start'), end: b('rlWindow.end'), timeZone: b('rlWindow.timeZone'),
+          validFromLocal: b('rlWindow.validFromLocal'), validUntilLocal: b('rlWindow.validUntilLocal')
+        },
+        rlNewRule: {
+          subject: b('rlNewRule.subject'), model: b('rlNewRule.model'), target: b('rlNewRule.target'),
+          rpm: b('rlNewRule.rpm'), burst: b('rlNewRule.burst'), maxConcurrentStreams: b('rlNewRule.maxConcurrentStreams')
         },
         newKey: {
           role: b('newKey.role'),
@@ -5581,31 +6297,601 @@ function adminApp() {
     get configModelCountText() { return this.configStatus?.modelCount ?? 0; },
 
     get rateLimitsLoading() {
-      return !this.rateLimits && !this.rateLimitsLoadError && this.isLoading('settings');
+      return !this.rlDraft && !this.rateLimitsLoadError && this.isLoading('settings');
     },
-    get rateLimitsDisabled() { return !!this.rateLimits && !this.rateLimits.enabled; },
+    get rateLimitsLoaded() { return !!this.rlDraft; },
+    get rateLimitsEditable() { return !!this.rlDraft && !this.rlReadOnlyReason; },
+    get rateLimitsLocked() { return !this.rateLimitsEditable; },
+    get rateLimitsReadOnlyText() { return this.rlReadOnlyReason || ''; },
+    get rateLimitsDisabled() { return !!this.rlDraft && !this.rlDraft.enabled; },
 
-    get rateLimitPlanViewRows() {
-      return this.rateLimitPlanRows.map((_, index) => ({
-        key: index,
-        slug: this.bindPath('rateLimitPlanRows.' + index + '.slug'),
-        rpm: this.bindPath('rateLimitPlanRows.' + index + '.rpm'),
-        burst: this.bindPath('rateLimitPlanRows.' + index + '.burst'),
-        maxConcurrentStreams: this.bindPath('rateLimitPlanRows.' + index + '.maxConcurrentStreams'),
-        remove: () => this.removeRateLimitPlanRow(index)
+    get rateLimitsDirty() {
+      if (!this.rateLimits || !this.rlDraft) return false;
+      return JSON.stringify(this.buildRateLimitsPayload(this.rlDraft)) !==
+        JSON.stringify(this.buildRateLimitsPayload(this.rateLimits));
+    },
+
+    /** What the sticky bar says has changed, so an operator can tell a stray edit from an intended one. */
+    get rlDirtyView() {
+      const before = this.rateLimits ? this.buildRateLimitsPayload(this.rateLimits) : null;
+      const after = this.rlDraft ? this.buildRateLimitsPayload(this.rlDraft) : null;
+      if (!before || !after) return { show: false, count: 0, countText: '', detail: '', items: [] };
+      const items = [];
+      if (before.enabled !== after.enabled) items.push(after.enabled ? 'enforcement on' : 'enforcement off');
+      if (before.adaptiveEnabled !== after.adaptiveEnabled) items.push(after.adaptiveEnabled ? 'adaptive on' : 'adaptive off');
+      if (JSON.stringify(before.default) !== JSON.stringify(after.default)) items.push('default tier');
+      const slugs = new Set([...Object.keys(before.plans), ...Object.keys(after.plans)]);
+      for (const slug of slugs) {
+        if (JSON.stringify(before.plans[slug]) !== JSON.stringify(after.plans[slug])) {
+          items.push((!before.plans[slug] ? 'new plan ' : !after.plans[slug] ? 'removed plan ' : 'plan ') + slug);
+        }
+      }
+      const byId = (list) => Object.fromEntries(list.map(r => [this.rlIdentity(r.scope, r.target), r]));
+      const b = byId(before.rules);
+      const a = byId(after.rules);
+      for (const id of new Set([...Object.keys(b), ...Object.keys(a)])) {
+        if (JSON.stringify(b[id]) === JSON.stringify(a[id])) continue;
+        const r = a[id] || b[id];
+        const label = this.rlScopeInfo(r.scope).short + ' ' + (r.target === '*' ? '' : r.target);
+        items.push((!b[id] ? 'new rule ' : !a[id] ? 'deleted rule ' : '') + label.trim());
+      }
+      const count = items.length;
+      return {
+        show: count > 0,
+        count,
+        countText: count + ' unsaved change' + (count === 1 ? '' : 's'),
+        detail: items.slice(0, 4).join(' · ') + (count > 4 ? ' · …' : ''),
+        items: items.map((text, i) => ({ key: i, text }))
+      };
+    },
+
+    /** The schedule report row for a rule, keyed the same way the draft is. */
+    rlStatusFor(scope, target) {
+      const id = this.rlIdentity(scope, target);
+      return (this.rlSchedule?.rules || []).find(r => this.rlIdentity(r.scope, r.target) === id) || null;
+    },
+
+    get rlStatusView() {
+      const d = this.rlDraft || {};
+      const rules = d.rules || [];
+      const windows = rules.reduce((n, r) => n + (r.schedule || []).length, 0);
+      const statuses = this.rlSchedule?.rules || [];
+      const active = statuses.filter(r => r.activeWindow).length;
+      const nexts = statuses
+        .map(r => r.nextChangeAt ? new Date(r.nextChangeAt).getTime() : NaN)
+        .filter(t => Number.isFinite(t) && t > Date.now());
+      const next = nexts.length ? new Date(Math.min(...nexts)).toISOString() : null;
+      return {
+        title: d.enabled === false ? 'Rate limits are not enforced' : 'Rate limits are enforced',
+        titleClass: d.enabled === false ? 'off' : '',
+        adaptiveText: d.adaptiveEnabled ? 'Adaptive load shedding on' : 'Adaptive load shedding off',
+        rules: this.formatNum(rules.length),
+        windows: this.formatNum(windows),
+        active: this.formatNum(active),
+        activeClass: active > 0 ? 'live' : '',
+        next: next ? this.rlRelative(next) : '—',
+        nextSub: next ? 'Next change · ' + this.rlFmtShort(next) : 'Next change',
+        scheduleStale: !!this.rlScheduleError,
+        scheduleError: this.rlScheduleError || ''
+      };
+    },
+
+    get rlTierCards() {
+      const d = this.rlDraft;
+      if (!d) return [];
+      const usage = new Map();
+      for (const k of this.keys || []) {
+        const slug = k.planSlug || k.plan || null;
+        if (slug) usage.set(String(slug).toLowerCase(), (usage.get(String(slug).toLowerCase()) || 0) + 1);
+      }
+      const card = (kind, slug, t) => ({
+        key: kind + ':' + slug,
+        name: kind === 'default' ? 'default' : slug,
+        who: kind === 'default' ? 'tenants without a plan' : (usage.has(slug.toLowerCase()) ? usage.get(slug.toLowerCase()) + ' key' + (usage.get(slug.toLowerCase()) === 1 ? '' : 's') : 'plan tier'),
+        rpm: this.formatNum(t.rpm), burst: this.formatNum(t.burst),
+        streams: t.maxConcurrentStreams > 0 ? this.formatNum(t.maxConcurrentStreams) : '∞',
+        streamsTitle: t.maxConcurrentStreams > 0 ? 'Concurrent streams' : 'Streams unlimited',
+        edit: () => this.openRateLimitTier(kind, slug)
+      });
+      const cards = [card('default', '', d.default)];
+      for (const slug of Object.keys(d.plans || {}).sort((a, b) => a.localeCompare(b))) cards.push(card('plan', slug, d.plans[slug]));
+      return cards;
+    },
+
+    rlRuleMatchesFilter(rule) {
+      const chip = this.rlFilterScope || 'all';
+      if (chip === 'scheduled' && !(rule.schedule || []).length) return false;
+      if (chip !== 'all' && chip !== 'scheduled' && rule.scope !== chip) return false;
+      const q = String(this.rlFilterText || '').trim().toLowerCase();
+      if (!q) return true;
+      const info = this.rlScopeInfo(rule.scope);
+      return String(rule.target || '').toLowerCase().includes(q) ||
+        info.short.toLowerCase().includes(q) || info.name.toLowerCase().includes(q) ||
+        (rule.schedule || []).some(w => String(w.name || '').toLowerCase().includes(q));
+    },
+
+    get rlScopeChips() {
+      const rules = this.rlDraft?.rules || [];
+      const chips = [{ id: 'all', label: 'All', count: rules.length }];
+      for (const s of this.rlScopeCatalog()) {
+        const count = rules.filter(r => r.scope === s.id).length;
+        if (count) chips.push({ id: s.id, label: s.short, count });
+      }
+      const scheduled = rules.filter(r => (r.schedule || []).length).length;
+      if (scheduled) chips.push({ id: 'scheduled', label: 'Scheduled', count: scheduled });
+      return chips.map(c => ({
+        key: c.id, label: c.label, count: String(c.count),
+        cls: (this.rlFilterScope || 'all') === c.id ? 'active' : '',
+        select: () => this.setRateLimitScopeFilter(c.id)
       }));
     },
 
-    get rateLimitRuleViewRows() {
-      return this.rateLimitRuleRows.map((_, index) => ({
-        key: index,
-        scope: this.bindPath('rateLimitRuleRows.' + index + '.scope'),
-        target: this.bindPath('rateLimitRuleRows.' + index + '.target'),
-        rpm: this.bindPath('rateLimitRuleRows.' + index + '.rpm'),
-        burst: this.bindPath('rateLimitRuleRows.' + index + '.burst'),
-        maxConcurrentStreams: this.bindPath('rateLimitRuleRows.' + index + '.maxConcurrentStreams'),
-        remove: () => this.removeRateLimitRuleRow(index)
-      }));
+    rlForceFor(rule) {
+      const s = this.rlStatusFor(rule.scope, rule.target);
+      if (!s) {
+        return this.rlScheduleError
+          ? { dot: 'err', text: 'unknown', sub: 'schedule unavailable', title: this.rlScheduleError }
+          : { dot: '', text: this.rlTierText(rule), sub: 'as saved', title: '' };
+      }
+      const invalid = (s.windows || []).find(w => w.state === 'invalid');
+      if (s.effective?.suspended) {
+        return { dot: 'warn', text: 'paused', sub: (s.activeWindow || '') + (s.activeUntil ? ' · until ' + this.rlFmtShort(s.activeUntil) : ''), title: 'This rule is not enforced while the window runs' };
+      }
+      if (s.activeWindow) {
+        return {
+          dot: 'on', text: this.rlTierText(s.effective),
+          sub: s.activeWindow + (s.activeUntil ? ' · until ' + this.rlFmtShort(s.activeUntil) + ' · ' + this.rlRelative(s.activeUntil) : ' · open-ended'),
+          title: 'A window is in force'
+        };
+      }
+      if (invalid) {
+        return { dot: 'err', text: this.rlTierText(s.effective), sub: 'base · window “' + invalid.name + '” skipped: ' + invalid.error, title: invalid.error || '' };
+      }
+      return {
+        dot: '', text: this.rlTierText(s.effective),
+        sub: s.nextChangeAt && s.nextWindow ? 'base · ' + s.nextWindow + ' at ' + this.rlFmtShort(s.nextChangeAt) + ' · ' + this.rlRelative(s.nextChangeAt) : 'base',
+        title: ''
+      };
+    },
+
+    get rlRuleRows() {
+      const rules = this.rlDraft?.rules || [];
+      return rules
+        .map((rule, index) => ({ rule, index }))
+        .filter(({ rule }) => this.rlRuleMatchesFilter(rule))
+        .map(({ rule, index }) => {
+          const info = this.rlScopeInfo(rule.scope);
+          const identity = this.rlIdentity(rule.scope, rule.target);
+          const saved = (this.rateLimits?.rules || []).find(r => this.rlIdentity(r.scope, r.target) === identity);
+          const changed = !saved || JSON.stringify(this.buildRateLimitsPayload({ rules: [saved], plans: {}, default: {} }).rules[0]) !==
+            JSON.stringify(this.buildRateLimitsPayload({ rules: [rule], plans: {}, default: {} }).rules[0]);
+          const windows = (rule.schedule || []).length;
+          const force = changed ? { dot: '', text: this.rlTierText(rule), sub: 'unsaved · in force once saved', title: '' } : this.rlForceFor(rule);
+          const target = info.singleton ? info.name : String(rule.target || '').replace('|', ' · ');
+          return {
+            key: identity + ':' + index,
+            target,
+            scope: info.singleton ? info.desc : info.name.replace(/^An? /, '').replace(/^./, c => c.toUpperCase()),
+            tier: this.rlTierText(rule),
+            windowsText: windows ? windows + ' window' + (windows === 1 ? '' : 's') : '—',
+            windowsCls: windows ? 'tag accent' : 'muted',
+            forceDot: 'rl-dot ' + force.dot,
+            forceText: force.text,
+            forceSub: force.sub,
+            forceTitle: force.title,
+            changed,
+            rowCls: 'rl-row' + (changed ? ' changed' : ''),
+            open: () => this.openRateLimitRule(identity)
+          };
+        });
+    },
+
+    get rlHasRules() { return (this.rlDraft?.rules || []).length > 0; },
+    get rlNoRules() { return !!this.rlDraft && (this.rlDraft.rules || []).length === 0; },
+    get rlNoFilteredRules() { return this.rlHasRules && this.rlRuleRows.length === 0; },
+
+    get rlZoneOptions() {
+      const browser = this.rlBrowserZone();
+      let all = [];
+      try { all = Intl.supportedValuesOf('timeZone'); } catch { all = []; }
+      const head = [browser, 'UTC'].filter((z, i, arr) => arr.indexOf(z) === i);
+      const rest = all.filter(z => !head.includes(z));
+      return [...head, ...rest].map(z => ({ value: z, label: z === browser ? z + ' (browser)' : z }));
+    },
+
+    get rlRangeOptions() {
+      return [{ value: 7, label: 'Next 7 days' }, { value: 14, label: 'Next 14 days' }, { value: 30, label: 'Next 30 days' }];
+    },
+
+    rlBandClass(index) {
+      return ['b1', 'b2', 'b3', 'b4'][index % 4];
+    },
+
+    get rlTimelineView() {
+      const report = this.rlSchedule;
+      const { from, to } = this.rlRangeFromTo();
+      const span = to.getTime() - from.getTime();
+      const now = Date.now();
+      const pct = (t) => Math.max(0, Math.min(100, ((t - from.getTime()) / span) * 100));
+      const zone = this.rlZoneOrDefault();
+      const days = Number(this.rlRangeDays) || 7;
+
+      // One tick per local day, positioned by its real instant so a 23- or 25-hour day is drawn
+      // at its true width rather than forced into an equal column.
+      const axis = [];
+      const start = this.rlZoneParts(from, zone);
+      for (let i = 0; i < days; i++) {
+        const dayStart = this.rlZonedToDate(start.year, start.month, start.day + i, 0, 0, zone);
+        if (days > 14 && i % 2 === 1) continue;
+        axis.push({
+          key: i,
+          left: pct(dayStart.getTime()) + '%',
+          style: 'left: ' + pct(dayStart.getTime()) + '%',
+          label: new Intl.DateTimeFormat(undefined, { timeZone: zone, weekday: 'short', day: 'numeric' }).format(dayStart)
+        });
+      }
+
+      const rules = (this.rlDraft?.rules || []).filter(r => (r.schedule || []).length);
+      const legendMap = new Map();
+      const rows = rules.map((rule) => {
+        const id = this.rlIdentity(rule.scope, rule.target);
+        const names = (rule.schedule || []).map(w => w.name);
+        const bands = (report?.occurrences || [])
+          .filter(o => this.rlIdentity(o.scope, o.target) === id)
+          .map((o, i) => {
+            const s = new Date(o.start).getTime();
+            const e = new Date(o.end).getTime();
+            const idx = Math.max(0, names.indexOf(o.window));
+            const state = e <= now ? 'past' : (s <= now ? 'current' : 'future');
+            const cls = this.rlBandClass(idx);
+            legendMap.set(id + '|' + o.window, { cls, text: o.window + ' · ' + this.rlTierText(o.tier) });
+            return {
+              key: i,
+              left: pct(s) + '%',
+              width: Math.max(0.4, pct(e) - pct(s)) + '%',
+              style: 'left: ' + pct(s) + '%; width: ' + Math.max(0.4, pct(e) - pct(s)) + '%',
+              cls: 'rl-band ' + cls + ' ' + state + (o.clippedStart ? ' clip-start' : '') + (o.clippedEnd ? ' clip-end' : ''),
+              title: o.window + ': ' + this.rlFmtLong(o.start) + ' → ' + this.rlFmtLong(o.end) + ' · ' + this.rlTierText(o.tier)
+            };
+          });
+        const info = this.rlScopeInfo(rule.scope);
+        return {
+          key: id,
+          label: info.singleton ? info.short : String(rule.target).replace('|', ' · '),
+          sub: 'base ' + this.rlTierText(rule),
+          bands,
+          open: () => this.openRateLimitRule(id)
+        };
+      });
+
+      return {
+        hasRows: rows.length > 0,
+        empty: rows.length === 0,
+        hasReport: !!report,
+        rows,
+        axis,
+        nowLeft: pct(now) + '%',
+        nowStyle: 'left: ' + pct(now) + '%',
+        showNow: now >= from.getTime() && now <= to.getTime(),
+        legend: [...legendMap.values()].map((l, i) => ({ key: i, cls: 'rl-legend-swatch ' + l.cls, text: l.text })),
+        rangeText: new Intl.DateTimeFormat(undefined, { timeZone: zone, day: 'numeric', month: 'short' }).format(from) + ' – ' +
+          new Intl.DateTimeFormat(undefined, { timeZone: zone, day: 'numeric', month: 'short' }).format(new Date(to.getTime() - 1))
+      };
+    },
+
+    get rlTransitionRows() {
+      const list = (this.rlSchedule?.transitions || []).filter(t => new Date(t.at).getTime() >= Date.now() - 60000);
+      const shown = this.rlShowAllTransitions ? list : list.slice(0, 6);
+      return shown.map((t, i) => {
+        const info = this.rlScopeInfo(t.scope);
+        const up = (t.to?.rpm || 0) > (t.from?.rpm || 0) || (!t.to?.suspended && t.from?.suspended);
+        const down = (t.to?.rpm || 0) < (t.from?.rpm || 0) || (t.to?.suspended && !t.from?.suspended);
+        return {
+          key: i,
+          when: this.rlFmtShort(t.at),
+          rel: this.rlRelative(t.at),
+          target: info.singleton ? info.short : String(t.target).replace('|', ' · '),
+          what: t.window ? (t.to?.suspended ? 'paused by ' + t.window : t.window) : 'back to base',
+          // Rate alone when both sides have one: the full tiers would say the same thing three times.
+          delta: (t.from?.rpm > 0 && t.to?.rpm > 0 && !t.from?.suspended && !t.to?.suspended)
+            ? this.formatNum(t.from.rpm) + ' → ' + this.formatNum(t.to.rpm) + ' rpm'
+            : this.rlTierText(t.from) + ' → ' + this.rlTierText(t.to),
+          deltaCls: 'rl-delta ' + (up ? 'up' : down ? 'down' : '')
+        };
+      });
+    },
+
+    get rlTransitionsView() {
+      const all = (this.rlSchedule?.transitions || []).filter(t => new Date(t.at).getTime() >= Date.now() - 60000);
+      const total = this.rlSchedule?.transitionsTruncated ? (this.rlSchedule.transitionsTotal || all.length) : all.length;
+      const hidden = all.length - Math.min(all.length, this.rlShowAllTransitions ? all.length : 6);
+      return {
+        empty: !!this.rlSchedule && all.length === 0,
+        showToggle: all.length > 6,
+        toggleText: this.rlShowAllTransitions ? 'Show fewer' : 'Show all ' + total + ' changes',
+        hidden,
+        truncatedNote: this.rlSchedule?.transitionsTruncated ? 'Only the first ' + all.length + ' of ' + total + ' changes are listed; narrow the range to see the rest.' : ''
+      };
+    },
+
+    get rlPreviewView() {
+      const p = this.rlPreview;
+      if (!p) return { has: false, title: '', rows: [], unchanged: '', error: this.rlPreviewError || '' };
+      const rows = (p.rules || []).map((r, i) => ({ r, i })).filter(({ r }) =>
+        r.activeWindow || r.effective?.suspended || JSON.stringify(r.effective) !== JSON.stringify(r.base));
+      const unchanged = (p.rules || []).length - rows.length;
+      return {
+        has: true,
+        title: this.rlFmtLong(p.at) + ' (' + this.rlZoneOrDefault() + ')',
+        rows: rows.map(({ r, i }) => {
+          const info = this.rlScopeInfo(r.scope);
+          return {
+            key: i,
+            target: info.singleton ? info.short : String(r.target).replace('|', ' · '),
+            tag: r.activeWindow || 'base',
+            tagCls: 'tag ' + (r.activeWindow ? (r.effective?.suspended ? 'warn' : 'accent') : 'muted'),
+            tier: this.rlTierText(r.effective),
+            next: r.nextChangeAt ? 'until ' + this.rlFmtShort(r.nextChangeAt) : ''
+          };
+        }),
+        unchanged: unchanged > 0 ? unchanged + ' rule' + (unchanged === 1 ? '' : 's') + ' unchanged · base tiers apply' : '',
+        error: this.rlPreviewError || ''
+      };
+    },
+
+    // ---- rule drawer ----
+
+    get rlRuleDrawerView() {
+      const r = this.rlRule;
+      const info = this.rlScopeInfo(r.scope);
+      const status = this.rlStatusFor(r.scope, r.target);
+      const force = status ? this.rlForceFor({ ...r, schedule: r.schedule }) : { dot: '', text: this.rlTierText(r), sub: 'not saved yet', title: '' };
+      const windows = (r.schedule || []).map((w, i) => {
+        const ws = (status?.windows || []).find(x => String(x.name).toLowerCase() === String(w.name).toLowerCase());
+        const state = ws?.state || 'unsaved';
+        const stateText = state === 'active' ? 'Active' + (ws.nextEndAt ? ' · ends ' + this.rlFmtShort(ws.nextEndAt) : '')
+          : state === 'upcoming' ? 'Next ' + this.rlFmtShort(ws.nextStartAt) + ' · ' + this.rlRelative(ws.nextStartAt)
+          : state === 'expired' ? 'Expired · never applies again'
+          : state === 'invalid' ? 'Skipped: ' + (ws.error || 'cannot be evaluated')
+          : 'Not saved yet';
+        return {
+          key: i,
+          name: w.name,
+          kindTag: w.kind === 'once' ? 'once' : 'weekly',
+          kindCls: 'tag ' + (w.kind === 'once' ? 'accent' : ''),
+          when: this.rlWindowWhen(w),
+          tier: w.suspend ? 'paused' : this.rlTierText(w),
+          cls: 'rl-win ' + (state === 'active' ? 'active' : state === 'expired' || state === 'invalid' ? 'muted' : ''),
+          stateCls: 'status-chip ' + (state === 'active' ? 'ok' : state === 'invalid' ? 'fail' : state === 'expired' ? 'warn' : 'muted'),
+          stateText,
+          edit: () => this.openRateLimitWindow(i)
+        };
+      });
+
+      const id = this.rlIdentity(r.scope, r.target);
+      const { from, to } = this.rlRangeFromTo();
+      const span = to.getTime() - from.getTime();
+      const now = Date.now();
+      const names = (r.schedule || []).map(w => w.name);
+      const pct = (t) => Math.max(0, Math.min(100, ((t - from.getTime()) / span) * 100));
+      const bands = (this.rlSchedule?.occurrences || [])
+        .filter(o => this.rlIdentity(o.scope, o.target) === id)
+        .map((o, i) => {
+          const s = new Date(o.start).getTime();
+          const e = new Date(o.end).getTime();
+          const state = e <= now ? 'past' : (s <= now ? 'current' : 'future');
+          return {
+            key: i, left: pct(s) + '%', width: Math.max(0.4, pct(e) - pct(s)) + '%',
+            style: 'left: ' + pct(s) + '%; width: ' + Math.max(0.4, pct(e) - pct(s)) + '%',
+            cls: 'rl-band ' + this.rlBandClass(Math.max(0, names.indexOf(o.window))) + ' ' + state,
+            title: o.window + ': ' + this.rlFmtLong(o.start) + ' → ' + this.rlFmtLong(o.end)
+          };
+        });
+
+      const usage = this.rateLimitUsage;
+      const section = r.scope === 'model' ? usage?.byModel : r.scope === 'api_key' ? usage?.byApiKey : r.scope === 'tenant' ? usage?.byTenant : r.scope === 'tenant_model' ? usage?.byTenantModel : null;
+      const row = (section || []).find(x => String(x.key || '').toLowerCase() === String(r.target || '').toLowerCase());
+      const windowMinutes = usage?.windowMinutes || Number(this.rateLimitUsageMinutes) || 60;
+
+      return {
+        eyebrow: 'Rule · ' + info.name,
+        title: info.singleton ? info.name : String(r.target).replace('|', ' · '),
+        subtitle: info.desc,
+        forceCls: 'rl-forcebar ' + (force.dot === 'on' ? 'on' : force.dot === 'warn' ? 'warn' : force.dot === 'err' ? 'err' : ''),
+        forceDot: 'rl-dot ' + force.dot,
+        forceBig: force.text,
+        forceSub: force.dot === 'on' ? 'Enforcing ' + force.sub : force.sub,
+        windows,
+        hasWindows: windows.length > 0,
+        noWindows: windows.length === 0,
+        bands,
+        hasBands: bands.length > 0,
+        nowLeft: pct(now) + '%',
+        nowStyle: 'left: ' + pct(now) + '%',
+        usageText: row ? this.formatNum(row.requests) + ' requests · ' + this.formatNum(row.rejected) + ' refused · ' + (row.requestsPerMinute ?? 0).toFixed(1) + ' req/min' : 'No traffic recorded for this rule',
+        usageWindow: 'Last ' + windowMinutes + ' min',
+        hasUsage: !!usage,
+        error: this.rlRuleError || '',
+        editable: this.rateLimitsEditable
+      };
+    },
+
+    // ---- window form ----
+
+    get rlWindowView() {
+      const f = this.rlWindow;
+      const isOnce = f.kind === 'once';
+      const preview = this.rlWindowPreview;
+      const candidate = this.rlWindowFromForm();
+      const tierText = f.suspend ? 'paused (nothing enforced by this rule)' : this.rlTierText(candidate);
+      const baseText = this.rlTierText(this.rlRule);
+      let summary;
+      if (isOnce) {
+        summary = candidate.from
+          ? (candidate.until
+            ? 'From ' + this.rlFmtLong(candidate.from) + ' to ' + this.rlFmtLong(candidate.until)
+            : 'From ' + this.rlFmtLong(candidate.from) + ', staying in force')
+          : 'Pick a start';
+      } else {
+        const overnight = f.start && f.end && f.end !== '24:00' && f.end <= f.start;
+        summary = 'Every ' + this.rlDaysText(candidate.days) + ' from ' + (f.start || '?') + ' to ' + (f.end || '?') +
+          (overnight ? ' the next morning' : '') + ' (' + candidate.timeZone + ')';
+      }
+      summary += ', this rule ' + (f.suspend ? 'is paused' : 'gets ' + tierText + ' instead of ' + baseText) + '.';
+      const next = preview?.nextStartAt
+        ? (preview.activeNow ? 'Running now' : 'Next: ' + this.rlFmtLong(preview.nextStartAt)) +
+          (preview.nextEndAt ? ' → ' + this.rlFmtLong(preview.nextEndAt) : ' · open-ended')
+        : '';
+      const overlaps = preview?.overlaps || [];
+      const outrankedBy = preview?.outrankedBy || [];
+      const outranks = preview?.outranks || [];
+      const precedence = [
+        outrankedBy.length ? 'outranked by ' + outrankedBy.join(', ') + ' while those run' : '',
+        outranks.length ? 'outranks ' + outranks.join(', ') : ''
+      ].filter(Boolean).join(' · ');
+      return {
+        title: this.rlWindowEditIndex >= 0 ? 'Edit window' : 'Add window',
+        eyebrow: (this.rlRule.target === '*' ? this.rlScopeInfo(this.rlRule.scope).name : this.rlRule.target) + ' · window',
+        isOnce, isWeekly: !isOnce,
+        kindRows: [
+          { key: 'weekly', label: 'Every week', cls: !isOnce ? 'active' : '', select: () => this.setRateLimitWindowKind('weekly') },
+          { key: 'once', label: 'One time', cls: isOnce ? 'active' : '', select: () => this.setRateLimitWindowKind('once') }
+        ],
+        dayRows: this.rlDayLabels().map(([id, label]) => ({
+          key: id, label, cls: (f.days || []).includes(id) ? 'on' : '', toggle: () => this.toggleRateLimitWindowDay(id)
+        })),
+        summary,
+        next,
+        overlapCls: 'status-chip ' + (overlaps.length ? 'fail' : preview ? 'ok' : 'muted'),
+        overlapText: overlaps.length ? 'Overlaps ' + overlaps.join(', ') : preview ? 'No overlap' : 'Checking…',
+        precedence,
+        error: this.rlWindowError || (preview && preview.valid === false ? preview.error : '') || '',
+        canApply: !this.rlWindowError && !(preview && preview.valid === false),
+        applyDisabled: !!this.rlWindowError || !!(preview && preview.valid === false),
+        applyLabel: this.rlWindowEditIndex >= 0 ? 'Apply' : 'Add window',
+        showTier: !f.suspend,
+        isEdit: this.rlWindowEditIndex >= 0,
+        advancedLabel: f.showAdvanced ? 'Hide advanced' : 'Advanced · priority, valid from / until',
+        showAdvanced: !!f.showAdvanced,
+        suspend: !!f.suspend,
+        zoneOptions: this.rlZoneOptions
+      };
+    },
+
+    // ---- new rule flow ----
+
+    rlSuggestionsFor(kind, query) {
+      const q = String(query || '').trim().toLowerCase();
+      const out = [];
+      if (kind === 'models') {
+        for (const m of this.models || []) {
+          const id = m.id || '';
+          const aliases = (m.aliases || []).join(', ');
+          if (!q || id.toLowerCase().includes(q) || aliases.toLowerCase().includes(q)) {
+            out.push({ value: id, text: id, sub: 'registered' + (aliases ? ' · alias ' + aliases : '') + (m.publicAccess ? ' · public' : '') });
+          }
+        }
+      } else if (kind === 'keys') {
+        for (const k of this.keys || []) {
+          if (k.isRevoked || k.isArchived) continue;
+          const id = k.id || '';
+          const label = [k.label, k.assignee].filter(Boolean).join(' · ');
+          if (!q || id.toLowerCase().includes(q) || label.toLowerCase().includes(q) || (k.keyPrefix || '').toLowerCase().includes(q)) {
+            out.push({ value: id, text: k.keyPrefix ? k.keyPrefix + '…' : id, sub: label || id });
+          }
+        }
+      } else if (kind === 'tenants') {
+        const seen = new Set();
+        for (const k of this.keys || []) {
+          const slug = k.tenantSlug || k.tenant || null;
+          const id = k.tenantId || null;
+          const value = slug || id;
+          if (!value || seen.has(value)) continue;
+          seen.add(value);
+          if (!q || String(value).toLowerCase().includes(q) || String(id || '').toLowerCase().includes(q)) {
+            out.push({ value, text: value, sub: id && slug ? id : 'tenant' });
+          }
+        }
+      }
+      return out.slice(0, 6);
+    },
+
+    get rlNewRuleView() {
+      const n = this.rlNewRule;
+      const info = this.rlScopeInfo(n.scope);
+      const step = n.step;
+      const target = this.rlNewRuleTarget();
+      const tier = this.rlTierPayload(n);
+      const kind = info.suggest || '';
+      const suggestions = step === 2 && !info.singleton
+        ? (info.pair
+          ? [
+            ...this.rlSuggestionsFor(kind, n.subject).map((s, i) => ({ key: 'subject:' + i, text: s.text, sub: s.sub, pick: () => this.pickRateLimitSuggestion('subject', s.value) })),
+            ...this.rlSuggestionsFor('models', n.model).map((s, i) => ({ key: 'model:' + i, text: s.text, sub: 'model · ' + s.sub, pick: () => this.pickRateLimitSuggestion('model', s.value) }))
+          ]
+          : this.rlSuggestionsFor(kind, n.target).map((s, i) => ({ key: i, text: s.text, sub: s.sub, pick: () => this.pickRateLimitSuggestion('target', s.value) })))
+        : [];
+      const known = kind === 'models' && !info.pair && n.target
+        ? (this.models || []).some(m => (m.id || '').toLowerCase() === n.target.trim().toLowerCase() || (m.aliases || []).some(a => a.toLowerCase() === n.target.trim().toLowerCase()))
+        : null;
+      const capacity = tier.rpm + tier.burst;
+      const subject = info.singleton ? info.name : (info.pair ? (n.subject || '?') + ' on ' + (n.model || '?') : (target || '?'));
+      const summary = tier.rpm > 0
+        ? subject + ' may take ' + this.formatNum(tier.rpm) + ' requests a minute' +
+          (tier.burst > 0 ? ', up to ' + this.formatNum(capacity) + ' at once after a quiet spell (' + this.formatNum(tier.rpm) + ' + ' + this.formatNum(tier.burst) + ' burst)' : ', with no extra burst') +
+          (tier.maxConcurrentStreams > 0 ? ', with at most ' + this.formatNum(tier.maxConcurrentStreams) + ' streams open.' : '.')
+        : subject + ' is not rate-limited by this rule' + (tier.maxConcurrentStreams > 0 ? ', but may hold at most ' + this.formatNum(tier.maxConcurrentStreams) + ' streams open.' : '.');
+      return {
+        step,
+        steps: [
+          { key: 1, label: '1 Scope', cls: step === 1 ? 'active' : '' },
+          { key: 2, label: '2 Target', cls: step === 2 ? 'active' : (info.singleton ? 'skipped' : '') },
+          { key: 3, label: '3 Limit', cls: step === 3 ? 'active' : '' },
+          { key: 4, label: '4 Schedule · optional', cls: '' }
+        ],
+        title: step === 1 ? 'What should it limit?' : step === 2 ? 'Which ' + info.short.toLowerCase() + '?' : 'How much?',
+        scopeCards: this.rlScopeCatalog().map(s => ({
+          key: s.id, name: s.name, desc: s.desc,
+          cls: 'rl-scope-card' + (n.scope === s.id ? ' sel' : ''),
+          select: () => this.setRateLimitNewRuleScope(s.id)
+        })),
+        isStep1: step === 1, isStep2: step === 2, isStep3: step === 3, notStep3: step !== 3,
+        isPair: !!info.pair,
+        isSingle: !info.pair,
+        targetLabel: info.hint || 'Target',
+        subjectLabel: info.hint || 'Subject',
+        suggestions,
+        hasSuggestions: suggestions.length > 0,
+        unknownNote: known === false ? 'Not a registered model. The rule is stored and applies as soon as a model with this id exists.' : '',
+        summary,
+        summaryTitle: info.singleton ? info.name : subject,
+        error: this.rlNewRuleError || '',
+        showBack: step > 1,
+        nextLabel: step === 1 ? (info.singleton ? 'Set the limit' : 'Choose the ' + info.short.toLowerCase()) : 'Set the limit',
+        isTenant: n.scope === 'tenant'
+      };
+    },
+
+    get rlWindowClosed() { return !this.rlWindowOpen; },
+
+    get rlTierView() {
+      const t = this.rlTier;
+      const isPlan = t.kind === 'plan';
+      const tier = this.rlTierPayload(t);
+      const capacity = tier.rpm + tier.burst;
+      const who = isPlan ? 'Tenants on plan “' + (String(t.slug || '').trim() || '…') + '”' : 'Tenants without a matching plan';
+      return {
+        title: isPlan ? (t.isNew ? 'New plan tier' : 'Plan · ' + t.originalSlug) : 'Default tier',
+        hint: isPlan
+          ? 'Tenants whose plan slug matches get this tier instead of the default. A tenant rule still overrides it.'
+          : 'The tier every tenant gets unless a plan or a tenant rule matches them.',
+        isPlan,
+        canRemove: isPlan && !t.isNew,
+        applyLabel: t.isNew ? 'Add plan' : 'Done',
+        summary: who + ' may take ' + this.formatNum(tier.rpm) + ' requests a minute' +
+          (tier.burst > 0 ? ', up to ' + this.formatNum(capacity) + ' at once after a quiet spell (' + this.formatNum(tier.rpm) + ' + ' + this.formatNum(tier.burst) + ' burst)' : '') +
+          (tier.maxConcurrentStreams > 0 ? ', with at most ' + this.formatNum(tier.maxConcurrentStreams) + ' streams open.' : ', with no cap on open streams.')
+      };
     },
 
     // The admin page runs under a CSP-friendly Alpine build that evaluates property paths only, so

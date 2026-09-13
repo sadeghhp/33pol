@@ -65,7 +65,7 @@ directive that the evaluator could not resolve fails the build instead of the op
 | API keys | `#/keys` | List (assignee, MTD usage, last used), create/edit metadata, per-key model access, revoke, archive/restore, permanently delete a never-used key, view usage |
 | Logs | `#/logs` | In-memory diagnostic tail (warning and above), severity and search filters, expandable detail with hint and request ID, clear buffer |
 | Errors | `#/errors` | Persisted, grouped failures: time-range presets, model / status / code facets, occurrence drill-down with stack trace, request-ID cross-link, JSON+CSV export, clear all |
-| Settings | `#/settings` | Config status, rate limits (default + plans), tenant model allowlist, observability links |
+| Settings | `#/settings` | Config status, rate limits (tiers, scoped rules, scheduled windows, calendar), tenant model allowlist, observability links |
 
 ### Logs vs Errors
 
@@ -212,7 +212,7 @@ GET requests retry once on network failure. Usage export uses `downloadBlob` wit
 **API key metadata:** Create or **Edit** keys with **Label**, **Assignee**, **Cost center**, and **Description**. Assignee is for ownership display; cost center is independent and drives FinOps rollups when set (overrides tenant default on inference). List with `GET /admin/api/keys?includeUsageSummary=true` for month-to-date cost/request counts and **Last used**.
 
 **Usage filters:** Usage tab supports **Cost center** and **API key** filters on rollups (cost center) and billing events (both). Use **Usage** on a key row to jump here filtered to that key.
-| Settings | `GET /admin/api/config/status`, `POST /admin/api/config/reload`, `GET/PUT /admin/api/rate-limits` |
+| Settings | `GET /admin/api/config/status`, `POST /admin/api/config/reload`, `GET/PUT /admin/api/rate-limits`, `GET /admin/api/rate-limits/schedule`, `POST /admin/api/rate-limits/windows/preview`, `GET /admin/api/rate-limits/usage` |
 
 **Errors query parameters** (shared by groups, occurrences and export): `from`, `to` (ISO-8601),
 `level`, `modelId`, `status`, `code`, `tenantId`, `requestId`, `fingerprint`, `search`,
@@ -220,7 +220,7 @@ GET requests retry once on network failure. Usage export uses `downloadBlob` wit
 Both list responses report `total` as the count matched **before** paging, plus `source`
 (`database` or `memory`) and `persisted`, so the console can say when errors are in-memory only.
 
-Rate limit changes are written to `appsettings.json` and applied via configuration reload (see [rate-limit-admin.md](./runbooks/rate-limit-admin.md)).
+Rate limit changes are written to the gateway database and applied without a restart; the page stages edits in drawers and saves them from a sticky bar (see [rate-limit-admin.md](./runbooks/rate-limit-admin.md)).
 
 After adding or editing a model, verify **`GET /v1/models`** (link on Routing → Models).
 

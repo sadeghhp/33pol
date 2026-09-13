@@ -1712,102 +1712,197 @@
             </div>
           </div>
 
-          <!-- Rate limits -->
-          <div class="card" x-show="isSettingsLimits">
-            <span class="eyebrow">Throttling</span>
-            <h3>Rate limits</h3>
-            <p class="hint">Default tier and plan tiers (RPM, burst, max concurrent streams). Stored in the database and applied without a restart. A tier is a <strong>tenant-wide</strong> budget &mdash; every API key a tenant holds draws on the same one.</p>
-            <dl class="setting-defs">
-              <dt>Default</dt>
-              <dd>The tier every tenant gets unless a plan (or a tenant override) matches them.</dd>
-              <dt>Plan slug</dt>
-              <dd>Name of a plan, such as <code>standard</code>. Tenants on that plan use the tier on this row instead of the default.</dd>
-              <dt>RPM</dt>
-              <dd>Requests per minute the tenant may keep up over time &mdash; the sustained ceiling. Minimum 1; there is no &ldquo;unlimited&rdquo; value.</dd>
-              <dt>Burst</dt>
-              <dd>The maximum number of extra requests allowed in a short period before rate limiting kicks in. A tenant that has been idle can send <strong>RPM + Burst</strong> requests back-to-back, then drops to the RPM pace. 0 means no spike allowance beyond one minute&rsquo;s worth of requests.</dd>
-              <dt>Max streams</dt>
-              <dd>Streaming responses the tenant may hold open at the same time. <strong>0 means unlimited</strong>, not &ldquo;streaming off&rdquo; &mdash; there is no per-tier way to refuse streaming.</dd>
-            </dl>
+          <!-- Rate limits: read first, edit on demand. The page is a summary; editing happens in
+               the rule, tier and new-rule drawers below, and the sticky bar appears while the
+               draft differs from what the server has. -->
+          <div x-show="isSettingsLimits">
             <p class="notice error" x-show="rateLimitsLoadError" x-text="rateLimitsLoadError"></p>
             <p class="hint" x-show="rateLimitsLoading">Loading rate limits…</p>
-            <template x-if="rateLimits">
-              <div>
-                <label class="checkbox">
-                  <input type="checkbox" x-model="mdl.rateLimits.enabled" />
-                  Enforce rate limits
-                </label>
-                <p class="hint">Turning this off disables request-rate and concurrent-stream limits for every tenant and plan. The values below stay saved and take effect again when you re-enable it.</p>
-                <p class="notice error" x-show="rateLimitsDisabled">Rate limiting is disabled — clients can send unlimited requests. Quotas and budgets still apply.</p>
-                <div class="rl-grid">
-                  <span class="rl-name">Default</span>
-                  <label>RPM <input type="number" min="1" title="Sustained requests per minute for this tier. Minimum 1." x-model.number="mdl.rateLimits.default.rpm" /></label>
-                  <label>Burst <input type="number" min="0" title="Extra requests allowed in a short spike, on top of RPM. An idle tenant may send RPM + Burst at once. 0 = no spike allowance." x-model.number="mdl.rateLimits.default.burst" /></label>
-                  <label>Max streams <input type="number" min="0" title="Concurrent streaming responses per tenant. 0 = unlimited." x-model.number="mdl.rateLimits.default.maxConcurrentStreams" /></label>
-                </div>
-                <template x-for="row in rateLimitPlanViewRows" :key="row.key">
-                  <div class="rl-grid rl-plan">
-                    <label>Plan slug <input type="text" title="Plan name this tier applies to, e.g. standard." x-model="row.slug" placeholder="standard" /></label>
-                    <label>RPM <input type="number" min="1" title="Sustained requests per minute for this tier. Minimum 1." x-model.number="row.rpm" /></label>
-                    <label>Burst <input type="number" min="0" title="Extra requests allowed in a short spike, on top of RPM. An idle tenant may send RPM + Burst at once. 0 = no spike allowance." x-model.number="row.burst" /></label>
-                    <label>Max streams <input type="number" min="0" title="Concurrent streaming responses per tenant. 0 = unlimited." x-model.number="row.maxConcurrentStreams" /></label>
-                    <button type="button" class="action secondary" @click="row.remove"><span class="icon" x-html="icons.trash"></span> Remove</button>
+            <template x-if="rateLimitsLoaded">
+              <div class="rl-page">
+                <p class="notice warn" x-show="rateLimitsReadOnlyText" x-text="rateLimitsReadOnlyText"></p>
+
+                <!-- Status -->
+                <div class="card rl-status">
+                  <label class="rl-switch" title="Enforce rate limits">
+                    <input type="checkbox" x-model="mdl.rlDraft.enabled" :disabled="rateLimitsLocked" aria-label="Enforce rate limits" />
+                    <span class="rl-switch-track"></span>
+                  </label>
+                  <div class="rl-status-text">
+                    <div class="rl-status-title" :class="rlStatusView.titleClass" x-text="rlStatusView.title"></div>
+                    <div class="rl-status-sub">
+                      <label class="rl-switch sm" title="Adapt model limits to load">
+                        <input type="checkbox" x-model="mdl.rlDraft.adaptiveEnabled" :disabled="rateLimitsLocked" aria-label="Adapt model limits to load" />
+                        <span class="rl-switch-track"></span>
+                        <span x-text="rlStatusView.adaptiveText"></span>
+                      </label>
+                      <span class="rl-sep">·</span>
+                      <span>applies without a restart</span>
+                      <span class="rl-sep">·</span>
+                      <button type="button" class="rl-link" @click="scrollToRateLimitUsage">Usage report</button>
+                      <span class="rl-sep">·</span>
+                      <button type="button" class="rl-link" @click="reloadRateLimits" :disabled="loadingSettings">Reload</button>
+                    </div>
                   </div>
-                </template>
-                <div class="toolbar" style="margin-top: var(--space-4); margin-bottom: 0">
-                  <button type="button" class="action secondary" @click="addRateLimitPlanRow"><span class="icon" x-html="icons.plus"></span> Add plan</button>
+                  <div class="rl-stats">
+                    <div class="rl-stat"><span class="v" x-text="rlStatusView.rules"></span><span class="l">Rules</span></div>
+                    <div class="rl-stat"><span class="v" x-text="rlStatusView.windows"></span><span class="l">Windows</span></div>
+                    <div class="rl-stat" :title="rlStatusView.scheduleError"><span class="v" :class="rlStatusView.activeClass"><span class="rl-dot on" x-show="rlStatusView.activeClass"></span><span x-text="rlStatusView.active"></span></span><span class="l">Active now</span></div>
+                    <div class="rl-stat"><span class="v" x-text="rlStatusView.next"></span><span class="l" x-text="rlStatusView.nextSub"></span></div>
+                  </div>
+                </div>
+                <p class="notice error" x-show="rateLimitsDisabled">Rate limiting is disabled — clients can send unlimited requests. Quotas and budgets still apply. Schedules are paused, not deleted.</p>
+
+                <!-- Tiers -->
+                <div class="rl-section">
+                  <div class="rl-section-head">
+                    <div><h3>Tiers</h3><p class="sub">What a tenant gets by plan. Every key a tenant holds shares its tier; a tenant rule below overrides it.</p></div>
+                    <button type="button" class="action secondary" @click="openRateLimitNewPlan" x-show="rateLimitsEditable"><span class="icon" x-html="icons.plus"></span> Add plan</button>
+                  </div>
+                  <div class="rl-tiers">
+                    <template x-for="t in rlTierCards" :key="t.key">
+                      <button type="button" class="rl-tier" @click="t.edit" :disabled="rateLimitsLocked">
+                        <span class="rl-tier-name"><span x-text="t.name"></span><span class="rl-tier-who" x-text="t.who"></span></span>
+                        <span class="rl-tier-nums">
+                          <span class="rl-tier-n"><b x-text="t.rpm"></b><span>rpm</span></span>
+                          <span class="rl-tier-n"><b x-text="t.burst"></b><span>burst</span></span>
+                          <span class="rl-tier-n" :title="t.streamsTitle"><b x-text="t.streams"></b><span>streams</span></span>
+                        </span>
+                      </button>
+                    </template>
+                  </div>
                 </div>
 
-                <h4 class="rl-subhead">Scoped rules</h4>
-                <p class="hint">
-                  Limits on a single model, a single API key, or one caller&rsquo;s use of one model. Scoped rules
-                  <strong>compose</strong> with the tiers above rather than replacing them: a request needs room in
-                  <em>every</em> rule that applies to it, so adding one here can only ever tighten what a caller may do.
-                  Targets are the canonical model id, the tenant id, or the API key id;
-                  <code>tenant&nbsp;&amp;&nbsp;model</code> and <code>key&nbsp;&amp;&nbsp;model</code> take
-                  <code>subject|model</code>. Leave RPM at 0 for a rule that only caps concurrent streams.
-                </p>
-                <template x-for="row in rateLimitRuleViewRows" :key="row.key">
-                  <div class="rl-grid rl-rule">
-                    <label>Scope
-                      <select x-model="row.scope" title="Which dimension this rule counts against.">
-                        <option value="model">Model</option>
-                        <option value="api_key">API key</option>
-                        <option value="tenant">Tenant</option>
-                        <option value="tenant_model">Tenant &amp; model</option>
-                        <option value="api_key_model">Key &amp; model</option>
-                        <option value="global">Whole gateway</option>
-                        <option value="auth_failure">Failed auth</option>
-                        <option value="anonymous">Anonymous callers</option>
+                <!-- Rules -->
+                <div class="rl-section">
+                  <div class="rl-section-head">
+                    <div><h3>Rules</h3><p class="sub">Limits on one model, key or tenant. Every rule that applies must admit a request, so a rule only ever tightens. Open a rule to change it or add windows.</p></div>
+                    <button type="button" class="action" @click="openRateLimitNewRule" x-show="rateLimitsEditable"><span class="icon" x-html="icons.plus"></span> New rule</button>
+                  </div>
+                  <div class="toolbar rl-toolbar" x-show="rlHasRules">
+                    <div class="filter-field rl-filter">
+                      <span class="icon" x-html="icons.search"></span>
+                      <input type="search" x-model="mdl.rlFilterText" placeholder="Find a model, tenant, key or window" aria-label="Filter rules" />
+                    </div>
+                    <div class="rl-chips" role="group" aria-label="Filter by scope">
+                      <template x-for="c in rlScopeChips" :key="c.key">
+                        <button type="button" class="preset" :class="c.cls" @click="c.select"><span x-text="c.label"></span> <i x-text="c.count"></i></button>
+                      </template>
+                    </div>
+                  </div>
+                  <div class="empty-state" x-show="rlNoRules">
+                    <span class="empty-state-icon icon" x-html="icons.layers"></span>
+                    <span>No scoped rules yet. Tenants are held to their tier; add a rule to limit one model, key or tenant on its own.</span>
+                    <button type="button" class="action" @click="openRateLimitNewRule" x-show="rateLimitsEditable"><span class="icon" x-html="icons.plus"></span> New rule</button>
+                  </div>
+                  <p class="hint" x-show="rlNoFilteredRules">No rule matches that filter.</p>
+                  <div class="rl-rules card" x-show="rlHasRules">
+                    <table class="rl-rules-table">
+                      <thead><tr><th class="rl-col-rule">Rule</th><th class="rl-col-tier">Base tier</th><th class="rl-col-sched">Schedule</th><th>In force now</th><th class="rl-col-chev"></th></tr></thead>
+                      <tbody>
+                        <template x-for="r in rlRuleRows" :key="r.key">
+                          <tr class="rl-row" :class="r.rowCls" @click="r.open" tabindex="0" @keydown.enter="r.open" role="button">
+                            <td><span class="rl-target" x-text="r.target"></span><span class="rl-scope" x-text="r.scope"></span></td>
+                            <td><span class="rl-nums" x-text="r.tier"></span></td>
+                            <td><span :class="r.windowsCls" x-text="r.windowsText"></span></td>
+                            <td><div class="rl-force" :title="r.forceTitle"><span :class="r.forceDot"></span><div><b x-text="r.forceText"></b><span class="rl-until" x-text="r.forceSub"></span></div></div></td>
+                            <td class="rl-col-chev"><span class="icon" x-html="icons.chevron-right"></span></td>
+                          </tr>
+                        </template>
+                      </tbody>
+                    </table>
+                  </div>
+                  <details class="rl-disclose">
+                    <summary>How rules, tiers and windows combine</summary>
+                    <p class="hint">A request needs room in <em>every</em> rule that applies to it: the gateway ceiling, the caller&rsquo;s tenant tier, its key rule, the model rule, and the tenant-on-model and key-on-model rules. Nothing overrides anything else, so adding a rule can only tighten what a caller may do. The one exception is inside the tenant tier, where a tenant rule beats the plan tier, which beats the default. A window changes a rule&rsquo;s numbers for a span of time; a one-time window outranks a weekly one, and when no window is active the base tier applies. Tightening bites on the next request; a raised limit refills at the new rate rather than jumping to full.</p>
+                  </details>
+                </div>
+
+                <!-- Calendar -->
+                <div class="rl-section">
+                  <div class="rl-section-head">
+                    <div><h3>Calendar</h3><p class="sub">When limits change, <span x-text="rlTimelineView.rangeText"></span>. From the saved configuration; unsaved edits are not drawn until you save.</p></div>
+                    <div class="rl-cal-controls">
+                      <select x-model.number="mdl.rlRangeDays" @change="onRateLimitRangeChange" aria-label="Calendar range">
+                        <template x-for="o in rlRangeOptions" :key="o.value"><option :value="o.value" x-text="o.label"></option></template>
                       </select>
-                    </label>
-                    <label>Target <input type="text" title="Model id, tenant id, key id, or subject|model. Use * for the gateway-wide, failed-auth and anonymous scopes." x-model="row.target" placeholder="gpt-4" /></label>
-                    <label>RPM <input type="number" min="0" title="Sustained requests per minute for this rule. 0 = this rule does not limit the rate." x-model.number="row.rpm" /></label>
-                    <label>Burst <input type="number" min="0" title="Extra requests allowed in a short spike, on top of RPM." x-model.number="row.burst" /></label>
-                    <label>Max streams <input type="number" min="0" title="Concurrent streaming responses in this scope. 0 = unlimited." x-model.number="row.maxConcurrentStreams" /></label>
-                    <button type="button" class="action secondary" @click="row.remove"><span class="icon" x-html="icons.trash"></span> Remove</button>
+                      <select x-model="mdl.rlZone" @change="onRateLimitZoneChange" aria-label="Show times in">
+                        <template x-for="z in rlZoneOptions" :key="z.value"><option :value="z.value" x-text="z.label"></option></template>
+                      </select>
+                    </div>
                   </div>
-                </template>
-                <div class="toolbar" style="margin-top: var(--space-4); margin-bottom: 0">
-                  <button type="button" class="action secondary" @click="addRateLimitRuleRow"><span class="icon" x-html="icons.plus"></span> Add rule</button>
+                  <p class="notice error" x-show="rlScheduleError" x-text="rlScheduleError"></p>
+                  <div class="rl-cal">
+                    <div class="card rl-cal-main">
+                      <div class="empty-state rl-cal-empty" x-show="rlTimelineView.empty">
+                        <span>No windows yet. Open a rule and add a window to see it here.</span>
+                      </div>
+                      <div class="rl-tl" x-show="rlTimelineView.hasRows">
+                        <div></div>
+                        <div class="rl-tl-axis">
+                          <template x-for="a in rlTimelineView.axis" :key="a.key"><span :style="a.style" x-text="a.label"></span></template>
+                        </div>
+                        <template x-for="row in rlTimelineView.rows" :key="row.key">
+                          <div class="rl-tl-row">
+                            <button type="button" class="rl-tl-label" @click="row.open"><span class="t" x-text="row.label"></span><span class="s" x-text="row.sub"></span></button>
+                            <div class="rl-tl-track">
+                              <div class="rl-tl-grid"></div>
+                              <template x-for="b in row.bands" :key="b.key"><div :class="b.cls" :style="b.style" :title="b.title"></div></template>
+                              <div class="rl-now" :style="rlTimelineView.nowStyle" x-show="rlTimelineView.showNow"></div>
+                            </div>
+                          </div>
+                        </template>
+                      </div>
+                      <div class="rl-legend" x-show="rlTimelineView.hasRows">
+                        <template x-for="l in rlTimelineView.legend" :key="l.key"><span><i :class="l.cls"></i><span x-text="l.text"></span></span></template>
+                        <span><i class="rl-legend-swatch base"></i>base tier</span>
+                        <span><i class="rl-legend-swatch past"></i>past</span>
+                      </div>
+                      <div class="rl-preview">
+                        <label class="rl-preview-label">Preview at</label>
+                        <input type="datetime-local" x-model="mdl.rlPreviewAt" @change="runRateLimitPreview" @keydown.enter="runRateLimitPreview" aria-label="Preview at" />
+                        <button type="button" class="action secondary sm" @click="runRateLimitPreview">Show</button>
+                        <button type="button" class="action ghost sm" @click="clearRateLimitPreview" x-show="rlPreviewView.has">Clear</button>
+                        <span class="muted">what would every rule enforce at that moment?</span>
+                      </div>
+                      <p class="field-error" x-show="rlPreviewView.error" x-text="rlPreviewView.error"></p>
+                      <div class="rl-preview-res" x-show="rlPreviewView.has">
+                        <div class="rl-preview-title" x-text="rlPreviewView.title"></div>
+                        <template x-for="p in rlPreviewView.rows" :key="p.key">
+                          <div class="rl-preview-row"><span class="k" x-text="p.target"></span><span :class="p.tagCls" x-text="p.tag"></span><span class="r"><span x-text="p.tier"></span> <span class="muted" x-text="p.next"></span></span></div>
+                        </template>
+                        <div class="rl-preview-row muted" x-show="rlPreviewView.unchanged" x-text="rlPreviewView.unchanged"></div>
+                      </div>
+                    </div>
+                    <div class="card rl-cal-side">
+                      <h4 class="rl-h4">Coming up</h4>
+                      <p class="hint" x-show="rlTransitionsView.empty">Nothing changes in this range.</p>
+                      <template x-for="t in rlTransitionRows" :key="t.key">
+                        <div class="rl-trans">
+                          <span class="when"><span x-text="t.when"></span><span class="rel" x-text="t.rel"></span></span>
+                          <span class="what"><span class="mono" x-text="t.target"></span> <span x-text="t.what"></span></span>
+                          <span :class="t.deltaCls" x-text="t.delta"></span>
+                        </div>
+                      </template>
+                      <button type="button" class="rl-link" x-show="rlTransitionsView.showToggle" @click="toggleRateLimitTransitions" x-text="rlTransitionsView.toggleText"></button>
+                      <p class="hint" x-show="rlTransitionsView.truncatedNote" x-text="rlTransitionsView.truncatedNote"></p>
+                    </div>
+                  </div>
                 </div>
 
-                <h4 class="rl-subhead">Load-aware enforcement</h4>
-                <label class="checkbox">
-                  <input type="checkbox" x-model="mdl.rateLimits.adaptiveEnabled" />
-                  Adapt model limits to load
-                </label>
-                <p class="hint">
-                  While a model is saturated, its per-model rules are held below their configured rate and clients that keep
-                  being refused are told to wait longer. It <strong>never raises a limit</strong> above what you configured, and
-                  never below the floor in <code>RateLimiting:Adaptive:MinFactor</code>. Turn it off to enforce exactly the
-                  numbers above; the usage report below shows what it is doing and why.
-                </p>
-
-                <div class="toolbar" style="margin-top: var(--space-4); margin-bottom: 0">
+                <!-- Sticky save bar: present only while the draft differs from the server. -->
+                <div class="rl-savebar" x-show="rlDirtyView.show" x-transition.opacity role="status">
+                  <span class="rl-dot accent"></span>
+                  <div class="rl-savebar-text"><span x-text="rlDirtyView.countText"></span><small x-text="rlDirtyView.detail"></small></div>
                   <span class="spacer"></span>
-                  <button type="button" class="action secondary" @click="loadRateLimits" :disabled="loadingSettings">Reload</button>
-                  <button type="button" class="action" @click="saveRateLimits" :disabled="loadingSettings">Save rate limits</button>
+                  <button type="button" class="action ghost" @click="discardRateLimitChanges" :disabled="loadingSettings">Discard</button>
+                  <button type="button" class="action secondary" @click="toggleRateLimitReview" :disabled="loadingSettings">Review changes</button>
+                  <button type="button" class="action" @click="saveRateLimits" :disabled="rateLimitsLocked">Save</button>
+                </div>
+                <div class="card rl-review" x-show="rlReviewOpen">
+                  <ul>
+                    <template x-for="i in rlDirtyView.items" :key="i.key"><li x-text="i.text"></li></template>
+                  </ul>
                 </div>
                 <p class="field-error" x-show="rateLimitFieldError" x-text="rateLimitFieldError"></p>
               </div>
@@ -1815,7 +1910,7 @@
           </div>
 
           <!-- Rate-limit usage report -->
-          <div class="card" x-show="isSettingsLimits">
+          <div class="card" id="rate-limit-usage" x-show="isSettingsLimits">
             <span class="eyebrow">Who is using what</span>
             <h3>Rate-limit usage</h3>
             <p class="hint">
@@ -2182,6 +2277,244 @@
       <div class="modal-actions">
         <button type="button" class="action secondary" @click="closeModelTestDialog">Close</button>
         <button type="button" class="action" @click="rerunModelTest" :disabled="modelTest.rerunDisabled">Run again</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Rate limits: rule drawer (with the window form as a sub-panel) -->
+  <div class="drawer-backdrop" x-show="rlRuleDrawerOpen" x-transition.opacity @click.self="closeRateLimitRule" role="presentation">
+    <div class="drawer rl-drawer" role="dialog" aria-modal="true" aria-labelledby="rl-rule-title" @click.stop>
+      <template x-if="rlWindowClosed">
+        <div>
+          <div class="drawer-header">
+            <div><span class="eyebrow" x-text="rlRuleDrawerView.eyebrow"></span><h3 id="rl-rule-title" x-text="rlRuleDrawerView.title"></h3><p class="hint" x-text="rlRuleDrawerView.subtitle"></p></div>
+            <button type="button" class="icon-btn" @click="closeRateLimitRule" aria-label="Close"><span class="icon" x-html="icons.x"></span></button>
+          </div>
+
+          <div :class="rlRuleDrawerView.forceCls">
+            <span :class="rlRuleDrawerView.forceDot"></span>
+            <div><span class="big" x-text="rlRuleDrawerView.forceBig"></span><div class="rest" x-text="rlRuleDrawerView.forceSub"></div></div>
+          </div>
+
+          <div class="drawer-section">
+            <h4 class="rl-h4">Base tier</h4>
+            <p class="hint">Applies whenever no window is active, and whenever a window cannot be evaluated.</p>
+            <div class="rl-bignums">
+              <label class="rl-bignum">RPM<input type="number" min="0" x-model.number="mdl.rlRule.rpm" :disabled="rateLimitsLocked" title="Sustained requests per minute. 0 = this rule does not limit the rate." /></label>
+              <label class="rl-bignum">Burst<input type="number" min="0" x-model.number="mdl.rlRule.burst" :disabled="rateLimitsLocked" title="Extra requests allowed at once after a quiet spell, on top of RPM." /></label>
+              <label class="rl-bignum">Streams<input type="number" min="0" x-model.number="mdl.rlRule.maxConcurrentStreams" :disabled="rateLimitsLocked" title="Concurrent streaming responses. 0 = unlimited." /></label>
+            </div>
+            <p class="field-error" x-show="rlRuleDrawerView.error" x-text="rlRuleDrawerView.error"></p>
+          </div>
+
+          <div class="drawer-section">
+            <h4 class="rl-h4">Windows <button type="button" class="action secondary sm" @click="openRateLimitNewWindow" x-show="rateLimitsEditable"><span class="icon" x-html="icons.plus"></span> Add window</button></h4>
+            <p class="hint">A different tier for a span of time. A one-time window outranks a weekly one; same-kind windows may not overlap.</p>
+            <p class="hint" x-show="rlRuleDrawerView.noWindows">No windows. The base tier applies around the clock.</p>
+            <div class="rl-wins">
+              <template x-for="w in rlRuleDrawerView.windows" :key="w.key">
+                <button type="button" :class="w.cls" @click="w.edit" :disabled="rateLimitsLocked">
+                  <span class="t"><span x-text="w.name"></span> <span :class="w.kindCls" x-text="w.kindTag"></span></span>
+                  <span class="n" x-text="w.tier"></span>
+                  <span class="w" x-text="w.when"></span>
+                  <span class="s"><span :class="w.stateCls" x-text="w.stateText"></span></span>
+                </button>
+              </template>
+            </div>
+          </div>
+
+          <div class="drawer-section" x-show="rlRuleDrawerView.hasBands">
+            <h4 class="rl-h4">This week <span class="muted">as saved</span></h4>
+            <div class="rl-tl-track mini">
+              <div class="rl-tl-grid"></div>
+              <template x-for="b in rlRuleDrawerView.bands" :key="b.key"><div :class="b.cls" :style="b.style" :title="b.title"></div></template>
+              <div class="rl-now" :style="rlRuleDrawerView.nowStyle"></div>
+            </div>
+            <div class="rl-tl-axis mini">
+              <template x-for="a in rlTimelineView.axis" :key="a.key"><span :style="a.style" x-text="a.label"></span></template>
+            </div>
+          </div>
+
+          <div class="drawer-section">
+            <h4 class="rl-h4">Usage <span class="muted" x-text="rlRuleDrawerView.usageWindow"></span></h4>
+            <p class="hint" x-text="rlRuleDrawerView.usageText"></p>
+          </div>
+
+          <div class="drawer-footer">
+            <div class="modal-actions rl-drawer-actions">
+              <button type="button" class="action ghost danger-text" @click="confirmDeleteRateLimitRule" x-show="rateLimitsEditable">Delete rule</button>
+              <span class="spacer"></span>
+              <button type="button" class="action secondary" @click="closeRateLimitRule">Cancel</button>
+              <button type="button" class="action" @click="applyRateLimitRule" :disabled="rateLimitsLocked">Done</button>
+            </div>
+            <p class="hint rl-staged">Changes are staged until you save the page.</p>
+          </div>
+        </div>
+      </template>
+
+      <template x-if="rlWindowOpen">
+        <div>
+          <div class="drawer-header">
+            <div><span class="eyebrow" x-text="rlWindowView.eyebrow"></span><h3 id="rl-window-title" x-text="rlWindowView.title"></h3></div>
+            <button type="button" class="icon-btn" @click="closeRateLimitWindow" aria-label="Back"><span class="icon" x-html="icons.arrow-left"></span></button>
+          </div>
+
+          <div class="rl-seg full" role="group" aria-label="Window kind">
+            <template x-for="k in rlWindowView.kindRows" :key="k.key"><button type="button" :class="k.cls" @click="k.select" x-text="k.label"></button></template>
+          </div>
+
+          <label>Name <input type="text" x-model="mdl.rlWindow.name" @input="queueRateLimitWindowPreview" placeholder="off-peak" maxlength="64" /></label>
+
+          <div x-show="rlWindowView.isWeekly">
+            <label class="rl-inline-label">Days it starts</label>
+            <div class="rl-days" role="group" aria-label="Days">
+              <template x-for="d in rlWindowView.dayRows" :key="d.key"><button type="button" :class="d.cls" @click="d.toggle" x-text="d.label"></button></template>
+            </div>
+            <div class="rl-3col">
+              <label>From <input type="time" x-model="mdl.rlWindow.start" @change="queueRateLimitWindowPreview" step="60" /></label>
+              <label>To <input type="time" x-model="mdl.rlWindow.end" @change="queueRateLimitWindowPreview" step="60" title="An end at or before the start runs into the next day. Use 00:00 to 24:00 for a whole day." /></label>
+              <label>Time zone
+                <select x-model="mdl.rlWindow.timeZone" @change="queueRateLimitWindowPreview">
+                  <template x-for="z in rlWindowView.zoneOptions" :key="z.value"><option :value="z.value" x-text="z.label"></option></template>
+                </select>
+              </label>
+            </div>
+          </div>
+
+          <div x-show="rlWindowView.isOnce">
+            <div class="rl-3col">
+              <label>From <input type="datetime-local" x-model="mdl.rlWindow.fromLocal" @change="queueRateLimitWindowPreview" /></label>
+              <label>Until <span class="muted">(optional)</span> <input type="datetime-local" x-model="mdl.rlWindow.untilLocal" @change="queueRateLimitWindowPreview" /></label>
+              <label>Time zone
+                <select x-model="mdl.rlWindow.timeZone" @change="queueRateLimitWindowPreview">
+                  <template x-for="z in rlWindowView.zoneOptions" :key="z.value"><option :value="z.value" x-text="z.label"></option></template>
+                </select>
+              </label>
+            </div>
+            <p class="hint">Leave Until empty for a change that starts at From and stays in force; that is how a planned baseline change is expressed without editing the base numbers at 2 a.m.</p>
+          </div>
+
+          <label class="rl-inline-label">Limit during the window</label>
+          <div class="rl-bignums" x-show="rlWindowView.showTier">
+            <label class="rl-bignum">RPM<input type="number" min="0" x-model.number="mdl.rlWindow.rpm" @input="queueRateLimitWindowPreview" /></label>
+            <label class="rl-bignum">Burst<input type="number" min="0" x-model.number="mdl.rlWindow.burst" @input="queueRateLimitWindowPreview" /></label>
+            <label class="rl-bignum">Streams<input type="number" min="0" x-model.number="mdl.rlWindow.maxConcurrentStreams" @input="queueRateLimitWindowPreview" /></label>
+          </div>
+          <label class="checkbox"><input type="checkbox" x-model="mdl.rlWindow.suspend" @change="queueRateLimitWindowPreview" /> Pause this rule instead <span class="muted">· nothing is enforced by it while the window runs</span></label>
+
+          <div class="rl-summary">
+            <span x-text="rlWindowView.summary"></span>
+            <span class="next" x-show="rlWindowView.next" x-text="rlWindowView.next"></span>
+          </div>
+          <div class="rl-checks">
+            <span :class="rlWindowView.overlapCls" x-text="rlWindowView.overlapText"></span>
+            <span class="muted" x-text="rlWindowView.precedence"></span>
+          </div>
+          <p class="field-error" x-show="rlWindowView.error" x-text="rlWindowView.error"></p>
+
+          <button type="button" class="rl-link" @click="toggleRateLimitWindowAdvanced" :aria-expanded="rlWindowView.showAdvanced" x-text="rlWindowView.advancedLabel"></button>
+          <div class="rl-3col" x-show="rlWindowView.showAdvanced">
+            <label>Priority <input type="number" min="0" max="1000" x-model="mdl.rlWindow.priority" @input="queueRateLimitWindowPreview" placeholder="auto" title="Higher wins. Leave empty for the default: one-time beats weekly." /></label>
+            <label>Valid from <input type="datetime-local" x-model="mdl.rlWindow.validFromLocal" @change="queueRateLimitWindowPreview" /></label>
+            <label>Valid until <input type="datetime-local" x-model="mdl.rlWindow.validUntilLocal" @change="queueRateLimitWindowPreview" /></label>
+          </div>
+
+          <div class="drawer-footer">
+            <div class="modal-actions rl-drawer-actions">
+              <button type="button" class="action ghost danger-text" @click="removeRateLimitWindow" x-show="rlWindowView.isEdit">Remove window</button>
+              <span class="spacer"></span>
+              <button type="button" class="action secondary" @click="closeRateLimitWindow">Back</button>
+              <button type="button" class="action" @click="applyRateLimitWindow" :disabled="rlWindowView.applyDisabled" x-text="rlWindowView.applyLabel"></button>
+            </div>
+          </div>
+        </div>
+      </template>
+    </div>
+  </div>
+
+  <!-- Rate limits: tier drawer -->
+  <div class="drawer-backdrop" x-show="rlTierDrawerOpen" x-transition.opacity @click.self="closeRateLimitTier" role="presentation">
+    <div class="drawer" role="dialog" aria-modal="true" aria-labelledby="rl-tier-title" @click.stop>
+      <div class="drawer-header">
+        <div><span class="eyebrow">Tier</span><h3 id="rl-tier-title" x-text="rlTierView.title"></h3></div>
+        <button type="button" class="icon-btn" @click="closeRateLimitTier" aria-label="Close"><span class="icon" x-html="icons.x"></span></button>
+      </div>
+      <p class="hint" x-text="rlTierView.hint"></p>
+      <label x-show="rlTierView.isPlan">Plan slug <input type="text" x-model="mdl.rlTier.slug" placeholder="standard" title="Tenants whose plan is this slug use this tier instead of the default." /></label>
+      <div class="rl-bignums">
+        <label class="rl-bignum">RPM<input type="number" min="1" x-model.number="mdl.rlTier.rpm" title="Sustained requests per minute. Minimum 1; there is no unlimited value." /></label>
+        <label class="rl-bignum">Burst<input type="number" min="0" x-model.number="mdl.rlTier.burst" title="Extra requests allowed at once after a quiet spell, on top of RPM." /></label>
+        <label class="rl-bignum">Streams<input type="number" min="0" x-model.number="mdl.rlTier.maxConcurrentStreams" title="Concurrent streaming responses per tenant. 0 = unlimited." /></label>
+      </div>
+      <div class="rl-summary" x-text="rlTierView.summary"></div>
+      <p class="field-error" x-show="rlTierError" x-text="rlTierError"></p>
+      <div class="drawer-footer">
+        <div class="modal-actions rl-drawer-actions">
+          <button type="button" class="action ghost danger-text" @click="confirmRemoveRateLimitPlan" x-show="rlTierView.canRemove">Remove plan</button>
+          <span class="spacer"></span>
+          <button type="button" class="action secondary" @click="closeRateLimitTier">Cancel</button>
+          <button type="button" class="action" @click="applyRateLimitTier" x-text="rlTierView.applyLabel"></button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Rate limits: new rule flow -->
+  <div class="drawer-backdrop" x-show="rlNewRuleOpen" x-transition.opacity @click.self="closeRateLimitNewRule" role="presentation">
+    <div class="drawer rl-drawer" role="dialog" aria-modal="true" aria-labelledby="rl-new-title" @click.stop>
+      <div class="drawer-header">
+        <div>
+          <span class="eyebrow">New rule</span><h3 id="rl-new-title" x-text="rlNewRuleView.title"></h3>
+          <div class="rl-steps"><template x-for="s in rlNewRuleView.steps" :key="s.key"><span :class="s.cls" x-text="s.label"></span></template></div>
+        </div>
+        <button type="button" class="icon-btn" @click="closeRateLimitNewRule" aria-label="Close"><span class="icon" x-html="icons.x"></span></button>
+      </div>
+
+      <div x-show="rlNewRuleView.isStep1" class="rl-scopes" role="radiogroup" aria-label="Scope">
+        <template x-for="s in rlNewRuleView.scopeCards" :key="s.key">
+          <button type="button" :class="s.cls" @click="s.select" role="radio"><b x-text="s.name"></b><span x-text="s.desc"></span></button>
+        </template>
+      </div>
+
+      <div x-show="rlNewRuleView.isStep2">
+        <template x-if="rlNewRuleView.isPair">
+          <div>
+            <label><span x-text="rlNewRuleView.subjectLabel"></span> <input type="text" x-model="mdl.rlNewRule.subject" placeholder="acme" /></label>
+            <label>Model id <input type="text" x-model="mdl.rlNewRule.model" placeholder="gpt-4" /></label>
+          </div>
+        </template>
+        <template x-if="rlNewRuleView.isSingle">
+          <label><span x-text="rlNewRuleView.targetLabel"></span> <input type="text" x-model="mdl.rlNewRule.target" placeholder="gpt-4" /></label>
+        </template>
+        <div class="rl-suggest" x-show="rlNewRuleView.hasSuggestions">
+          <template x-for="s in rlNewRuleView.suggestions" :key="s.key">
+            <button type="button" @click="s.pick"><span x-text="s.text"></span><small x-text="s.sub"></small></button>
+          </template>
+        </div>
+        <p class="hint" x-show="rlNewRuleView.unknownNote" x-text="rlNewRuleView.unknownNote"></p>
+      </div>
+
+      <div x-show="rlNewRuleView.isStep3">
+        <div class="rl-bignums">
+          <label class="rl-bignum">RPM<input type="number" min="0" x-model.number="mdl.rlNewRule.rpm" title="0 = this rule does not limit the rate." /></label>
+          <label class="rl-bignum">Burst<input type="number" min="0" x-model.number="mdl.rlNewRule.burst" /></label>
+          <label class="rl-bignum">Streams<input type="number" min="0" x-model.number="mdl.rlNewRule.maxConcurrentStreams" title="0 = unlimited." /></label>
+        </div>
+        <p class="hint" x-show="rlNewRuleView.isTenant">A tenant rule with RPM 0 keeps the plan&rsquo;s rate and only caps streams.</p>
+        <div class="rl-summary"><b x-text="rlNewRuleView.summaryTitle"></b><span class="next" x-text="rlNewRuleView.summary"></span><span class="next">Tenant and key limits still apply on top.</span></div>
+      </div>
+
+      <p class="field-error" x-show="rlNewRuleView.error" x-text="rlNewRuleView.error"></p>
+
+      <div class="drawer-footer">
+        <div class="modal-actions rl-drawer-actions">
+          <button type="button" class="action ghost" @click="rateLimitNewRuleBack" x-show="rlNewRuleView.showBack">Back</button>
+          <span class="spacer"></span>
+          <button type="button" class="action secondary" @click="closeRateLimitNewRule" x-show="rlNewRuleView.notStep3">Cancel</button>
+          <button type="button" class="action" @click="rateLimitNewRuleNext" x-show="rlNewRuleView.notStep3" x-text="rlNewRuleView.nextLabel"></button>
+          <button type="button" class="action secondary" @click="createRateLimitRuleWithSchedule" x-show="rlNewRuleView.isStep3">Add a schedule</button>
+          <button type="button" class="action" @click="createRateLimitRule" x-show="rlNewRuleView.isStep3">Create rule</button>
+        </div>
       </div>
     </div>
   </div>

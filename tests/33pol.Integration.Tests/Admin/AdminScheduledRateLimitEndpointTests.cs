@@ -288,7 +288,17 @@ public sealed class AdminScheduledRateLimitEndpointTests
         json.RootElement.GetProperty("valid").GetBoolean().Should().BeFalse();
         json.RootElement.GetProperty("overlaps").EnumerateArray().Single().GetString().Should().Be("off-peak");
         json.RootElement.GetProperty("outrankedBy").EnumerateArray().Single().GetString().Should().Be("launch");
-        json.RootElement.GetProperty("nextStartAt").GetDateTimeOffset().Should().BeAfter(DateTimeOffset.UtcNow);
+        // On a weekend the candidate is running right now, and "next" is the occurrence in progress.
+        var activeNow = json.RootElement.GetProperty("activeNow").GetBoolean();
+        var nextStart = json.RootElement.GetProperty("nextStartAt").GetDateTimeOffset();
+        if (activeNow)
+        {
+            nextStart.Should().BeOnOrBefore(DateTimeOffset.UtcNow);
+        }
+        else
+        {
+            nextStart.Should().BeAfter(DateTimeOffset.UtcNow);
+        }
 
         var get = await admin.GetAsync("/admin/api/rate-limits");
         using var stored = JsonDocument.Parse(await get.Content.ReadAsStringAsync());
