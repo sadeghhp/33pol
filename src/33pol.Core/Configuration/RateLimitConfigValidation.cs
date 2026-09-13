@@ -129,6 +129,26 @@ public static partial class RateLimitConfigValidation
                 return false;
             }
 
+            // Neither branch below sees a negative rpm: the tier check runs only above zero and the
+            // concurrency-only check only at zero, so -50 with a burst of 100 used to be stored as
+            // a 50-token bucket refilling at the floor rate, and reported as a negative limit.
+            if (rule.Rpm < 0)
+            {
+                error = $"rule '{rule.Identity}' has a negative rpm; use 0 to leave the rate unlimited by this rule.";
+                return false;
+            }
+
+            // A tenant override with rpm 0 inherits its plan's (or the default's) rate and applies
+            // only its stream cap. A burst alongside that zero would have no rate to refill it and
+            // no tier to belong to, so it is refused rather than silently dropped.
+            if (rule.Rpm == 0 &&
+                rule.Burst != 0 &&
+                string.Equals(rule.Scope, RateLimitScopeNames.Tenant, StringComparison.OrdinalIgnoreCase))
+            {
+                error = $"rule '{rule.Identity}' inherits the plan or default rate when rpm is 0; set burst to 0 as well.";
+                return false;
+            }
+
             // Scoped rules may leave rpm at zero to cap only concurrency, so the shared tier check
             // (which floors rpm at 1) is applied only when the rule limits the rate at all.
             if (rule.Rpm > 0 && !TryValidateTier(tier, $"rule '{rule.Identity}'", out error))

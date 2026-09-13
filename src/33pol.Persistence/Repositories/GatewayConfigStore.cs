@@ -99,6 +99,7 @@ public sealed class GatewayConfigStore(GatewayDbContext dbContext) : IGatewayCon
             TenantModels = Scope(byScope, RateLimitScopeNames.TenantModel),
             ApiKeyModels = Scope(byScope, RateLimitScopeNames.ApiKeyModel),
             AuthFailure = Single(byScope, RateLimitScopeNames.AuthFailure),
+            Anonymous = Single(byScope, RateLimitScopeNames.Anonymous),
         };
     }
 

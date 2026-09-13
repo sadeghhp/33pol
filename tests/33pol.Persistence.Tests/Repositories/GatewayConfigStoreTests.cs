@@ -65,6 +65,44 @@ public sealed class GatewayConfigStoreTests
         snapshot.Version.Should().Be(1); // save bumped the config version
     }
 
+    /// <summary>The anonymous tier is one <c>anonymous</c>/<c>*</c> row, loaded like the auth-failure one.</summary>
+    [Fact]
+    public async Task RateLimits_AnonymousRule_LoadsIntoTheAnonymousTier()
+    {
+        await using var db = PersistenceTestDbContextFactory.CreateInMemory(
+            nameof(RateLimits_AnonymousRule_LoadsIntoTheAnonymousTier));
+
+        await new RateLimitSettingsRepository(db).SaveAsync(
+            enabled: true,
+            adaptiveEnabled: false,
+            new RateLimitPolicy(3000, 500, 256),
+            new Dictionary<string, RateLimitPolicy>(StringComparer.OrdinalIgnoreCase),
+            [new RateLimitRuleDefinition(RateLimitScopeNames.Anonymous, RateLimitScopeNames.SingletonTarget, 60, 20, 2)]);
+
+        var snapshot = await new GatewayConfigStore(db).LoadSnapshotAsync();
+
+        snapshot.RateLimits.Anonymous.Should().Be(new RateLimitPolicy(60, 20, 2));
+    }
+
+    /// <summary>No row means "use the default tier", which is what deployments predating the tier get.</summary>
+    [Fact]
+    public async Task RateLimits_WithNoAnonymousRule_LeavesTheAnonymousTierUnlimited()
+    {
+        await using var db = PersistenceTestDbContextFactory.CreateInMemory(
+            nameof(RateLimits_WithNoAnonymousRule_LeavesTheAnonymousTierUnlimited));
+
+        await new RateLimitSettingsRepository(db).SaveAsync(
+            enabled: true,
+            adaptiveEnabled: false,
+            new RateLimitPolicy(3000, 500, 256),
+            new Dictionary<string, RateLimitPolicy>(StringComparer.OrdinalIgnoreCase),
+            []);
+
+        var snapshot = await new GatewayConfigStore(db).LoadSnapshotAsync();
+
+        snapshot.RateLimits.Anonymous.Should().Be(RateLimitPolicy.Unlimited);
+    }
+
     [Fact]
     public async Task RateLimits_SaveDisabled_RoundTripsFlagAndKeepsTierValues()
     {

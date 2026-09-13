@@ -746,6 +746,8 @@ public sealed class ModelRouterMiddleware
         if (_rateLimitPlanResolver is null)
         {
             lease = RateLimitSlotLease.Empty;
+            // The tenant tier only: the anonymous tier is applied by the plan resolver, which every
+            // real host wires, so this path does not consult it.
             var tier = _rateLimitPolicyResolver.Resolve(subject.PlanSlug, subject.TenantId, subject.TenantSlug);
             var single = _rateLimitStore.TryAcquireStreamSlot(subject.PartitionKey, tier);
             if (single.IsAcquired && tier.EnforcesConcurrency)

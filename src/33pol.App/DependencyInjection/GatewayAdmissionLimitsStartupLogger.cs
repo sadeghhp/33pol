@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Options;
 using Pol33.Core.Abstractions;
 using Pol33.Core.Configuration;
+using Pol33.Core.Models;
 
 namespace Pol33.App.DependencyInjection;
 
@@ -20,6 +21,8 @@ namespace Pol33.App.DependencyInjection;
 internal sealed class GatewayAdmissionLimitsStartupLogger(
     IOptions<GatewayOptions> options,
     IGatewayConfigProvider configProvider,
+    IModelRegistry registry,
+    IGatewayAuthenticationState authState,
     IHostEnvironment environment,
     ILogger<GatewayAdmissionLimitsStartupLogger> logger) : IHostedService
 {
@@ -77,6 +80,24 @@ internal sealed class GatewayAdmissionLimitsStartupLogger(
                 + "Admin → Rate limits if the model server is being under-used.",
                 tier.MaxConcurrentStreams,
                 resilience.MaxConcurrentForwardsPerModel);
+        }
+
+        // The anonymous tier is seeded only into a fresh database — the rule seed is a one-shot —
+        // so a deployment upgraded from before it existed still holds anonymous callers to the
+        // default tier. That is thousands of requests a minute per address against a public model,
+        // and nothing else says so.
+        if (rateLimits.Enabled &&
+            authState.IsAuthenticationRequired &&
+            rateLimits.Anonymous.EnforcesNothing &&
+            registry.GetAllModels().Any(static model => model.AllowsPublicGatewayAccess()))
+        {
+            logger.LogWarning(
+                "A publicAccess model is registered and no anonymous rate-limit tier is configured, so "
+                + "every anonymous client address is held to the default tier ({Rpm} rpm + {Burst} burst). "
+                + "Add a rule with scope 'anonymous' and target '*' under Admin → Rate limits to bound "
+                + "unauthenticated callers separately.",
+                tier.Rpm,
+                tier.Burst);
         }
 
         if (!options.Value.ForwardedHeaders.Enabled && !environment.IsDevelopment())

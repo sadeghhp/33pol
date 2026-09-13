@@ -262,6 +262,7 @@ public sealed class GatewayDbBootstrap
         AddMap(RateLimitScopeNames.TenantModel, _rateLimitingOptions.TenantModels);
         AddMap(RateLimitScopeNames.ApiKeyModel, _rateLimitingOptions.ApiKeyModels);
         AddSingleton(RateLimitScopeNames.AuthFailure, _rateLimitingOptions.AuthFailure);
+        AddSingleton(RateLimitScopeNames.Anonymous, _rateLimitingOptions.Anonymous);
 
         if (rules.Count > RateLimitConfigValidation.MaxRules)
         {

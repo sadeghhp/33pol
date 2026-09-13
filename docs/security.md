@@ -169,9 +169,10 @@ Operators may mark individual registry models with `"publicAccess": true` (admin
 - A key the gateway **does** recognise but will not honour — revoked, expired, or belonging to a deactivated tenant — is still rejected with `401`, on public models and on `GET /v1/models` alike. Serving those anonymously would answer `200` to a caller whose credential had been withdrawn, leaving no signal anywhere that it had stopped working.
 - A **valid** inference key still works and attributes usage to the tenant (rate limits, quotas, budgets).
 - Model grants are **not** enforced for public models.
-- Anonymous callers are partitioned for rate limits and quotas by client IP, not pooled into one bucket. Behind a proxy this requires `Gateway:ForwardedHeaders` (below) — without it every anonymous caller shares the proxy's address and one client can exhaust the limit for all of them.
+- Anonymous callers are partitioned for rate limits and quotas by client IP, not pooled into one bucket, and each address is held to the `anonymous` rate-limit tier (60 rpm + 20 burst + 2 streams on a fresh install; see the [rate-limit runbook](runbooks/rate-limit-admin.md)). Without an `anonymous` rule they fall back to the default tier, and the gateway warns at startup. With authentication off entirely, every caller keeps the default tier. Behind a proxy this requires `Gateway:ForwardedHeaders` (below) — without it every anonymous caller shares the proxy's address and one client can exhaust the limit for all of them.
+- An address that has spent its `auth_failure` budget (see the [rate-limit runbook](runbooks/rate-limit-admin.md)) is refused anonymous access to public models until it refills; keys that validate are unaffected.
 
-**Operational guidance:** Use public access only for local or internal upstreams (e.g. LM Studio). Do not mark paid cloud models public without network isolation and strict default/anonymous rate limits.
+**Operational guidance:** Use public access only for local or internal upstreams (e.g. LM Studio). Do not mark paid cloud models public without network isolation and a strict `anonymous` rate-limit rule.
 
 ## Client IP behind a proxy (`Gateway:ForwardedHeaders`)
 

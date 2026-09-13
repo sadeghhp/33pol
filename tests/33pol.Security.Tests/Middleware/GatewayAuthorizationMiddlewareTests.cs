@@ -120,6 +120,34 @@ public sealed class GatewayAuthorizationMiddlewareTests
 
         context.Response.StatusCode.Should().Be(StatusCodes.Status401Unauthorized);
         context.Response.Headers[GatewayHeaders.ErrorCode].ToString().Should().Be("invalid_api_key");
+        context.Items[GatewayAuthContextItems.CredentialRejected].Should()
+            .Be(true, "a refused credential is what the auth-failure limiter charges");
+    }
+
+    /// <summary>
+    /// A recognised key without the role a route needs is answered 403 and left unmarked: it is not
+    /// a guessed credential, so it must not spend the address's guessing budget.
+    /// </summary>
+    [Fact]
+    public async Task InvokeAsync_AuthenticatedWithoutTheRole_Returns403WithoutMarking()
+    {
+        var authState = new GatewayAuthenticationState { IsAuthenticationRequired = true };
+        var authorization = Substitute.For<IAuthorizationService>();
+        authorization.AuthorizeAsync(Arg.Any<ClaimsPrincipal>(), Arg.Any<object?>(), GatewayAuthPolicies.Admin)
+            .Returns(AuthorizationResult.Failed());
+
+        RequestDelegate next = _ => Task.CompletedTask;
+        var sut = new GatewayAuthorizationMiddleware(next, authState, authorization, new OpenAiErrorResponseWriter());
+        var context = new DefaultHttpContext();
+        context.Request.Path = "/admin/api/rate-limits";
+        context.User = CreatePrincipal(ApiKeyRole.Inference);
+        context.Response.Body = new MemoryStream();
+
+        await sut.InvokeAsync(context);
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status403Forbidden);
+        context.Response.Headers[GatewayHeaders.ErrorCode].ToString().Should().Be("insufficient_scope");
+        context.Items.ContainsKey(GatewayAuthContextItems.CredentialRejected).Should().BeFalse();
     }
 
     [Fact]

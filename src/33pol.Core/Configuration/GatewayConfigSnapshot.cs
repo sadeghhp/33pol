@@ -107,6 +107,13 @@ public sealed record RateLimitsConfigSection
     /// </summary>
     public RateLimitPolicy AuthFailure { get; init; } = RateLimitPolicy.Unlimited;
 
+    /// <summary>
+    /// The tier for callers with no credential, per client address block.
+    /// <see cref="RateLimitPolicy.Unlimited"/> means "use the default tier", which is what
+    /// deployments that never configured one get.
+    /// </summary>
+    public RateLimitPolicy Anonymous { get; init; } = RateLimitPolicy.Unlimited;
+
     public static RateLimitsConfigSection Defaults { get; } = new();
 }
 

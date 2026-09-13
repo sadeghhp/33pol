@@ -94,6 +94,7 @@ public static class GatewayConfigSnapshotServiceCollectionExtensions
                 TenantModels = ToPolicyMap(rateLimiting.TenantModels),
                 ApiKeyModels = ToPolicyMap(rateLimiting.ApiKeyModels),
                 AuthFailure = ToPolicy(rateLimiting.AuthFailure),
+                Anonymous = ToPolicy(rateLimiting.Anonymous),
             },
             Quota = new QuotaConfigSection
             {

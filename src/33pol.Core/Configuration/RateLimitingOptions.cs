@@ -71,6 +71,26 @@ public sealed class RateLimitingOptions
         MaxConcurrentStreams = 0,
     };
 
+    /// <summary>
+    /// The tier for callers with no credential on a gateway that requires one, counted per client
+    /// address block. Only reachable while some model is <c>publicAccess</c>; with authentication
+    /// off every caller keeps the default tier.
+    /// </summary>
+    /// <remarks>
+    /// Its own tier because the default one is sized for a paying tenant, and an anonymous address
+    /// used to receive exactly that: thousands of requests a minute per address, with no way to
+    /// configure anything smaller without also tightening every authenticated tenant on the default
+    /// tier. Zero rpm and zero streams means "use the default tier", which is what deployments that
+    /// predate the setting get. A zero rpm with a stream cap keeps the default rate and applies
+    /// only the cap, the same composition a <c>tenant</c> rule with rpm 0 gets.
+    /// </remarks>
+    public RateLimitTierOptions Anonymous { get; set; } = new()
+    {
+        Rpm = 60,
+        Burst = 20,
+        MaxConcurrentStreams = 2,
+    };
+
     public AdaptiveRateLimitOptions Adaptive { get; set; } = new();
 
     public int InMemoryPartitionRetentionSeconds { get; set; } = 3600;

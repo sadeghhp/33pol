@@ -4,6 +4,46 @@ All notable changes to this project are documented here. Version tags follow [Se
 
 ## [Unreleased]
 
+### Added — an anonymous rate-limit tier
+
+Unauthenticated traffic to a `publicAccess` model was held, per client address, to the *default*
+tenant tier: thousands of requests a minute per address under the shipped configuration, with no way
+to configure anything smaller without also tightening every authenticated tenant on the default
+tier. A new `anonymous` rule scope (target `*`, `RateLimiting:Anonymous` in appsettings) now sets the
+tier for anonymous callers; a fresh install seeds it at 60 rpm + 20 burst + 2 concurrent streams per
+address. It composes like a `tenant` rule: `rpm: 0` keeps the default rate and applies only the stream
+cap, and applies only where a caller could have presented a key — a gateway with authentication off
+keeps the default tier for everyone. Rule seeding is a one-shot per database, so an upgraded deployment keeps the default-tier
+behaviour until an operator adds the rule under Settings → Rate limits; the gateway logs a warning at
+startup when a public model is registered and no `anonymous` rule exists.
+
+### Fixed — auth-failure rate limiting: a shared address was a lockout, and the wrong things were charged
+
+Once a client address had spent its auth-failure budget, every request from it was refused before
+authentication — a valid key included. Behind an ingress without `ForwardedHeaders`, or a corporate
+NAT, that made one client retrying a stale key once a second a denial of service against every
+other caller on that address and against the operator's admin access. A spent budget now refuses
+only requests that cannot prove a credential: the limiter authenticates the request itself, a key
+that validates passes (and spends nothing), and the security layer reuses the cached result.
+
+The budget was also charged on any downstream `401` or `403`: the router's 403 for a model the key
+was not granted, and the `401`/`403` the forwarder copies verbatim from an upstream provider. A valid
+key could therefore lock its own address out by asking for the wrong model, and an expired upstream
+credential charged every client address on every request. The security layer now marks the requests
+it refuses (`GatewayAuthContextItems.CredentialRejected`), and only those are charged. A `403` for a
+recognised key — no grant, wrong role, wrong tenant — is no longer charged at all, since nothing is
+being guessed.
+
+### Fixed — rate limiting: a tenant rule with `rpm: 0` was enforced as one request per minute
+
+Every scoped rule reads `rpm: 0` as "this rule does not limit the rate", and the runbook says so. The
+`tenant` scope did not: a per-tenant override replaced the plan tier wholesale and was then floored at
+1 rpm, so a rule written to cap one tenant's streams throttled that tenant to roughly one request a
+minute. An override with `rpm: 0` now keeps the rate of the tenant's plan (or the default tier) and
+contributes only its stream cap. Validation additionally requires `burst: 0` beside that zero, and
+rejects a negative `rpm` on any scope, which the range checks previously never saw. Rows already
+saved with `rpm: 0` behave correctly on upgrade; no migration.
+
 ### Added — API key archiving, and deletion only for keys that were never used
 
 Key management had one destructive verb: revoke. A revoked key stayed in the working set forever, so

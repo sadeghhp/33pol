@@ -99,9 +99,14 @@ public sealed class ForwardedHeadersPartitionTests
                 IntegrationModelsConfig.ApplyStandardModelsSettings(settings, configPath);
 
                 // One request per partition per minute, so a shared partition shows up immediately.
+                // Both tiers, because which one an anonymous caller is held to depends on whether
+                // the gateway requires keys — and this factory does not settle that before the
+                // first request.
                 settings["RateLimiting:Enabled"] = "true";
                 settings["RateLimiting:Default:Rpm"] = "1";
                 settings["RateLimiting:Default:Burst"] = "0";
+                settings["RateLimiting:Anonymous:Rpm"] = "1";
+                settings["RateLimiting:Anonymous:Burst"] = "0";
 
                 if (trustForwardedHeaders)
                 {

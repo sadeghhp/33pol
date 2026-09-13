@@ -61,9 +61,47 @@ public sealed class RateLimitConfigAdminServiceTests
         result.StatusCode.Should().Be(503);
     }
 
+    /// <summary>
+    /// The anonymous tier round-trips as a singleton rule, like the auth-failure one: present on a
+    /// GET when set, and absent when the deployment has none — an absent tier must not come back as
+    /// a rule that enforces nothing.
+    /// </summary>
+    [Fact]
+    public void GetCurrent_ListsTheAnonymousTierAsASingletonRule()
+    {
+        var service = CreateService(
+            new StubServiceProvider(null, null),
+            new GatewayConfigSnapshot
+            {
+                RateLimits = new RateLimitsConfigSection
+                {
+                    AuthFailure = new RateLimitPolicy(60, 20, 0),
+                    Anonymous = new RateLimitPolicy(60, 20, 2),
+                },
+            });
+
+        var rules = service.GetCurrent().Rules;
+
+        rules.Should().Contain(r =>
+            r.Scope == RateLimitScopeNames.Anonymous &&
+            r.TargetKey == RateLimitScopeNames.SingletonTarget &&
+            r.Rpm == 60 && r.Burst == 20 && r.MaxConcurrentStreams == 2);
+    }
+
+    [Fact]
+    public void GetCurrent_WithNoAnonymousTier_ListsNoAnonymousRule()
+    {
+        var service = CreateService(new StubServiceProvider(null, null), new GatewayConfigSnapshot());
+
+        service.GetCurrent().Rules.Should().NotContain(r => r.Scope == RateLimitScopeNames.Anonymous);
+    }
+
     private static RateLimitConfigAdminService CreateService(IServiceProvider provider) =>
+        CreateService(provider, new GatewayConfigSnapshot());
+
+    private static RateLimitConfigAdminService CreateService(IServiceProvider provider, GatewayConfigSnapshot snapshot) =>
         new(
-            new StubConfigProvider(new GatewayConfigSnapshot()),
+            new StubConfigProvider(snapshot),
             new StubScopeFactory(provider),
             NullLogger<RateLimitConfigAdminService>.Instance);
 

@@ -96,13 +96,25 @@ public sealed class RateLimitRuleValidationTests
         error.Should().Contain("more than once");
     }
 
-    [Fact]
-    public void TryValidateRules_ASingletonScopeWithARealTarget_IsRejected()
+    [Theory]
+    [InlineData(RateLimitScopeNames.Global)]
+    [InlineData(RateLimitScopeNames.AuthFailure)]
+    [InlineData(RateLimitScopeNames.Anonymous)]
+    public void TryValidateRules_ASingletonScopeWithARealTarget_IsRejected(string scope)
     {
-        var rules = new[] { new RateLimitRuleDefinition(RateLimitScopeNames.Global, "gpt-4", 10, 0, 0) };
+        var rules = new[] { new RateLimitRuleDefinition(scope, "gpt-4", 10, 0, 0) };
 
         RateLimitConfigValidation.TryValidateRules(rules, out var error).Should().BeFalse();
         error.Should().Contain("single partition");
+    }
+
+    /// <summary>The anonymous tier is a singleton like the auth-failure one: one rule, target <c>*</c>.</summary>
+    [Fact]
+    public void TryValidateRules_AnAnonymousRule_IsAccepted()
+    {
+        var rules = new[] { new RateLimitRuleDefinition(RateLimitScopeNames.Anonymous, "*", 60, 20, 2) };
+
+        RateLimitConfigValidation.TryValidateRules(rules, out var error).Should().BeTrue(error);
     }
 
     /// <summary>
@@ -127,6 +139,55 @@ public sealed class RateLimitRuleValidationTests
 
         RateLimitConfigValidation.TryValidateRules(rules, out var error).Should().BeFalse();
         error.Should().Contain("exceed");
+    }
+
+    /// <summary>
+    /// A tenant rule with rpm 0 inherits the plan or default rate and applies only its stream cap.
+    /// </summary>
+    [Fact]
+    public void TryValidateRules_ATenantRuleWithZeroRpmAndNoBurst_IsAccepted()
+    {
+        var rules = new[] { new RateLimitRuleDefinition(RateLimitScopeNames.Tenant, "acme", 0, 0, 3) };
+
+        RateLimitConfigValidation.TryValidateRules(rules, out var error).Should().BeTrue(error);
+    }
+
+    /// <summary>
+    /// A burst next to an inherited rate has no rate to refill it, so it is refused rather than
+    /// silently dropped.
+    /// </summary>
+    [Fact]
+    public void TryValidateRules_ATenantRuleWithZeroRpmAndABurst_IsRejected()
+    {
+        var rules = new[] { new RateLimitRuleDefinition(RateLimitScopeNames.Tenant, "acme", 0, 5, 3) };
+
+        RateLimitConfigValidation.TryValidateRules(rules, out var error).Should().BeFalse();
+        error.Should().Contain("burst");
+    }
+
+    /// <summary>Other scopes keep accepting a burst-free zero rpm and are not subject to the tenant rule.</summary>
+    [Fact]
+    public void TryValidateRules_AModelRuleWithZeroRpmAndABurst_IsStillAccepted()
+    {
+        var rules = new[] { new RateLimitRuleDefinition(RateLimitScopeNames.Model, "gpt-4", 0, 5, 3) };
+
+        RateLimitConfigValidation.TryValidateRules(rules, out var error).Should().BeTrue(error);
+    }
+
+    /// <summary>
+    /// Neither range check used to see a negative rpm: the tier check runs above zero and the
+    /// concurrency-only check at zero, so -50 with a burst slipped through as a real bucket.
+    /// </summary>
+    [Theory]
+    [InlineData(RateLimitScopeNames.Model)]
+    [InlineData(RateLimitScopeNames.Tenant)]
+    [InlineData(RateLimitScopeNames.ApiKey)]
+    public void TryValidateRules_ANegativeRpm_IsRejected(string scope)
+    {
+        var rules = new[] { new RateLimitRuleDefinition(scope, "target", -50, 100, 0) };
+
+        RateLimitConfigValidation.TryValidateRules(rules, out var error).Should().BeFalse();
+        error.Should().Contain("negative");
     }
 
     /// <summary>Null means "the caller does not manage rules", which is not an error.</summary>

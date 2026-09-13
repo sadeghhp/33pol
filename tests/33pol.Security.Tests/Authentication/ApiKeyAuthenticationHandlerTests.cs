@@ -225,6 +225,66 @@ public sealed class ApiKeyAuthenticationHandlerTests
         await validator.Received(1).ValidateAsync("sk-33pol-good", Arg.Any<CancellationToken>());
     }
 
+    /// <summary>
+    /// The 401 the challenge writes is the one outcome the auth-failure limiter charges, and the
+    /// marker is how it knows — a status code cannot tell this apart from an upstream's 401.
+    /// </summary>
+    [Fact]
+    public async Task HandleChallengeAsync_MarksTheCredentialRejected()
+    {
+        var handler = CreateHandler(out var authState, out _);
+        authState.IsAuthenticationRequired = true;
+
+        var context = new DefaultHttpContext();
+        context.Request.Method = HttpMethods.Post;
+        context.Request.Path = "/v1/chat/completions";
+        context.Response.Body = new MemoryStream();
+
+        await handler.InitializeAsync(new AuthenticationScheme(GatewayAuthSchemes.ApiKey, null, typeof(ApiKeyAuthenticationHandler)), context);
+        await handler.ChallengeAsync(null);
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status401Unauthorized);
+        context.Items[GatewayAuthContextItems.CredentialRejected].Should().Be(true);
+    }
+
+    /// <summary>A challenge that writes nothing (auth off, anonymous path) charges nothing either.</summary>
+    [Fact]
+    public async Task HandleChallengeAsync_WhenAuthenticationIsNotRequired_DoesNotMark()
+    {
+        var handler = CreateHandler(out var authState, out _);
+        authState.IsAuthenticationRequired = false;
+
+        var context = new DefaultHttpContext();
+        context.Request.Path = "/v1/chat/completions";
+        context.Response.Body = new MemoryStream();
+
+        await handler.InitializeAsync(new AuthenticationScheme(GatewayAuthSchemes.ApiKey, null, typeof(ApiKeyAuthenticationHandler)), context);
+        await handler.ChallengeAsync(null);
+
+        context.Items.ContainsKey(GatewayAuthContextItems.CredentialRejected).Should().BeFalse();
+    }
+
+    /// <summary>
+    /// A forbid is a recognised key without the role or tenant a route needs. Nothing is being
+    /// guessed, so nothing is marked for the guessing budget.
+    /// </summary>
+    [Fact]
+    public async Task HandleForbiddenAsync_DoesNotMarkTheCredentialRejected()
+    {
+        var handler = CreateHandler(out var authState, out _);
+        authState.IsAuthenticationRequired = true;
+
+        var context = new DefaultHttpContext();
+        context.Request.Path = "/admin/api/rate-limits";
+        context.Response.Body = new MemoryStream();
+
+        await handler.InitializeAsync(new AuthenticationScheme(GatewayAuthSchemes.ApiKey, null, typeof(ApiKeyAuthenticationHandler)), context);
+        await handler.ForbidAsync(null);
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status403Forbidden);
+        context.Items.ContainsKey(GatewayAuthContextItems.CredentialRejected).Should().BeFalse();
+    }
+
     private static IApiKeyValidator FailingValidator(ApiKeyValidationFailure failure)
     {
         var validator = Substitute.For<IApiKeyValidator>();

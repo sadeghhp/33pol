@@ -173,6 +173,89 @@ public sealed class RateLimitPlanResolverTests
         plan.Rules[0].PartitionKey.Should().Be(RateLimitKeys.Tenant("anon:203.0.113.7"));
     }
 
+    /// <summary>
+    /// An anonymous caller's tenant-scope bucket is held to the anonymous tier, not the one sized
+    /// for a paying tenant. The bucket key does not change: it is the tier that does.
+    /// </summary>
+    [Fact]
+    public void Resolve_AnonymousSubject_UsesTheAnonymousTier()
+    {
+        var resolver = Create(
+            new RateLimitsConfigSection
+            {
+                Default = new RateLimitPolicy(3000, 500, 256),
+                Anonymous = new RateLimitPolicy(60, 20, 2),
+            },
+            authenticationRequired: true);
+
+        var rule = resolver.Resolve(new RateLimitSubject(null, null, null, null, "anon:203.0.113.7"), modelId: null)
+            .Rules.Single();
+
+        rule.Scope.Should().Be(RateLimitScope.Tenant);
+        rule.PartitionKey.Should().Be(RateLimitKeys.Tenant("anon:203.0.113.7"));
+        rule.Policy.Should().Be(new RateLimitPolicy(60, 20, 2));
+        rule.ConfiguredRpm.Should().Be(60);
+    }
+
+    /// <summary>With no anonymous tier configured, anonymous callers keep the default tier as before.</summary>
+    [Fact]
+    public void Resolve_AnonymousSubject_WithNoAnonymousTier_FallsBackToTheDefault()
+    {
+        var resolver = Create(
+            new RateLimitsConfigSection { Default = new RateLimitPolicy(3000, 500, 256) },
+            authenticationRequired: true);
+
+        resolver.Resolve(new RateLimitSubject(null, null, null, null, "anon:203.0.113.7"), modelId: null)
+            .Rules.Single().Policy.Should().Be(new RateLimitPolicy(3000, 500, 256));
+    }
+
+    /// <summary>
+    /// With authentication off nobody could have presented a key, so nobody is anonymous in the
+    /// sense the tier exists for: every caller keeps the default tier, as such deployments always have.
+    /// </summary>
+    [Fact]
+    public void Resolve_SubjectWithoutATenant_WhenAuthenticationIsNotRequired_UsesTheDefault()
+    {
+        var resolver = Create(
+            new RateLimitsConfigSection
+            {
+                Default = new RateLimitPolicy(3000, 500, 256),
+                Anonymous = new RateLimitPolicy(60, 20, 2),
+            },
+            authenticationRequired: false);
+
+        resolver.Resolve(new RateLimitSubject(null, null, null, null, "anon:203.0.113.7"), modelId: null)
+            .Rules.Single().Policy.Should().Be(new RateLimitPolicy(3000, 500, 256));
+    }
+
+    /// <summary>
+    /// The flag is set at startup, possibly after the first plans were resolved, so it has to be
+    /// part of the cache key rather than baked into whichever plan was built first.
+    /// </summary>
+    [Fact]
+    public void Resolve_AfterAuthenticationBecomesRequired_DoesNotServeTheDefaultTierPlan()
+    {
+        var authState = new StubAuthState { IsAuthenticationRequired = false };
+        var resolver = new RateLimitPlanResolver(
+            new MutableConfigProvider(new GatewayConfigSnapshot
+            {
+                RateLimits = new RateLimitsConfigSection
+                {
+                    Default = new RateLimitPolicy(3000, 500, 256),
+                    Anonymous = new RateLimitPolicy(60, 20, 2),
+                },
+            }),
+            governor: null,
+            authState);
+        var subject = new RateLimitSubject(null, null, null, null, "anon:203.0.113.7");
+
+        resolver.Resolve(subject, modelId: null).Rules.Single().Policy.Rpm.Should().Be(3000);
+
+        authState.IsAuthenticationRequired = true;
+
+        resolver.Resolve(subject, modelId: null).Rules.Single().Policy.Rpm.Should().Be(60);
+    }
+
 
     /// <summary>
     /// A per-tenant rule may name the tenant by id or by slug.
@@ -262,8 +345,40 @@ public sealed class RateLimitPlanResolverTests
             .Rules.Single(r => r.Scope == RateLimitScope.Tenant).Policy.Rpm.Should().Be(5);
     }
 
+    /// <summary>
+    /// A tenant rule with rpm 0 reaches the request path as the plan's rate plus the rule's stream
+    /// cap, and reports the inherited rate as the configured one. It used to reach it as 1 rpm.
+    /// </summary>
+    [Fact]
+    public void Resolve_TenantRuleWithZeroRpm_ProducesTheComposedTenantRule()
+    {
+        var resolver = Create(new RateLimitsConfigSection
+        {
+            Default = new RateLimitPolicy(600, 50, 0),
+            Plans = Map(("pro", new RateLimitPolicy(120, 20, 10))),
+            TenantOverrides = Map(("acme", new RateLimitPolicy(0, 0, 3))),
+        });
+
+        var rule = resolver.Resolve(Acme, modelId: null).Rules.Single(r => r.Scope == RateLimitScope.Tenant);
+
+        rule.Policy.Should().Be(new RateLimitPolicy(120, 20, 3));
+        rule.ConfiguredRpm.Should().Be(120);
+        rule.IsAdapted.Should().BeFalse();
+    }
+
     private static RateLimitPlanResolver Create(RateLimitsConfigSection rateLimits) =>
         new(new MutableConfigProvider(new GatewayConfigSnapshot { RateLimits = rateLimits }));
+
+    private static RateLimitPlanResolver Create(RateLimitsConfigSection rateLimits, bool authenticationRequired) =>
+        new(
+            new MutableConfigProvider(new GatewayConfigSnapshot { RateLimits = rateLimits }),
+            governor: null,
+            new StubAuthState { IsAuthenticationRequired = authenticationRequired });
+
+    private sealed class StubAuthState : IGatewayAuthenticationState
+    {
+        public bool IsAuthenticationRequired { get; set; }
+    }
 
     private static IReadOnlyDictionary<string, RateLimitPolicy> Map(
         params (string Key, RateLimitPolicy Policy)[] entries) =>

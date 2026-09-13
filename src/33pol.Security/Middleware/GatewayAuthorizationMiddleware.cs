@@ -65,12 +65,16 @@ public sealed class GatewayAuthorizationMiddleware
 
         if (context.User.Identity?.IsAuthenticated != true)
         {
+            // No usable credential reached this point: the outcome the auth-failure limiter charges.
+            context.Items[GatewayAuthContextItems.CredentialRejected] = true;
             await context.WriteGatewayErrorAsync(
                 _errors.Write(GatewayErrorCode.InvalidApiKey),
                 context.RequestAborted).ConfigureAwait(false);
             return;
         }
 
+        // A recognised key without the role the route needs. Not a credential rejection — there is
+        // nothing being guessed — so it is left unmarked and never spends the guessing budget.
         await context.WriteGatewayErrorAsync(
             _errors.Write(GatewayErrorCode.InsufficientScope),
             context.RequestAborted).ConfigureAwait(false);

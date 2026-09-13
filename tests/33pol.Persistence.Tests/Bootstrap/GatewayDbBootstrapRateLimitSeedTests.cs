@@ -46,6 +46,7 @@ public sealed class GatewayDbBootstrapRateLimitSeedTests
             (RateLimitScopeNames.TenantModel, "acme|local-mock"),
             (RateLimitScopeNames.ApiKeyModel, "key-1|local-mock"),
             (RateLimitScopeNames.AuthFailure, "*"),
+            (RateLimitScopeNames.Anonymous, "*"),
         });
 
         var model = rules.Single(r => r.Scope == RateLimitScopeNames.Model);
@@ -201,7 +202,8 @@ public sealed class GatewayDbBootstrapRateLimitSeedTests
 
         await CreateBootstrap(scope.Db, ConfiguredScopes()).EnsureInitializedAsync();
 
-        (await scope.Db.RateLimitRules.CountAsync()).Should().Be(7);
+        (await scope.Db.RateLimitRules.CountAsync()).Should()
+            .Be(8, "six configured scopes plus the shipped auth-failure and anonymous singletons");
         var defaults = await scope.Db.RateLimitDefaults.AsNoTracking().SingleAsync();
         defaults.Rpm.Should().Be(4242, "an existing tier is not overwritten by a backfill");
         defaults.RulesSeededAt.Should().NotBeNull();
@@ -228,16 +230,39 @@ public sealed class GatewayDbBootstrapRateLimitSeedTests
         rules.Should().NotContain(r => r.Scope == RateLimitScopeNames.TenantModel);
     }
 
-    /// <summary>An unset optional scope is the default shape, so it must not become a row.</summary>
+    /// <summary>
+    /// An unset optional scope is the default shape, so it must not become a row. The two tiers that
+    /// ship with a default — auth-failure and anonymous — are the only rows a bare configuration seeds.
+    /// </summary>
     [Fact]
-    public async Task EnsureInitializedAsync_WithNoScopesConfigured_SeedsOnlyTheAuthFailureDefault()
+    public async Task EnsureInitializedAsync_WithNoScopesConfigured_SeedsOnlyTheShippedSingletons()
     {
         await using var scope = await SqliteScope.CreateAsync();
 
         await CreateBootstrap(scope.Db, new RateLimitingOptions()).EnsureInitializedAsync();
 
         var rules = await scope.Db.RateLimitRules.AsNoTracking().ToListAsync();
-        rules.Select(r => r.Scope).Should().BeEquivalentTo([RateLimitScopeNames.AuthFailure]);
+        rules.Select(r => r.Scope).Should().BeEquivalentTo([RateLimitScopeNames.AuthFailure, RateLimitScopeNames.Anonymous]);
+
+        var anonymous = rules.Single(r => r.Scope == RateLimitScopeNames.Anonymous);
+        anonymous.TargetKey.Should().Be(RateLimitScopeNames.SingletonTarget);
+        (anonymous.Rpm, anonymous.Burst, anonymous.MaxConcurrentStreams).Should().Be((60, 20, 2));
+    }
+
+    /// <summary>
+    /// The anonymous tier is unset the same way every other optional scope is, and then seeds no row —
+    /// anonymous callers fall back to the default tier, which is what deployments predating it get.
+    /// </summary>
+    [Fact]
+    public async Task EnsureInitializedAsync_WithTheAnonymousTierUnset_SeedsNoAnonymousRow()
+    {
+        await using var scope = await SqliteScope.CreateAsync();
+
+        var options = new RateLimitingOptions { Anonymous = RateLimitTierOptions.Unset() };
+        await CreateBootstrap(scope.Db, options).EnsureInitializedAsync();
+
+        var rules = await scope.Db.RateLimitRules.AsNoTracking().ToListAsync();
+        rules.Should().NotContain(r => r.Scope == RateLimitScopeNames.Anonymous);
     }
 
     private static RateLimitingOptions ConfiguredScopes()

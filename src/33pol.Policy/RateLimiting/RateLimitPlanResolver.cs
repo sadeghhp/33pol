@@ -23,9 +23,16 @@ namespace Pol33.Policy.RateLimiting;
 /// fixed number of variants per model and costs at most one step of precision on a number that is
 /// already an approximation.</para>
 /// </remarks>
+/// <param name="authState">
+/// Whether the gateway requires credentials. A subject with no tenant is held to the anonymous tier
+/// only when it could have authenticated and did not; with authentication off, every caller has no
+/// tenant and keeps the default tier. The flag is part of the cache key because it is set at
+/// startup, after the first requests may already have been resolved.
+/// </param>
 public sealed class RateLimitPlanResolver(
     IGatewayConfigProvider configProvider,
-    IAdaptiveRateLimitGovernor? governor = null) : IRateLimitPlanResolver
+    IAdaptiveRateLimitGovernor? governor = null,
+    IGatewayAuthenticationState? authState = null) : IRateLimitPlanResolver
 {
     /// <summary>
     /// Adaptive factors are rounded to this many steps for cache-key purposes: 20 steps is a 5%
@@ -59,6 +66,7 @@ public sealed class RateLimitPlanResolver(
         var rateLimits = snapshot.RateLimits;
 
         var factorStep = ModelFactorStep(rateLimits, modelId);
+        var anonymous = subject.TenantId is null && (authState?.IsAuthenticationRequired ?? false);
         var key = new PlanCacheKey(
             snapshot.Version,
             subject.PartitionKey,
@@ -67,14 +75,15 @@ public sealed class RateLimitPlanResolver(
             subject.PlanSlug,
             subject.ApiKeyId,
             modelId,
-            factorStep);
+            factorStep,
+            anonymous);
 
         if (_cache.TryGetValue(key, out var cached))
         {
             return cached;
         }
 
-        var plan = Build(rateLimits, subject, modelId, factorStep);
+        var plan = Build(rateLimits, subject, modelId, factorStep, anonymous);
 
         if (_cache.Count >= MaxCacheEntries)
         {
@@ -100,7 +109,8 @@ public sealed class RateLimitPlanResolver(
         RateLimitsConfigSection rateLimits,
         in RateLimitSubject subject,
         string? modelId,
-        int factorStep)
+        int factorStep,
+        bool anonymous)
     {
         var rules = new List<RateLimitRule>(RateLimitRuleBuffer.MaxRules);
 
@@ -112,12 +122,16 @@ public sealed class RateLimitPlanResolver(
         }
 
         // The tenant scope always produces a rule: it is the gateway's universal limit, and the
-        // default tier stands in when nothing more specific is configured.
-        var tenantTier = RateLimitPolicyResolver.ResolveTenantTier(
-            rateLimits,
-            subject.PlanSlug,
-            subject.TenantId,
-            subject.TenantSlug);
+        // default tier stands in when nothing more specific is configured. A caller that could have
+        // presented a key and did not — anonymous traffic to a public model — gets the anonymous
+        // tier rather than the one sized for a paying tenant.
+        var tenantTier = anonymous
+            ? RateLimitPolicyResolver.ResolveAnonymousTier(rateLimits, authenticationRequired: true)
+            : RateLimitPolicyResolver.ResolveTenantTier(
+                rateLimits,
+                subject.PlanSlug,
+                subject.TenantId,
+                subject.TenantSlug);
         rules.Add(new RateLimitRule(
             RateLimitScope.Tenant,
             RateLimitKeys.Tenant(subject.PartitionKey),
@@ -217,6 +231,7 @@ public sealed class RateLimitPlanResolver(
     /// rather than leaving some requests enforced against the old numbers.
     /// </param>
     /// <param name="FactorStep">The quantised adaptive factor for <paramref name="ModelId"/>.</param>
+    /// <param name="Anonymous">Whether the subject is held to the anonymous tier.</param>
     private readonly record struct PlanCacheKey(
         long ConfigVersion,
         string PartitionKey,
@@ -225,5 +240,6 @@ public sealed class RateLimitPlanResolver(
         string? PlanSlug,
         string? ApiKeyId,
         string? ModelId,
-        int FactorStep);
+        int FactorStep,
+        bool Anonymous);
 }

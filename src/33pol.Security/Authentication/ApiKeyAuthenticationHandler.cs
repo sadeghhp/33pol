@@ -137,6 +137,10 @@ public sealed class ApiKeyAuthenticationHandler : AuthenticationHandler<Authenti
             ? GatewayErrorCode.ExpiredApiKey
             : GatewayErrorCode.InvalidApiKey;
 
+        // The one signal the auth-failure limiter charges on. Set here, where the 401 is actually
+        // written, so a challenge that returns early above (auth off, anonymous path) charges nothing.
+        Context.Items[GatewayAuthContextItems.CredentialRejected] = true;
+
         await Context.WriteGatewayErrorAsync(
             _errors.Write(errorCode),
             Context.RequestAborted).ConfigureAwait(false);
@@ -146,6 +150,11 @@ public sealed class ApiKeyAuthenticationHandler : AuthenticationHandler<Authenti
     /// Authenticated but not authorized (e.g. a tenant admin on an operator-only route). The default
     /// forbid is an empty 403; clients of this gateway expect the OpenAI-shaped error body.
     /// </summary>
+    /// <remarks>
+    /// Deliberately not marked as a credential rejection: the key was recognised and is usable, it
+    /// simply does not hold the role or tenant the route needs. There is nothing to guess here, so
+    /// there is nothing for the auth-failure budget to bound.
+    /// </remarks>
     protected override async Task HandleForbiddenAsync(AuthenticationProperties properties)
     {
         await Context.WriteGatewayErrorAsync(

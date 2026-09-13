@@ -27,7 +27,8 @@ public sealed class AdminRateLimitsDto
         new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
-    /// The scoped rules: per-model, per-key, combined, and the global and auth-failure singletons.
+    /// The scoped rules: per-model, per-key, combined, and the global, auth-failure and anonymous
+    /// singletons.
     /// </summary>
     /// <remarks>
     /// Null on a PUT means "leave the stored rules alone", which is what a client written against
@@ -40,7 +41,7 @@ public sealed class AdminRateLimitsDto
 
 /// <param name="Scope">
 /// <c>global</c>, <c>tenant</c>, <c>api_key</c>, <c>model</c>, <c>tenant_model</c>,
-/// <c>api_key_model</c> or <c>auth_failure</c>.
+/// <c>api_key_model</c>, <c>auth_failure</c> or <c>anonymous</c>.
 /// </param>
 /// <param name="Target">
 /// What the rule applies to: an id for the single-subject scopes, <c>subject|model</c> for the

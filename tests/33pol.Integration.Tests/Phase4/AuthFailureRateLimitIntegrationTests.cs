@@ -100,6 +100,127 @@ public sealed class AuthFailureRateLimitIntegrationTests
         (await PostChatAsync(guesser)).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
     }
 
+    /// <summary>
+    /// A spent budget refuses only what cannot prove a credential. Refusing a good key too made a
+    /// shared address — an ingress without ForwardedHeaders, a corporate NAT — a lockout for every
+    /// caller behind it, the operator's admin access included, for as long as one stale key kept
+    /// being retried.
+    /// </summary>
+    [Fact]
+    public async Task SpentBudget_AValidKeyStillAuthenticates()
+    {
+        await using var factory = CreateFactory();
+        await GatewayWebApplicationFactory.EnsureAuthReadyAsync(factory);
+
+        var guesser = factory.CreateClient();
+        guesser.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", "sk-33pol-not-a-real-key");
+        (await guesser.GetAsync("/admin/api/rate-limits")).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        (await guesser.GetAsync("/admin/api/rate-limits")).StatusCode.Should().Be(HttpStatusCode.TooManyRequests);
+
+        // Same (absent) address as the guesser in the test host.
+        var admin = factory.CreateClient();
+        admin.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", AdminKey);
+        (await admin.GetAsync("/admin/api/rate-limits")).StatusCode.Should()
+            .Be(HttpStatusCode.OK, "a key that validates is never locked out by someone else's guessing");
+
+        (await guesser.GetAsync("/admin/api/rate-limits")).StatusCode.Should()
+            .Be(HttpStatusCode.TooManyRequests, "the valid key's pass-through spends nothing, so the guesser stays refused");
+    }
+
+    /// <summary>
+    /// A 403 for a model the key was never granted is a recognised credential being told no, not a
+    /// guess. Charging it let any valid key lock its own address out of the gateway by asking for the
+    /// wrong model a few dozen times.
+    /// </summary>
+    [Fact]
+    public async Task GrantDeniedModel_DoesNotSpendTheAuthFailureBudget()
+    {
+        // A roomy tenant tier, so the refusals under test are the router's 403s and not the
+        // tenant's own 1 rpm budget.
+        await using var factory = CreateFactory(defaultRpm: 100);
+        await GatewayWebApplicationFactory.EnsureAuthReadyAsync(factory);
+
+        var admin = factory.CreateClient();
+        admin.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", AdminKey);
+        var ungranted = await CreateInferenceClientAsync(factory, admin, grantLocalMock: false);
+
+        for (var i = 0; i < 3; i++)
+        {
+            (await PostChatAsync(ungranted)).StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        }
+
+        // The budget of one is still intact, so the first wrong key is answered 401 rather than 429.
+        var guesser = factory.CreateClient();
+        guesser.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", "sk-33pol-not-a-real-key");
+        (await PostChatAsync(guesser)).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+    }
+
+    /// <summary>
+    /// The forwarder copies the upstream's status onto the response. An upstream whose own credential
+    /// has expired answers 401 to everyone; charging those spent every client address's budget on an
+    /// outage none of them caused, and locked the operator out of fixing it.
+    /// </summary>
+    [Fact]
+    public async Task UpstreamUnauthorized_DoesNotSpendTheAuthFailureBudget()
+    {
+        await using var factory = CreateFactory(
+            upstreamHandler: new FixedStatusUpstreamHandler(HttpStatusCode.Unauthorized),
+            defaultRpm: 100);
+        await GatewayWebApplicationFactory.EnsureAuthReadyAsync(factory);
+
+        var admin = factory.CreateClient();
+        admin.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", AdminKey);
+        var client = await CreateInferenceClientAsync(factory, admin, grantLocalMock: true);
+
+        // Two, not more: enough to prove the charge is not happening without nearing the circuit
+        // breaker's failure threshold, which would change the status under test.
+        for (var i = 0; i < 2; i++)
+        {
+            (await PostChatAsync(client)).StatusCode.Should().Be(HttpStatusCode.Unauthorized, "the upstream's 401 is passed through");
+        }
+
+        var guesser = factory.CreateClient();
+        guesser.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", "sk-33pol-not-a-real-key");
+        (await PostChatAsync(guesser)).StatusCode.Should()
+            .Be(HttpStatusCode.Unauthorized, "an upstream's 401 is not a guessed credential and spends nothing");
+    }
+
+    private static async Task<HttpClient> CreateInferenceClientAsync(
+        WebApplicationFactory<Program> factory,
+        HttpClient admin,
+        bool grantLocalMock)
+    {
+        var createKey = await admin.PostAsJsonAsync("/admin/api/keys", new { role = "Inference" });
+        createKey.EnsureSuccessStatusCode();
+        using var created = JsonDocument.Parse(await createKey.Content.ReadAsStringAsync());
+        var keyId = created.RootElement.GetProperty("id").GetGuid();
+        var secret = created.RootElement.GetProperty("secret").GetString()!;
+
+        if (grantLocalMock)
+        {
+            var grant = await admin.PutAsJsonAsync(
+                $"/admin/api/keys/{keyId}/model-grants",
+                new { modelIds = new[] { "local-mock" } });
+            grant.EnsureSuccessStatusCode();
+        }
+
+        var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", secret);
+        return client;
+    }
+
+    private sealed class FixedStatusUpstreamHandler(HttpStatusCode statusCode) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            Task.FromResult(new HttpResponseMessage(statusCode)
+            {
+                Content = new StringContent(
+                    """{"error":{"message":"Incorrect API key provided","type":"invalid_request_error"}}""",
+                    Encoding.UTF8,
+                    "application/json"),
+            });
+    }
+
     private static async Task<HttpResponseMessage> PostChatAsync(HttpClient client)
     {
         using var content = new StringContent(ChatBody, Encoding.UTF8, "application/json");
@@ -116,12 +237,21 @@ public sealed class AuthFailureRateLimitIntegrationTests
     /// never in force. Now that it is, the fall-through no longer happens and the budget under test
     /// has to be the one the test names.
     /// </remarks>
-    private static WebApplicationFactory<Program> CreateFactory(bool trustForwardedHeaders = false) =>
+    private static WebApplicationFactory<Program> CreateFactory(
+        bool trustForwardedHeaders = false,
+        HttpMessageHandler? upstreamHandler = null,
+        int defaultRpm = 1) =>
         GatewayWebApplicationFactory.CreateWithInMemoryDatabase(
             AdminKey,
+            upstreamHandler: upstreamHandler,
             configureSettings: settings =>
             {
-                settings["RateLimiting:Default:Rpm"] = "1";
+                // A private local-mock, so a key without a grant is refused 403 by the router.
+                IntegrationModelsConfig.ApplyStandardModelsSettings(
+                    settings,
+                    IntegrationModelsConfig.WriteStandardModelsConfig());
+
+                settings["RateLimiting:Default:Rpm"] = defaultRpm.ToString();
                 settings["RateLimiting:Default:Burst"] = "0";
                 settings["RateLimiting:AuthFailure:Rpm"] = "1";
                 settings["RateLimiting:AuthFailure:Burst"] = "0";

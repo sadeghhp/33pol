@@ -53,6 +53,44 @@ public sealed class AdminScopedRateLimitEndpointTests
         second.Headers.GetValues("X-33pol-RateLimit-Scope").Single().Should().Be("model");
     }
 
+    /// <summary>
+    /// A tenant rule with rpm 0 caps that tenant's streams and leaves its rate to the default tier.
+    /// It used to be floored to 1 rpm, so the second request in a minute was refused.
+    /// </summary>
+    [Fact]
+    public async Task PutRateLimits_WithAConcurrencyOnlyTenantRule_LeavesTheTenantRateAlone()
+    {
+        var handler = new MockUpstreamHandler();
+        await using var factory = CreateFactory(handler);
+        await GatewayWebApplicationFactory.EnsureAuthReadyAsync(factory);
+        var admin = CreateAuthenticatedClient(factory, AdminKey);
+
+        var put = await admin.PutAsJsonAsync(
+            "/admin/api/rate-limits",
+            new
+            {
+                enabled = true,
+                @default = new { rpm = 10_000, burst = 0, maxConcurrentStreams = 100 },
+                plans = new Dictionary<string, object>(),
+                rules = new[]
+                {
+                    // "default" is the bootstrap tenant's slug.
+                    new { scope = "tenant", target = "default", rpm = 0, burst = 0, maxConcurrentStreams = 2 },
+                },
+            });
+        put.EnsureSuccessStatusCode();
+
+        var client = await CreateInferenceClientAsync(factory, admin);
+
+        for (var i = 0; i < 5; i++)
+        {
+            var response = await PostChatAsync(client);
+            response.StatusCode.Should().BeOneOf(HttpStatusCode.OK, HttpStatusCode.BadGateway);
+            response.Headers.GetValues("X-33pol-RateLimit-Limit").Single().Should()
+                .Be("10000", "the tenant rule inherits the default tier's rate rather than being floored to 1 rpm");
+        }
+    }
+
     /// <summary>A rule survives the round trip through the database and comes back on the next GET.</summary>
     [Fact]
     public async Task PutRateLimits_RulesRoundTripThroughTheDatabase()

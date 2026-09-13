@@ -28,4 +28,14 @@ public interface IRateLimitPolicyResolver
     /// what the gateway enforced before the setting existed.
     /// </remarks>
     RateLimitPolicy ResolveAuthFailure() => Resolve(planSlug: null, tenantId: null, tenantSlug: null);
+
+    /// <summary>
+    /// The tier applied to callers with no credential, counted per client address block.
+    /// </summary>
+    /// <remarks>
+    /// Its own tier for the same reason the auth-failure one is: the default tier is sized for a
+    /// tenant, and an address that never identified itself used to get all of it. The default body
+    /// returns the default tier, which is what the gateway enforced before the setting existed.
+    /// </remarks>
+    RateLimitPolicy ResolveAnonymous() => Resolve(planSlug: null, tenantId: null, tenantSlug: null);
 }

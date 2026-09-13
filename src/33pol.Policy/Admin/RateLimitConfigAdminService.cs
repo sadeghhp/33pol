@@ -62,6 +62,14 @@ public sealed class RateLimitConfigAdminService(
                 rateLimits.AuthFailure));
         }
 
+        if (!rateLimits.Anonymous.EnforcesNothing)
+        {
+            rules.Add(RateLimitRuleDefinition.FromPolicy(
+                RateLimitScopeNames.Anonymous,
+                RateLimitScopeNames.SingletonTarget,
+                rateLimits.Anonymous));
+        }
+
         return rules;
     }
 

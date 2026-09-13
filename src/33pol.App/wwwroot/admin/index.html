@@ -1776,9 +1776,10 @@
                         <option value="api_key_model">Key &amp; model</option>
                         <option value="global">Whole gateway</option>
                         <option value="auth_failure">Failed auth</option>
+                        <option value="anonymous">Anonymous callers</option>
                       </select>
                     </label>
-                    <label>Target <input type="text" title="Model id, tenant id, key id, or subject|model. Use * for the gateway-wide and failed-auth scopes." x-model="row.target" placeholder="gpt-4" /></label>
+                    <label>Target <input type="text" title="Model id, tenant id, key id, or subject|model. Use * for the gateway-wide, failed-auth and anonymous scopes." x-model="row.target" placeholder="gpt-4" /></label>
                     <label>RPM <input type="number" min="0" title="Sustained requests per minute for this rule. 0 = this rule does not limit the rate." x-model.number="row.rpm" /></label>
                     <label>Burst <input type="number" min="0" title="Extra requests allowed in a short spike, on top of RPM." x-model.number="row.burst" /></label>
                     <label>Max streams <input type="number" min="0" title="Concurrent streaming responses in this scope. 0 = unlimited." x-model.number="row.maxConcurrentStreams" /></label>

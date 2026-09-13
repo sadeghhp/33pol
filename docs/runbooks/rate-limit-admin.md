@@ -9,7 +9,7 @@ There are six scopes a request can be subject to:
 | Scope | Counts against | Configured as |
 |-------|----------------|---------------|
 | `global` | Every inference request through the gateway | rule, target `*` |
-| `tenant` | One tenant, or one client address block for anonymous traffic | default tier / plan tier / `tenant` rule |
+| `tenant` | One tenant, or one client address block for anonymous traffic | default tier / plan tier / `tenant` rule (`rpm: 0` keeps the plan or default rate and caps streams only); for anonymous callers, the `anonymous` rule (target `*`), falling back to the default tier |
 | `api_key` | One credential | rule, target = key id |
 | `model` | One model, summed over every caller | rule, target = canonical model id |
 | `tenant_model` | One tenant's use of one model | rule, target = `tenant\|modelId` |
@@ -37,11 +37,11 @@ Evaluation runs in **two stages**. The scopes that need no request body — glob
 | `burst` | Extra tokens above `rpm`, so bucket capacity is `rpm + burst`. This is what an idle partition may spend at once. |
 | `maxConcurrentStreams` | Streaming responses open at once. **`0` means unlimited, not "streaming denied".** |
 
-A tier is a **per-partition** budget. In the tenant scope a partition is a *tenant* — every API key a tenant holds draws on the same bucket unless you add an `api_key` rule to bound one of them separately. Unauthenticated callers (only possible while some model is `publicAccess`) partition by client **address block** instead: the full address for IPv4, the `/64` prefix for IPv6. IPv6 is collapsed because a single subscriber is routinely handed a `/64` or shorter, and keying on the full 128-bit address would let one client mint 2^64 buckets — the limit would never bind, and the churn would walk the partition table into its ceiling. See [`ForwardedHeaders`](../integrations.md) for making that address the caller's rather than your ingress's.
+A tier is a **per-partition** budget. In the tenant scope a partition is a *tenant* — every API key a tenant holds draws on the same bucket unless you add an `api_key` rule to bound one of them separately. Unauthenticated callers (only possible while some model is `publicAccess`) partition by client **address block** instead: the full address for IPv4, the `/64` prefix for IPv6. Each such address is held to the **`anonymous`** tier (a rule with scope `anonymous` and target `*`; 60 rpm + 20 burst + 2 streams on a fresh install), never to the default tier, unless no `anonymous` rule exists — then it falls back to the default tier, which is what deployments upgraded from before the tier existed get, and the gateway logs a warning at startup while a public model is registered. An `anonymous` rule with `rpm: 0` keeps the default rate and applies only its stream cap. The tier applies only where a caller *could* have presented a key: on a gateway with authentication off (no database, no keys), every caller is metered by the default tier as before. IPv6 is collapsed because a single subscriber is routinely handed a `/64` or shorter, and keying on the full 128-bit address would let one client mint 2^64 buckets — the limit would never bind, and the churn would walk the partition table into its ceiling. See [`ForwardedHeaders`](../integrations.md) for making that address the caller's rather than your ingress's.
 
-Requests refused by authentication are counted separately, per client address block, against the **`auth_failure`** tier (falling back to the default tier when none is configured), on inference and `/admin/api` paths. Only the ones answered `401` or `403` are charged, so traffic that authenticates never spends it; that budget is independent of a tenant's own limit in both directions.
+Requests refused by authentication are counted separately, per client address block, against the **`auth_failure`** tier (falling back to the default tier when none is configured), on inference and `/admin/api` paths. Only a `401` written by authentication itself — a missing, unknown, expired or revoked key, or a deactivated tenant — is charged. A `403` (a recognised key without a grant or a role) and any status copied from an upstream provider are not: neither is a guessed credential, and charging them let a valid key lock its own address out, or an expired upstream credential lock out every address at once. Traffic that authenticates never spends this budget, and it is independent of a tenant's own limit in both directions.
 
-Once an address has spent it, the next request from that address is refused `429` **before** authentication runs — a good key included. That is the point (it is what stops the guessing), but it means the address has to be the caller's rather than your ingress's: with `ForwardedHeaders` unconfigured behind a proxy, every caller shares one address and therefore one budget. Configure the trusted proxy, or raise the default tier. Reaching the shipped default takes 3 500 rejected credentials from one address inside a minute.
+Once an address has spent it, requests from that address that **cannot prove a credential** are refused `429`: no key, a key the gateway does not recognise, or a key it recognises but will not honour. A key that validates still passes — the gateway authenticates it on the spot and the security layer reuses that result — and is metered by its tenant tier as usual, so one client retrying a stale key behind a shared address (an ingress without `ForwardedHeaders`, a corporate NAT) cannot lock out the other callers behind it, or the operator's admin access. Anonymous access to public models from that address is refused until the budget refills. The address still has to be the caller's rather than your ingress's for the budget to be fair: configure the trusted proxy. With the shipped `auth_failure` tier (60 rpm + 20 burst) an address is refused after 80 rejected credentials inside a minute; only if that tier is removed does the budget fall back to the default tier.
 
 Every answer on an inference path carries the partition's budget:
 
@@ -80,12 +80,13 @@ Body shape (camelCase JSON):
     { "scope": "tenant_model",  "target": "acme|gpt-4",         "rpm": 60,  "burst": 10, "maxConcurrentStreams": 4 },
     { "scope": "api_key",       "target": "6f1c…",              "rpm": 30,  "burst": 0,  "maxConcurrentStreams": 2 },
     { "scope": "model",         "target": "llama-70b",          "rpm": 0,   "burst": 0,  "maxConcurrentStreams": 8 },
-    { "scope": "auth_failure",  "target": "*",                  "rpm": 60,  "burst": 20, "maxConcurrentStreams": 0 }
+    { "scope": "auth_failure",  "target": "*",                  "rpm": 60,  "burst": 20, "maxConcurrentStreams": 0 },
+    { "scope": "anonymous",     "target": "*",                  "rpm": 60,  "burst": 20, "maxConcurrentStreams": 2 }
   ]
 }
 ```
 
-The fourth rule caps concurrency only: a scoped rule may leave `rpm` at `0`, which means "this rule does not limit the request rate". (The *default* tier is still floored at 1 — a zero there would silently disable the gateway's only universal limit.)
+The fourth rule caps concurrency only: a scoped rule may leave `rpm` at `0`, which means "this rule does not limit the request rate". For a `tenant` rule that means the tenant keeps the rate — `rpm` and `burst` — of its plan or the default tier and takes the rule's `maxConcurrentStreams`; a `tenant` rule with `rpm: 0` must therefore also have `burst: 0`, since there is no rate of its own for that burst to belong to. (The *default* tier is still floored at 1 — a zero there would silently disable the gateway's only universal limit.)
 
 **`rules` is optional, and omitting it is not the same as sending `[]`.** Omitted means "I do not manage rules", and the stored set is carried through untouched — so a client written against the older contract cannot delete rules it cannot see. An empty array is a deliberate "there are no rules" and does delete them.
 
@@ -97,8 +98,10 @@ Validation (HTTP 400, `{ "message": "…" }`):
 - `burst`: 0 … 1_000_000
 - `maxConcurrentStreams`: 0 … 10_000, where `0` is unlimited
 - Plan slugs: non-empty, start with a letter, alphanumeric/`_`/`-`, max 64 chars
-- Rule `scope`: one of `global`, `tenant`, `api_key`, `model`, `tenant_model`, `api_key_model`, `auth_failure`
-- Rule `target`: non-empty, no surrounding whitespace, max 256 chars; exactly one `|` for the pair scopes and none for the others; `*` for `global` and `auth_failure`
+- Rule `scope`: one of `global`, `tenant`, `api_key`, `model`, `tenant_model`, `api_key_model`, `auth_failure`, `anonymous`
+- Rule `target`: non-empty, no surrounding whitespace, max 256 chars; exactly one `|` for the pair scopes and none for the others; `*` for `global`, `auth_failure` and `anonymous`
+- `rpm` on a rule may be `0` ("this rule does not limit the rate") but never negative
+- A `tenant` rule with `rpm: 0` must have `burst: 0`; it inherits its rate from the plan or default tier
 - A rule must enforce something — `rpm` and `maxConcurrentStreams` both zero is rejected rather than accepted as a limit that never fires
 - No two rules may share a (scope, target); duplicates are rejected rather than last-one-wins, so the applied configuration never depends on serialisation order
 - At most 2 000 rules
@@ -117,7 +120,7 @@ What gets seeded, and when:
 |---------------|-------------|-------------|
 | `Default`, `Plans` | `rate_limit_defaults`, `rate_limit_plans` | the defaults row does not exist |
 | `Adaptive:Enabled` | `rate_limit_defaults.AdaptiveEnabled` | same |
-| `Global`, `Tenants`, `ApiKeys`, `Models`, `TenantModels`, `ApiKeyModels`, `AuthFailure` | `rate_limit_rules` | once per database, stamped by `rate_limit_defaults.RulesSeededAt` |
+| `Global`, `Tenants`, `ApiKeys`, `Models`, `TenantModels`, `ApiKeyModels`, `AuthFailure`, `Anonymous` | `rate_limit_rules` | once per database, stamped by `rate_limit_defaults.RulesSeededAt` |
 
 The rule seed is a **one-shot**, not a top-up. Deleting every rule through the admin API is a configuration decision, and a restart must not quietly restore the appsettings set — so the stamp, not an empty table, is what decides. A database created before the rules table existed carries a null stamp and is backfilled from configuration exactly once on upgrade, without disturbing the tiers already in it.
 
