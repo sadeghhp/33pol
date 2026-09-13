@@ -162,22 +162,12 @@ public sealed class ApiKeyAuthenticationHandler : AuthenticationHandler<Authenti
             Context.RequestAborted).ConfigureAwait(false);
     }
 
-    private static string? ExtractApiKey(HttpRequest request)
-    {
-        // A present-but-blank X-API-Key (some proxies and SDKs always send the header) must not
-        // shadow a valid bearer token on the same request.
-        if (request.Headers.TryGetValue("X-API-Key", out var headerValue) &&
-            !string.IsNullOrWhiteSpace(headerValue.ToString()))
-        {
-            return headerValue.ToString();
-        }
-
-        var authorization = request.Headers.Authorization.ToString();
-        if (authorization.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
-        {
-            return authorization["Bearer ".Length..].Trim();
-        }
-
-        return null;
-    }
+    /// <summary>
+    /// Reads the credential through <see cref="GatewayCredential"/>, which the proxy layer also uses
+    /// to decide whether a request presents one — the two must never disagree about that.
+    /// </summary>
+    private static string? ExtractApiKey(HttpRequest request) =>
+        GatewayCredential.Extract(
+            request.Headers[GatewayCredential.ApiKeyHeader].ToString(),
+            request.Headers.Authorization.ToString());
 }

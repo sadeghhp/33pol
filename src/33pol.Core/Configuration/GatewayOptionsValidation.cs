@@ -42,6 +42,14 @@ public static class GatewayOptionsValidation
             errors.Add($"{nameof(GatewayOptions.Resilience)}.{nameof(GatewayResilienceOptions.StreamIdleTimeoutSeconds)} must be at least 1 second.");
         }
 
+        // No "off" value: the gateway holds an upstream connection, a bulkhead slot and a budget
+        // reservation for the whole of a write, so an unbounded one is a resource-retention risk
+        // rather than a tuning choice.
+        if (options.Resilience.DownstreamWriteTimeoutSeconds < 1)
+        {
+            errors.Add($"{nameof(GatewayOptions.Resilience)}.{nameof(GatewayResilienceOptions.DownstreamWriteTimeoutSeconds)} must be at least 1 second.");
+        }
+
         if (options.Resilience.ForwardTimeoutSecondsPerRequestMegabyte < 0)
         {
             errors.Add($"{nameof(GatewayOptions.Resilience)}.{nameof(GatewayResilienceOptions.ForwardTimeoutSecondsPerRequestMegabyte)} cannot be negative.");
@@ -55,6 +63,16 @@ public static class GatewayOptionsValidation
         if (options.Resilience.MaxRequestBodyBytes < 1)
         {
             errors.Add($"{nameof(GatewayOptions.Resilience)}.{nameof(GatewayResilienceOptions.MaxRequestBodyBytes)} must be at least 1 byte.");
+        }
+
+        if (double.IsNaN(options.Resilience.MinRequestBodyBytesPerSecond) || options.Resilience.MinRequestBodyBytesPerSecond < 0)
+        {
+            errors.Add($"{nameof(GatewayOptions.Resilience)}.{nameof(GatewayResilienceOptions.MinRequestBodyBytesPerSecond)} cannot be negative (0 disables the check).");
+        }
+
+        if (options.Resilience.MinRequestBodyDataRateGraceSeconds < 1)
+        {
+            errors.Add($"{nameof(GatewayOptions.Resilience)}.{nameof(GatewayResilienceOptions.MinRequestBodyDataRateGraceSeconds)} must be at least 1 second.");
         }
 
         if (options.Resilience.MaxConcurrentForwardsPerModel < 1)

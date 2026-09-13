@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using Pol33.Core.Abstractions;
+using Pol33.Core.Errors;
 using Pol33.Core.Identity;
 using Pol33.Core.RateLimiting;
 using Pol33.Core.Security;
@@ -186,6 +187,88 @@ public sealed class ModelRouterRateLimitTests
             recorded.Control.Should().Be(RateLimitControl.Concurrency);
             recorded.ConfiguredRpm.Should().Be(0);
             recorded.EffectiveRpm.Should().Be(0);
+        });
+    }
+
+    /// <summary>
+    /// The escalation the governor computes has to actually be sent. It was recorded here and then
+    /// read nowhere: only RateLimitMiddleware consulted the governor, so a client pinned purely on a
+    /// concurrency cap was told to retry in one second however long it had been pinned. The refusal
+    /// also carried none of the budget headers every rate refusal carries, so the client could not
+    /// see which cap had refused it or how many slots were left.
+    /// </summary>
+    [Fact]
+    public async Task InvokeAsync_WhenTheConcurrencyCapRefuses_TheAnswerCarriesTheBackoffAndTheBudget()
+    {
+        await WithSingleModelRegistryAsync(async registry =>
+        {
+            var governor = Substitute.For<IAdaptiveRateLimitGovernor>();
+            governor.GetRetryAfterSeconds(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<DateTimeOffset>()).Returns(23);
+
+            var store = Substitute.For<IDistributedRateLimitStore>();
+            store.TryAcquireStreamSlot(Arg.Any<string>(), Arg.Any<RateLimitPolicy>())
+                .Returns(new RateLimitAcquireResult(
+                    false,
+                    GatewayRateLimitReason.ConcurrencyLimitExceeded,
+                    RetryAfterSeconds: 1,
+                    Limit: 4,
+                    Remaining: 0,
+                    Scope: RateLimitScope.Tenant));
+
+            var middleware = ModelRouterMiddlewareTests.CreateMiddlewareForRateLimitTests(
+                registry: registry,
+                forwarder: CreateForwarderReturning(ForwarderError.None),
+                rateLimitStore: store,
+                rateLimitGovernor: governor);
+
+            var context = CreateContext("""{"model":"m1","stream":true}""");
+            await middleware.InvokeAsync(context);
+
+            context.Response.StatusCode.Should().Be(StatusCodes.Status429TooManyRequests);
+            context.Response.Headers[GatewayHeaders.RetryAfter].ToString().Should().Be("23");
+            context.Response.Headers[GatewayHeaders.RateLimitLimit].ToString().Should().Be("4");
+            context.Response.Headers[GatewayHeaders.RateLimitRemaining].ToString().Should().Be("0");
+            context.Response.Headers[GatewayHeaders.RateLimitScope].ToString().Should().Be("tenant");
+        });
+    }
+
+    /// <summary>
+    /// A model's slot count is shared by everyone using the model, so being refused by it says
+    /// nothing about how fast this caller is retrying — the same reason the rate path stopped
+    /// escalating on the global and model scopes.
+    /// </summary>
+    [Fact]
+    public async Task InvokeAsync_WhenASharedScopeRefusesTheStream_TheCallersBackoffIsUntouched()
+    {
+        await WithSingleModelRegistryAsync(async registry =>
+        {
+            var governor = Substitute.For<IAdaptiveRateLimitGovernor>();
+
+            var store = Substitute.For<IDistributedRateLimitStore>();
+            store.TryAcquireStreamSlot(Arg.Any<string>(), Arg.Any<RateLimitPolicy>())
+                .Returns(new RateLimitAcquireResult(
+                    false,
+                    GatewayRateLimitReason.ConcurrencyLimitExceeded,
+                    RetryAfterSeconds: 1,
+                    Limit: 4,
+                    Remaining: 0,
+                    Scope: RateLimitScope.Model));
+
+            var middleware = ModelRouterMiddlewareTests.CreateMiddlewareForRateLimitTests(
+                registry: registry,
+                forwarder: CreateForwarderReturning(ForwarderError.None),
+                rateLimitStore: store,
+                rateLimitGovernor: governor);
+
+            var context = CreateContext("""{"model":"m1","stream":true}""");
+            await middleware.InvokeAsync(context);
+
+            context.Response.StatusCode.Should().Be(StatusCodes.Status429TooManyRequests);
+            governor.DidNotReceive().RecordOutcome(Arg.Any<string>(), false, Arg.Any<DateTimeOffset>());
+            governor.DidNotReceive().GetRetryAfterSeconds(
+                Arg.Any<string>(),
+                Arg.Any<int>(),
+                Arg.Any<DateTimeOffset>());
         });
     }
 

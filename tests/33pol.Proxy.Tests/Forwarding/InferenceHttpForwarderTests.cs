@@ -423,6 +423,277 @@ public sealed class InferenceHttpForwarderTests
         body.Should().Contain("chunk-5");
     }
 
+    /// <summary>
+    /// An SSE upstream returns headers the moment it accepts the request, so for a streaming
+    /// request the header allowance was spent in milliseconds and the first token had only the
+    /// idle gap to arrive in — a hard time-to-first-token ceiling the header allowance had been
+    /// sized precisely to avoid. The first byte must be governed by the header allowance.
+    /// </summary>
+    [Fact]
+    public async Task SendAsync_Streaming_FirstTokenSlowerThanIdleGap_IsGovernedByTheHeaderAllowance()
+    {
+        // Headers at once, the only chunk after 500 ms: far past a 150 ms idle gap, well inside
+        // the 5 s header allowance. A single chunk, so the idle gap — which does apply from the
+        // first byte on — is never what the test exercises.
+        var handler = new SlowDripUpstreamHandler(
+            chunks: 1,
+            interChunkDelay: TimeSpan.FromMilliseconds(500),
+            stallAfterChunks: null);
+
+        var forwarder = new InferenceHttpForwarder(
+            new SingleHandlerClientFactory(handler),
+            NoOpGatewayMetricsCollector.Instance,
+            NullLogger<InferenceHttpForwarder>.Instance);
+
+        var context = CreatePostContext("""{"model":"gpt","stream":true}""");
+        var transformer = new StreamingHttpTransformer(true, "gpt", "gpt");
+
+        var error = await forwarder.SendAsync(
+            context,
+            "http://backend:8000",
+            null,
+            transformer,
+            isStreaming: true,
+            new InferenceForwardTimeouts(
+                HeaderTimeout: TimeSpan.FromSeconds(5),
+                StreamIdleTimeout: TimeSpan.FromMilliseconds(150)),
+            CancellationToken.None);
+
+        error.Should().Be(ForwarderError.None, "the first token is on the header allowance, not the idle gap");
+        context.Response.Body.Position = 0;
+        var body = await new StreamReader(context.Response.Body).ReadToEndAsync();
+        body.Should().Contain("chunk-0");
+        context.Items[InferenceForwardingContextKeys.ResponseBytesForwarded].Should().Be((long)body.Length);
+    }
+
+    /// <summary>
+    /// The complement: headers and then nothing, past the header allowance, is still a stall — and
+    /// the record must be able to say that nothing was forwarded, which is what separates a
+    /// time-to-first-token failure from a generation that stopped mid-stream.
+    /// </summary>
+    [Fact]
+    public async Task SendAsync_Streaming_NoFirstByteWithinTheAllowance_ReportsZeroBytesForwarded()
+    {
+        var handler = new SlowDripUpstreamHandler(
+            chunks: 1,
+            interChunkDelay: TimeSpan.Zero,
+            stallAfterChunks: 0);
+
+        var forwarder = new InferenceHttpForwarder(
+            new SingleHandlerClientFactory(handler),
+            NoOpGatewayMetricsCollector.Instance,
+            NullLogger<InferenceHttpForwarder>.Instance);
+
+        var context = CreatePostContext("""{"model":"gpt","stream":true}""");
+        var transformer = new StreamingHttpTransformer(true, "gpt", "gpt");
+
+        var error = await forwarder.SendAsync(
+            context,
+            "http://backend:8000",
+            null,
+            transformer,
+            isStreaming: true,
+            new InferenceForwardTimeouts(
+                HeaderTimeout: TimeSpan.FromMilliseconds(300),
+                StreamIdleTimeout: TimeSpan.FromMilliseconds(100)),
+            CancellationToken.None);
+
+        error.Should().Be(ForwarderError.ResponseBodyCanceled);
+        context.Items[InferenceForwardingContextKeys.ResponseBytesForwarded].Should().Be(0L);
+        context.Items[GatewayErrorContextKeys.UpstreamException].Should().BeOfType<TimeoutException>()
+            .Which.Message.Should().Contain("no response body byte");
+    }
+
+    /// <summary>A mid-stream stall reports what did reach the client, and says so.</summary>
+    [Fact]
+    public async Task SendAsync_Streaming_MidStreamStall_ReportsBytesForwarded()
+    {
+        var handler = new SlowDripUpstreamHandler(
+            chunks: 2,
+            interChunkDelay: TimeSpan.FromMilliseconds(20),
+            stallAfterChunks: 1);
+
+        var forwarder = new InferenceHttpForwarder(
+            new SingleHandlerClientFactory(handler),
+            NoOpGatewayMetricsCollector.Instance,
+            NullLogger<InferenceHttpForwarder>.Instance);
+
+        var context = CreatePostContext("""{"model":"gpt","stream":true}""");
+        var transformer = new StreamingHttpTransformer(true, "gpt", "gpt");
+
+        var error = await forwarder.SendAsync(
+            context,
+            "http://backend:8000",
+            null,
+            transformer,
+            isStreaming: true,
+            new InferenceForwardTimeouts(
+                HeaderTimeout: TimeSpan.FromSeconds(5),
+                StreamIdleTimeout: TimeSpan.FromMilliseconds(200)),
+            CancellationToken.None);
+
+        error.Should().Be(ForwarderError.ResponseBodyCanceled);
+        ((long)context.Items[InferenceForwardingContextKeys.ResponseBytesForwarded]!).Should().BePositive();
+        context.Items[GatewayErrorContextKeys.UpstreamException].Should().BeOfType<TimeoutException>()
+            .Which.Message.Should().Contain("stalled for more than").And.Contain("had reached the client");
+    }
+
+    /// <summary>
+    /// The idle deadline covered the write to the client as well as the read from the upstream. A
+    /// client that stopped reading blocked the flush, the timer fired, and a slow client was
+    /// recorded as an upstream stall. Only upstream reads are on the read clock.
+    /// </summary>
+    /// <remarks>
+    /// Also the deadline-replacement case: the write outlives the read gap, so the read deadline's
+    /// timer fires while nothing is awaiting it. The stream must carry on afterwards, which it can
+    /// only do if the cancelled source was replaced rather than re-armed — a cancelled source ignores
+    /// <c>CancelAfter</c>, so the very next read would have thrown.
+    /// </remarks>
+    [Fact]
+    public async Task SendAsync_Streaming_SlowClientWrite_IsNotReportedAsAnUpstreamStall()
+    {
+        var handler = new SlowDripUpstreamHandler(
+            chunks: 3,
+            interChunkDelay: TimeSpan.FromMilliseconds(10));
+
+        var forwarder = new InferenceHttpForwarder(
+            new SingleHandlerClientFactory(handler),
+            NoOpGatewayMetricsCollector.Instance,
+            NullLogger<InferenceHttpForwarder>.Instance);
+
+        var context = CreatePostContext("""{"model":"gpt","stream":true}""");
+        // The second write — after the first byte has switched the deadline to the idle gap —
+        // takes three times the gap to complete.
+        context.Response.Body = new SlowClientResponseStream(
+            slowWriteOrdinal: 2,
+            writeDelay: TimeSpan.FromMilliseconds(450));
+        var transformer = new StreamingHttpTransformer(true, "gpt", "gpt");
+
+        var error = await forwarder.SendAsync(
+            context,
+            "http://backend:8000",
+            null,
+            transformer,
+            isStreaming: true,
+            new InferenceForwardTimeouts(
+                HeaderTimeout: TimeSpan.FromSeconds(5),
+                StreamIdleTimeout: TimeSpan.FromMilliseconds(150))
+            {
+                // Comfortably longer than the slow write, and independent of the read gap: that
+                // independence is the whole point of the two deadlines being separate.
+                DownstreamWriteTimeout = TimeSpan.FromSeconds(5),
+            },
+            CancellationToken.None);
+
+        error.Should().Be(ForwarderError.None, "a slow client is not an upstream stall");
+        context.Response.Body.Position = 0;
+        var body = await new StreamReader(context.Response.Body).ReadToEndAsync();
+        body.Should().Contain("chunk-0").And.Contain("chunk-1").And.Contain("chunk-2");
+        context.Items[InferenceForwardingContextKeys.ResponseBytesForwarded].Should().Be((long)body.Length);
+    }
+
+    /// <summary>
+    /// A client that holds the socket open and stops reading used to hold the whole forward with it:
+    /// the write observed only the client's abort token, so nothing in the application bounded it.
+    /// The upstream connection, the per-model bulkhead slot and the budget reservation were retained
+    /// for as long as the client cared to wait, and the only thing that ended it was Kestrel's
+    /// response data rate — a host default the gateway never configured and an operator may relax for
+    /// long-lived SSE clients.
+    /// </summary>
+    [Fact]
+    public async Task SendAsync_Streaming_ClientStopsReading_ReportsDownstreamWriteTimeout()
+    {
+        var handler = new SlowDripUpstreamHandler(chunks: 3, interChunkDelay: TimeSpan.Zero);
+        var forwarder = new InferenceHttpForwarder(
+            new SingleHandlerClientFactory(handler),
+            NoOpGatewayMetricsCollector.Instance,
+            NullLogger<InferenceHttpForwarder>.Instance);
+
+        var context = CreatePostContext("""{"model":"gpt","stream":true}""");
+        var destination = new SlowClientResponseStream(slowWriteOrdinal: 1, writeDelay: TimeSpan.FromMinutes(5));
+        context.Response.Body = destination;
+        var transformer = new StreamingHttpTransformer(true, "gpt", "gpt");
+
+        var sendTask = forwarder.SendAsync(
+            context,
+            "http://backend:8000",
+            null,
+            transformer,
+            isStreaming: true,
+            new InferenceForwardTimeouts(
+                // Long enough that neither upstream deadline can be the one that fires.
+                HeaderTimeout: TimeSpan.FromSeconds(30),
+                StreamIdleTimeout: TimeSpan.FromSeconds(30))
+            {
+                DownstreamWriteTimeout = TimeSpan.FromMilliseconds(150),
+            },
+            CancellationToken.None);
+
+        await destination.SlowWriteEntered.WaitAsync(TimeSpan.FromSeconds(5));
+
+        // Bounded, so a regression that removes the write bound fails the test instead of hanging the
+        // suite — which is exactly how the unbounded write behaved.
+        var error = await sendTask.WaitAsync(TimeSpan.FromSeconds(5));
+
+        error.Should().Be(ForwarderError.ResponseBodyClient);
+
+        // Not a TimeoutException: that type makes GatewayLogHints say "the upstream did not respond",
+        // which points an operator at the wrong system for a fault that is entirely downstream.
+        var stashed = context.Items[GatewayErrorContextKeys.UpstreamException].Should().BeAssignableTo<Exception>().Subject;
+        stashed.Should().NotBeAssignableTo<TimeoutException>();
+        stashed.Message.Should().Contain("client stopped reading");
+
+        // A write that timed out delivered nothing, so it must not inflate the count.
+        context.Items[InferenceForwardingContextKeys.ResponseBytesForwarded].Should().Be(0L);
+    }
+
+    /// <summary>
+    /// A genuine disconnect outranks the write deadline even when both have expired: the disconnect is
+    /// the root cause, and reporting it as a gateway timeout would both mislead the operator and put a
+    /// client hang-up in the error store, which <c>client_canceled</c> exists to keep out.
+    /// </summary>
+    [Fact]
+    public async Task SendAsync_Streaming_ClientDisconnectsDuringStalledWrite_IsReportedAsCancellation()
+    {
+        var handler = new SlowDripUpstreamHandler(chunks: 3, interChunkDelay: TimeSpan.Zero);
+        var forwarder = new InferenceHttpForwarder(
+            new SingleHandlerClientFactory(handler),
+            NoOpGatewayMetricsCollector.Instance,
+            NullLogger<InferenceHttpForwarder>.Instance);
+
+        var context = CreatePostContext("""{"model":"gpt","stream":true}""");
+        var destination = new SlowClientResponseStream(slowWriteOrdinal: 1, writeDelay: TimeSpan.FromMinutes(5));
+        context.Response.Body = destination;
+        var transformer = new StreamingHttpTransformer(true, "gpt", "gpt");
+
+        using var clientGone = new CancellationTokenSource();
+
+        // Cancelled only once the write is genuinely in flight, so the ordering is decided by the
+        // test rather than by a sleep.
+        var sendTask = forwarder.SendAsync(
+            context,
+            "http://backend:8000",
+            null,
+            transformer,
+            isStreaming: true,
+            new InferenceForwardTimeouts(
+                HeaderTimeout: TimeSpan.FromSeconds(30),
+                StreamIdleTimeout: TimeSpan.FromSeconds(30))
+            {
+                // Expires while the write is blocked, so both the write deadline and the client token
+                // are cancelled by the time the write observes either.
+                DownstreamWriteTimeout = TimeSpan.FromMilliseconds(50),
+            },
+            clientGone.Token);
+
+        await destination.SlowWriteEntered.WaitAsync(TimeSpan.FromSeconds(5));
+        await clientGone.CancelAsync();
+
+        (await sendTask.WaitAsync(TimeSpan.FromSeconds(5))).Should().Be(ForwarderError.RequestCanceled);
+        context.Items.ContainsKey(GatewayErrorContextKeys.UpstreamException).Should().BeFalse(
+            "a client hang-up is not a gateway fault and needs no stashed cause");
+    }
+
     /// <summary>A header timeout is distinct from both cancellation and a stream stall.</summary>
     [Fact]
     public async Task SendAsync_HeaderTimeout_ReturnsRequestTimedOut()
@@ -691,6 +962,41 @@ public sealed class InferenceHttpForwarderTests
         };
         context.Request.EnableBuffering();
         return context;
+    }
+
+    /// <summary>
+    /// A client-side response body whose Nth write takes a configurable time to complete. A delay
+    /// longer than the test is how a client that has stopped reading behaves: the write sits there
+    /// until something cancels its token.
+    /// </summary>
+    /// <remarks>
+    /// Only <c>WriteAsync</c> blocks. <c>Response.StartAsync</c> flushes before the body phase is
+    /// entered, so a double that also blocks <c>FlushAsync</c> hangs before the write deadline is
+    /// ever armed — which is a property of the harness, not of the code under test.
+    /// </remarks>
+    private sealed class SlowClientResponseStream(int slowWriteOrdinal, TimeSpan writeDelay) : MemoryStream
+    {
+        private readonly TaskCompletionSource _slowWriteEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _writes;
+
+        /// <summary>Completes once the slow write is in flight, so a test orders against it without sleeping.</summary>
+        public Task SlowWriteEntered => _slowWriteEntered.Task;
+
+        public override async ValueTask WriteAsync(
+            ReadOnlyMemory<byte> buffer,
+            CancellationToken cancellationToken = default)
+        {
+            if (Interlocked.Increment(ref _writes) == slowWriteOrdinal)
+            {
+                _slowWriteEntered.TrySetResult();
+                await Task.Delay(writeDelay, cancellationToken);
+            }
+
+            await base.WriteAsync(buffer, cancellationToken);
+        }
+
+        public override Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
+            WriteAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
     }
 
     private sealed class SignaledResponseBodyStream : MemoryStream

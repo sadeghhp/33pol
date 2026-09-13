@@ -29,7 +29,10 @@ public static class GatewayConfigSnapshotServiceCollectionExtensions
         // boot rather than only when the database was first seeded.
         var initial = BuildInitialSnapshot(configuration);
         var environmentOrigins = GatewayCorsEnvironmentConfiguration.ReadAllowedOriginsFromEnvironment();
-        services.AddSingleton(new GatewayConfigState(initial, environmentOrigins));
+        services.AddSingleton(sp => new GatewayConfigState(
+            initial,
+            environmentOrigins,
+            sp.GetService<TimeProvider>()));
         services.AddSingleton<IGatewayConfigProvider>(sp => sp.GetRequiredService<GatewayConfigState>());
 
         var connectionString = configuration.GetConnectionString(

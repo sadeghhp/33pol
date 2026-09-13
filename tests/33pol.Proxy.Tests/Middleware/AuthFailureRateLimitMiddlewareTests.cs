@@ -3,6 +3,7 @@ using System.Security.Claims;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using NSubstitute;
 using NSubstitute.ExceptionExtensions;
 using Pol33.Core.Abstractions;
@@ -148,9 +149,13 @@ public sealed class AuthFailureRateLimitMiddlewareTests
         }
     }
 
-    /// <summary>The gateway-wide master switch governs this budget like every other limit.</summary>
+    /// <summary>
+    /// The master switch is how an operator stops shaping client traffic during an incident. It used
+    /// to switch this off as well, so the one action taken under pressure also removed the only
+    /// ceiling on credential guessing.
+    /// </summary>
     [Fact]
-    public async Task InvokeAsync_WhenRateLimitingDisabled_NeverRejects()
+    public async Task InvokeAsync_WhenRateLimitingDisabled_StillBoundsGuessing()
     {
         var middleware = CreateMiddleware(
             new RateLimitPolicy(Rpm: 1, Burst: 0, MaxConcurrentStreams: 0),
@@ -158,9 +163,97 @@ public sealed class AuthFailureRateLimitMiddlewareTests
             out _,
             enabled: false);
 
+        (await InvokeAsync(middleware, "/v1/chat/completions")).Should().Be(StatusCodes.Status401Unauthorized);
+        (await InvokeAsync(middleware, "/v1/chat/completions")).Should().Be(StatusCodes.Status429TooManyRequests);
+    }
+
+    /// <summary>Its own switch, for a deployment that deliberately sends bad keys (a load test).</summary>
+    [Fact]
+    public async Task InvokeAsync_WhenProtectionDisabled_NeverRejects()
+    {
+        var middleware = CreateMiddleware(
+            new RateLimitPolicy(Rpm: 1, Burst: 0, MaxConcurrentStreams: 0),
+            RejectCredential,
+            out _,
+            protectionEnabled: false);
+
         for (var i = 0; i < 20; i++)
         {
             (await InvokeAsync(middleware, "/v1/chat/completions")).Should().Be(StatusCodes.Status401Unauthorized);
+        }
+    }
+
+    /// <summary>
+    /// A caller offering no credential is not guessing at one. Charging it made anonymous traffic to
+    /// a public model spend a budget it could never be admitted by, and refusing it made one stale
+    /// key behind a NAT a lockout for every anonymous caller sharing that address.
+    /// </summary>
+    [Fact]
+    public async Task InvokeAsync_WithoutACredential_IsNeitherChargedNorRefused()
+    {
+        var policy = new RateLimitPolicy(Rpm: 1, Burst: 0, MaxConcurrentStreams: 0);
+        var middleware = CreateMiddleware(policy, RejectCredential, out var store);
+
+        for (var i = 0; i < 20; i++)
+        {
+            (await InvokeAsync(middleware, "/v1/chat/completions", credential: null))
+                .Should().Be(StatusCodes.Status401Unauthorized);
+        }
+
+        store.PeekRequest("authfail:unknown", policy, DateTimeOffset.UtcNow).IsAcquired.Should()
+            .BeTrue("an uncredentialed request spends nothing, so a credentialed one still has its budget");
+    }
+
+    /// <summary>
+    /// Proving a credential is not free: an unknown key misses the validator's caches and costs a
+    /// database read. Without a bound on it, an attacker rotating keys past the budget kept forcing
+    /// that read on every guess and the limiter only shortened the reply.
+    /// </summary>
+    [Fact]
+    public async Task InvokeAsync_PastTheProbeAllowance_StopsValidatingAltogether()
+    {
+        var middleware = CreateMiddleware(
+            new RateLimitPolicy(Rpm: 1, Burst: 0, MaxConcurrentStreams: 0),
+            RejectCredential,
+            out _,
+            probeMultiplier: 2);
+
+        // Spends the auth-failure budget; every request after this one has to prove a credential.
+        (await InvokeAsync(middleware, "/v1/chat/completions")).Should().Be(StatusCodes.Status401Unauthorized);
+
+        var authentication = Unauthenticated();
+        for (var i = 0; i < 10; i++)
+        {
+            (await InvokeAsync(middleware, "/v1/chat/completions", authentication: authentication))
+                .Should().Be(StatusCodes.Status429TooManyRequests);
+        }
+
+        await authentication.Received(2).AuthenticateAsync(Arg.Any<HttpContext>(), GatewayAuthSchemes.ApiKey);
+    }
+
+    /// <summary>
+    /// A key that authenticates is answered from the validator's positive cache, so proving it costs
+    /// nothing and must not count against the allowance — otherwise the bound on wasted work would
+    /// become a second, much lower rate limit on the legitimate clients behind a shared address.
+    /// </summary>
+    [Fact]
+    public async Task InvokeAsync_PastTheBudget_AValidCredential_NeverSpendsTheProbeAllowance()
+    {
+        Action<HttpContext> downstream = RejectCredential;
+        var middleware = CreateMiddleware(
+            new RateLimitPolicy(Rpm: 1, Burst: 0, MaxConcurrentStreams: 0),
+            context => downstream(context),
+            out _,
+            probeMultiplier: 2);
+
+        (await InvokeAsync(middleware, "/admin/api/keys")).Should().Be(StatusCodes.Status401Unauthorized);
+
+        downstream = Answer(StatusCodes.Status200OK);
+        var holder = Authenticated();
+        for (var i = 0; i < 25; i++)
+        {
+            (await InvokeAsync(middleware, "/admin/api/keys", authentication: holder))
+                .Should().Be(StatusCodes.Status200OK, "a valid key is never locked out, however long the flood lasts");
         }
     }
 
@@ -191,8 +284,9 @@ public sealed class AuthFailureRateLimitMiddlewareTests
         guesser.Response.StatusCode.Should().Be(StatusCodes.Status429TooManyRequests, "the budget stays spent");
     }
 
+    /// <summary>A credential that does not authenticate is exactly what the budget is for.</summary>
     [Fact]
-    public async Task InvokeAsync_ExhaustedBudget_NoCredential_Is429()
+    public async Task InvokeAsync_ExhaustedBudget_UnprovableCredential_Is429()
     {
         var middleware = CreateMiddleware(
             new RateLimitPolicy(Rpm: 1, Burst: 0, MaxConcurrentStreams: 0),
@@ -314,22 +408,35 @@ public sealed class AuthFailureRateLimitMiddlewareTests
         AuthFailureRateLimitMiddleware middleware,
         string path,
         IPAddress? remoteAddress = null,
-        IAuthenticationService? authentication = null)
+        IAuthenticationService? authentication = null,
+        string? credential = DefaultCredential)
     {
-        var context = CreateContext(path, remoteAddress, authentication);
+        var context = CreateContext(path, remoteAddress, authentication, credential);
         await middleware.InvokeAsync(context);
         return context.Response.StatusCode;
     }
 
+    /// <summary>
+    /// The credential every case carries unless it is testing what happens without one. The limiter
+    /// only looks at requests that present one, so a context without it exercises nothing.
+    /// </summary>
+    private const string DefaultCredential = "sk-guess";
+
     private static DefaultHttpContext CreateContext(
         string path,
         IPAddress? remoteAddress = null,
-        IAuthenticationService? authentication = null)
+        IAuthenticationService? authentication = null,
+        string? credential = DefaultCredential)
     {
         var context = new DefaultHttpContext();
         context.Request.Method = HttpMethods.Post;
         context.Request.Path = path;
         context.Connection.RemoteIpAddress = remoteAddress;
+
+        if (credential is not null)
+        {
+            context.Request.Headers[GatewayCredential.ApiKeyHeader] = credential;
+        }
 
         if (authentication is not null)
         {
@@ -345,7 +452,9 @@ public sealed class AuthFailureRateLimitMiddlewareTests
         RateLimitPolicy policy,
         Action<HttpContext> downstream,
         out InMemoryDistributedRateLimitStore store,
-        bool enabled = true)
+        bool enabled = true,
+        bool protectionEnabled = true,
+        int probeMultiplier = 10)
     {
         var resolver = new RateLimitPolicyResolver(new StubConfigProvider(new GatewayConfigSnapshot
         {
@@ -363,7 +472,12 @@ public sealed class AuthFailureRateLimitMiddlewareTests
             store,
             new OpenAiErrorResponseWriter(),
             Substitute.For<IGatewayMetricsCollector>(),
-            TimeProvider.System);
+            TimeProvider.System,
+            Options.Create(new RateLimitingOptions
+            {
+                AuthFailureProtectionEnabled = protectionEnabled,
+                AuthFailureProbeMultiplier = probeMultiplier,
+            }));
     }
 
     private sealed class StubConfigProvider(GatewayConfigSnapshot snapshot) : IGatewayConfigProvider

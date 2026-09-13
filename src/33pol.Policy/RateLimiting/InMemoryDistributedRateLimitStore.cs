@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Pol33.Core.Abstractions;
 using Pol33.Core.Configuration;
@@ -30,6 +31,7 @@ public sealed class InMemoryDistributedRateLimitStore : IDistributedRateLimitSto
     private readonly ConcurrentDictionary<string, RequestWindowState> _requestWindows = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, StreamConcurrencyState> _streamSlots = new(StringComparer.Ordinal);
     private readonly TimeProvider _timeProvider;
+    private readonly ILogger<InMemoryDistributedRateLimitStore>? _logger;
     private readonly TimeSpan _partitionRetention;
     private readonly int _maxPartitions;
 
@@ -39,11 +41,17 @@ public sealed class InMemoryDistributedRateLimitStore : IDistributedRateLimitSto
     private int _requestPartitionCount;
     private int _streamPartitionCount;
 
+    // Whether the last sweep had to evict a partition that still had budget spent. Only ever touched
+    // by the maintenance sweep, which is single-threaded, so it needs no interlocking.
+    private bool _forcingEviction;
+
     public InMemoryDistributedRateLimitStore(
         IOptions<RateLimitingOptions>? options = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        ILogger<InMemoryDistributedRateLimitStore>? logger = null)
     {
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _logger = logger;
 
         var retentionSeconds = options?.Value.InMemoryPartitionRetentionSeconds ?? 3600;
         _partitionRetention = TimeSpan.FromSeconds(Math.Max(1, retentionSeconds));
@@ -229,6 +237,23 @@ public sealed class InMemoryDistributedRateLimitStore : IDistributedRateLimitSto
 
         var state = GetOrAddWindow(partitionKey, now);
         state.Apply(TokenOperation.ForceTake, now, capacity, RefillPerSecond(policy));
+    }
+
+    /// <inheritdoc />
+    public void RefundRequest(string partitionKey, RateLimitPolicy policy, DateTimeOffset now)
+    {
+        var capacity = policy.Capacity;
+        if (capacity <= 0)
+        {
+            return;
+        }
+
+        // TryGetValue rather than GetOrAdd, for the same reason RefundRange uses it: a partition
+        // swept between the take and the refund starts full again anyway.
+        if (_requestWindows.TryGetValue(partitionKey, out var state))
+        {
+            state.Apply(TokenOperation.Refund, now, capacity, RefillPerSecond(policy));
+        }
     }
 
     public RateLimitAcquireResult TryAcquireStreamSlot(string partitionKey, RateLimitPolicy policy)
@@ -500,11 +525,52 @@ public sealed class InMemoryDistributedRateLimitStore : IDistributedRateLimitSto
             }
         }
 
+        // Spent buckets are evicted only as a last resort: dropping one hands its partition a full
+        // bucket on the next request, which is a windfall for whoever was being limited. A partition
+        // sitting at capacity has nothing to win from being reset, so those go first — and because
+        // the pass is ordered by last-seen, and a bucket refills to capacity within
+        // 60 × (1 + burst/rpm) seconds of going quiet, the idle end of the table is almost entirely
+        // made of them.
         removed += EnforceCeiling(
             _requestWindows,
             ref _requestPartitionCount,
             static state => state.LastSeenUtc,
+            static _ => true,
+            eligible: static state => state.IsAtCapacity);
+
+        var forced = EnforceCeiling(
+            _requestWindows,
+            ref _requestPartitionCount,
+            static state => state.LastSeenUtc,
             static _ => true);
+        // Edge-triggered: the condition this warns about persists for as long as the flood does, and
+        // the sweep runs every few seconds, so warning on every tick would bury the operator in the
+        // same line while telling them nothing new. One line when it starts, one when it stops.
+        if (forced > 0)
+        {
+            if (!_forcingEviction)
+            {
+                _forcingEviction = true;
+                _logger?.LogWarning(
+                    "Rate-limit partition ceiling ({MaxPartitions}) is forcing eviction of partitions "
+                    + "with budget already spent ({Forced} this sweep); each starts full again on its "
+                    + "next request, so limits are not being fully enforced. Raise "
+                    + "RateLimiting:InMemoryMaxPartitions, or shorten "
+                    + "RateLimiting:InMemoryPartitionRetentionSeconds.",
+                    _maxPartitions,
+                    forced);
+            }
+        }
+        else if (_forcingEviction)
+        {
+            _forcingEviction = false;
+            _logger?.LogInformation(
+                "Rate-limit partition table is back under its ceiling ({MaxPartitions}); no further "
+                + "partitions are being reset by eviction.",
+                _maxPartitions);
+        }
+
+        removed += forced;
         removed += EnforceCeiling(
             _streamSlots,
             ref _streamPartitionCount,
@@ -522,11 +588,24 @@ public sealed class InMemoryDistributedRateLimitStore : IDistributedRateLimitSto
     /// being rejected is touched on every rejection, so it sorts to the end and cannot be evicted
     /// (and thereby handed a fresh bucket) by a caller flooding the table with new partitions.
     /// </remarks>
+    /// <param name="canEvict">
+    /// The final gate, applied to the partitions actually chosen. May have side effects — the
+    /// stream-slot pass tombstones the state it is about to remove — which is why it is not what
+    /// narrows the candidate set.
+    /// </param>
+    /// <param name="eligible">
+    /// A side-effect-free filter applied <em>before</em> the ordering, so the chosen victims come
+    /// only from the partitions it admits. Applying such a filter through
+    /// <paramref name="canEvict"/> instead would silently under-evict: the least-recently-seen
+    /// partitions would be picked first and then skipped, leaving the table over its ceiling with a
+    /// second pass to force it back down — which is the eviction this filter exists to avoid.
+    /// </param>
     private int EnforceCeiling<TState>(
         ConcurrentDictionary<string, TState> partitions,
         ref int liveCount,
         Func<TState, DateTimeOffset> lastSeen,
-        Func<TState, bool> canEvict)
+        Func<TState, bool> canEvict,
+        Func<TState, bool>? eligible = null)
         where TState : class
     {
         var excess = Volatile.Read(ref liveCount) - _maxPartitions;
@@ -535,8 +614,13 @@ public sealed class InMemoryDistributedRateLimitStore : IDistributedRateLimitSto
             return 0;
         }
 
-        var victims = partitions
-            .ToArray()
+        var candidates = partitions.ToArray().AsEnumerable();
+        if (eligible is not null)
+        {
+            candidates = candidates.Where(pair => eligible(pair.Value));
+        }
+
+        var victims = candidates
             .OrderBy(pair => lastSeen(pair.Value))
             .Take(excess);
 
@@ -581,6 +665,10 @@ public sealed class InMemoryDistributedRateLimitStore : IDistributedRateLimitSto
         private DateTimeOffset _lastRefillUtc;
         private bool _primed;
 
+        // The capacity the tier last presented, so the maintenance sweep can tell a full bucket from
+        // a spent one without being told the tier.
+        private int _lastCapacity;
+
         // Read without the lock by the maintenance sweep, which sorts up to the whole table by it.
         // Taking the per-partition lock 50,000 times to order a list is a cost with no correctness
         // to show for it: a last-seen that is one operation stale only changes which of two
@@ -594,6 +682,28 @@ public sealed class InMemoryDistributedRateLimitStore : IDistributedRateLimitSto
         }
 
         public DateTimeOffset LastSeenUtc => new(Interlocked.Read(ref _lastSeenTicks), TimeSpan.Zero);
+
+        /// <summary>
+        /// Whether this bucket holds every token its tier allows, so dropping it would grant its
+        /// partition nothing it does not already have.
+        /// </summary>
+        /// <remarks>
+        /// Measured against the capacity of the last operation applied, which is the tier in force
+        /// for this partition; a bucket that has never been applied to is unprimed and starts full
+        /// by definition. Read under the same lock every mutation takes, so the answer cannot be
+        /// torn — a request admitted immediately afterwards only means the caller had a full budget
+        /// anyway, which is exactly the case where resetting it costs nothing.
+        /// </remarks>
+        public bool IsAtCapacity
+        {
+            get
+            {
+                lock (_sync)
+                {
+                    return !_primed || _tokens >= _lastCapacity;
+                }
+            }
+        }
 
         /// <summary>
         /// Refills the bucket for the time elapsed since the last call, then applies
@@ -616,6 +726,8 @@ public sealed class InMemoryDistributedRateLimitStore : IDistributedRateLimitSto
                     _tokens = capacity;
                     _primed = true;
                 }
+
+                _lastCapacity = capacity;
 
                 // The refill anchor only ever moves forwards. Time can arrive out of order here for
                 // two reasons: the wall clock stepped back, or — far more often — two concurrent

@@ -366,6 +366,56 @@ public sealed class RateLimitPlanResolverTests
         rule.IsAdapted.Should().BeFalse();
     }
 
+    /// <summary>
+    /// The model bucket is shared by everyone who uses the model, so with a publicAccess model the
+    /// internet at large was spending the budget authenticated tenants depend on — each anonymous
+    /// caller inside its own per-address tier, and the model's own budget gone all the same.
+    /// </summary>
+    [Fact]
+    public void Resolve_AnonymousSubject_CountsTheModelScopeInItsOwnBucket()
+    {
+        var rateLimits = new RateLimitsConfigSection
+        {
+            Default = new RateLimitPolicy(3000, 0, 0),
+            Anonymous = new RateLimitPolicy(60, 0, 0),
+            Models = Map(("gpt-4", new RateLimitPolicy(500, 0, 0))),
+        };
+
+        var anonymous = Create(rateLimits, authenticationRequired: true)
+            .Resolve(new RateLimitSubject(null, null, null, null, "anon:203.0.113.7"), "gpt-4")
+            .Rules.Single(rule => rule.Scope == RateLimitScope.Model);
+
+        var tenant = Create(rateLimits, authenticationRequired: true)
+            .Resolve(new RateLimitSubject("acme", null, null, null, "acme"), "gpt-4")
+            .Rules.Single(rule => rule.Scope == RateLimitScope.Model);
+
+        anonymous.PartitionKey.Should().Be(RateLimitKeys.AnonymousModel("gpt-4"));
+        tenant.PartitionKey.Should().Be(RateLimitKeys.Model("gpt-4"));
+        anonymous.PartitionKey.Should().NotBe(tenant.PartitionKey);
+        anonymous.Policy.Should().Be(tenant.Policy, "the same rule sizes both buckets");
+    }
+
+    /// <summary>
+    /// With authentication off nobody is anonymous in the sense the split exists for, so the model
+    /// bucket stays the single shared one it has always been.
+    /// </summary>
+    [Fact]
+    public void Resolve_WithoutAuthentication_KeepsTheOneSharedModelBucket()
+    {
+        var resolver = Create(
+            new RateLimitsConfigSection
+            {
+                Default = new RateLimitPolicy(3000, 0, 0),
+                Anonymous = new RateLimitPolicy(60, 0, 0),
+                Models = Map(("gpt-4", new RateLimitPolicy(500, 0, 0))),
+            },
+            authenticationRequired: false);
+
+        resolver.Resolve(new RateLimitSubject(null, null, null, null, "anon:203.0.113.7"), "gpt-4")
+            .Rules.Single(rule => rule.Scope == RateLimitScope.Model)
+            .PartitionKey.Should().Be(RateLimitKeys.Model("gpt-4"));
+    }
+
     private static RateLimitPlanResolver Create(RateLimitsConfigSection rateLimits) =>
         new(new MutableConfigProvider(new GatewayConfigSnapshot { RateLimits = rateLimits }));
 

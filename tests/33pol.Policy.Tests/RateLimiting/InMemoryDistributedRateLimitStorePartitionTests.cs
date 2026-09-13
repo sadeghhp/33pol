@@ -91,6 +91,58 @@ public sealed class InMemoryDistributedRateLimitStorePartitionTests
         }
     }
 
+    /// <summary>
+    /// Eviction reseats a partition's bucket at full, so a spent one must be the last thing dropped.
+    /// The ceiling used to evict strictly by last-seen, which handed a caller mid-way through its
+    /// budget a fresh one whenever a flood of new partitions pushed the table over.
+    /// </summary>
+    [Fact]
+    public void Compact_PastThePartitionCeiling_PrefersPartitionsWithNothingToWin()
+    {
+        var store = CreateStore(maxPartitions: 3);
+        var tight = new RateLimitPolicy(Rpm: 2, Burst: 0, MaxConcurrentStreams: 0);
+
+        // The oldest partition by last-seen, and half-spent: strict LRU would drop it first.
+        store.TryAcquireRequest("spender", tight, Start).IsAcquired.Should().BeTrue();
+
+        // Newer partitions that have never spent anything. Each is created full by the peek-free
+        // take and immediately refunded, so it sits at capacity.
+        for (var i = 0; i < 10; i++)
+        {
+            var key = $"anon:10.0.0.{i}";
+            var at = Start.AddMilliseconds(i + 1);
+            store.TryAcquireRequest(key, tight, at);
+            store.RefundRequest(key, tight, at);
+        }
+
+        store.Compact(Start.AddSeconds(1));
+
+        RequestWindowCount(store).Should().BeLessThanOrEqualTo(3);
+        store.PeekRequest("spender", tight, Start).Remaining.Should()
+            .Be(1, "the half-spent partition kept its debt rather than being reset by the ceiling");
+    }
+
+    /// <summary>
+    /// When every partition is spent there is nothing free to drop, so the ceiling still wins — the
+    /// table must not be allowed to grow without bound just because eviction would cost something.
+    /// </summary>
+    [Fact]
+    public void Compact_WhenEveryPartitionIsSpent_StillEvictsDownToTheCeiling()
+    {
+        var store = CreateStore(maxPartitions: 5);
+        var tight = new RateLimitPolicy(Rpm: 1, Burst: 0, MaxConcurrentStreams: 0);
+
+        for (var i = 0; i < 50; i++)
+        {
+            store.TryAcquireRequest($"anon:10.0.0.{i}", tight, Start.AddMilliseconds(i));
+        }
+
+        store.Compact(Start.AddMilliseconds(60));
+
+        RequestWindowCount(store).Should().BeLessThanOrEqualTo(5);
+        store.GetStats().RequestPartitions.Should().Be(RequestWindowCount(store));
+    }
+
     /// <summary>A partition holding stream slots is not evicted, at any threshold.</summary>
     [Fact]
     public void Compact_PastThePartitionCeiling_NeverEvictsAPartitionHoldingSlots()

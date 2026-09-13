@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.Extensions.Options;
 using OpenTelemetry.Metrics;
 using Pol33.Api.DependencyInjection;
@@ -37,6 +38,15 @@ public static class GatewayHostBuilderExtensions
                 .GetSection(GatewayOptions.SectionName)
                 .Get<GatewayOptions>() ?? new GatewayOptions();
             options.Limits.MaxRequestBodySize = gatewayOptions.Resilience.MaxRequestBodyBytes;
+
+            // Previously left at the framework default and not exposed, so the "data arriving too
+            // slowly" rejections it produced could be neither sized nor tuned. 0 disables it.
+            var resilience = gatewayOptions.Resilience;
+            options.Limits.MinRequestBodyDataRate = resilience.MinRequestBodyBytesPerSecond > 0
+                ? new MinDataRate(
+                    resilience.MinRequestBodyBytesPerSecond,
+                    TimeSpan.FromSeconds(Math.Max(1, resilience.MinRequestBodyDataRateGraceSeconds)))
+                : null;
         });
 
         return builder;
@@ -78,6 +88,10 @@ public static class GatewayHostBuilderExtensions
         // check belongs here for the same reason — a shutting-down gateway should reject before it
         // spends work on the body.
         app.UseInferenceResilience();
+        // Ahead of PublicModelDetection for the same reason PublicModelDetection is ahead of
+        // authentication: it is the first middleware to buffer and JSON-parse the body, and an
+        // anonymous caller already over its per-address budget should not make the gateway do that.
+        app.UseAnonymousAdmissionGuard();
         app.UsePublicModelDetection();
         // Outside the security middleware, so the requests it refuses are counted somewhere: the
         // rate limiter proper runs behind authentication and never sees a rejected credential.

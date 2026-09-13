@@ -14,11 +14,20 @@ namespace Pol33.Policy.Admin;
 public sealed class RateLimitConfigAdminService(
     IGatewayConfigProvider configProvider,
     IServiceScopeFactory scopeFactory,
-    ILogger<RateLimitConfigAdminService> logger) : IRateLimitConfigAdminService
+    ILogger<RateLimitConfigAdminService> logger,
+    TimeProvider? timeProvider = null) : IRateLimitConfigAdminService
 {
+    private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
+
+    /// <summary>
+    /// The stored configuration: base tiers and schedules. The live snapshot is the projected one,
+    /// so reading it directly would show an active window's tier as the configured number.
+    /// </summary>
+    private RateLimitsConfigSection StoredRateLimits => configProvider.Current.RateLimits.StoredOrSelf;
+
     public RateLimitAdminConfig GetCurrent()
     {
-        var rateLimits = configProvider.Current.RateLimits;
+        var rateLimits = StoredRateLimits;
         return new RateLimitAdminConfig
         {
             Enabled = rateLimits.Enabled,
@@ -28,7 +37,7 @@ public sealed class RateLimitConfigAdminService(
                 static p => p.Key,
                 static p => ToTierOptions(p.Value),
                 StringComparer.OrdinalIgnoreCase),
-            Rules = ToRules(rateLimits),
+            Rules = WithSchedules(ToRules(rateLimits), rateLimits),
         };
     }
 
@@ -84,6 +93,34 @@ public sealed class RateLimitConfigAdminService(
         }
     }
 
+    /// <summary>Each rule with its stored schedule attached; a rule without one gets an empty list, never null.</summary>
+    private static List<RateLimitRuleDefinition> WithSchedules(
+        List<RateLimitRuleDefinition> rules,
+        Core.Configuration.RateLimitsConfigSection stored)
+    {
+        for (var i = 0; i < rules.Count; i++)
+        {
+            var rule = rules[i];
+            stored.Schedules.TryGetValue(RateLimitScheduleProjection.Identity(rule.Scope, rule.TargetKey), out var windows);
+            rules[i] = rule with { Schedule = windows ?? [] };
+        }
+
+        return rules;
+    }
+
+    public RateLimitScheduleReport GetSchedule(DateTimeOffset at, DateTimeOffset from, DateTimeOffset to, int take)
+    {
+        var stored = StoredRateLimits;
+        var rules = WithSchedules(ToRules(stored), stored);
+        return RateLimitScheduleReportBuilder.Build(rules, at, from, to, take);
+    }
+
+    public RateLimitWindowPreview PreviewWindow(RateLimitRuleDefinition rule, string candidateName)
+    {
+        ArgumentNullException.ThrowIfNull(rule);
+        return RateLimitWindowPreviewBuilder.Build(rule, candidateName, _timeProvider.GetUtcNow());
+    }
+
     public async Task<RateLimitConfigUpdateResult> UpdateAsync(
         bool enabled,
         bool adaptiveEnabled,
@@ -99,14 +136,32 @@ public sealed class RateLimitConfigAdminService(
             return RateLimitConfigUpdateResult.Fail(validationError!, statusCode: 400);
         }
 
-        if (!RateLimitConfigValidation.TryValidateRules(rules, out var ruleError))
+        var stored = StoredRateLimits;
+
+        // A rule whose schedule the caller left unspecified keeps the schedule stored under its
+        // identity, for the same reason a null rule list keeps the stored rules: a client that
+        // cannot see windows must not be able to delete them by omission.
+        IReadOnlyList<RateLimitRuleDefinition>? submittedRules = rules?
+            .Select(rule => rule is null || rule.Schedule is not null
+                ? rule!
+                : rule with
+                {
+                    Schedule = stored.Schedules.TryGetValue(
+                        RateLimitScheduleProjection.Identity(rule.Scope, rule.TargetKey),
+                        out var kept)
+                        ? kept
+                        : [],
+                })
+            .ToArray();
+
+        if (!RateLimitConfigValidation.TryValidateRules(submittedRules, out var ruleError))
         {
             return RateLimitConfigUpdateResult.Fail(ruleError!, statusCode: 400);
         }
 
         // Null means "the caller does not manage rules", so the stored set is carried through
         // unchanged rather than wiped by a client that predates them.
-        var effectiveRules = rules ?? ToRules(configProvider.Current.RateLimits);
+        IReadOnlyList<RateLimitRuleDefinition> effectiveRules = submittedRules ?? WithSchedules(ToRules(stored), stored);
 
         await using var scope = scopeFactory.CreateAsyncScope();
         var repository = scope.ServiceProvider.GetService<IRateLimitSettingsRepository>();
@@ -141,11 +196,12 @@ public sealed class RateLimitConfigAdminService(
             }
 
             logger.LogInformation(
-                "Updated rate limits (enabled={Enabled}, adaptive={Adaptive}, default + {PlanCount} plan tier(s), {RuleCount} scoped rule(s)).",
+                "Updated rate limits (enabled={Enabled}, adaptive={Adaptive}, default + {PlanCount} plan tier(s), {RuleCount} scoped rule(s), {WindowCount} schedule window(s)).",
                 enabled,
                 adaptiveEnabled,
                 plans.Count,
-                effectiveRules.Count);
+                effectiveRules.Count,
+                effectiveRules.Sum(static r => r.Windows.Count));
             return RateLimitConfigUpdateResult.Ok(
                 enabled ? "Rate limits updated." : "Rate limits updated. Rate limiting is now disabled.");
         }

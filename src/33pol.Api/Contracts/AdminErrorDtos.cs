@@ -125,6 +125,12 @@ public sealed class AdminErrorOccurrenceDto
 
     public string? Hint { get; init; }
 
+    public bool? IsStreaming { get; init; }
+
+    public double? TimeToFirstTokenMs { get; init; }
+
+    public long? ResponseBytesForwarded { get; init; }
+
     public static AdminErrorOccurrenceDto From(GatewayErrorRecord record) => new()
     {
         Id = record.Id,
@@ -149,6 +155,9 @@ public sealed class AdminErrorOccurrenceDto
         DurationMs = record.DurationMs,
         UpstreamBodySnippet = record.UpstreamBodySnippet,
         Hint = record.Hint,
+        IsStreaming = record.IsStreaming,
+        TimeToFirstTokenMs = record.TimeToFirstTokenMs,
+        ResponseBytesForwarded = record.ResponseBytesForwarded,
     };
 }
 

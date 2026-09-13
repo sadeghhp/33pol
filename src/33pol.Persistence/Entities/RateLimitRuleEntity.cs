@@ -38,5 +38,12 @@ public sealed class RateLimitRuleEntity
 
     public int MaxConcurrentStreams { get; set; }
 
+    /// <summary>
+    /// The rule's schedule windows as one JSON document (see
+    /// <c>RateLimitScheduleJson</c>), or null for a rule with no windows. A document rather than a
+    /// child table because windows are only ever read and written with their rule.
+    /// </summary>
+    public string? ScheduleJson { get; set; }
+
     public DateTimeOffset UpdatedAt { get; set; }
 }

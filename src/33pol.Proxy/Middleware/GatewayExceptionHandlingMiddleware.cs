@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Globalization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
 using Pol33.Core.Abstractions;
@@ -36,6 +38,12 @@ public sealed class GatewayExceptionHandlingMiddleware(
 {
     public async Task InvokeAsync(HttpContext context)
     {
+        // This handler sits at the top of the pipeline, so its clock is as close to request start
+        // as the gateway can measure. Without it a body-read failure was recorded with no duration
+        // at all, and "did the client hang up at once or after a minute of trickling" — the
+        // question that separates a client-side timeout from a network fault — went unanswered.
+        var started = Stopwatch.GetTimestamp();
+
         try
         {
             await next(context).ConfigureAwait(false);
@@ -43,14 +51,18 @@ public sealed class GatewayExceptionHandlingMiddleware(
         catch (BadHttpRequestException ex)
         {
             var code = ClassifyBadRequest(ex);
+            var durationMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+            var message = code == GatewayErrorCode.RequestIncomplete
+                ? DescribeIncompleteBody(context, ex, durationMs)
+                : ex.Message;
 
             logger.LogWarning(
                 "Rejected malformed request for {Method} {Path}: {Reason}",
                 context.Request.Method,
                 context.Request.Path,
-                ex.Message);
+                message);
 
-            RecordError(context, ex, GatewayLogLevel.Warning, code.ToString(), StatusCodeFor(code));
+            RecordError(context, ex, GatewayLogLevel.Warning, code.ToString(), StatusCodeFor(code), message, durationMs);
             await WriteAsync(context, code).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
@@ -74,7 +86,9 @@ public sealed class GatewayExceptionHandlingMiddleware(
                 ex,
                 GatewayLogLevel.Error,
                 GatewayErrorCode.UpstreamError.ToString(),
-                StatusCodes.Status502BadGateway);
+                StatusCodes.Status502BadGateway,
+                ex.Message,
+                Stopwatch.GetElapsedTime(started).TotalMilliseconds);
             await WriteAsync(context, GatewayErrorCode.UpstreamError).ConfigureAwait(false);
         }
     }
@@ -89,7 +103,9 @@ public sealed class GatewayExceptionHandlingMiddleware(
         Exception exception,
         GatewayLogLevel level,
         string eventCode,
-        int statusCode)
+        int statusCode,
+        string message,
+        double durationMs)
     {
         // The inference path records its own failures with the model, upstream and outcome
         // attached. Recording again here would add a second, thinner row for the same fault.
@@ -107,7 +123,7 @@ public sealed class GatewayExceptionHandlingMiddleware(
             Source = GatewayErrorSourceNames.Exception,
             Category = nameof(GatewayExceptionHandlingMiddleware),
             EventCode = eventCode,
-            Message = exception.Message,
+            Message = message,
             ExceptionType = exception.GetType().FullName,
             StackTrace = exception.ToString(),
             Method = context.Request.Method,
@@ -119,6 +135,7 @@ public sealed class GatewayExceptionHandlingMiddleware(
             RequestId = context.Items.TryGetValue(RequestIdKeys.HttpContextItemKey, out var id)
                 ? id?.ToString()
                 : null,
+            DurationMs = durationMs,
             Hint = GatewayLogHints.ForException(exception),
         });
 
@@ -146,6 +163,51 @@ public sealed class GatewayExceptionHandlingMiddleware(
         }
 
         return GatewayErrorCode.InvalidJson;
+    }
+
+    /// <summary>
+    /// Kestrel's message says only that the body ended early or arrived too slowly. How many bytes
+    /// arrived against how many were declared, and over how long, is what tells a truncating client
+    /// from a proxy that buffers in pieces from a batch job that pauses between inputs — and none
+    /// of it is recoverable after the fact, so it is put in the message here.
+    /// </summary>
+    /// <remarks>
+    /// The counts are plain digits: the fingerprint normalizes numbers away, so every occurrence
+    /// still groups as one fault while each keeps its own figures.
+    /// </remarks>
+    private static string DescribeIncompleteBody(HttpContext context, BadHttpRequestException ex, double durationMs)
+    {
+        var received = TryGetBufferedBodyLength(context.Request.Body);
+        var declared = context.Request.ContentLength;
+
+        var progress = (received, declared) switch
+        {
+            (long r, long d) => string.Create(CultureInfo.InvariantCulture, $"Received {r} of {d} declared request-body bytes"),
+            (long r, null) => string.Create(CultureInfo.InvariantCulture, $"Received {r} request-body bytes of a chunked body (no Content-Length)"),
+            (null, long d) => string.Create(CultureInfo.InvariantCulture, $"Received an unknown number of {d} declared request-body bytes (body not buffered)"),
+            (null, null) => "Received an unknown number of request-body bytes of a chunked body (not buffered, no Content-Length)",
+        };
+
+        return string.Create(
+            CultureInfo.InvariantCulture,
+            $"{ex.Message.TrimEnd()} {progress} over {durationMs:F0} ms.");
+    }
+
+    /// <summary>
+    /// Bytes buffered so far by the request-body stream. The inference pipeline enables buffering
+    /// before the first read, and the buffering stream's length is exactly what has arrived.
+    /// Null for an unbuffered body, whose read position is not recoverable.
+    /// </summary>
+    private static long? TryGetBufferedBodyLength(Stream body)
+    {
+        try
+        {
+            return body.CanSeek ? body.Length : null;
+        }
+        catch (Exception ex) when (ex is IOException or ObjectDisposedException or NotSupportedException)
+        {
+            return null;
+        }
     }
 
     private static int StatusCodeFor(GatewayErrorCode code) =>

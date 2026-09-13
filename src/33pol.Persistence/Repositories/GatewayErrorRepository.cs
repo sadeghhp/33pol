@@ -445,6 +445,9 @@ public sealed class GatewayErrorRepository(GatewayDbContext dbContext) : IGatewa
         DurationMs = record.DurationMs,
         UpstreamBodySnippet = record.UpstreamBodySnippet,
         Hint = record.Hint,
+        IsStreaming = record.IsStreaming,
+        TimeToFirstTokenMs = record.TimeToFirstTokenMs,
+        ResponseBytesForwarded = record.ResponseBytesForwarded,
     };
 
     private static GatewayErrorRecord ToRecord(GatewayErrorEntity entity) => new()
@@ -472,6 +475,9 @@ public sealed class GatewayErrorRepository(GatewayDbContext dbContext) : IGatewa
         DurationMs = entity.DurationMs,
         UpstreamBodySnippet = entity.UpstreamBodySnippet,
         Hint = entity.Hint,
+        IsStreaming = entity.IsStreaming,
+        TimeToFirstTokenMs = entity.TimeToFirstTokenMs,
+        ResponseBytesForwarded = entity.ResponseBytesForwarded,
     };
 
     private sealed class GroupProjection

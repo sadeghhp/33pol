@@ -55,4 +55,10 @@ public sealed class GatewayErrorEntity
     public string? UpstreamBodySnippet { get; set; }
 
     public string? Hint { get; set; }
+
+    public bool? IsStreaming { get; set; }
+
+    public double? TimeToFirstTokenMs { get; set; }
+
+    public long? ResponseBytesForwarded { get; set; }
 }

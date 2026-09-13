@@ -170,7 +170,9 @@ Operators may mark individual registry models with `"publicAccess": true` (admin
 - A **valid** inference key still works and attributes usage to the tenant (rate limits, quotas, budgets).
 - Model grants are **not** enforced for public models.
 - Anonymous callers are partitioned for rate limits and quotas by client IP, not pooled into one bucket, and each address is held to the `anonymous` rate-limit tier (60 rpm + 20 burst + 2 streams on a fresh install; see the [rate-limit runbook](runbooks/rate-limit-admin.md)). Without an `anonymous` rule they fall back to the default tier, and the gateway warns at startup. With authentication off entirely, every caller keeps the default tier. Behind a proxy this requires `Gateway:ForwardedHeaders` (below) — without it every anonymous caller shares the proxy's address and one client can exhaust the limit for all of them.
-- An address that has spent its `auth_failure` budget (see the [rate-limit runbook](runbooks/rate-limit-admin.md)) is refused anonymous access to public models until it refills; keys that validate are unaffected.
+- The `auth_failure` budget (see the [rate-limit runbook](runbooks/rate-limit-admin.md)) covers only requests that **present** a credential, so a flood of bad keys from one address never blocks anonymous access to public models from the same address — that is bounded by the `anonymous` tier instead. Keys that validate are unaffected in either direction.
+- Anonymous traffic is counted against a **separate** bucket for each `model` rule, so unauthenticated callers cannot exhaust a public model's gateway-wide budget and leave your granted tenants seeing `429`.
+- An uncredentialed request whose address is already over its anonymous budget is refused **before** the body is buffered and parsed, so a flood costs the gateway two dictionary lookups rather than a full JSON parse per request.
 
 **Operational guidance:** Use public access only for local or internal upstreams (e.g. LM Studio). Do not mark paid cloud models public without network isolation and a strict `anonymous` rate-limit rule.
 

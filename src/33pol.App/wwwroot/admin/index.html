@@ -1617,7 +1617,7 @@
                       <p class="hint" x-show="r.occurrencesLoading">Loading recent occurrences…</p>
                       <table class="occurrence-table" x-show="r.hasOccurrences">
                         <thead>
-                          <tr><th>Time</th><th>Request ID</th><th>Status</th><th>Duration</th><th>Tenant</th><th></th></tr>
+                          <tr><th>Time</th><th>Request ID</th><th>Status</th><th>Duration</th><th>First byte</th><th>Sent</th><th>Tenant</th><th></th></tr>
                         </thead>
                         <!-- One tbody per occurrence: x-for needs a single root, and the detail row
                              (stack trace and upstream body for that occurrence) lives under it. -->
@@ -1628,6 +1628,8 @@
                               <td><code x-text="o.requestId"></code></td>
                               <td x-text="o.statusText"></td>
                               <td x-text="o.durationText"></td>
+                              <td x-text="o.firstByteText" :title="o.firstByteTitle"></td>
+                              <td x-text="o.bytesText" :title="o.bytesTitle"></td>
                               <td class="col-truncate" x-text="o.tenant" :title="o.tenant"></td>
                               <td>
                                 <button type="button" class="icon-btn" @click.stop="o.copyId" aria-label="Copy request ID">

@@ -31,6 +31,14 @@ public static class ProxyServiceCollectionExtensions
     public static IApplicationBuilder UseGatewayExceptionHandling(this IApplicationBuilder app) =>
         app.UseMiddleware<GatewayExceptionHandlingMiddleware>();
 
+    /// <summary>
+    /// Refuses over-budget anonymous inference before the body is read. Must be registered
+    /// immediately before <c>UsePublicModelDetection</c>, which is the first thing to buffer and
+    /// parse it.
+    /// </summary>
+    public static IApplicationBuilder UseAnonymousAdmissionGuard(this IApplicationBuilder app) =>
+        app.UseMiddleware<AnonymousAdmissionGuardMiddleware>();
+
     public static IApplicationBuilder UsePublicModelDetection(this IApplicationBuilder app) =>
         app.UseMiddleware<PublicModelDetectionMiddleware>();
 

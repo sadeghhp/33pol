@@ -69,6 +69,7 @@ public sealed class GatewayConfigStore(GatewayDbContext dbContext) : IGatewayCon
         // recognise are ignored rather than guessed at: a row written by a newer version must not be
         // reinterpreted as some other scope's limit.
         var byScope = new Dictionary<string, Dictionary<string, RateLimitPolicy>>(StringComparer.OrdinalIgnoreCase);
+        var schedules = new Dictionary<string, IReadOnlyList<RateLimitWindowDefinition>>(StringComparer.OrdinalIgnoreCase);
         foreach (var rule in rules)
         {
             if (!byScope.TryGetValue(rule.Scope, out var map))
@@ -78,6 +79,13 @@ public sealed class GatewayConfigStore(GatewayDbContext dbContext) : IGatewayCon
             }
 
             map[rule.TargetKey] = new RateLimitPolicy(rule.Rpm, rule.Burst, rule.MaxConcurrentStreams);
+
+            // A schedule that cannot be read applies the base tier, never nothing: the rule stays
+            // in force at its configured numbers and the windows are simply absent until fixed.
+            if (RateLimitScheduleJson.TryDeserialize(rule.ScheduleJson, out var windows) && windows.Count > 0)
+            {
+                schedules[RateLimitScheduleProjection.Identity(rule.Scope, rule.TargetKey)] = windows;
+            }
         }
 
         return new RateLimitsConfigSection
@@ -100,6 +108,7 @@ public sealed class GatewayConfigStore(GatewayDbContext dbContext) : IGatewayCon
             ApiKeyModels = Scope(byScope, RateLimitScopeNames.ApiKeyModel),
             AuthFailure = Single(byScope, RateLimitScopeNames.AuthFailure),
             Anonymous = Single(byScope, RateLimitScopeNames.Anonymous),
+            Schedules = schedules,
         };
     }
 

@@ -41,15 +41,43 @@ public sealed class AuthFailureRateLimitIntegrationTests
         payload.GetProperty("error").GetProperty("code").GetString().Should().Be("rate_limit_exceeded");
     }
 
+    /// <summary>
+    /// An uncredentialed caller is not guessing at a credential, so it is bounded by the anonymous
+    /// tier rather than the auth-failure one — but it <em>is</em> bounded: the limiter proper sits
+    /// behind security, so without this these 401s were free.
+    /// </summary>
     [Fact]
-    public async Task AdminApi_WithoutAKey_IsRateLimitedAfterItsBudgetIsSpent()
+    public async Task AdminApi_WithoutAKey_IsRateLimitedAfterItsAnonymousBudgetIsSpent()
     {
-        await using var factory = CreateFactory();
+        await using var factory = CreateFactory(anonymousRpm: 1);
         await GatewayWebApplicationFactory.EnsureAuthReadyAsync(factory);
         var client = factory.CreateClient();
 
         (await client.GetAsync("/admin/api/rate-limits")).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
         (await client.GetAsync("/admin/api/rate-limits")).StatusCode.Should().Be(HttpStatusCode.TooManyRequests);
+    }
+
+    /// <summary>
+    /// Uncredentialed traffic must not touch the guessing budget. It used to, so behind a NAT or an
+    /// ingress without ForwardedHeaders one anonymous client could spend the budget that decides
+    /// whether everybody else's wrong keys are still answered 401.
+    /// </summary>
+    [Fact]
+    public async Task AnonymousTraffic_DoesNotSpendTheAuthFailureBudget()
+    {
+        await using var factory = CreateFactory(anonymousRpm: 100, defaultRpm: 100);
+        await GatewayWebApplicationFactory.EnsureAuthReadyAsync(factory);
+
+        var anonymous = factory.CreateClient();
+        for (var i = 0; i < 10; i++)
+        {
+            await anonymous.GetAsync("/admin/api/rate-limits");
+        }
+
+        var guesser = factory.CreateClient();
+        guesser.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", "sk-33pol-not-a-real-key");
+        (await guesser.GetAsync("/admin/api/rate-limits")).StatusCode.Should()
+            .Be(HttpStatusCode.Unauthorized, "the guessing budget of one was never spent by anonymous traffic");
     }
 
     /// <summary>
@@ -240,7 +268,8 @@ public sealed class AuthFailureRateLimitIntegrationTests
     private static WebApplicationFactory<Program> CreateFactory(
         bool trustForwardedHeaders = false,
         HttpMessageHandler? upstreamHandler = null,
-        int defaultRpm = 1) =>
+        int defaultRpm = 1,
+        int anonymousRpm = 100) =>
         GatewayWebApplicationFactory.CreateWithInMemoryDatabase(
             AdminKey,
             upstreamHandler: upstreamHandler,
@@ -255,6 +284,11 @@ public sealed class AuthFailureRateLimitIntegrationTests
                 settings["RateLimiting:Default:Burst"] = "0";
                 settings["RateLimiting:AuthFailure:Rpm"] = "1";
                 settings["RateLimiting:AuthFailure:Burst"] = "0";
+
+                // Uncredentialed traffic is bounded by this tier rather than the guessing budget,
+                // so it has to be set explicitly wherever a test is about an uncredentialed caller.
+                settings["RateLimiting:Anonymous:Rpm"] = anonymousRpm.ToString();
+                settings["RateLimiting:Anonymous:Burst"] = "0";
 
                 if (trustForwardedHeaders)
                 {

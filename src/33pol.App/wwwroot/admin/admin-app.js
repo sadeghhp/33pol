@@ -5536,6 +5536,18 @@ function adminApp() {
             requestId: o.requestId || '—',
             statusText: o.statusCode ? String(o.statusCode) : '—',
             durationText: o.durationMs == null ? '—' : this.formatNum(Math.round(o.durationMs)) + ' ms',
+            // A stall with nothing sent is a time-to-first-token failure, not a mid-stream one;
+            // the outcome name alone cannot tell the two apart, these two columns can.
+            firstByteText: o.timeToFirstTokenMs != null
+              ? this.formatNum(Math.round(o.timeToFirstTokenMs)) + ' ms'
+              : (o.isStreaming ? 'never' : '—'),
+            firstByteTitle: o.isStreaming == null
+              ? ''
+              : (o.timeToFirstTokenMs != null
+                ? 'Time from forward start to the first response byte reaching the client'
+                : (o.isStreaming ? 'No response byte ever reached the client' : 'Not measured for non-streaming responses')),
+            bytesText: o.responseBytesForwarded == null ? '—' : this.formatNum(o.responseBytesForwarded) + ' B',
+            bytesTitle: o.responseBytesForwarded == null ? '' : 'Response-body bytes delivered to the client before the request ended',
             tenant: o.tenantId || '—',
             source: o.source,
             // Each occurrence keeps its own stack and upstream body; the group's sample is only the

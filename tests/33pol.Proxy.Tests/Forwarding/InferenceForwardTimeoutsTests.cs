@@ -72,15 +72,105 @@ public sealed class InferenceForwardTimeoutsTests
         timeouts.ForRequestBody(long.MaxValue).HeaderTimeout.Should().Be(TimeSpan.FromSeconds(3600));
     }
 
+    /// <summary>
+    /// An SSE upstream returns headers before it has scheduled the request, so the wait for the
+    /// first token is the wait the header allowance was sized for. The first byte gets what the
+    /// header phase left of it.
+    /// </summary>
+    [Fact]
+    public void FirstByteTimeout_IsTheRemainderOfTheHeaderAllowance()
+    {
+        var timeouts = Create(forwardTimeoutSeconds: 300, perMegabyte: 60);
+
+        timeouts.FirstByteTimeout(TimeSpan.FromSeconds(20)).Should().Be(TimeSpan.FromSeconds(280));
+    }
+
+    /// <summary>The prompt-scaled widening carries over: a long-context request waits longer for its first token too.</summary>
+    [Fact]
+    public void FirstByteTimeout_FollowsThePromptScaledAllowance()
+    {
+        var timeouts = Create(forwardTimeoutSeconds: 300, perMegabyte: 60).ForRequestBody(10 * 1024 * 1024);
+
+        timeouts.FirstByteTimeout(TimeSpan.Zero).Should().Be(TimeSpan.FromSeconds(900));
+    }
+
+    /// <summary>Never shorter than the idle gap, which is the floor for any wait on the body.</summary>
+    [Theory]
+    [InlineData(290)]
+    [InlineData(300)]
+    [InlineData(10_000)]
+    public void FirstByteTimeout_NeverFallsBelowTheIdleGap(int headerPhaseSeconds)
+    {
+        var timeouts = Create(forwardTimeoutSeconds: 300, perMegabyte: 60);
+
+        timeouts.FirstByteTimeout(TimeSpan.FromSeconds(headerPhaseSeconds)).Should().Be(TimeSpan.FromSeconds(120));
+    }
+
+    [Fact]
+    public void FirstByteTimeout_NegativeElapsed_IsTreatedAsZero()
+    {
+        var timeouts = Create(forwardTimeoutSeconds: 300, perMegabyte: 60);
+
+        timeouts.FirstByteTimeout(TimeSpan.FromSeconds(-5)).Should().Be(TimeSpan.FromSeconds(300));
+    }
+
+    /// <summary>
+    /// Exactly at the boundary the remainder equals the idle gap, so either rule gives the same
+    /// answer; one tick either side must still resolve to the larger of the two.
+    /// </summary>
+    [Fact]
+    public void FirstByteTimeout_AtTheBoundary_ResolvesToTheLargerAllowance()
+    {
+        var timeouts = Create(forwardTimeoutSeconds: 300, perMegabyte: 60);
+
+        // 300s header allowance, 120s idle gap: the remainder equals the gap at 180s elapsed.
+        timeouts.FirstByteTimeout(TimeSpan.FromSeconds(180)).Should().Be(TimeSpan.FromSeconds(120));
+        timeouts.FirstByteTimeout(TimeSpan.FromSeconds(180) - TimeSpan.FromTicks(1))
+            .Should().Be(TimeSpan.FromSeconds(120) + TimeSpan.FromTicks(1));
+        timeouts.FirstByteTimeout(TimeSpan.FromSeconds(180) + TimeSpan.FromTicks(1))
+            .Should().Be(TimeSpan.FromSeconds(120));
+    }
+
+    /// <summary>
+    /// The write bound is independent of the read gap, and a value the caller never set still bounds
+    /// the write rather than leaving it open — the two-argument constructor is what the forwarder
+    /// tests and any other caller use.
+    /// </summary>
+    [Fact]
+    public void EffectiveDownstreamWriteTimeout_DefaultsToTheIdleGap()
+    {
+        new InferenceForwardTimeouts(TimeSpan.FromSeconds(300), TimeSpan.FromSeconds(120))
+            .EffectiveDownstreamWriteTimeout.Should().Be(TimeSpan.FromSeconds(120));
+    }
+
+    [Fact]
+    public void EffectiveDownstreamWriteTimeout_UsesTheConfiguredValueWhenSet()
+    {
+        Create(forwardTimeoutSeconds: 300, perMegabyte: 60, downstreamWriteSeconds: 45)
+            .EffectiveDownstreamWriteTimeout.Should().Be(TimeSpan.FromSeconds(45));
+    }
+
+    /// <summary>Widening the header allowance must not move the write bound.</summary>
+    [Fact]
+    public void ForRequestBody_LeavesTheDownstreamWriteBoundAlone()
+    {
+        var timeouts = Create(forwardTimeoutSeconds: 300, perMegabyte: 60, downstreamWriteSeconds: 45);
+
+        timeouts.ForRequestBody(20 * 1024 * 1024).EffectiveDownstreamWriteTimeout
+            .Should().Be(TimeSpan.FromSeconds(45));
+    }
+
     private static InferenceForwardTimeouts Create(
         int forwardTimeoutSeconds,
         int perMegabyte,
-        int maxSeconds = 3600) =>
+        int maxSeconds = 3600,
+        int downstreamWriteSeconds = 120) =>
         InferenceForwardTimeouts.FromResilience(new GatewayResilienceOptions
         {
             ForwardTimeoutSeconds = forwardTimeoutSeconds,
             ForwardTimeoutSecondsPerRequestMegabyte = perMegabyte,
             MaxForwardTimeoutSeconds = maxSeconds,
             StreamIdleTimeoutSeconds = 120,
+            DownstreamWriteTimeoutSeconds = downstreamWriteSeconds,
         });
 }

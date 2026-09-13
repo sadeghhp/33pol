@@ -1032,11 +1032,29 @@
             "uid": "prometheus"
           },
           "refId": "B",
+          "expr": "sum(rate(gateway_forward_attempts_total{model=~\"$model\", outcome=\"upstream_first_byte_timeout\"}[$__rate_interval]))",
+          "legendFormat": "upstream_first_byte_timeout (breaker-counting)"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "C",
           "expr": "sum(rate(gateway_forward_attempts_total{model=~\"$model\", outcome=\"stream_idle_timeout\"}[$__rate_interval]))",
           "legendFormat": "stream_idle_timeout (not counted)"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "D",
+          "expr": "sum(rate(gateway_forward_attempts_total{model=~\"$model\", outcome=\"client_write_timeout\"}[$__rate_interval]))",
+          "legendFormat": "client_write_timeout (client-side, not counted)"
         }
       ],
-      "description": "upstream_timeout means headers never arrived, so the backend never answered — it counts against the circuit breaker. stream_idle_timeout means it answered and then went quiet mid-response, which is not held against it."
+      "description": "Which deadline ended the forward, and whether the circuit breaker believes it. upstream_timeout means headers never arrived. upstream_first_byte_timeout means headers arrived and no response byte ever did — for an SSE backend the headers are written on admission, so that is backend ill health and counts. stream_idle_timeout means it produced tokens and then went quiet mid-response, which is not held against it. client_write_timeout is the consumer refusing to read, which says nothing about the backend."
     },
     {
       "id": 22,

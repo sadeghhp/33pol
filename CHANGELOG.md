@@ -4,6 +4,149 @@ All notable changes to this project are documented here. Version tags follow [Se
 
 ## [Unreleased]
 
+### Security — credential guessing could still make the gateway pay for every guess
+
+An address past its `auth_failure` budget is refused unless it can prove a credential, so a shared
+address is not a lockout for the key-holders behind it. Proving one is not free, though: a key the
+gateway has never seen misses the validator's caches and costs a database read, so an attacker
+rotating random keys kept forcing that read on every guess and the limiter only shortened the reply.
+The proving is now bounded too — an over-budget address may have `AuthFailureProbeMultiplier` times
+the `auth_failure` rate validated per minute (10× by default), and past that everything is refused
+with nothing looked up at all. A key that authenticates is answered from cache, so it hands its
+token straight back and a real client behind a busy NAT never reaches the allowance.
+
+Requests carrying **no** credential are out of this limiter entirely. They were being refused by a
+budget they could never spend into: behind a NAT or an ingress without `ForwardedHeaders`, one
+client retrying a stale key locked every anonymous caller of a `publicAccess` model out of the
+gateway. Uncredentialed traffic is metered by the `anonymous` tier, which is the limit that applies
+to it.
+
+The auth-failure budget is also no longer switched off by the rate-limiting master switch. That
+switch is how an operator stops shaping client traffic during an incident, and it was taking a
+security control down with it. It has its own setting, `RateLimiting:AuthFailureProtectionEnabled`
+(default `true`).
+
+### Fixed — anonymous traffic could exhaust a public model's budget for paying tenants
+
+A `model` rule is the model's gateway-wide capacity, shared by everyone who uses it. With a
+`publicAccess` model, unauthenticated callers charged that same bucket — each one individually
+inside its per-address `anonymous` tier, and the model's rule exhausted all the same, so every
+granted tenant saw 429s for a model they pay for. Anonymous requests now count against a separate
+bucket sized by the same rule; the model's exposure to the upstream is bounded by the per-model
+bulkhead, which is the control that protects it.
+
+### Fixed — an anonymous flood was buffered and JSON-parsed before any limiter saw it
+
+Public-model detection has to run ahead of authentication, and it reads the request body to do its
+job — so while any model was `publicAccess`, every inference POST was buffered and parsed before a
+single limiter had looked at it. The cheapest thing a limiter does was happening after the most
+expensive thing the gateway does on a refused request. An uncredentialed request whose address has
+already spent its anonymous budget is now answered before any of that. It is a peek, not a debit:
+the token is still taken by the limiter proper against the same partition, so nothing is charged
+twice.
+
+### Fixed — the admin API and model listing had no rate limit at all
+
+`/admin/api/*` and `/v1/models` are requests the gateway answers itself, and nothing bounded them:
+a key could poll an endpoint that reads the database as fast as it liked. They are now charged one
+token against a per-caller bucket sized by the new `RateLimiting:ControlPlane` setting (600 rpm +
+120 burst; `0`/`0` switches it off). It is deliberately not the caller's inference tier and not
+editable from the console — a tenant tier is a decision about forwarded traffic, and applying it
+here would mean an operator who tightened it could no longer reach the console to loosen it again.
+The `global` rule is untouched for the same reason. The static console under `/admin` is files and
+is not metered.
+
+### Fixed — a shared limit escalated the wrong caller's backoff
+
+The adaptive governor lengthens a partition's `Retry-After` the longer it keeps being refused, on
+the premise that a client refused over and over is retrying too fast. That premise only holds for a
+limit the caller alone can exhaust. Refusals from the `global` and `model` scopes — the gateway
+being busy — were escalating the individual caller, so a tenant well inside its own tier, sending
+one request a minute, was told to wait a minute for a limit it was never over. Only caller-scoped
+refusals (`tenant`, `api_key`, and their model pairs) escalate now.
+
+### Fixed — a stream-concurrency refusal told every client to retry in one second
+
+The router recorded the refusal with the governor and then never read what the governor computed:
+only the rate path consulted it, so a client pinned purely on a concurrency cap sat at
+`Retry-After: 1` however long it had been pinned. That answer also carried none of the
+`X-33pol-RateLimit-*` headers every rate refusal carries, so the client could not see which cap had
+refused it or how many slots were left. Both are now the same as the rate path's.
+
+### Fixed — the partition ceiling handed spent buckets a fresh one
+
+Evicting a rate-limit partition resets its bucket, and the ceiling evicted strictly by last-seen —
+so a caller half-way through its budget got a full one whenever a flood of new partitions pushed the
+table over 50 000. Eviction now takes partitions sitting at capacity first, which have nothing to
+win from a reset and, because a quiet bucket refills, are almost all of the idle end of the table.
+If it still has to drop a spent one it says so with a warning naming the ceiling.
+
+### Fixed — a client that stopped reading held the whole forward open
+
+The write of response bytes to the client observed only the client's abort token, so nothing in the
+application bounded it. A consumer that kept the socket open and stopped reading applied backpressure
+through to the upstream read and held everything the forward owns with it: the upstream connection,
+the per-model bulkhead slot, the stream-concurrency slot and the budget reservation. The only thing
+ending such a request was Kestrel's `MinResponseDataRate`, a host default the gateway never configured
+and one operators commonly relax for long-lived SSE clients.
+
+Each write now carries its own deadline, `Gateway:Resilience:DownstreamWriteTimeoutSeconds` (default
+120, no "off" value). It is measured per write, so a client that keeps consuming is unaffected however
+long the response runs, and it is classified separately from the upstream deadlines: a breach is
+`client_write_timeout`, never counted against the circuit breaker, and distinct from a clean
+`client_canceled` — a disconnect still wins whenever both have happened. Unlike `client_canceled` it
+is recorded in the Errors tab, because a consumer stalling mid-response is how one caller starves a
+model's concurrency. Gateway correctness no longer depends on any host data-rate default.
+
+### Changed — headers with no response body now counts against the circuit breaker
+
+`stream_idle_timeout` covered two different faults and neither was counted. Headers followed by no
+response byte at all is now its own outcome, `upstream_first_byte_timeout`, and it *is* counted as
+backend ill health: an SSE upstream writes its headers on admission, before scheduling and before
+prefill, so they are no evidence that anything works, and producing nothing for the whole first-byte
+allowance (five minutes plus a minute per megabyte of prompt, by default) is. A stall after real
+tokens keeps the `stream_idle_timeout` name and stays uncounted, because the backend demonstrably
+produced output. The breaker requires both an absolute failure count and a failure ratio over its
+window, so a backend that is merely busy and still serving other callers does not trip on these.
+
+### Fixed — a streaming request had 120 s to produce its first token, whatever its prompt
+
+An SSE upstream (vLLM, SGLang, TGI) returns response headers the moment it accepts a request, before
+scheduling or prefill. The gateway's prompt-scaled header allowance (`ForwardTimeoutSeconds` plus
+`ForwardTimeoutSecondsPerRequestMegabyte`) was therefore spent in milliseconds on every streaming
+request, and the wait for the first token fell to `StreamIdleTimeoutSeconds` alone: a hard 120 s
+time-to-first-token ceiling that a large model under load, or a long-context prompt, legitimately
+exceeds. In one production window it accounted for 162 of 354 recorded errors, 134 of them on a single
+397B model, every one ending 120–128 s after the request started with nothing forwarded. The first
+response byte now gets the remainder of the header allowance (never less than the idle gap) in both
+response modes; the idle gap applies from the first byte on, as before.
+
+The idle deadline also covered the write to the client. A client that stopped reading blocked the
+flush, the timer fired, and the event was recorded as an upstream stall. Only upstream reads are on
+that clock now; the write has its own, above.
+
+Each stall record now says which deadline ran out, and carries `isStreaming`, `timeToFirstTokenMs` and
+`responseBytesForwarded` (new columns on `gateway_errors`, shown per occurrence in the Errors tab).
+The two fault shapes group separately.
+
+### Fixed — request-body failures were recorded blind
+
+`request_incomplete` records (a client that hung up mid-upload, or trickled the body below Kestrel's
+minimum data rate) had no duration and no byte counts. The message now states how many bytes arrived
+against how many were declared, and over how long, which is what separates a client-side timeout
+from a proxy that buffers in pieces from a batch job that pauses between inputs. The exception
+handler records a duration for everything it captures.
+
+Kestrel's minimum request-body data rate is exposed as `Gateway:Resilience:MinRequestBodyBytesPerSecond`
+and `MinRequestBodyDataRateGraceSeconds` (defaults unchanged: 240 B/s after 5 s; 0 disables).
+
+### Fixed — the errors export dropped the upstream's own error text
+
+The gateway captured the first 2 KB of every upstream 4xx/5xx body and showed it in the console, but
+the CSV export omitted the column, so an offline review of forty upstream 400s had only the gateway's
+generic message to go on. The export now carries `upstreamBodySnippet`. The hint on an upstream 400
+no longer asserts a single cause ("check the model's type") over that text; it points at it.
+
 ### Added — an anonymous rate-limit tier
 
 Unauthenticated traffic to a `publicAccess` model was held, per client address, to the *default*

@@ -22,7 +22,39 @@ public static class RateLimitKeys
 
     public static string ApiKey(string apiKeyId) => "k:" + apiKeyId;
 
+    /// <summary>
+    /// The bucket a caller's admin-API and model-listing requests are counted against.
+    /// </summary>
+    /// <remarks>
+    /// Separate from the caller's inference bucket, though sized by the same tier: the two are
+    /// different kinds of work, and letting an operator's console polling eat into the tenant's
+    /// inference budget — or the reverse — would make either one's limit unpredictable from the
+    /// other's traffic.
+    /// </remarks>
+    public static string ControlPlane(string partitionKey) => "cp:" + partitionKey;
+
     public static string Model(string modelId) => "m:" + modelId;
+
+    /// <summary>
+    /// The model bucket anonymous callers are counted against, separate from the one authenticated
+    /// tenants share.
+    /// </summary>
+    /// <remarks>
+    /// A <c>model</c> rule is the model's own gateway-wide capacity, shared by every caller of it.
+    /// With a <c>publicAccess</c> model, unauthenticated traffic charged that same bucket, so
+    /// distributed anonymous callers — each individually inside the anonymous tier — could exhaust
+    /// the model's budget and every paying tenant saw 429s for a model they were granted. Giving
+    /// anonymous traffic its own bucket under the same rule means the two cannot starve each other;
+    /// the model's total exposure is bounded by the per-model bulkhead, which is what actually
+    /// protects the upstream.
+    /// </remarks>
+    public static string AnonymousModel(string modelId) => "m!:" + modelId;
+
+    /// <summary>
+    /// The allowance for validating credentials from an address that has spent its auth-failure
+    /// budget. Namespaced away from that budget so the two cannot be confused for one bucket.
+    /// </summary>
+    public static string AuthProbe(string authFailurePartitionKey) => "ap:" + authFailurePartitionKey;
 
     public static string TenantModel(string partitionKey, string modelId) =>
         "tm:" + partitionKey + PairSeparator + modelId;

@@ -164,6 +164,11 @@ public static partial class RateLimitConfigValidation
                 return false;
             }
 
+            if (!TryValidateSchedule(rule, out error))
+            {
+                return false;
+            }
+
             if (!seen.Add(rule.Identity))
             {
                 // Silently keeping the last one would make the applied configuration depend on the
@@ -171,6 +176,267 @@ public static partial class RateLimitConfigValidation
                 error = $"rule '{rule.Identity}' is defined more than once.";
                 return false;
             }
+        }
+
+        return true;
+    }
+
+    public const int MaxWindowsPerRule = 16;
+    public const int MaxWindowNameLength = 64;
+    public const int MinPriority = 0;
+    public const int MaxPriority = 1000;
+
+    /// <summary>
+    /// Validates a rule's schedule: well-formed windows with unique names, tiers that pass the same
+    /// checks as the rule's own, one time zone per rule, and no two windows of the same kind that
+    /// can be active at once. A null schedule is "unspecified" and always valid.
+    /// </summary>
+    public static bool TryValidateSchedule(RateLimitRuleDefinition rule, out string? error)
+    {
+        error = null;
+        var windows = rule.Schedule;
+        if (windows is null || windows.Count == 0)
+        {
+            return true;
+        }
+
+        if (windows.Count > MaxWindowsPerRule)
+        {
+            error = $"rule '{rule.Identity}' may not have more than {MaxWindowsPerRule} windows.";
+            return false;
+        }
+
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        string? zone = null;
+
+        foreach (var window in windows)
+        {
+            if (window is null)
+            {
+                error = $"rule '{rule.Identity}' has a null window.";
+                return false;
+            }
+
+            var name = window.Name;
+            if (string.IsNullOrWhiteSpace(name) || name.Length != name.Trim().Length || name.Length > MaxWindowNameLength)
+            {
+                error = $"rule '{rule.Identity}': every window needs a name of at most {MaxWindowNameLength} characters with no surrounding whitespace.";
+                return false;
+            }
+
+            var label = $"rule '{rule.Identity}' window '{name}'";
+
+            if (!names.Add(name))
+            {
+                error = $"{label} is defined more than once.";
+                return false;
+            }
+
+            if (!RateLimitWindowKinds.IsKnown(window.Kind))
+            {
+                error = $"{label}: kind must be '{RateLimitWindowKinds.Once}' or '{RateLimitWindowKinds.Weekly}'.";
+                return false;
+            }
+
+            if (window.Priority is { } priority && (priority < MinPriority || priority > MaxPriority))
+            {
+                error = $"{label}: priority must be between {MinPriority} and {MaxPriority}.";
+                return false;
+            }
+
+            var shape = RateLimitScheduleEvaluator.Describe(window);
+            if (shape is not null)
+            {
+                error = $"{label}: {shape}.";
+                return false;
+            }
+
+            if (window.IsWeekly)
+            {
+                // One zone per rule keeps the overlap check below a static question. Two zones
+                // whose offsets move on different dates can overlap on some weeks and not others,
+                // and a rule that is valid in March and invalid in October is not a rule anyone
+                // can reason about.
+                var windowZone = string.IsNullOrWhiteSpace(window.TimeZone) ? "UTC" : window.TimeZone.Trim();
+                if (zone is null)
+                {
+                    zone = windowZone;
+                }
+                else if (!string.Equals(zone, windowZone, StringComparison.OrdinalIgnoreCase))
+                {
+                    error = $"{label}: every weekly window on a rule must use the same time zone ('{zone}').";
+                    return false;
+                }
+            }
+
+            if (!window.Suspend && !TryValidateWindowTier(rule, window, label, out error))
+            {
+                return false;
+            }
+        }
+
+        var overlaps = FindWindowOverlaps(windows);
+        if (overlaps.Count > 0)
+        {
+            var (first, second) = overlaps[0];
+            error = $"rule '{rule.Identity}': windows '{first}' and '{second}' are the same kind and can be active at the same time; give one a different span or a priority.";
+            return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// The pairs of same-kind windows that can be active at the same instant. Two <c>once</c>
+    /// windows overlap when their spans intersect; two <c>weekly</c> windows when any minute of the
+    /// week falls in both. Windows with an explicit priority are exempt: the operator has said
+    /// which wins.
+    /// </summary>
+    public static IReadOnlyList<(string First, string Second)> FindWindowOverlaps(
+        IReadOnlyList<RateLimitWindowDefinition> windows)
+    {
+        var result = new List<(string, string)>();
+
+        for (var i = 0; i < windows.Count; i++)
+        {
+            for (var j = i + 1; j < windows.Count; j++)
+            {
+                var a = windows[i];
+                var b = windows[j];
+                if (a is null || b is null || a.Priority is not null || b.Priority is not null)
+                {
+                    continue;
+                }
+
+                if (!string.Equals(a.Kind, b.Kind, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (!RateLimitScheduleEvaluator.IsWellFormed(a) || !RateLimitScheduleEvaluator.IsWellFormed(b))
+                {
+                    continue;
+                }
+
+                if (a.IsOnce ? OnceOverlap(a, b) : WeeklyOverlap(a, b))
+                {
+                    result.Add((a.Name, b.Name));
+                }
+            }
+        }
+
+        return result;
+    }
+
+    private static bool OnceOverlap(RateLimitWindowDefinition a, RateLimitWindowDefinition b)
+    {
+        var aEnd = a.Until ?? DateTimeOffset.MaxValue;
+        var bEnd = b.Until ?? DateTimeOffset.MaxValue;
+        return a.From < bEnd && b.From < aEnd;
+    }
+
+    private static bool WeeklyOverlap(RateLimitWindowDefinition a, RateLimitWindowDefinition b)
+    {
+        // Bounded windows whose validity ranges never meet cannot overlap whatever their weeks say.
+        var aFrom = a.ValidFrom ?? DateTimeOffset.MinValue;
+        var aUntil = a.ValidUntil ?? DateTimeOffset.MaxValue;
+        var bFrom = b.ValidFrom ?? DateTimeOffset.MinValue;
+        var bUntil = b.ValidUntil ?? DateTimeOffset.MaxValue;
+        if (aFrom >= bUntil || bFrom >= aUntil)
+        {
+            return false;
+        }
+
+        // Zones are equal by construction on a saved rule (TryValidateSchedule enforces it), so
+        // minute-of-week intervals are comparable directly. Across different zones the answer is
+        // computed conservatively in the same local frame.
+        foreach (var x in MinuteOfWeekSpans(a))
+        {
+            foreach (var y in MinuteOfWeekSpans(b))
+            {
+                if (x.Start < y.End && y.Start < x.End)
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>A weekly window as spans of minutes since Monday 00:00, wrapped at the week's end.</summary>
+    private static IEnumerable<(int Start, int End)> MinuteOfWeekSpans(RateLimitWindowDefinition window)
+    {
+        const int MinutesPerDay = 24 * 60;
+        const int MinutesPerWeek = 7 * MinutesPerDay;
+
+        RateLimitScheduleEvaluator.TryParseTime(window.Start, out var start);
+        RateLimitScheduleEvaluator.TryParseTime(window.End, out var end);
+        var length = end <= start ? (TimeSpan.FromDays(1) - start + end) : (end - start);
+
+        foreach (var label in window.Days!)
+        {
+            RateLimitScheduleEvaluator.TryParseDay(label, out var day);
+            var dayIndex = ((int)day + 6) % 7; // Monday = 0
+            var from = dayIndex * MinutesPerDay + (int)start.TotalMinutes;
+            var to = from + (int)length.TotalMinutes;
+            if (to <= MinutesPerWeek)
+            {
+                yield return (from, to);
+            }
+            else
+            {
+                yield return (from, MinutesPerWeek);
+                yield return (0, to - MinutesPerWeek);
+            }
+        }
+    }
+
+    private static bool TryValidateWindowTier(
+        RateLimitRuleDefinition rule,
+        RateLimitWindowDefinition window,
+        string label,
+        out string? error)
+    {
+        error = null;
+        var tier = new RateLimitTierOptions
+        {
+            Rpm = window.Rpm,
+            Burst = window.Burst,
+            MaxConcurrentStreams = window.MaxConcurrentStreams,
+        };
+
+        if (tier.EnforcesNothing)
+        {
+            error = $"{label} enforces nothing while active; set rpm or maxConcurrentStreams above zero, or mark it as suspending the rule.";
+            return false;
+        }
+
+        if (window.Rpm < 0)
+        {
+            error = $"{label} has a negative rpm; use 0 to leave the rate unlimited by this rule.";
+            return false;
+        }
+
+        if (window.Rpm == 0 &&
+            window.Burst != 0 &&
+            string.Equals(rule.Scope, RateLimitScopeNames.Tenant, StringComparison.OrdinalIgnoreCase))
+        {
+            error = $"{label} inherits the plan or default rate when rpm is 0; set burst to 0 as well.";
+            return false;
+        }
+
+        if (window.Rpm > 0 && !TryValidateTier(tier, label, out error))
+        {
+            return false;
+        }
+
+        if (window.Rpm == 0 &&
+            (window.Burst is < MinBurst or > MaxBurst ||
+             window.MaxConcurrentStreams is < MinMaxConcurrentStreams or > MaxMaxConcurrentStreams))
+        {
+            error = $"{label} has a burst or maxConcurrentStreams outside the allowed range.";
+            return false;
         }
 
         return true;

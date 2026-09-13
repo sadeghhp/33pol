@@ -33,9 +33,14 @@ public static class GatewayLogHints
                        "Routing → Models, or the environment variable its upstream auth points at.";
 
             case 400:
-                return "The upstream rejected the request body. Check that the model's type in " +
-                       "Routing → Models matches what the upstream actually serves — an embedding " +
-                       "model probed as text generation fails this way.";
+                // The captured upstream body (shown alongside this hint) is the only thing that says
+                // *why*; the hint must not assert a single cause over it. Forty 400s from four
+                // models were all labelled "check the model type" when the bodies said otherwise.
+                return "The upstream rejected the request body; its own error text (the upstream " +
+                       "response, when captured) names the field or limit it objected to — an " +
+                       "unsupported parameter, a message shape it does not accept, or a prompt over " +
+                       "its context length. If every request for this model fails the same way, check " +
+                       "that the model's type in Routing → Models matches what the upstream serves.";
 
             case 408:
             case 504:

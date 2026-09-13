@@ -86,6 +86,63 @@ public sealed class GatewayOptionsValidationTests
             StringComparison.Ordinal));
     }
 
+    /// <summary>
+    /// There is deliberately no "off" value: the gateway holds an upstream connection, a bulkhead slot
+    /// and a budget reservation for the whole of a write to the client.
+    /// </summary>
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void Validate_NonPositiveDownstreamWriteTimeout_ReturnsError(int seconds)
+    {
+        var options = new GatewayOptions
+        {
+            Resilience = new GatewayResilienceOptions { DownstreamWriteTimeoutSeconds = seconds },
+        };
+
+        var errors = GatewayOptionsValidation.Validate(options);
+
+        errors.Should().ContainSingle(e => e.Contains(nameof(GatewayResilienceOptions.DownstreamWriteTimeoutSeconds), StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Validate_NegativeMinRequestBodyRate_ReturnsError()
+    {
+        var options = new GatewayOptions
+        {
+            Resilience = new GatewayResilienceOptions { MinRequestBodyBytesPerSecond = -1 },
+        };
+
+        var errors = GatewayOptionsValidation.Validate(options);
+
+        errors.Should().ContainSingle(e => e.Contains(nameof(GatewayResilienceOptions.MinRequestBodyBytesPerSecond), StringComparison.Ordinal));
+    }
+
+    /// <summary>Zero is the documented way to switch the check off, not a misconfiguration.</summary>
+    [Fact]
+    public void Validate_ZeroMinRequestBodyRate_IsAllowed()
+    {
+        var options = new GatewayOptions
+        {
+            Resilience = new GatewayResilienceOptions { MinRequestBodyBytesPerSecond = 0 },
+        };
+
+        GatewayOptionsValidation.Validate(options).Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Validate_ZeroMinRequestBodyGrace_ReturnsError()
+    {
+        var options = new GatewayOptions
+        {
+            Resilience = new GatewayResilienceOptions { MinRequestBodyDataRateGraceSeconds = 0 },
+        };
+
+        var errors = GatewayOptionsValidation.Validate(options);
+
+        errors.Should().ContainSingle(e => e.Contains(nameof(GatewayResilienceOptions.MinRequestBodyDataRateGraceSeconds), StringComparison.Ordinal));
+    }
+
     [Fact]
     public void Validate_ValidOptions_ReturnsNoErrors()
     {

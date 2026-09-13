@@ -169,6 +169,34 @@ public sealed class AdminErrorEndpointTests
         body.Should().Contain("\"'=cmd");
     }
 
+    /// <summary>
+    /// The upstream's own error text was captured and shown in the console but dropped from the
+    /// export, so an offline review of forty upstream 400s had only the gateway's generic message.
+    /// The streaming, first-byte and forwarded-byte columns tell a time-to-first-token failure from
+    /// a mid-stream stall without the console.
+    /// </summary>
+    [Fact]
+    public async Task Export_AsCsv_CarriesTheUpstreamBodyAndResponseProgress()
+    {
+        await using var factory = GatewayWebApplicationFactory.CreateWithInMemoryDatabase(AdminKey);
+        await GatewayWebApplicationFactory.EnsureAuthReadyAsync(factory);
+        await RecordErrorsAsync(factory, Error("req_1") with
+        {
+            UpstreamBodySnippet = "{\"error\":{\"message\":\"unsupported parameter: logprobs\"}}",
+            IsStreaming = true,
+            TimeToFirstTokenMs = null,
+            ResponseBytesForwarded = 0,
+        });
+        var client = CreateAuthenticatedClient(factory, AdminKey);
+
+        var body = await client.GetStringAsync("/admin/api/errors/export?format=csv");
+
+        var lines = body.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        lines[0].TrimEnd().Should().EndWith("upstreamTarget,streaming,timeToFirstTokenMs,responseBytesForwarded,upstreamBodySnippet");
+        lines[1].Should().Contain("unsupported parameter: logprobs");
+        lines[1].TrimEnd().Should().EndWith(",\"true\",,\"0\",\"{\"\"error\"\":{\"\"message\"\":\"\"unsupported parameter: logprobs\"\"}}\"");
+    }
+
     [Fact]
     public async Task Export_DefaultsToJson()
     {

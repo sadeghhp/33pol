@@ -328,17 +328,33 @@ public sealed class ModelRouterMiddleware
                         RateLimitControl.Concurrency,
                         streamAcquire.ConfiguredRpm,
                         streamAcquire.EffectiveRpm));
-                    _rateLimitGovernor?.RecordOutcome(
-                        ratePartitionKey,
-                        admitted: false,
-                        DateTimeOffset.UtcNow);
+
+                    // The same treatment a rate refusal gets in RateLimitMiddleware, which this used
+                    // to skip on both counts: the partition's escalating backoff was recorded here
+                    // and then never read, so a client pinned on a concurrency cap was told to
+                    // retry in one second however long it had been pinned; and the answer carried
+                    // none of the budget headers, so it could not see which cap had refused it or
+                    // how many slots were left. Escalation is skipped for the shared scopes for the
+                    // same reason it is there — see RateLimitScopeExtensions.IsCallerScoped.
+                    var refusedAt = DateTimeOffset.UtcNow;
+                    var retryAfter = streamAcquire.RetryAfterSeconds ?? 1;
+                    if (_rateLimitGovernor is not null && (streamAcquire.Scope?.IsCallerScoped() ?? true))
+                    {
+                        _rateLimitGovernor.RecordOutcome(ratePartitionKey, admitted: false, refusedAt);
+                        retryAfter = _rateLimitGovernor.GetRetryAfterSeconds(
+                            ratePartitionKey,
+                            retryAfter,
+                            refusedAt);
+                    }
+
+                    RateLimitResponseHeaders.Write(context, streamAcquire);
                     await RejectAtAdmissionAsync(
                         context,
                         modelConfig.Id,
                         requestInfo.Stream,
                         _errors.Write(GatewayErrorCode.ConcurrencyLimitExceeded),
                         outcome: "stream_concurrency",
-                        retryAfterSeconds: streamAcquire.RetryAfterSeconds).ConfigureAwait(false);
+                        retryAfterSeconds: retryAfter).ConfigureAwait(false);
                     return;
                 }
             }
@@ -584,15 +600,37 @@ public sealed class ModelRouterMiddleware
 
             if (error == ForwarderError.ResponseBodyCanceled)
             {
-                // The upstream answered and then stalled while sending the body. The backend proved
-                // it was reachable and producing, so this is not evidence of ill health — abandon the
-                // probe (via lease dispose) rather than counting a failure.
+                // Whether anything reached the client separates two different faults, and they are
+                // judged differently.
+                //
+                // Zero bytes means the upstream accepted the request, returned headers, and then
+                // produced nothing for the whole first-byte allowance — by default five minutes plus
+                // a minute per megabyte of prompt. For an SSE backend those headers are written on
+                // admission, before scheduling and before prefill, so they are not evidence of a
+                // working backend; nothing was generated. A hung worker, a deadlocked scheduler or a
+                // dead GPU process looks exactly like this, and it IS backend ill health, so it is
+                // counted. The breaker needs both an absolute failure count and a failure ratio over
+                // its window, so a backend that is merely busy — and still answering other callers —
+                // does not trip on these.
+                //
+                // A stall after N bytes is a generation that demonstrably started and then stopped.
+                // The backend proved it was producing, so that stays inconclusive: abandon the probe
+                // (via lease dispose) rather than counting a failure.
+                var responseBytesForwarded = ResolveResponseBytesForwarded(context);
+                var noFirstByte = responseBytesForwarded == 0;
+                var stallOutcome = noFirstByte ? "upstream_first_byte_timeout" : "stream_idle_timeout";
+                if (noFirstByte)
+                {
+                    circuitLease.RecordFailure();
+                }
+
                 _logger.LogWarning(
-                    "Response body for model {ModelId} stalled past the idle timeout after {ElapsedMs}ms",
+                    "Response body for model {ModelId} stalled past its allowance after {ElapsedMs}ms with {ResponseBytesForwarded} bytes forwarded to the client",
                     modelConfig.Id,
-                    (DateTimeOffset.UtcNow - started).TotalMilliseconds);
-                inferenceScope.SetOutcome(false, "stream_idle_timeout");
-                _metricsCollector.RecordForwardAttempt(modelConfig.Id, "stream_idle_timeout");
+                    (DateTimeOffset.UtcNow - started).TotalMilliseconds,
+                    responseBytesForwarded);
+                inferenceScope.SetOutcome(false, stallOutcome);
+                _metricsCollector.RecordForwardAttempt(modelConfig.Id, stallOutcome);
 
                 // A streaming response has already flushed its first bytes, but a non-streaming one
                 // can stall before a single byte is written. Without this the client received the
@@ -602,7 +640,9 @@ public sealed class ModelRouterMiddleware
                     await context.WriteGatewayErrorAsync(
                         _errors.Write(
                             GatewayErrorCode.UpstreamError,
-                            message: "Backend stopped sending the response body."),
+                            message: noFirstByte
+                                ? "Backend returned response headers but never started sending the response body."
+                                : "Backend stopped sending the response body."),
                         CancellationToken.None).ConfigureAwait(false);
                 }
 
@@ -612,7 +652,49 @@ public sealed class ModelRouterMiddleware
                     started,
                     requestInfo.Stream,
                     success: false,
-                    outcome: "stream_idle_timeout",
+                    outcome: stallOutcome,
+                    upstreamUrl: modelConfig.Url,
+                    usage: usageCapture);
+                return;
+            }
+
+            if (error == ForwarderError.ResponseBodyClient)
+            {
+                // The client held the connection open and stopped reading, so the gateway gave up
+                // writing to it. Backpressure had reached the upstream read, which means the client —
+                // not the backend — was holding the upstream connection, the bulkhead slot and the
+                // budget reservation. Nothing here is evidence about the backend, so the probe is
+                // abandoned rather than failed.
+                //
+                // Kept distinct from client_canceled: a clean disconnect needs no operator attention
+                // and is not recorded, while a client that stalls mid-response is a fault worth
+                // seeing — it is how a misbehaving consumer starves a model's concurrency.
+                _logger.LogWarning(
+                    "Client stopped reading the response body for model {ModelId} after {ElapsedMs}ms",
+                    modelConfig.Id,
+                    (DateTimeOffset.UtcNow - started).TotalMilliseconds);
+                inferenceScope.SetOutcome(false, "client_write_timeout");
+                _metricsCollector.RecordForwardAttempt(modelConfig.Id, "client_write_timeout");
+
+                // A client that is not reading will not read an error body either, but a non-streaming
+                // response has not started, and leaving it to complete as a bare 200 with no body
+                // would record a success for a request that failed.
+                if (!context.Response.HasStarted)
+                {
+                    await context.WriteGatewayErrorAsync(
+                        _errors.Write(
+                            GatewayErrorCode.UpstreamError,
+                            message: "The client stopped reading the response body."),
+                        CancellationToken.None).ConfigureAwait(false);
+                }
+
+                RecordRecentRequest(
+                    context,
+                    modelConfig.Id,
+                    started,
+                    requestInfo.Stream,
+                    success: false,
+                    outcome: "client_write_timeout",
                     upstreamUrl: modelConfig.Url,
                     usage: usageCapture);
                 return;
@@ -928,7 +1010,9 @@ public sealed class ModelRouterMiddleware
                 durationMs,
                 errorCode,
                 outcome,
-                upstreamUrl);
+                upstreamUrl,
+                isStreaming,
+                entry.TimeToFirstTokenMs);
         }
     }
 
@@ -951,7 +1035,9 @@ public sealed class ModelRouterMiddleware
         double durationMs,
         string? errorCode,
         string? outcome,
-        string? upstreamUrl)
+        string? upstreamUrl,
+        bool isStreaming,
+        double? timeToFirstTokenMs)
     {
         if (string.Equals(outcome, "client_canceled", StringComparison.Ordinal))
         {
@@ -962,6 +1048,7 @@ public sealed class ModelRouterMiddleware
         var upstreamException = context.Items.TryGetValue(GatewayErrorContextKeys.UpstreamException, out var stashed)
             ? stashed as Exception
             : null;
+        var responseBytesForwarded = ResolveResponseBytesForwarded(context);
 
         _errorRecorder.Record(new GatewayErrorRecord
         {
@@ -972,7 +1059,7 @@ public sealed class ModelRouterMiddleware
             Source = GatewayErrorSourceNames.Proxy,
             Category = nameof(ModelRouterMiddleware),
             EventCode = errorCode ?? outcome,
-            Message = BuildErrorMessage(modelId, statusCode, outcome),
+            Message = BuildErrorMessage(modelId, statusCode, outcome, responseBytesForwarded),
             ExceptionType = upstreamException?.GetType().FullName,
             StackTrace = upstreamException?.ToString(),
             Method = context.Request.Method,
@@ -986,6 +1073,9 @@ public sealed class ModelRouterMiddleware
             ApiKeyId = ResolveApiKeyId(context),
             RequestId = requestId,
             DurationMs = durationMs,
+            IsStreaming = isStreaming,
+            TimeToFirstTokenMs = timeToFirstTokenMs,
+            ResponseBytesForwarded = responseBytesForwarded,
             UpstreamBodySnippet = context.Items.TryGetValue(
                 GatewayErrorContextKeys.UpstreamBodySnippet,
                 out var snippet)
@@ -1007,16 +1097,32 @@ public sealed class ModelRouterMiddleware
         // having a bad minute — it needs an operator, so it is ranked above an ordinary 5xx.
         "upstream_auth_missing" => GatewayLogLevel.Critical,
         "upstream_4xx" or "budget_exceeded" or "backend_unhealthy" or "circuit_open"
-            or "bulkhead_full" or "stream_concurrency" => GatewayLogLevel.Warning,
+            or "bulkhead_full" or "stream_concurrency" or "client_write_timeout" => GatewayLogLevel.Warning,
+        // Counted against the breaker, so it is ranked with the other backend failures rather than
+        // left at the Warning a 200-status streaming stall would otherwise get.
+        "upstream_first_byte_timeout" => GatewayLogLevel.Error,
         _ => statusCode >= StatusCodes.Status500InternalServerError
             ? GatewayLogLevel.Error
             : GatewayLogLevel.Warning,
     };
 
-    private static string BuildErrorMessage(string modelId, int statusCode, string? outcome) => outcome switch
+    /// <summary>Bytes the forwarder delivered to the client, or null when the body phase was never entered.</summary>
+    private static long? ResolveResponseBytesForwarded(HttpContext context) =>
+        context.Items.TryGetValue(InferenceForwardingContextKeys.ResponseBytesForwarded, out var value) && value is long bytes
+            ? bytes
+            : null;
+
+    private static string BuildErrorMessage(string modelId, int statusCode, string? outcome, long? responseBytesForwarded) => outcome switch
     {
         "upstream_timeout" => $"Upstream timed out for model '{modelId}'.",
+        // Distinct from stream_idle_timeout in both name and message: the fingerprint is taken over
+        // the message, and an operator chasing time-to-first-token failures must not find them pooled
+        // with mid-stream stalls.
+        "upstream_first_byte_timeout" =>
+            $"Upstream returned headers but never started sending the response body for model '{modelId}' (time to first token exceeded the allowance).",
         "stream_idle_timeout" => $"Upstream stopped sending the response body for model '{modelId}'.",
+        "client_write_timeout" =>
+            $"Client stopped reading the response body for model '{modelId}' after {responseBytesForwarded ?? 0} bytes; the gateway gave up writing to it.",
         "upstream_body_error" => $"Upstream connection failed while sending the response body for model '{modelId}'.",
         "backend_unhealthy" => $"Rejected: no healthy backend for model '{modelId}'.",
         "circuit_open" => $"Rejected: circuit breaker open for model '{modelId}'.",

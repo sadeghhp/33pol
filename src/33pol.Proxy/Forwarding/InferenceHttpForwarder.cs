@@ -117,6 +117,7 @@ public sealed class InferenceHttpForwarder(
         // cancellation sources here.
         using var headerCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         headerCts.CancelAfter(timeouts.HeaderTimeout);
+        var headerPhaseStarted = Stopwatch.GetTimestamp();
 
         HttpResponseMessage responseMessage;
         try
@@ -164,6 +165,7 @@ public sealed class InferenceHttpForwarder(
             // if the body phase fails before anything reached the client. Without this a gateway 502
             // written over them carried the upstream's Content-Type/Content-Length and vendor headers.
             List<string>? copiedHeaderNames = null;
+            BodyProgress? progress = null;
             try
             {
                 context.Response.StatusCode = (int)responseMessage.StatusCode;
@@ -190,71 +192,106 @@ public sealed class InferenceHttpForwarder(
                     await context.Response.StartAsync(cancellationToken).ConfigureAwait(false);
                 }
 
-                // Body phase, for streaming and non-streaming alike. The idle deadline is rearmed
-                // after every chunk that reaches the client, so a response of any total duration
-                // survives while the upstream keeps producing. Only a genuine stall trips it, and a
-                // stall is inconclusive about backend health because the backend already answered.
-                using var idleCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                idleCts.CancelAfter(timeouts.StreamIdleTimeout);
-
-                // Re-arming the idle deadline reschedules a timer, and a token stream forwards a
-                // chunk several times a second, so doing it per chunk is pure churn. Skipping the
-                // re-arm for a short spell only ever makes the deadline fire *earlier* than the
-                // configured gap — by at most this floor — so a healthy stream is never cut short by
-                // it, and at the default 120s idle timeout the floor is 1s.
-                var rearmFloor = TimeSpan.FromTicks(Math.Min(
-                    TimeSpan.TicksPerSecond,
-                    timeouts.StreamIdleTimeout.Ticks / 4));
-                var lastRearm = Stopwatch.GetTimestamp();
-
-                await using var upstreamBody = await responseMessage.Content
-                    .ReadAsStreamAsync(idleCts.Token)
-                    .ConfigureAwait(false);
+                // Body phase, for streaming and non-streaming alike. Two allowances govern it.
+                //
+                // The first byte gets whatever the header allowance left unused, and never less than
+                // the idle gap. An SSE upstream returns its headers the moment it accepts the
+                // request — before scheduling, before prefill — so for a streaming request the
+                // header allowance was spent in milliseconds and the wait for the first token fell
+                // to the idle gap alone: a hard 120 s time-to-first-token ceiling, however large the
+                // prompt, and however far ForRequestBody had widened the header allowance for it.
+                // The header allowance is what was sized for that wait, so it governs it.
+                //
+                // After the first byte, the idle deadline is rearmed after every chunk that reaches
+                // the client, so a response of any total duration survives while the upstream keeps
+                // producing. Only a genuine stall trips it, and a stall is inconclusive about backend
+                // health because the backend already answered.
+                //
+                // The deadline covers the upstream read only. The write to the client carries its own,
+                // separately classified bound (EffectiveDownstreamWriteTimeout), because the two
+                // measure different faults: charging a client's refusal to read to the upstream — as
+                // one shared token did — reported a slow client as an upstream stall, while leaving
+                // the write on the client's abort token alone made it unbounded unless the host
+                // happened to enforce a response data rate.
+                var firstByteAllowance = timeouts.FirstByteTimeout(Stopwatch.GetElapsedTime(headerPhaseStarted));
+                using var deadline = new UpstreamReadDeadline(cancellationToken, timeouts.StreamIdleTimeout);
+                deadline.Arm(firstByteAllowance);
 
                 // An upstream error body is the only thing that says *why* a model rejected a call
                 // (unsupported parameter, context length, wrong role...). Without it every 400 in the
                 // Errors tab read as "check your config". Only error responses are tee'd, capped at
                 // the configured snippet size, so the success and streaming paths are untouched.
                 var snippet = CreateSnippetBufferIfErrorResponse(responseMessage);
+                progress = new BodyProgress();
 
                 try
                 {
+                    await using var upstreamBody = await responseMessage.Content
+                        .ReadAsStreamAsync(deadline.Token)
+                        .ConfigureAwait(false);
+
                     await CopyStreamWithFlushAsync(
                             upstreamBody,
                             context.Response.Body,
                             snippet,
+                            progress,
                             // Time to first token is a streaming notion; a buffered response has no
                             // meaningful first-token moment to report.
                             onFirstByteWritten: isStreaming
                                 ? () => RecordTimeToFirstTokenIfNeeded(context)
                                 : null,
-                            onChunkForwarded: () =>
-                            {
-                                var now = Stopwatch.GetTimestamp();
-                                if (Stopwatch.GetElapsedTime(lastRearm, now) < rearmFloor)
-                                {
-                                    return;
-                                }
-
-                                lastRearm = now;
-                                idleCts.CancelAfter(timeouts.StreamIdleTimeout);
-                            },
+                            deadline,
                             flushEachChunk: isStreaming,
-                            idleCts.Token)
+                            timeouts.EffectiveDownstreamWriteTimeout,
+                            cancellationToken)
                         .ConfigureAwait(false);
                     StashSnippet(context, snippet);
                 }
-                catch (OperationCanceledException) when (idleCts.IsCancellationRequested &&
-                                                        !cancellationToken.IsCancellationRequested)
+                catch (OperationCanceledException) when (deadline.Fired)
                 {
-                    logger.LogWarning(
-                        "Upstream stalled for more than {StreamIdleTimeoutSeconds}s while sending the response body for {Uri}",
-                        timeouts.StreamIdleTimeout.TotalSeconds,
-                        requestMessage.RequestUri);
+                    // Which allowance ran out is the fact an operator needs: a stall with nothing
+                    // forwarded is a time-to-first-token failure (scheduling, prefill, a hung
+                    // worker), a stall after N bytes is a generation that stopped mid-stream. The
+                    // outcome name is the same for both; the message and the byte count are not.
+                    if (progress.BytesForwarded == 0)
+                    {
+                        logger.LogWarning(
+                            "Upstream returned headers but no response body byte within {FirstByteAllowanceSeconds}s for {Uri}",
+                            firstByteAllowance.TotalSeconds,
+                            requestMessage.RequestUri);
+                        StashException(context, new TimeoutException(
+                            $"Upstream returned response headers but no response body byte within {firstByteAllowance.TotalSeconds:0.#}s (time to first token exceeded the allowance)."));
+                    }
+                    else
+                    {
+                        logger.LogWarning(
+                            "Upstream stalled for more than {StreamIdleTimeoutSeconds}s while sending the response body for {Uri}, after {BytesForwarded} bytes had reached the client",
+                            timeouts.StreamIdleTimeout.TotalSeconds,
+                            requestMessage.RequestUri,
+                            progress.BytesForwarded);
+                        StashException(context, new TimeoutException(
+                            $"Upstream stalled for more than {timeouts.StreamIdleTimeout.TotalSeconds:0.#}s while sending the response body, after {progress.BytesForwarded} bytes had reached the client."));
+                    }
+
                     RemoveCopiedHeadersIfNotStarted(context, copiedHeaderNames);
-                    StashException(context, new TimeoutException(
-                        $"Upstream stalled for more than {timeouts.StreamIdleTimeout.TotalSeconds}s while sending the response body."));
                     return ForwarderError.ResponseBodyCanceled;
+                }
+                catch (DownstreamWriteTimeoutException ex)
+                {
+                    // The client stopped reading. Backpressure reaches all the way to the upstream
+                    // read, so the whole forward — upstream connection, bulkhead slot, budget
+                    // reservation — was being held by the client rather than by the backend. Reported
+                    // as a client-side body failure so it is never counted against the breaker, and
+                    // kept distinct from a clean disconnect, which needs no operator attention.
+                    logger.LogWarning(
+                        "Client stopped reading the response body for {Method} {Uri}; gave up after {DownstreamWriteTimeoutSeconds}s with {BytesForwarded} bytes delivered",
+                        requestMessage.Method,
+                        requestMessage.RequestUri,
+                        ex.Timeout.TotalSeconds,
+                        progress.BytesForwarded);
+                    RemoveCopiedHeadersIfNotStarted(context, copiedHeaderNames);
+                    StashException(context, ex);
+                    return ForwarderError.ResponseBodyClient;
                 }
                 catch (UpstreamBodyReadException ex) when (!cancellationToken.IsCancellationRequested)
                 {
@@ -288,6 +325,15 @@ public sealed class InferenceHttpForwarder(
                 // Writing to the client failed: the client disconnected while receiving the body.
                 // Reads from the upstream never surface here — they are wrapped above.
                 return ForwarderError.RequestCanceled;
+            }
+            finally
+            {
+                // Recorded however the body phase ended, so the error record can say whether the
+                // client got anything at all. Absent when the body phase was never entered.
+                if (progress is not null)
+                {
+                    context.Items[InferenceForwardingContextKeys.ResponseBytesForwarded] = progress.BytesForwarded;
+                }
             }
         }
 
@@ -517,6 +563,18 @@ public sealed class InferenceHttpForwarder(
     /// Streaming responses must reach the client chunk by chunk. A buffered response has no such
     /// requirement, so it is left to the server's own flushing rather than paying a flush per read.
     /// </param>
+    /// <param name="downstreamWriteTimeout">
+    /// Longest a single write to the client may take. Armed per write, so a client that keeps
+    /// consuming is never affected however long the whole response runs.
+    /// </param>
+    /// <param name="clientToken">
+    /// The client's disconnect token. The write observes it alongside its own deadline; the upstream
+    /// read observes <paramref name="deadline"/> instead.
+    /// </param>
+    /// <exception cref="DownstreamWriteTimeoutException">
+    /// A single write to the client outlived <paramref name="downstreamWriteTimeout"/> without the
+    /// client having disconnected — it is still holding the socket open and not reading.
+    /// </exception>
     /// <exception cref="UpstreamBodyReadException">
     /// The upstream read failed with an <see cref="IOException"/> (which includes
     /// <see cref="HttpIOException"/>). Wrapped so the caller can tell an upstream failure from a
@@ -526,10 +584,12 @@ public sealed class InferenceHttpForwarder(
         Stream source,
         Stream destination,
         ErrorBodySnippet? snippet,
+        BodyProgress progress,
         Action? onFirstByteWritten,
-        Action? onChunkForwarded,
+        UpstreamReadDeadline deadline,
         bool flushEachChunk,
-        CancellationToken cancellationToken)
+        TimeSpan downstreamWriteTimeout,
+        CancellationToken clientToken)
     {
         var buffer = ArrayPool<byte>.Shared.Rent(16 * 1024);
         var firstByteWritten = false;
@@ -540,8 +600,10 @@ public sealed class InferenceHttpForwarder(
                 int read;
                 try
                 {
+                    // The token is fetched per read: the deadline replaces it after a client write
+                    // outlived the gap, so a stale copy would cancel a read the upstream did not stall.
                     read = await source
-                        .ReadAsync(buffer.AsMemory(0, buffer.Length), cancellationToken)
+                        .ReadAsync(buffer.AsMemory(0, buffer.Length), deadline.Token)
                         .ConfigureAwait(false);
                 }
                 catch (IOException ex)
@@ -555,15 +617,38 @@ public sealed class InferenceHttpForwarder(
                 }
 
                 snippet?.Append(buffer.AsSpan(0, read));
-                await destination.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
-                if (flushEachChunk)
+
+                // A source per write rather than one re-armed across the loop: a shared source can be
+                // cancelled by its timer in the instant between a write completing and the re-arm,
+                // which would fail the *next* write for a client that is reading perfectly well. One
+                // source per write cannot carry stale cancellation into a later operation at all.
+                using (var writeDeadline = CancellationTokenSource.CreateLinkedTokenSource(clientToken))
                 {
-                    await destination.FlushAsync(cancellationToken).ConfigureAwait(false);
+                    writeDeadline.CancelAfter(downstreamWriteTimeout);
+                    try
+                    {
+                        await destination.WriteAsync(buffer.AsMemory(0, read), writeDeadline.Token).ConfigureAwait(false);
+                        if (flushEachChunk)
+                        {
+                            await destination.FlushAsync(writeDeadline.Token).ConfigureAwait(false);
+                        }
+                    }
+                    catch (OperationCanceledException) when (!clientToken.IsCancellationRequested)
+                    {
+                        // The client is still connected and still not reading. A disconnect takes
+                        // precedence when both have happened: it is the root cause, and the caller
+                        // must keep reporting it as a cancellation rather than a gateway timeout.
+                        throw new DownstreamWriteTimeoutException(downstreamWriteTimeout);
+                    }
                 }
+
+                // Counted only once the bytes are actually with the client, so a write that timed out
+                // never inflates the total.
+                progress.BytesForwarded += read;
 
                 // Rearm only once the bytes are actually with the client: progress, not mere
                 // upstream activity, is what proves the response is alive.
-                onChunkForwarded?.Invoke();
+                deadline.OnChunkForwarded();
 
                 if (!firstByteWritten)
                 {
@@ -576,6 +661,95 @@ public sealed class InferenceHttpForwarder(
         {
             ArrayPool<byte>.Shared.Return(buffer);
         }
+    }
+
+    /// <summary>Response-body bytes delivered to the client so far. Mutable on purpose: the count must survive the exception that ends the copy.</summary>
+    private sealed class BodyProgress
+    {
+        public long BytesForwarded;
+    }
+
+    /// <summary>
+    /// The deadline on upstream body reads: a first-byte allowance, then an idle gap rearmed after
+    /// every chunk that reaches the client.
+    /// </summary>
+    /// <remarks>
+    /// <para>Only upstream reads observe <see cref="Token"/>. A client write that outlives the gap
+    /// lets the timer fire against a token nothing is awaiting; <see cref="OnChunkForwarded"/> then
+    /// replaces the source rather than trying to rearm a cancelled one (which is a no-op), because
+    /// the upstream has just produced a chunk and is not the stalled party.</para>
+    ///
+    /// <para>Rearming reschedules a timer, and a token stream forwards a chunk several times a
+    /// second, so a rearm is skipped while the last one is younger than a quarter of the gap (at most
+    /// one second). Skipping only ever makes the deadline fire <em>earlier</em> than the configured
+    /// gap — by at most that floor — so a healthy stream is never cut short by it. The switch from
+    /// the first-byte allowance to the idle gap is never skipped.</para>
+    /// </remarks>
+    private sealed class UpstreamReadDeadline : IDisposable
+    {
+        private readonly CancellationToken _clientToken;
+        private readonly TimeSpan _idleGap;
+        private readonly TimeSpan _rearmFloor;
+        private CancellationTokenSource _source;
+        private long _lastArmed;
+        private bool _firstByteSeen;
+
+        public UpstreamReadDeadline(CancellationToken clientToken, TimeSpan idleGap)
+        {
+            _clientToken = clientToken;
+            _idleGap = idleGap;
+            _rearmFloor = TimeSpan.FromTicks(Math.Min(TimeSpan.TicksPerSecond, idleGap.Ticks / 4));
+            _source = CancellationTokenSource.CreateLinkedTokenSource(clientToken);
+        }
+
+        /// <summary>The token the next upstream read must observe. Re-read before every read.</summary>
+        public CancellationToken Token => _source.Token;
+
+        /// <summary>True when the deadline, not the client, cancelled the current token.</summary>
+        public bool Fired => _source.IsCancellationRequested && !_clientToken.IsCancellationRequested;
+
+        public void Arm(TimeSpan allowance)
+        {
+            _source.CancelAfter(allowance);
+            _lastArmed = Stopwatch.GetTimestamp();
+        }
+
+        public void OnChunkForwarded()
+        {
+            var now = Stopwatch.GetTimestamp();
+
+            if (_source.IsCancellationRequested)
+            {
+                if (_clientToken.IsCancellationRequested)
+                {
+                    return;
+                }
+
+                // Ran out while the client write, not the upstream read, was in progress. A fresh
+                // clock: the upstream just proved it is producing.
+                _source.Dispose();
+                _source = CancellationTokenSource.CreateLinkedTokenSource(_clientToken);
+                _firstByteSeen = true;
+                Arm(_idleGap);
+                return;
+            }
+
+            if (!_firstByteSeen)
+            {
+                _firstByteSeen = true;
+                Arm(_idleGap);
+                return;
+            }
+
+            if (Stopwatch.GetElapsedTime(_lastArmed, now) < _rearmFloor)
+            {
+                return;
+            }
+
+            Arm(_idleGap);
+        }
+
+        public void Dispose() => _source.Dispose();
     }
 
     /// <summary>Fallback for a body that cannot be rewound; read once, as before.</summary>
@@ -602,4 +776,19 @@ public sealed class InferenceHttpForwarder(
     /// </summary>
     private sealed class UpstreamBodyReadException(IOException inner)
         : Exception("Reading the upstream response body failed.", inner);
+
+    /// <summary>
+    /// A single write of response-body bytes to the client outlived its deadline while the client was
+    /// still connected.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately not a <see cref="TimeoutException"/>: <c>GatewayLogHints.ForException</c> reads
+    /// that type as "the upstream did not respond", which would send an operator to the wrong system
+    /// for a fault that is entirely downstream.
+    /// </remarks>
+    private sealed class DownstreamWriteTimeoutException(TimeSpan timeout)
+        : Exception($"The client stopped reading the response body; no write completed within {timeout.TotalSeconds:0.#}s.")
+    {
+        public TimeSpan Timeout { get; } = timeout;
+    }
 }

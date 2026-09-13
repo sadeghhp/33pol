@@ -69,6 +69,7 @@ public sealed class RateLimitPlanResolver(
         var anonymous = subject.TenantId is null && (authState?.IsAuthenticationRequired ?? false);
         var key = new PlanCacheKey(
             snapshot.Version,
+            rateLimits.EffectiveVersion,
             subject.PartitionKey,
             subject.TenantId,
             subject.TenantSlug,
@@ -154,7 +155,13 @@ public sealed class RateLimitPlanResolver(
 
             if (rateLimits.Models.TryGetValue(modelId, out var modelTier) && !modelTier.EnforcesNothing)
             {
-                rules.Add(Adapt(RateLimitScope.Model, RateLimitKeys.Model(modelId), modelTier, factor));
+                // Anonymous callers are counted in their own bucket under the same rule. The model
+                // bucket is shared by everyone who uses the model, so with a publicAccess model the
+                // internet at large was spending the budget authenticated tenants depend on.
+                var modelPartition = anonymous
+                    ? RateLimitKeys.AnonymousModel(modelId)
+                    : RateLimitKeys.Model(modelId);
+                rules.Add(Adapt(RateLimitScope.Model, modelPartition, modelTier, factor));
             }
 
             // Matched on the tenant id first and its slug second, for the same reason the tenant
@@ -232,8 +239,13 @@ public sealed class RateLimitPlanResolver(
     /// </param>
     /// <param name="FactorStep">The quantised adaptive factor for <paramref name="ModelId"/>.</param>
     /// <param name="Anonymous">Whether the subject is held to the anonymous tier.</param>
+    /// <param name="EffectiveVersion">
+    /// Bumped whenever a scheduled window begins or ends, so a plan built against the tier a window
+    /// put in force is not served once that window is over.
+    /// </param>
     private readonly record struct PlanCacheKey(
         long ConfigVersion,
+        long EffectiveVersion,
         string PartitionKey,
         string? TenantId,
         string? TenantSlug,

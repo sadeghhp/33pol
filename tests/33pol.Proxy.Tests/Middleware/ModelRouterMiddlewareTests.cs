@@ -9,6 +9,7 @@ using NSubstitute;
 using Pol33.Core.Abstractions;
 using Pol33.Core.Configuration;
 using Pol33.Core.Errors;
+using Pol33.Core.Forwarding;
 using Pol33.Core.Identity;
 using Pol33.Core.Models;
 using Pol33.Core.Security;
@@ -952,6 +953,190 @@ public sealed class ModelRouterMiddlewareTests
     }
 
     /// <summary>
+    /// Headers followed by nothing is a time-to-first-token failure, not a mid-stream stall: the
+    /// record must say so, carry the zero byte count, and group apart from a generation that stopped
+    /// mid-stream — 162 of them were pooled under one message that read as "stopped sending", when
+    /// nothing had ever been sent.
+    /// </summary>
+    /// <remarks>
+    /// It is also the one stall the breaker counts. For an SSE backend the response headers are
+    /// written on admission, before scheduling and before prefill, so they are not evidence that
+    /// anything works; producing no byte at all for the whole first-byte allowance is. With a
+    /// threshold of 1 an uncounted outcome would leave the breaker closed.
+    /// </remarks>
+    [Fact]
+    public async Task InvokeAsync_StreamIdleTimeoutWithNothingForwarded_IsRecordedAsAFirstTokenFailure()
+    {
+        await WithSingleModelRegistryAsync(async registry =>
+        {
+            var breakers = CreateBreakerRegistry(failureThreshold: 1);
+            var forwarder = Substitute.For<IInferenceHttpForwarder>();
+            forwarder.SendAsync(
+                    Arg.Any<HttpContext>(),
+                    Arg.Any<string>(),
+                    Arg.Any<string?>(),
+                    Arg.Any<StreamingHttpTransformer>(),
+                    Arg.Any<bool>(),
+                    Arg.Any<InferenceForwardTimeouts>(),
+                    Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    call.Arg<HttpContext>().Items[InferenceForwardingContextKeys.ResponseBytesForwarded] = 0L;
+                    return ForwarderError.ResponseBodyCanceled;
+                });
+            var errorRecorder = Substitute.For<IGatewayErrorRecorder>();
+
+            var middleware = CreateMiddleware(
+                registry: registry,
+                forwarder: forwarder,
+                circuitBreakers: breakers,
+                errorRecorder: errorRecorder);
+
+            var context = CreateContext(
+                HttpMethods.Post, "/v1/chat/completions", """{"model":"m1","stream":true}""");
+            await middleware.InvokeAsync(context);
+
+            errorRecorder.Received(1).Record(Arg.Is<GatewayErrorRecord>(r =>
+                r.Outcome == "upstream_first_byte_timeout"
+                && r.Message.Contains("never started sending the response body")
+                && r.ResponseBytesForwarded == 0
+                && r.IsStreaming == true
+                && r.TimeToFirstTokenMs == null
+                && r.Level == "Error"));
+            breakers.GetBreaker("m1").State.Should().Be(
+                CircuitState.Open,
+                "headers with no body at all is backend ill health, unlike a stall after real tokens");
+        });
+    }
+
+    /// <summary>
+    /// The complement, and the line the breaker policy turns on: a stall after real tokens stays
+    /// uncounted, because the backend demonstrably produced output. Counting both would let one slow
+    /// consumer-side incident take a working model out of service.
+    /// </summary>
+    [Fact]
+    public async Task InvokeAsync_StreamIdleTimeoutAfterBytesForwarded_IsNotCountedAgainstTheBreaker()
+    {
+        await WithSingleModelRegistryAsync(async registry =>
+        {
+            var breakers = CreateBreakerRegistry(failureThreshold: 1);
+            var forwarder = Substitute.For<IInferenceHttpForwarder>();
+            forwarder.SendAsync(
+                    Arg.Any<HttpContext>(),
+                    Arg.Any<string>(),
+                    Arg.Any<string?>(),
+                    Arg.Any<StreamingHttpTransformer>(),
+                    Arg.Any<bool>(),
+                    Arg.Any<InferenceForwardTimeouts>(),
+                    Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    call.Arg<HttpContext>().Items[InferenceForwardingContextKeys.ResponseBytesForwarded] = 8_192L;
+                    return ForwarderError.ResponseBodyCanceled;
+                });
+
+            var middleware = CreateMiddleware(
+                registry: registry,
+                forwarder: forwarder,
+                circuitBreakers: breakers);
+
+            await middleware.InvokeAsync(CreateContext(
+                HttpMethods.Post, "/v1/chat/completions", """{"model":"m1","stream":true}"""));
+
+            breakers.GetBreaker("m1").State.Should().Be(CircuitState.Closed);
+        });
+    }
+
+    /// <summary>
+    /// A client that holds the socket open and stops reading is holding the upstream connection, the
+    /// bulkhead slot and the budget reservation with it — a fault worth recording. It says nothing
+    /// about the backend, so it must not touch the breaker, and it must stay distinct from a clean
+    /// client_canceled, which is deliberately kept out of the error store.
+    /// </summary>
+    [Fact]
+    public async Task InvokeAsync_DownstreamWriteTimeout_IsRecordedWithoutBlamingTheBackend()
+    {
+        await WithSingleModelRegistryAsync(async registry =>
+        {
+            var breakers = CreateBreakerRegistry(failureThreshold: 1);
+            var forwarder = Substitute.For<IInferenceHttpForwarder>();
+            forwarder.SendAsync(
+                    Arg.Any<HttpContext>(),
+                    Arg.Any<string>(),
+                    Arg.Any<string?>(),
+                    Arg.Any<StreamingHttpTransformer>(),
+                    Arg.Any<bool>(),
+                    Arg.Any<InferenceForwardTimeouts>(),
+                    Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    call.Arg<HttpContext>().Items[InferenceForwardingContextKeys.ResponseBytesForwarded] = 2_048L;
+                    return ForwarderError.ResponseBodyClient;
+                });
+            var errorRecorder = Substitute.For<IGatewayErrorRecorder>();
+
+            var middleware = CreateMiddleware(
+                registry: registry,
+                forwarder: forwarder,
+                circuitBreakers: breakers,
+                errorRecorder: errorRecorder);
+
+            await middleware.InvokeAsync(CreateContext(
+                HttpMethods.Post, "/v1/chat/completions", """{"model":"m1","stream":true}"""));
+
+            breakers.GetBreaker("m1").State.Should().Be(
+                CircuitState.Closed,
+                "a consumer that stops reading is no evidence about the backend");
+            errorRecorder.Received(1).Record(Arg.Is<GatewayErrorRecord>(r =>
+                r.Outcome == "client_write_timeout"
+                && r.Message.Contains("Client stopped reading the response body")
+                && r.ResponseBytesForwarded == 2_048
+                && r.Level == "Warning"));
+        });
+    }
+
+    /// <summary>A stall after bytes were forwarded keeps the mid-stream wording and the count.</summary>
+    [Fact]
+    public async Task InvokeAsync_StreamIdleTimeoutAfterBytesForwarded_IsRecordedAsAMidStreamStall()
+    {
+        await WithSingleModelRegistryAsync(async registry =>
+        {
+            var forwarder = Substitute.For<IInferenceHttpForwarder>();
+            forwarder.SendAsync(
+                    Arg.Any<HttpContext>(),
+                    Arg.Any<string>(),
+                    Arg.Any<string?>(),
+                    Arg.Any<StreamingHttpTransformer>(),
+                    Arg.Any<bool>(),
+                    Arg.Any<InferenceForwardTimeouts>(),
+                    Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    var items = call.Arg<HttpContext>().Items;
+                    items[InferenceForwardingContextKeys.ResponseBytesForwarded] = 4_096L;
+                    items[InferenceForwardingContextKeys.TimeToFirstTokenMs] = 850d;
+                    return ForwarderError.ResponseBodyCanceled;
+                });
+            var errorRecorder = Substitute.For<IGatewayErrorRecorder>();
+
+            var middleware = CreateMiddleware(
+                registry: registry,
+                forwarder: forwarder,
+                errorRecorder: errorRecorder);
+
+            var context = CreateContext(
+                HttpMethods.Post, "/v1/chat/completions", """{"model":"m1","stream":true}""");
+            await middleware.InvokeAsync(context);
+
+            errorRecorder.Received(1).Record(Arg.Is<GatewayErrorRecord>(r =>
+                r.Outcome == "stream_idle_timeout"
+                && r.Message.Contains("stopped sending the response body")
+                && r.ResponseBytesForwarded == 4_096
+                && r.TimeToFirstTokenMs == 850d));
+        });
+    }
+
+    /// <summary>
     /// An upstream that answers and then breaks the body off (reset, premature EOF) is a backend
     /// failure, unlike a stall or a client hang-up: it counts against the breaker, lands in the
     /// error store, and — when nothing has reached the client yet — is answered with a 502 rather
@@ -1262,6 +1447,37 @@ public sealed class ModelRouterMiddlewareTests
             }
 
             breakers.GetBreaker("m1").State.Should().Be(CircuitState.Closed);
+        });
+    }
+
+    /// <summary>
+    /// A disconnect keeps the <c>client_canceled</c> outcome and stays out of the error store. Now
+    /// that a stalled consumer has its own outcome, the two must not be allowed to drift into each
+    /// other: a hang-up is routine and unactionable, while a client that holds the socket open and
+    /// stops reading is a fault an operator needs to see.
+    /// </summary>
+    [Fact]
+    public async Task InvokeAsync_ClientCancellation_StaysClientCanceledAndIsNotRecorded()
+    {
+        await WithSingleModelRegistryAsync(async registry =>
+        {
+            RecentRequestEntry? recorded = null;
+            var recentRequestStore = Substitute.For<IRecentRequestStore>();
+            recentRequestStore.When(x => x.Record(Arg.Any<RecentRequestEntry>()))
+                .Do(call => recorded = call.Arg<RecentRequestEntry>());
+            var errorRecorder = Substitute.For<IGatewayErrorRecorder>();
+
+            var middleware = CreateMiddleware(
+                registry: registry,
+                forwarder: CreateForwarderReturning(ForwarderError.RequestCanceled),
+                recentRequestStore: recentRequestStore,
+                errorRecorder: errorRecorder);
+
+            await middleware.InvokeAsync(CreateContext(
+                HttpMethods.Post, "/v1/chat/completions", """{"model":"m1","stream":true}"""));
+
+            recorded.Should().NotBeNull();
+            errorRecorder.DidNotReceive().Record(Arg.Any<GatewayErrorRecord>());
         });
     }
 

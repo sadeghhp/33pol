@@ -1,7 +1,9 @@
 using System.Security.Claims;
 using System.Text.Json;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Options;
 using Pol33.Core.Abstractions;
+using Pol33.Core.Configuration;
 using Pol33.Core.Errors;
 using Pol33.Core.Models;
 using Pol33.Core.RateLimiting;
@@ -40,6 +42,16 @@ namespace Pol33.Proxy.Middleware;
 /// its own request rate. Stage two is therefore skipped for a caller the model is not granted to;
 /// its identity scopes are still charged, so the attempts are not free, and the router still gives
 /// the 403.</para>
+///
+/// <para><b>The control plane is metered too.</b> The admin API and the model listing are requests
+/// the gateway answers itself rather than forwards, and nothing bounded them: a key could poll them
+/// as fast as it liked, and several of them read the database. They are charged one token against a
+/// bucket of the caller's own, sized by <see cref="RateLimitingOptions.ControlPlane"/> — not by the
+/// caller's inference tier, which is an economics decision about forwarded traffic and would mean an
+/// operator who tightened it could no longer reach the console to loosen it again. There is no body
+/// to parse and no model to scope by, the global rule is untouched so it stays what it is documented
+/// as, and neither the usage report nor the governor hears about it: both describe inference, and
+/// console traffic in either would be describing the wrong thing.</para>
 /// </remarks>
 public sealed class RateLimitMiddleware
 {
@@ -64,6 +76,13 @@ public sealed class RateLimitMiddleware
 
     private readonly IGatewayAuthenticationState? _authState;
 
+    /// <summary>
+    /// The per-caller budget for admin-API and model-listing requests. Read once: it is an
+    /// appsettings guard rail rather than an admin-editable tier, so it cannot change under a
+    /// running process.
+    /// </summary>
+    private readonly RateLimitPolicy _controlPlanePolicy;
+
     public RateLimitMiddleware(
         RequestDelegate next,
         IRateLimitPlanResolver planResolver,
@@ -75,7 +94,8 @@ public sealed class RateLimitMiddleware
         IRateLimitUsageTracker? usage = null,
         TimeProvider? timeProvider = null,
         IModelGrantService? modelGrants = null,
-        IGatewayAuthenticationState? authState = null)
+        IGatewayAuthenticationState? authState = null,
+        IOptions<RateLimitingOptions>? options = null)
     {
         _next = next;
         _planResolver = planResolver;
@@ -88,11 +108,18 @@ public sealed class RateLimitMiddleware
         _timeProvider = timeProvider ?? TimeProvider.System;
         _modelGrants = modelGrants;
         _authState = authState;
+
+        var controlPlane = options?.Value.ControlPlane ?? new RateLimitTierOptions();
+        _controlPlanePolicy = new RateLimitPolicy(
+            Math.Max(0, controlPlane.Rpm),
+            Math.Max(0, controlPlane.Burst),
+            MaxConcurrentStreams: 0);
     }
 
     public async Task InvokeAsync(HttpContext context)
     {
-        if (!InferenceRouteClassifier.IsRoutableInference(context))
+        var metering = Classify(context);
+        if (metering == MeteredKind.None)
         {
             await _next(context).ConfigureAwait(false);
             return;
@@ -109,6 +136,23 @@ public sealed class RateLimitMiddleware
 
         var subject = RateLimitPartition.ResolveSubject(context);
         var now = _timeProvider.GetUtcNow();
+
+        if (metering == MeteredKind.ControlPlane)
+        {
+            // One bucket, no stages: no body to parse, no model to scope by, and no unroutable-body
+            // answer to give — the endpoint behind this reads its own payload.
+            var control = AcquireControlPlane(subject, now);
+            RateLimitResponseHeaders.Write(context, control);
+
+            if (!control.IsAcquired)
+            {
+                await RejectControlPlaneAsync(context, subject, control).ConfigureAwait(false);
+                return;
+            }
+
+            await _next(context).ConfigureAwait(false);
+            return;
+        }
 
         // --- Stage one: the scopes that do not need the body. ---
         //
@@ -149,7 +193,7 @@ public sealed class RateLimitMiddleware
             }
         }
 
-        WriteBudgetHeaders(context, tightest);
+        RateLimitResponseHeaders.Write(context, tightest);
         RecordAdmission(subject, modelId, tightest);
 
         // Answered here, after the debit, when the cached parse already says the router is going to
@@ -167,6 +211,76 @@ public sealed class RateLimitMiddleware
     /// <summary>Takes a token from every scope that can be decided without the request body.</summary>
     private RateLimitAcquireResult AcquireIdentityScopes(in RateLimitSubject subject, DateTimeOffset now) =>
         _rateLimitStore.TryAcquireAll(_planResolver.Resolve(subject, modelId: null).IdentityRules, now);
+
+    /// <summary>
+    /// Takes the caller's one token for an admin-API or model-listing request.
+    /// </summary>
+    /// <remarks>
+    /// One bucket per caller, in a partition of its own so console polling and inference cannot
+    /// spend each other's budget. No scope is stamped on the result: every
+    /// <see cref="RateLimitScope"/> names a dimension an operator can write a rule against, and this
+    /// budget is not one of them — labelling the answer <c>tenant</c> would point a client at the
+    /// tenant tier, which is not the number it was just refused by.
+    /// </remarks>
+    private RateLimitAcquireResult AcquireControlPlane(in RateLimitSubject subject, DateTimeOffset now)
+    {
+        if (!_controlPlanePolicy.EnforcesRate)
+        {
+            return RateLimitAcquireResult.Unlimited;
+        }
+
+        return _rateLimitStore.TryAcquireRequest(
+            RateLimitKeys.ControlPlane(subject.PartitionKey),
+            _controlPlanePolicy,
+            now);
+    }
+
+    /// <summary>Answers a control-plane request that is over its budget.</summary>
+    /// <remarks>
+    /// <para>Deliberately not routed through <see cref="RejectAsync"/>, and the admitted case is
+    /// deliberately not recorded at all. Both of those feed machinery that is about inference.</para>
+    ///
+    /// <para>The usage report's rate columns are last-writer-wins, so a console poll passing through
+    /// them would leave the tenant's "usage against limit" describing the control-plane budget
+    /// rather than the tier its traffic is actually held to — the same trap a stream-concurrency
+    /// refusal fell into once already. And the governor lengthens a partition's <c>Retry-After</c>
+    /// the longer it keeps being refused: routing this through it would have a tenant's inference
+    /// calls told to wait because its console was polling too fast, which is the cross-contamination
+    /// this budget's separate partition exists to prevent.</para>
+    ///
+    /// <para>The refusal is still counted, under a reason of its own so an operator can tell it
+    /// apart from a tenant hitting its inference tier.</para>
+    /// </remarks>
+    private async Task RejectControlPlaneAsync(
+        HttpContext context,
+        RateLimitSubject subject,
+        RateLimitAcquireResult acquire)
+    {
+        _metrics.RecordRateLimitRejection("rate_limit:control_plane", subject.PartitionKey, modelId: null);
+
+        await context.WriteGatewayErrorAsync(
+            _errors.Write(GatewayErrorCode.RateLimitExceeded),
+            context.RequestAborted,
+            acquire.RetryAfterSeconds ?? 1).ConfigureAwait(false);
+    }
+
+    /// <summary>What this request is metered as, if anything.</summary>
+    private enum MeteredKind
+    {
+        /// <summary>Not metered here: static files, health, metrics, the root document.</summary>
+        None,
+
+        /// <summary>A forwarded inference request: every scope, both stages.</summary>
+        Inference,
+
+        /// <summary>An admin-API or model-listing request: the caller's own scopes only.</summary>
+        ControlPlane,
+    }
+
+    private static MeteredKind Classify(HttpContext context) =>
+        InferenceRouteClassifier.IsRoutableInference(context) ? MeteredKind.Inference
+        : InferenceRouteClassifier.IsControlPlane(context) ? MeteredKind.ControlPlane
+        : MeteredKind.None;
 
     /// <summary>
     /// Takes a token from every model-scoped rule, refunding the first stage if one of them refuses.
@@ -357,39 +471,6 @@ public sealed class RateLimitMiddleware
         return false;
     }
 
-    /// <summary>
-    /// Publishes the partition's remaining budget on every answer, admitted or not, so a client can
-    /// pace itself instead of discovering the limit by being refused.
-    /// </summary>
-    private static void WriteBudgetHeaders(HttpContext context, RateLimitAcquireResult acquire)
-    {
-        if (acquire.Limit is not { } limit)
-        {
-            return;
-        }
-
-        var headers = context.Response.Headers;
-        headers[GatewayHeaders.RateLimitLimit] = limit.ToString();
-        headers[GatewayHeaders.RateLimitRemaining] = (acquire.Remaining ?? 0).ToString();
-        headers[GatewayHeaders.RateLimitReset] = (acquire.ResetAfterSeconds ?? 0).ToString();
-
-        if (acquire.Scope is { } scope)
-        {
-            // Several limits apply at once, so a bare remaining-count is ambiguous: this says which
-            // of them the number belongs to.
-            headers[GatewayHeaders.RateLimitScope] = scope.ToLabel();
-        }
-
-        if (acquire.AdaptiveFactor < 1.0 && acquire.ConfiguredRpm > 0)
-        {
-            // The two rates the governor moved between, read straight off the rule rather than
-            // reconstructed from the capacity: Scale() rounds rpm and burst independently, so
-            // dividing the capacity by the factor does not invert it and the header was off by a
-            // few whenever either rounding went the other way.
-            headers[GatewayHeaders.RateLimitAdaptive] = $"{acquire.EffectiveRpm}/{acquire.ConfiguredRpm}";
-        }
-    }
-
     private async Task RejectAsync(
         HttpContext context,
         RateLimitSubject subject,
@@ -397,7 +478,7 @@ public sealed class RateLimitMiddleware
         RateLimitAcquireResult acquire,
         DateTimeOffset now)
     {
-        WriteBudgetHeaders(context, acquire);
+        RateLimitResponseHeaders.Write(context, acquire);
 
         var scope = acquire.Scope;
         var reason = acquire.Control == RateLimitControl.Concurrency
@@ -405,7 +486,15 @@ public sealed class RateLimitMiddleware
             : "rate_limit:" + (scope?.ToLabel() ?? "tenant");
 
         _metrics.RecordRateLimitRejection(reason, subject.PartitionKey, modelId);
-        _governor?.RecordOutcome(subject.PartitionKey, admitted: false, now);
+
+        // Only a limit this caller alone can exhaust says anything about how fast it is retrying. A
+        // refusal from the global or model scope is the gateway being busy, and escalating this
+        // partition's Retry-After for it told a tenant well inside its own tier to wait a minute.
+        var callerScoped = scope?.IsCallerScoped() ?? true;
+        if (callerScoped)
+        {
+            _governor?.RecordOutcome(subject.PartitionKey, admitted: false, now);
+        }
         _usage?.Record(new RateLimitUsageEvent(
             subject.PartitionKey,
             subject.ApiKeyId,
@@ -426,7 +515,7 @@ public sealed class RateLimitMiddleware
         // that keeps coming back, and jitters it so a crowd refused together does not return
         // together.
         var retryAfter = acquire.RetryAfterSeconds ?? 1;
-        if (_governor is not null)
+        if (_governor is not null && callerScoped)
         {
             retryAfter = _governor.GetRetryAfterSeconds(subject.PartitionKey, retryAfter, now);
         }

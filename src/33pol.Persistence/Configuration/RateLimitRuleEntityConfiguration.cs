@@ -24,6 +24,9 @@ internal sealed class RateLimitRuleEntityConfiguration : IEntityTypeConfiguratio
             .UseCollation("NOCASE")
             .IsRequired();
 
+        builder.Property(r => r.ScheduleJson)
+            .HasColumnType("TEXT");
+
         builder.HasIndex(r => new { r.Scope, r.TargetKey }).IsUnique();
     }
 }

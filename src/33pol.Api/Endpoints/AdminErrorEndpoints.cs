@@ -159,7 +159,12 @@ public static class AdminErrorEndpoints
         var builder = new StringBuilder();
         builder.AppendLine(
             "timestampUtc,level,source,category,errorCode,outcome,statusCode,modelId,method,path," +
-            "requestId,tenantId,durationMs,exceptionType,message,hint,upstreamTarget");
+            "requestId,tenantId,durationMs,exceptionType,message,hint,upstreamTarget," +
+            // The upstream's own error text was captured and shown in the console but dropped from
+            // the export, so an offline review of forty upstream 400s had nothing but the gateway's
+            // generic message to go on. Streaming, first-byte and forwarded-byte columns tell a
+            // time-to-first-token failure from a mid-stream stall without the console.
+            "streaming,timeToFirstTokenMs,responseBytesForwarded,upstreamBodySnippet");
 
         foreach (var record in records)
         {
@@ -180,7 +185,11 @@ public static class AdminErrorEndpoints
                 .Append(Cell(record.ExceptionType)).Append(',')
                 .Append(Cell(record.Message)).Append(',')
                 .Append(Cell(record.Hint)).Append(',')
-                .Append(Cell(record.UpstreamTarget))
+                .Append(Cell(record.UpstreamTarget)).Append(',')
+                .Append(Cell(record.IsStreaming?.ToString().ToLowerInvariant())).Append(',')
+                .Append(Cell(record.TimeToFirstTokenMs?.ToString("F2", CultureInfo.InvariantCulture))).Append(',')
+                .Append(Cell(record.ResponseBytesForwarded?.ToString(CultureInfo.InvariantCulture))).Append(',')
+                .Append(Cell(record.UpstreamBodySnippet))
                 .AppendLine();
         }
 

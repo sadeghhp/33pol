@@ -383,6 +383,9 @@ namespace Pol33.Persistence.Migrations
                         .HasMaxLength(512)
                         .HasColumnType("TEXT");
 
+                    b.Property<bool?>("IsStreaming")
+                        .HasColumnType("INTEGER");
+
                     b.Property<string>("Level")
                         .IsRequired()
                         .HasMaxLength(16)
@@ -421,6 +424,9 @@ namespace Pol33.Persistence.Migrations
                         .HasMaxLength(64)
                         .HasColumnType("TEXT");
 
+                    b.Property<long?>("ResponseBytesForwarded")
+                        .HasColumnType("INTEGER");
+
                     b.Property<string>("RouteKind")
                         .HasMaxLength(32)
                         .HasColumnType("TEXT");
@@ -440,6 +446,9 @@ namespace Pol33.Persistence.Migrations
                     b.Property<string>("TenantId")
                         .HasMaxLength(64)
                         .HasColumnType("TEXT");
+
+                    b.Property<double?>("TimeToFirstTokenMs")
+                        .HasColumnType("REAL");
 
                     b.Property<string>("UpstreamBodySnippet")
                         .HasMaxLength(2048)
@@ -900,6 +909,9 @@ namespace Pol33.Persistence.Migrations
 
                     b.Property<int>("Rpm")
                         .HasColumnType("INTEGER");
+
+                    b.Property<string>("ScheduleJson")
+                        .HasColumnType("TEXT");
 
                     b.Property<string>("Scope")
                         .IsRequired()

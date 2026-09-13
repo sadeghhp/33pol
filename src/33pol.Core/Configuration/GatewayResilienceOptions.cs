@@ -51,7 +51,54 @@ public sealed class GatewayResilienceOptions
     /// </summary>
     public int StreamIdleTimeoutSeconds { get; set; } = 120;
 
+    /// <summary>
+    /// Longest a single write of response-body bytes to the client may take before the gateway gives
+    /// up on it. Measured per write, so a client that keeps consuming is never affected however long
+    /// the whole response runs.
+    /// </summary>
+    /// <remarks>
+    /// <para>This is the application's own bound on a downstream stall, and it exists because the
+    /// gateway holds expensive state for the whole of a forward: the upstream connection, a per-model
+    /// bulkhead slot, a stream-concurrency slot and a budget reservation. A client that stops reading
+    /// applies backpressure all the way through to the upstream read, so without a bound here that
+    /// state is retained for as long as the client holds the socket open.</para>
+    ///
+    /// <para>Kestrel's <c>MinResponseDataRate</c> (240 B/s after a 5 s grace, by default) normally
+    /// aborts such a connection first, and the abort surfaces as a client disconnect. That is a
+    /// transport-level guard on a different measure — average throughput, not per-write latency — and
+    /// it is the host's to configure or remove. Correctness does not depend on it: this timeout bounds
+    /// the write whether or not the host has any rate limit, and an operator who relaxes Kestrel's
+    /// rate for long-lived SSE clients (a common change) keeps a bound here.</para>
+    ///
+    /// <para>A breach is attributed to the client, not the backend: it is reported as
+    /// <c>client_write_timeout</c> and is never counted against the circuit breaker.</para>
+    /// </remarks>
+    public int DownstreamWriteTimeoutSeconds { get; set; } = 120;
+
     public long MaxRequestBodyBytes { get; set; } = 26_214_400;
+
+    /// <summary>
+    /// Slowest a client may deliver a request body, in bytes per second, before the server aborts
+    /// the read with <c>request_incomplete</c> ("data arriving too slowly"). 0 disables the check.
+    /// </summary>
+    /// <remarks>
+    /// <para>This is Kestrel's <c>MinRequestBodyDataRate</c>, which the gateway previously left at
+    /// the framework default and did not expose. The rate is averaged over the whole body read once
+    /// <see cref="MinRequestBodyDataRateGraceSeconds"/> has elapsed, so a client that <em>pauses</em>
+    /// mid-upload — a batch job building each embedding input as it goes, a proxy that buffers the
+    /// body in pieces — trips it even though its throughput while sending is fine.</para>
+    ///
+    /// <para>The default is the framework's. Raise the grace period, or lower the rate, only for a
+    /// gateway whose callers are known to send bodies in bursts; the check is what keeps a
+    /// slow-loris upload from holding a connection open indefinitely.</para>
+    /// </remarks>
+    public double MinRequestBodyBytesPerSecond { get; set; } = 240;
+
+    /// <summary>
+    /// How long after the body read begins before <see cref="MinRequestBodyBytesPerSecond"/> is
+    /// enforced. Kestrel's default is 5 seconds.
+    /// </summary>
+    public int MinRequestBodyDataRateGraceSeconds { get; set; } = 5;
 
     /// <summary>
     /// How much of an inference request body is held in memory before it spills to a temporary file.

@@ -96,6 +96,117 @@ public sealed class RateLimitConfigAdminServiceTests
         service.GetCurrent().Rules.Should().NotContain(r => r.Scope == RateLimitScopeNames.Anonymous);
     }
 
+    private static readonly RateLimitWindowDefinition StoredWindow = new(
+        "off-peak", RateLimitWindowKinds.Weekly, 1200, 200, 80,
+        Days: ["mon", "tue", "wed", "thu", "fri"], Start: "19:00", End: "07:00", TimeZone: "Europe/Berlin");
+
+    private static GatewayConfigSnapshot SnapshotWithScheduledRule() => new()
+    {
+        RateLimits = new RateLimitsConfigSection
+        {
+            Models = new Dictionary<string, RateLimitPolicy>(StringComparer.OrdinalIgnoreCase) { ["gpt-4"] = new(600, 60, 40) },
+            Schedules = new Dictionary<string, IReadOnlyList<RateLimitWindowDefinition>>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["model:gpt-4"] = [StoredWindow],
+            },
+        },
+    };
+
+    [Fact]
+    public void GetCurrent_AttachesTheStoredScheduleToItsRule()
+    {
+        var service = CreateService(new StubServiceProvider(null, null), SnapshotWithScheduledRule());
+
+        var rule = service.GetCurrent().Rules.Single(r => r.TargetKey == "gpt-4");
+
+        rule.Schedule.Should().ContainSingle().Which.Name.Should().Be("off-peak");
+        rule.Rpm.Should().Be(600);
+    }
+
+    [Fact]
+    public void GetCurrent_ReadsBaseTiers_NotTheProjectedOnes()
+    {
+        var stored = SnapshotWithScheduledRule().RateLimits;
+        var (projected, _) = RateLimitScheduleProjection.Project(
+            stored,
+            new DateTimeOffset(2026, 9, 18, 19, 14, 0, TimeSpan.Zero),
+            1);
+        var service = CreateService(new StubServiceProvider(null, null), new GatewayConfigSnapshot { RateLimits = projected });
+
+        var rule = service.GetCurrent().Rules.Single(r => r.TargetKey == "gpt-4");
+
+        rule.Rpm.Should().Be(600, "the window is active at that instant but the admin API shows what was configured");
+    }
+
+    [Fact]
+    public async Task UpdateAsync_RuleWithNullSchedule_KeepsTheStoredWindows()
+    {
+        var repo = new RecordingRepository();
+        var service = CreateService(new StubServiceProvider(repo, new RecordingRefresher()), SnapshotWithScheduledRule());
+
+        var result = await service.UpdateAsync(
+            enabled: true,
+            adaptiveEnabled: false,
+            new RateLimitTierOptions { Rpm = 60, Burst = 10, MaxConcurrentStreams = 5 },
+            new Dictionary<string, RateLimitTierOptions>(),
+            rules: [new RateLimitRuleDefinition("model", "gpt-4", 900, 90, 60)]);
+
+        result.Success.Should().BeTrue(result.Message);
+        var saved = repo.SavedRules!.Single();
+        saved.Rpm.Should().Be(900);
+        saved.Schedule.Should().ContainSingle().Which.Name.Should().Be("off-peak");
+    }
+
+    [Fact]
+    public async Task UpdateAsync_RuleWithEmptySchedule_RemovesTheStoredWindows()
+    {
+        var repo = new RecordingRepository();
+        var service = CreateService(new StubServiceProvider(repo, new RecordingRefresher()), SnapshotWithScheduledRule());
+
+        var result = await service.UpdateAsync(
+            enabled: true,
+            adaptiveEnabled: false,
+            new RateLimitTierOptions { Rpm = 60, Burst = 10, MaxConcurrentStreams = 5 },
+            new Dictionary<string, RateLimitTierOptions>(),
+            rules: [new RateLimitRuleDefinition("model", "gpt-4", 600, 60, 40) { Schedule = [] }]);
+
+        result.Success.Should().BeTrue(result.Message);
+        repo.SavedRules!.Single().Schedule.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task UpdateAsync_OverlappingWindows_IsAValidationError()
+    {
+        var service = CreateService(new StubServiceProvider(new RecordingRepository(), new RecordingRefresher()));
+        var clash = StoredWindow with { Name = "clash", Days = ["fri"], Start = "20:00", End = "22:00" };
+
+        var result = await service.UpdateAsync(
+            enabled: true,
+            adaptiveEnabled: false,
+            new RateLimitTierOptions { Rpm = 60, Burst = 10, MaxConcurrentStreams = 5 },
+            new Dictionary<string, RateLimitTierOptions>(),
+            rules: [new RateLimitRuleDefinition("model", "gpt-4", 600, 60, 40) { Schedule = [StoredWindow, clash] }]);
+
+        result.Success.Should().BeFalse();
+        result.StatusCode.Should().Be(400);
+        result.Message.Should().Contain("clash");
+    }
+
+    [Fact]
+    public void GetSchedule_ReportsTheRuleAtTheGivenInstant()
+    {
+        var service = CreateService(new StubServiceProvider(null, null), SnapshotWithScheduledRule());
+        var fridayEvening = new DateTimeOffset(2026, 9, 18, 19, 14, 0, TimeSpan.Zero);
+
+        var report = service.GetSchedule(fridayEvening, fridayEvening, fridayEvening.AddDays(7), take: 10);
+
+        var status = report.Rules.Single(r => r.Target == "gpt-4");
+        status.ActiveWindow.Should().Be("off-peak");
+        status.Effective.Rpm.Should().Be(1200);
+        status.Base.Rpm.Should().Be(600);
+        report.Occurrences.Should().NotBeEmpty();
+    }
+
     private static RateLimitConfigAdminService CreateService(IServiceProvider provider) =>
         CreateService(provider, new GatewayConfigSnapshot());
 

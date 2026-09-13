@@ -1,5 +1,6 @@
 using Pol33.Core.Abstractions;
 using Pol33.Core.Configuration;
+using Pol33.Core.RateLimiting;
 
 namespace Pol33.App.DependencyInjection;
 
@@ -19,7 +20,11 @@ namespace Pol33.App.DependencyInjection;
 internal sealed class GatewayConfigState : IGatewayConfigProvider
 {
     private readonly IReadOnlyList<string> _environmentOrigins;
-    private volatile GatewayConfigSnapshot _current;
+    private readonly TimeProvider _timeProvider;
+    private readonly object _projectLock = new();
+    private long _effectiveVersion;
+    private GatewayConfigSnapshot _stored;
+    private volatile Projection _current;
 
     public GatewayConfigState(GatewayConfigSnapshot initial)
         : this(initial, [])
@@ -30,21 +35,89 @@ internal sealed class GatewayConfigState : IGatewayConfigProvider
     /// <param name="environmentOrigins">
     /// Origins from the environment, already normalized; merged ahead of the snapshot's own list.
     /// </param>
-    public GatewayConfigState(GatewayConfigSnapshot initial, IReadOnlyList<string> environmentOrigins)
+    /// <param name="timeProvider">
+    /// The clock schedule windows are evaluated against. Optional so hand-built states keep
+    /// compiling; absent means the system clock.
+    /// </param>
+    public GatewayConfigState(
+        GatewayConfigSnapshot initial,
+        IReadOnlyList<string> environmentOrigins,
+        TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(initial);
         ArgumentNullException.ThrowIfNull(environmentOrigins);
         _environmentOrigins = environmentOrigins;
-        _current = Overlay(initial);
+        _timeProvider = timeProvider ?? TimeProvider.System;
+        _stored = Overlay(initial);
+        _current = Project(_stored, _timeProvider.GetUtcNow());
     }
 
-    public GatewayConfigSnapshot Current => _current;
+    /// <summary>
+    /// The snapshot with every scheduled window applied for the current instant.
+    /// </summary>
+    /// <remarks>
+    /// Scheduled tiers are projected lazily, here, rather than by a timer: this property is read on
+    /// every request, so re-projecting the moment a window boundary has passed is exactly as
+    /// prompt as any timer could be and needs nothing to keep running. Without schedules the check
+    /// is one comparison against a sentinel and no clock read at all.
+    /// </remarks>
+    public GatewayConfigSnapshot Current
+    {
+        get
+        {
+            var projection = _current;
+            if (projection.NextTransition == DateTimeOffset.MaxValue)
+            {
+                return projection.Snapshot;
+            }
+
+            var now = _timeProvider.GetUtcNow();
+            return now < projection.NextTransition ? projection.Snapshot : Reproject(now);
+        }
+    }
+
+    /// <summary>The snapshot as stored: base tiers and schedules, before any window is applied.</summary>
+    public GatewayConfigSnapshot Stored => _stored;
 
     public void Set(GatewayConfigSnapshot snapshot)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
-        _current = Overlay(snapshot);
+        lock (_projectLock)
+        {
+            _stored = Overlay(snapshot);
+            _current = Project(_stored, _timeProvider.GetUtcNow());
+        }
     }
+
+    private GatewayConfigSnapshot Reproject(DateTimeOffset now)
+    {
+        lock (_projectLock)
+        {
+            // Another reader may have re-projected while this one waited for the lock.
+            var projection = _current;
+            if (now < projection.NextTransition)
+            {
+                return projection.Snapshot;
+            }
+
+            _current = Project(_stored, now);
+            return _current.Snapshot;
+        }
+    }
+
+    private Projection Project(GatewayConfigSnapshot stored, DateTimeOffset now)
+    {
+        if (!stored.RateLimits.HasSchedules)
+        {
+            return new Projection(stored, DateTimeOffset.MaxValue);
+        }
+
+        var version = Interlocked.Increment(ref _effectiveVersion);
+        var (effective, next) = RateLimitScheduleProjection.Project(stored.RateLimits, now, version);
+        return new Projection(stored with { RateLimits = effective }, next ?? DateTimeOffset.MaxValue);
+    }
+
+    private sealed record Projection(GatewayConfigSnapshot Snapshot, DateTimeOffset NextTransition);
 
     /// <summary>
     /// Environment origins first, then the snapshot's, de-duplicated. A union rather than a

@@ -66,6 +66,15 @@ public interface IDistributedRateLimitStore
     /// </remarks>
     void DebitRequest(string partitionKey, RateLimitPolicy policy, DateTimeOffset now);
 
+    /// <summary>Hands one token back to a single partition, capped at its capacity.</summary>
+    /// <remarks>
+    /// The single-partition counterpart to <see cref="RefundAll"/>, for a budget that is taken
+    /// speculatively and released once the outcome shows it need not have been spent — the
+    /// auth-failure limiter's validation allowance, which charges for a lookup and gives the token
+    /// back when the lookup was answered from cache.
+    /// </remarks>
+    void RefundRequest(string partitionKey, RateLimitPolicy policy, DateTimeOffset now);
+
     RateLimitAcquireResult TryAcquireStreamSlot(string partitionKey, RateLimitPolicy policy);
 
     /// <summary>

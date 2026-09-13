@@ -64,6 +64,10 @@ public sealed record RateLimitsConfigSection
     private static readonly IReadOnlyDictionary<string, RateLimitPolicy> EmptyMap =
         new Dictionary<string, RateLimitPolicy>(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>Declared before <see cref="Defaults"/> for the same reason as <see cref="EmptyMap"/>.</summary>
+    private static readonly IReadOnlyDictionary<string, IReadOnlyList<RateLimitWindowDefinition>> EmptySchedules =
+        new Dictionary<string, IReadOnlyList<RateLimitWindowDefinition>>(StringComparer.OrdinalIgnoreCase);
+
     /// <summary>
     /// Global master switch. When false, neither request-rate limits nor stream-concurrency limits are
     /// enforced for any tier. Lives on the section rather than on <see cref="RateLimitPolicy"/> because
@@ -113,6 +117,32 @@ public sealed record RateLimitsConfigSection
     /// deployments that never configured one get.
     /// </summary>
     public RateLimitPolicy Anonymous { get; init; } = RateLimitPolicy.Unlimited;
+
+    /// <summary>
+    /// Schedule windows per scoped rule, keyed by the rule's <c>scope:target</c> identity (see
+    /// <see cref="RateLimitScheduleProjection.Identity"/>). Part of the <em>stored</em> shape: the
+    /// maps above hold base tiers here, and effective tiers on the projected copy the request path
+    /// reads (see <see cref="Stored"/>).
+    /// </summary>
+    public IReadOnlyDictionary<string, IReadOnlyList<RateLimitWindowDefinition>> Schedules { get; init; } = EmptySchedules;
+
+    /// <summary>
+    /// On a projected section, the stored section it was projected from; null on a stored section.
+    /// The admin surface reads base tiers from here so an active window never shows up as the
+    /// configured number.
+    /// </summary>
+    public RateLimitsConfigSection? Stored { get; init; }
+
+    /// <summary>
+    /// Bumped by every projection, so a cache keyed on configuration misses when a window begins or
+    /// ends exactly as it misses on an admin write. Zero on a section with no schedules.
+    /// </summary>
+    public long EffectiveVersion { get; init; }
+
+    /// <summary>The stored section: this one, or the one this projection came from.</summary>
+    public RateLimitsConfigSection StoredOrSelf => Stored ?? this;
+
+    public bool HasSchedules => Schedules.Count > 0;
 
     public static RateLimitsConfigSection Defaults { get; } = new();
 }

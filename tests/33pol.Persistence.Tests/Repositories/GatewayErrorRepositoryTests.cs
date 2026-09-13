@@ -29,6 +29,9 @@ public sealed class GatewayErrorRepositoryTests
             DurationMs = 1234.5,
             UpstreamBodySnippet = "{\"error\":\"overloaded\"}",
             Hint = "Check the upstream is loaded.",
+            IsStreaming = true,
+            TimeToFirstTokenMs = 845.25,
+            ResponseBytesForwarded = 4_096,
         };
 
         await sut.AppendBatchAsync([record]);

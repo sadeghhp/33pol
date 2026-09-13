@@ -32,6 +32,21 @@ public readonly record struct InferenceForwardTimeouts(TimeSpan HeaderTimeout, T
     /// </summary>
     public TimeSpan MaxHeaderTimeout { get; init; } = TimeSpan.FromDays(1);
 
+    /// <summary>
+    /// Longest a single write of response-body bytes to the client may take. Distinct from
+    /// <see cref="StreamIdleTimeout"/> on purpose: one bounds the upstream's silence, the other the
+    /// client's refusal to read, and conflating them reported a slow client as an upstream stall.
+    /// </summary>
+    /// <remarks>
+    /// Zero means "use <see cref="StreamIdleTimeout"/>", so a <see cref="InferenceForwardTimeouts"/>
+    /// built from the two positional deadlines alone is still bounded on the write side.
+    /// </remarks>
+    public TimeSpan DownstreamWriteTimeout { get; init; }
+
+    /// <summary>The write bound actually applied, resolving the zero default.</summary>
+    public TimeSpan EffectiveDownstreamWriteTimeout =>
+        DownstreamWriteTimeout > TimeSpan.Zero ? DownstreamWriteTimeout : StreamIdleTimeout;
+
     public static InferenceForwardTimeouts FromResilience(GatewayResilienceOptions resilience)
     {
         ArgumentNullException.ThrowIfNull(resilience);
@@ -47,7 +62,37 @@ public readonly record struct InferenceForwardTimeouts(TimeSpan HeaderTimeout, T
             HeaderTimeoutPerRequestMegabyte =
                 TimeSpan.FromSeconds(Math.Max(0, resilience.ForwardTimeoutSecondsPerRequestMegabyte)),
             MaxHeaderTimeout = maxHeaderTimeout,
+            DownstreamWriteTimeout =
+                TimeSpan.FromSeconds(Math.Max(1, resilience.DownstreamWriteTimeoutSeconds)),
         };
+    }
+
+    /// <summary>
+    /// Allowance for the first byte of the response body, given how long the header phase already
+    /// took.
+    /// </summary>
+    /// <remarks>
+    /// <para>An SSE upstream (vLLM, SGLang, TGI) writes its response headers the moment it accepts
+    /// the request — before the request is scheduled, before prefill, before any token exists. For
+    /// a streaming request the header allowance is therefore consumed in milliseconds and the wait
+    /// for the first token used to be governed by <see cref="StreamIdleTimeout"/> alone: a hard
+    /// 120 s time-to-first-token ceiling on every streaming request, however large its prompt, and
+    /// however carefully <see cref="ForRequestBody"/> had widened the header allowance for it.</para>
+    ///
+    /// <para>The first-byte allowance is the <em>remainder</em> of the header allowance — what the
+    /// header phase did not use — and never less than the idle gap. Time to first byte is thereby
+    /// bounded by the prompt-scaled header allowance in both response modes, which is what the
+    /// allowance was sized for. Once a byte has arrived the idle gap applies as before.</para>
+    /// </remarks>
+    public TimeSpan FirstByteTimeout(TimeSpan headerPhaseElapsed)
+    {
+        if (headerPhaseElapsed < TimeSpan.Zero)
+        {
+            headerPhaseElapsed = TimeSpan.Zero;
+        }
+
+        var remaining = HeaderTimeout - headerPhaseElapsed;
+        return remaining > StreamIdleTimeout ? remaining : StreamIdleTimeout;
     }
 
     /// <summary>

@@ -18,6 +18,19 @@ public sealed record RateLimitRuleDefinition(
     int Burst,
     int MaxConcurrentStreams)
 {
+    /// <summary>
+    /// The rule's schedule windows. Null means "not specified": the admin API reads it as "keep the
+    /// stored schedule for this rule", so a client that predates windows cannot delete them by
+    /// omission. An empty list is a deliberate "no windows". Never null once loaded from storage.
+    /// </summary>
+    public IReadOnlyList<RateLimitWindowDefinition>? Schedule { get; init; }
+
+    /// <summary>The windows to evaluate: the schedule, or none.</summary>
+    public IReadOnlyList<RateLimitWindowDefinition> Windows => Schedule ?? [];
+
+    public bool HasWindows => Schedule is { Count: > 0 };
+
+    /// <summary>The base tier: what applies whenever no window is active.</summary>
     public RateLimitPolicy ToPolicy() => new(Rpm, Burst, MaxConcurrentStreams);
 
     public static RateLimitRuleDefinition FromPolicy(string scope, string targetKey, RateLimitPolicy policy) =>

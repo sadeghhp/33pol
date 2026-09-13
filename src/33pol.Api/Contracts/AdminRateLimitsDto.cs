@@ -57,9 +57,101 @@ public sealed record AdminRateLimitRuleDto(
     int Burst,
     int MaxConcurrentStreams)
 {
+    /// <summary>
+    /// The rule's schedule windows. Null on a PUT means "keep the windows stored for this rule";
+    /// an empty array removes them. Always present on a GET.
+    /// </summary>
+    public List<AdminRateLimitWindowDto>? Schedule { get; init; }
+
     public RateLimitRuleDefinition ToDefinition() =>
-        new(Scope?.Trim() ?? string.Empty, Target ?? string.Empty, Rpm, Burst, MaxConcurrentStreams);
+        new(Scope?.Trim() ?? string.Empty, Target ?? string.Empty, Rpm, Burst, MaxConcurrentStreams)
+        {
+            Schedule = Schedule?.Select(static w => w.ToDefinition()).ToArray(),
+        };
 
     public static AdminRateLimitRuleDto FromDefinition(RateLimitRuleDefinition rule) =>
-        new(rule.Scope, rule.TargetKey, rule.Rpm, rule.Burst, rule.MaxConcurrentStreams);
+        new(rule.Scope, rule.TargetKey, rule.Rpm, rule.Burst, rule.MaxConcurrentStreams)
+        {
+            Schedule = rule.Windows.Select(AdminRateLimitWindowDto.FromDefinition).ToList(),
+        };
+}
+
+/// <summary>
+/// One schedule window on a rule. <c>once</c> windows use <paramref name="From"/> and
+/// <paramref name="Until"/>; <c>weekly</c> windows use <paramref name="Days"/>,
+/// <paramref name="Start"/>, <paramref name="End"/> and <paramref name="TimeZone"/>.
+/// </summary>
+public sealed record AdminRateLimitWindowDto(
+    string Name,
+    string Kind,
+    int Rpm,
+    int Burst,
+    int MaxConcurrentStreams,
+    bool Suspend = false,
+    int? Priority = null,
+    DateTimeOffset? From = null,
+    DateTimeOffset? Until = null,
+    List<string>? Days = null,
+    string? Start = null,
+    string? End = null,
+    string? TimeZone = null,
+    DateTimeOffset? ValidFrom = null,
+    DateTimeOffset? ValidUntil = null)
+{
+    public RateLimitWindowDefinition ToDefinition() =>
+        new(
+            Name?.Trim() ?? string.Empty,
+            Kind?.Trim().ToLowerInvariant() ?? string.Empty,
+            Rpm,
+            Burst,
+            MaxConcurrentStreams,
+            Suspend,
+            Priority,
+            From,
+            Until,
+            Days?.Select(static d => d?.Trim().ToLowerInvariant() ?? string.Empty).ToArray(),
+            Start?.Trim(),
+            End?.Trim(),
+            string.IsNullOrWhiteSpace(TimeZone) ? null : TimeZone.Trim(),
+            ValidFrom,
+            ValidUntil);
+
+    public static AdminRateLimitWindowDto FromDefinition(RateLimitWindowDefinition w) =>
+        new(
+            w.Name,
+            w.Kind,
+            w.Rpm,
+            w.Burst,
+            w.MaxConcurrentStreams,
+            w.Suspend,
+            w.Priority,
+            w.From,
+            w.Until,
+            w.Days?.ToList(),
+            w.Start,
+            w.End,
+            w.TimeZone,
+            w.ValidFrom,
+            w.ValidUntil);
+}
+
+/// <summary>
+/// POST body for <c>/admin/api/rate-limits/windows/preview</c>: the rule as it would be with the
+/// candidate window included, and which window is being composed.
+/// </summary>
+public sealed class AdminRateLimitWindowPreviewDto
+{
+    public string Scope { get; set; } = string.Empty;
+
+    public string Target { get; set; } = string.Empty;
+
+    public int Rpm { get; set; }
+
+    public int Burst { get; set; }
+
+    public int MaxConcurrentStreams { get; set; }
+
+    public List<AdminRateLimitWindowDto> Windows { get; set; } = [];
+
+    public string Candidate { get; set; } = string.Empty;
 }

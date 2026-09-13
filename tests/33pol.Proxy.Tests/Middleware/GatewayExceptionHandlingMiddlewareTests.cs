@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging.Abstractions;
 using Pol33.Core.Abstractions;
 using Pol33.Core.Errors;
+using Pol33.Core.Models;
 using Pol33.Proxy.Middleware;
 
 namespace Pol33.Proxy.Tests.Middleware;
@@ -65,15 +66,89 @@ public sealed class GatewayExceptionHandlingMiddlewareTests
         (await ReadErrorCodeAsync(context)).Should().Be("request_incomplete");
     }
 
+    /// <summary>
+    /// Kestrel's message says only that the body ended early. How many bytes arrived against how
+    /// many were declared, and over how long, is what tells a truncating client from a proxy that
+    /// buffers in pieces from a batch job that pauses between inputs — and a hundred and fifty such
+    /// records had none of it.
+    /// </summary>
+    [Fact]
+    public async Task InvokeAsync_IncompleteBody_RecordsReceivedAgainstDeclaredBytesAndDuration()
+    {
+        var context = CreateContext();
+        context.Request.Path = "/v1/embeddings";
+        context.Request.Body = new MemoryStream(new byte[1_234]);
+        context.Request.ContentLength = 98_765;
+        var recorder = Substitute.For<IGatewayErrorRecorder>();
+
+        await CreateMiddleware(
+                _ => throw new BadHttpRequestException("Unexpected end of request content.", StatusCodes.Status400BadRequest),
+                recorder)
+            .InvokeAsync(context);
+
+        (await ReadErrorCodeAsync(context)).Should().Be("request_incomplete");
+        recorder.Received(1).Record(Arg.Is<GatewayErrorRecord>(r =>
+            r.EventCode == "RequestIncomplete"
+            && r.Message.StartsWith("Unexpected end of request content.")
+            && r.Message.Contains("Received 1234 of 98765 declared request-body bytes")
+            && r.Message.Contains(" ms.")
+            && r.DurationMs != null
+            && r.Path == "/v1/embeddings"));
+    }
+
+    /// <summary>A chunked upload declares no length; the record still says how much arrived.</summary>
+    [Fact]
+    public async Task InvokeAsync_IncompleteChunkedBody_RecordsReceivedBytesWithoutADeclaredTotal()
+    {
+        var context = CreateContext();
+        context.Request.Body = new MemoryStream(new byte[512]);
+        context.Request.ContentLength = null;
+        var recorder = Substitute.For<IGatewayErrorRecorder>();
+
+        await CreateMiddleware(
+                _ => throw new BadHttpRequestException(
+                    "Reading the request body timed out due to data arriving too slowly. See MinRequestBodyDataRate.",
+                    StatusCodes.Status408RequestTimeout),
+                recorder)
+            .InvokeAsync(context);
+
+        recorder.Received(1).Record(Arg.Is<GatewayErrorRecord>(r =>
+            r.Message.Contains("Received 512 request-body bytes of a chunked body (no Content-Length)")));
+    }
+
+    /// <summary>
+    /// Off the inference path the body is not buffered, so the count is unknown; the declared
+    /// length is still worth stating. (The first cut of this read "an unknown number of of 98765".)
+    /// </summary>
+    [Fact]
+    public async Task InvokeAsync_IncompleteUnbufferedBody_StatesTheDeclaredLengthOnly()
+    {
+        var context = CreateContext();
+        context.Request.Path = "/admin/api/keys";
+        context.Request.Body = new NonSeekableStream();
+        context.Request.ContentLength = 98_765;
+        var recorder = Substitute.For<IGatewayErrorRecorder>();
+
+        await CreateMiddleware(
+                _ => throw new BadHttpRequestException("Unexpected end of request content.", StatusCodes.Status400BadRequest),
+                recorder)
+            .InvokeAsync(context);
+
+        recorder.Received(1).Record(Arg.Is<GatewayErrorRecord>(r =>
+            r.Message.Contains("Received an unknown number of 98765 declared request-body bytes (body not buffered)")));
+    }
+
     [Fact]
     public async Task InvokeAsync_UnexpectedException_WritesGatewayError()
     {
         var context = CreateContext();
+        var recorder = Substitute.For<IGatewayErrorRecorder>();
 
-        await CreateMiddleware(_ => throw new InvalidOperationException("boom")).InvokeAsync(context);
+        await CreateMiddleware(_ => throw new InvalidOperationException("boom"), recorder).InvokeAsync(context);
 
         context.Response.StatusCode.Should().Be(StatusCodes.Status502BadGateway);
         (await ReadErrorCodeAsync(context)).Should().Be("upstream_error");
+        recorder.Received(1).Record(Arg.Is<GatewayErrorRecord>(r => r.Message == "boom" && r.DurationMs != null));
     }
 
     /// <summary>A client hanging up is not a gateway fault and has nobody left to report to.</summary>
@@ -108,11 +183,13 @@ public sealed class GatewayExceptionHandlingMiddlewareTests
         context.Response.Body.Length.Should().Be(0);
     }
 
-    private static GatewayExceptionHandlingMiddleware CreateMiddleware(RequestDelegate next) =>
+    private static GatewayExceptionHandlingMiddleware CreateMiddleware(
+        RequestDelegate next,
+        IGatewayErrorRecorder? recorder = null) =>
         new(
             next,
             new OpenAiErrorResponseWriter(),
-            Substitute.For<IGatewayErrorRecorder>(),
+            recorder ?? Substitute.For<IGatewayErrorRecorder>(),
             NullLogger<GatewayExceptionHandlingMiddleware>.Instance);
 
     private static DefaultHttpContext CreateContext()
@@ -129,6 +206,35 @@ public sealed class GatewayExceptionHandlingMiddlewareTests
         context.Response.Body.Position = 0;
         using var document = await JsonDocument.ParseAsync(context.Response.Body);
         return document.RootElement.GetProperty("error").GetProperty("code").GetString();
+    }
+
+    private sealed class NonSeekableStream : Stream
+    {
+        public override bool CanRead => true;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => false;
+
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush()
+        {
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) => 0;
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 
     private sealed class StartedResponseFeature : Microsoft.AspNetCore.Http.Features.IHttpResponseFeature

@@ -103,6 +103,21 @@ public sealed record GatewayErrorRecord
     /// <summary>Redacted, length-capped upstream error body. Captured only when explicitly enabled.</summary>
     public string? UpstreamBodySnippet { get; init; }
 
+    /// <summary>Whether the client asked for a streamed response. Null off the inference path.</summary>
+    public bool? IsStreaming { get; init; }
+
+    /// <summary>
+    /// Milliseconds from forward start to the first response byte reaching the client. Null when no
+    /// byte ever did — which, on a <c>stream_idle_timeout</c>, is the whole story.
+    /// </summary>
+    public double? TimeToFirstTokenMs { get; init; }
+
+    /// <summary>
+    /// Response-body bytes delivered to the client before the request ended. Zero on a stall means
+    /// the upstream sent headers and nothing else. Null off the inference path.
+    /// </summary>
+    public long? ResponseBytesForwarded { get; init; }
+
     /// <summary>Actionable remediation from <see cref="Diagnostics.GatewayLogHints"/>, or null when the gateway cannot tell.</summary>
     public string? Hint { get; init; }
 }

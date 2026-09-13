@@ -72,6 +72,65 @@ public sealed class RateLimitingOptions
     };
 
     /// <summary>
+    /// Whether credential-guessing protection runs at all. Deliberately separate from
+    /// <see cref="Enabled"/>, and separate from the admin UI.
+    /// </summary>
+    /// <remarks>
+    /// The master switch is a traffic-shaping control: an operator flips it during an incident to
+    /// stop refusing legitimate clients. It used to disable this limiter too, so the one action
+    /// taken under pressure also removed the only ceiling on credential guessing — a security
+    /// control switched off as a side effect of a capacity decision. It lives in appsettings rather
+    /// than the database because turning it off is a deployment-level choice (a load test that
+    /// sends deliberately bad keys), not something to reach for from a console at three in the
+    /// morning.
+    /// </remarks>
+    public bool AuthFailureProtectionEnabled { get; set; } = true;
+
+    /// <summary>
+    /// The budget for the gateway's own request-serving surface — <c>/admin/api/*</c> and
+    /// <c>GET /v1/models</c> — counted per caller (tenant, or client address block when
+    /// unauthenticated).
+    /// </summary>
+    /// <remarks>
+    /// <para>These are requests the gateway answers itself rather than forwards, and nothing bounded
+    /// them: a key could poll an admin endpoint that reads the database as fast as it liked. This is
+    /// the ceiling on that.</para>
+    ///
+    /// <para>Deliberately <em>not</em> the caller's inference tier, and deliberately not editable
+    /// from the console. A tenant tier is an inference-economics decision — what a customer's plan
+    /// buys — and applying it here means an operator who sets a tight default tier can no longer
+    /// administer the gateway: the console call that would raise it again is refused by the tier it
+    /// is trying to change. This is a safety net against unmetered polling, sized so that nothing a
+    /// console does can reach it, and it lives in appsettings alongside the other guard rails. Zero
+    /// rpm and zero burst switches it off.</para>
+    /// </remarks>
+    public RateLimitTierOptions ControlPlane { get; set; } = new()
+    {
+        Rpm = 600,
+        Burst = 120,
+        MaxConcurrentStreams = 0,
+    };
+
+    /// <summary>
+    /// How much more traffic an address that has spent its auth-failure budget may still have
+    /// <em>validated</em>, as a multiple of <see cref="AuthFailure"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>Past its budget an address is refused unless it can prove a credential, so that a
+    /// shared address is not a lockout for the key-holders behind it. Proving one costs a lookup,
+    /// and for an attacker rotating keys it costs a database read every time — which would make the
+    /// limiter shorten the response without shedding the work it exists to shed. This bounds that:
+    /// beyond <c>AuthFailure × this</c> requests a minute from one address, nothing is validated and
+    /// everything is refused outright.</para>
+    ///
+    /// <para>Ten is wide enough that a real client behind a busy NAT is never the one to hit it, and
+    /// narrow enough that the validation an attacker can force stays a small multiple of the
+    /// guessing rate the operator already chose. One disables the allowance entirely, restoring the
+    /// hard lockout the multiplier exists to avoid.</para>
+    /// </remarks>
+    public int AuthFailureProbeMultiplier { get; set; } = 10;
+
+    /// <summary>
     /// The tier for callers with no credential on a gateway that requires one, counted per client
     /// address block. Only reachable while some model is <c>publicAccess</c>; with authentication
     /// off every caller keeps the default tier.
