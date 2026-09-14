@@ -42,10 +42,11 @@ milestone, each independently reviewable and revertible.
 
 ## M1 — Asset delivery ✅
 
-- **Objective** Correct cache and compression semantics for `/admin`; remove the measured 857 KB
-  warm-reload cost without touching rendering behaviour.
-- **Scope** Static-file cache policy, response compression, font preload, HTTP retry policy, Logs
-  default page size. **No** content hashing, **no** CSP change, **no** build system.
+- **Objective** Correct cache and compression semantics for `/admin`; remove the measured
+  925 KB-per-visit delivery cost without touching rendering behaviour.
+- **Scope** Static-file cache policy, response compression (scoped to `/admin`), font preload, HTTP
+  retry policy and its poll guards, Logs default page size. **No** content hashing, **no** CSP
+  change, **no** build system.
 - **Files** `src/33pol.App/GatewayHostBuilderExtensions.cs`,
   `src/33pol.App/wwwroot/admin/index.html`, `src/33pol.App/wwwroot/admin/admin-store.js`,
   `src/33pol.App/wwwroot/admin/admin-app.js`,
@@ -54,27 +55,60 @@ milestone, each independently reviewable and revertible.
 - **Acceptance** Cold ≤ 350 KB · return visit substantially reduced with fonts fully cached · text
   assets Brotli-encoded · `text/event-stream` never compressed and still streaming · all pre-existing
   admin tests green · Overview rendering untouched.
-- **Measured result**
+- **Measured result** Both builds measured with the same scripts, the same seeded data and the same
+  machine; `afeb6e0` is the pre-M1 commit. Figures are KiB, as the harness prints them.
 
-  | | Pre-M1 | Post-M1 |
-  |---|---:|---:|
-  | Cold transfer | 668 KB | **307 KB** |
-  | Return visit (persistent profile) | 857 KB, 0 cached | **197 KB**, fonts 0 B |
-  | `admin-app.js` over the wire | 315 KB | **112 KB** |
-  | `admin.css` / `index.html` | 105 / 161 KB | **33 / 43 KB** |
-  | Logs tab DOM | 8,475 nodes (103 rows) | **6,251 nodes** (50 rows) |
+  The two scripts answer different questions and their totals are **not** interchangeable, so each
+  row names its own: `measure.mjs` uses an incognito context and stops at the auth gate; `cache.mjs`
+  drives a persistent on-disk profile with the console signed in, which is what an operator's return
+  visit actually is.
 
-- **Verification** Full integration suite (368 passed) + 15 new caching tests + live header
-  inspection + SSE frame-arrival timing under compression + `measure.mjs` / `cache.mjs` before/after.
+  | | Harness | Pre-M1 (`afeb6e0`) | Post-M1 |
+  |---|---|---:|---:|
+  | The 8 text assets both builds fetch cold | `measure.mjs` | 652.5 KB | **218.8 KB** (−66.5%) |
+  | First visit, signed in | `cache.mjs` | 925.2 KB | **491.5 KB** |
+  | Return visit, signed in | `cache.mjs` | 925.2 KB, 0 cached | **199.1 KB**, fonts 0 B, 10 cached |
+  | `admin-app.js` over the wire | both | 315.1 KB | **112.5 KB** |
+  | `admin.css` / `index.html` | both | 104.9 / 160.8 KB | **32.7 / 43.1 KB** |
+  | Logs tab DOM | `measure.mjs` | 8,475 nodes (103 rows) | **6,251 nodes** (50 rows) |
+
+  Pre-M1, all three `cache.mjs` visits transferred 925.2 KB byte for byte with not one cache hit:
+  every asset was `no-store`, so a persistent profile bought nothing. Post-M1 a return visit keeps
+  all 272.8 KB of fonts and the Alpine bundle in cache and re-fetches only `index.html` and the
+  `?v=N` assets — which is the 199.1 KB, and which M2's content hashing is what finally removes.
+
+  The **first row is deliberately a subset, not a total.** `measure.mjs` ends its cold recording at
+  `networkidle`, and which on-demand faces land inside that window varies run to run — pre-M1 caught
+  none (8 requests), post-M1 catches two to four because they are now preloaded (10–12 requests). So
+  its raw cold totals compare different sets of assets and the per-asset comparison above is the
+  meaningful one. `cache.mjs` waits a fixed interval after the shell and recorded 17 requests on both
+  builds, which is why the whole-page numbers are taken from it.
+
+  **No idle-CPU claim is made.** Five consecutive 20 s samples of identical code spanned
+  31.5%–43.6% on this machine, so M1's effect on CPU — if any — is inside the noise. That number is
+  M7's to move and M7's to measure.
+
+- **Verification** Full integration suite + 17 caching tests + live header inspection on a Release
+  gateway + SSE frame-arrival timing under compression + `measure.mjs` / `cache.mjs` run against
+  pre-M1 and post-M1 gateways side by side. Each of the two regression tests added for the fixes
+  below was confirmed to fail against the behaviour it guards against before being kept.
 - **Deviation from the plan** §17 set "warm reload ≤ 20 KB" as an M1 criterion. That is not reachable
   in M1: what still transfers on a return visit is `index.html` plus the hand-versioned `?v=N`
   assets, which must stay `no-store` until content hashing makes their URL identity trustworthy.
   §17's own "what NOT to change yet" forbids content hashing here, so the ≤ 20 KB target belongs to
-  M2. M1 delivers 857 KB → 197 KB.
+  M2. M1 delivers 925.2 KB → 199.1 KB on a return visit.
 - **Rollback boundary** Single revert; server-side plus two small client edits, no structural change.
 - **Security impact** Neutral-to-positive. CSP and security headers unchanged and still applied on
   every cache branch (asserted). Compression enabled on header-authenticated responses only — see
-  the BREACH note in `GatewayHostBuilderExtensions.cs`.
+  the BREACH note in `GatewayHostBuilderExtensions.cs` — and scoped to `/admin`, so the inference
+  data path is untouched (`NonAdminResponses_AreNotCompressed`).
+- **Two rules worth keeping straight** (both have a regression test, both were got wrong first):
+  immutable caching keys on the *URL path* identifying the content, never on the directory —
+  `vendor/fonts.css` lives beside the immutable faces but is `?v=N` source, so it stays `no-store`
+  (`HandVersionedVendorCss_IsNotImmutablyCached`). And compression is an admin asset-delivery
+  measure: registered unscoped it also wraps the proxy's data path, which costs CPU on a hot path
+  for nothing, since a compressed upstream is passed through untouched and a streamed token chunk is
+  too small to compress.
 - **Performance impact** Measured below.
 
 ## M2 — Solid + Vite + TypeScript foundation ⬜

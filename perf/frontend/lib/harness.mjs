@@ -11,7 +11,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 
-export const HERE = path.dirname(fileURLToPath(import.meta.url));
+const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const ROOT = path.resolve(HERE, '..');
 
 export const BASE_URL = process.env.ADMIN_BASE_URL ?? 'http://127.0.0.1:5080';
@@ -19,9 +19,6 @@ export const API_KEY = process.env.GATEWAY_ADMIN_API_KEY ?? 'sk-33pol-dev-local-
 
 /** Length of every idle-CPU sampling window. Long enough to average out a 2 s poll and a 15 s heartbeat. */
 export const IDLE_WINDOW_MS = Number(process.env.IDLE_WINDOW_MS ?? 20000);
-
-/** Hashes in the DOM-count helpers below are attribute *prefixes*, not exact names. */
-const BOUND_PREFIXES = ['x-', ':', '@'];
 
 export async function launch() {
   const browser = await chromium.launch({ args: ['--no-sandbox'] });
@@ -71,6 +68,8 @@ export async function sampleWindow(page, cdp, ms = IDLE_WINDOW_MS) {
  * a panel migrates. A migrated panel should report ~0 bound attributes.
  */
 export function census() {
+  // Declared inline, not hoisted to module scope: this function is serialised and evaluated inside
+  // the page, where it can close over nothing from this file.
   const prefixes = ['x-', ':', '@'];
   const byKind = {};
   let bound = 0;
@@ -104,7 +103,6 @@ export async function watchLongTasks(page) {
 }
 
 export const readLongTasks = page => page.evaluate(() => (window.__longTasks ?? []).slice());
-export const clearLongTasks = page => page.evaluate(() => { window.__longTasks = []; });
 
 /** Signs in through the real auth gate, then waits for the live feed to paint a row. */
 export async function signIn(page, { waitForFeed = true } = {}) {

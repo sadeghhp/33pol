@@ -1,0 +1,296 @@
+{
+  "baseUrl": "http://127.0.0.1:5081",
+  "at": "2026-09-14T05:29:20.352Z",
+  "visits": [
+    {
+      "label": "1. first visit (cold)",
+      "transferredBytes": 947454,
+      "requests": 17,
+      "fontBytes": 279308,
+      "servedFromCache": 0,
+      "resources": [
+        {
+          "url": "/admin/index.html",
+          "bytes": 164694,
+          "cacheControl": "no-store, no-cache, must-revalidate"
+        },
+        {
+          "url": "/admin/vendor/fonts.css?v=1",
+          "bytes": 3678,
+          "cacheControl": "no-store, no-cache, must-revalidate"
+        },
+        {
+          "url": "/admin/admin.css?v=24",
+          "bytes": 107444,
+          "cacheControl": "no-store, no-cache, must-revalidate"
+        },
+        {
+          "url": "/admin/admin-icons.js?v=11",
+          "bytes": 10937,
+          "cacheControl": "no-store, no-cache, must-revalidate"
+        },
+        {
+          "url": "/admin/admin-errors.js?v=7",
+          "bytes": 4056,
+          "cacheControl": "no-store, no-cache, must-revalidate"
+        },
+        {
+          "url": "/admin/admin-store.js?v=10",
+          "bytes": 9322,
+          "cacheControl": "no-store, no-cache, must-revalidate"
+        },
+        {
+          "url": "/admin/vendor/alpine-csp-3.14.9.min.js",
+          "bytes": 45328,
+          "cacheControl": "no-store, no-cache, must-revalidate"
+        },
+        {
+          "url": "/admin/admin-app.js?v=37",
+          "bytes": 322687,
+          "cacheControl": "no-store, no-cache, must-revalidate"
+        },
+        {
+          "url": "/admin/vendor/fonts/IBMPlexSans-400.woff2",
+          "bytes": 45712,
+          "cacheControl": "no-store, no-cache, must-revalidate"
+        },
+        {
+          "url": "/admin/vendor/fonts/SpaceGrotesk-700.woff2",
+          "bytes": 22288,
+          "cacheControl": "no-store, no-cache, must-revalidate"
+        },
+        {
+          "url": "/admin/vendor/fonts/IBMPlexSans-500.woff2",
+          "bytes": 45712,
+          "cacheControl": "no-store, no-cache, must-revalidate"
+        },
+        {
+          "url": "/admin/vendor/fonts/IBMPlexMono-400.woff2",
+          "bytes": 14708,
+          "cacheControl": "no-store, no-cache, must-revalidate"
+        },
+        {
+          "url": "/admin/vendor/fonts/IBMPlexSans-600.woff2",
+          "bytes": 45712,
+          "cacheControl": "no-store, no-cache, must-revalidate"
+        },
+        {
+          "url": "/admin/vendor/fonts/IBMPlexMono-500.woff2",
+          "bytes": 14888,
+          "cacheControl": "no-store, no-cache, must-revalidate"
+        },
+        {
+          "url": "/admin/vendor/fonts/IBMPlexSans-700.woff2",
+          "bytes": 45712,
+          "cacheControl": "no-store, no-cache, must-revalidate"
+        },
+        {
+          "url": "/admin/vendor/fonts/SpaceGrotesk-600.woff2",
+          "bytes": 22288,
+          "cacheControl": "no-store, no-cache, must-revalidate"
+        },
+        {
+          "url": "/admin/vendor/fonts/SpaceGrotesk-500.woff2",
+          "bytes": 22288,
+          "cacheControl": "no-store, no-cache, must-revalidate"
+        }
+      ]
+    },
+    {
+      "label": "2. return visit",
+      "transferredBytes": 947454,
+      "requests": 17,
+      "fontBytes": 279308,
+      "servedFromCache": 0,
+      "resources": [
+        {
+          "url": "/admin/index.html",
+          "bytes": 164694,
+          "cacheControl": "no-store, no-cache, must-revalidate"
+        },
+        {
+          "url": "/admin/vendor/fonts.css?v=1",
+          "bytes": 3678,
+          "cacheControl": "no-store, no-cache, must-revalidate"
+        },
+        {
+          "url": "/admin/admin.css?v=24",
+          "bytes": 107444,
+          "cacheControl": "no-store, no-cache, must-revalidate"
+        },
+        {
+          "url": "/admin/admin-icons.js?v=11",
+          "bytes": 10937,
+          "cacheControl": "no-store, no-cache, must-revalidate"
+        },
+        {
+          "url": "/admin/admin-store.js?v=10",
+          "bytes": 9322,
+          "cacheControl": "no-store, no-cache, must-revalidate"
+        },
+        {
+          "url": "/admin/admin-errors.js?v=7",
+          "bytes": 4056,
+          "cacheControl": "no-store, no-cache, must-revalidate"
+        },
+        {
+          "url": "/admin/vendor/alpine-csp-3.14.9.min.js",
+          "bytes": 45328,
+          "cacheControl": "no-store, no-cache, must-revalidate"
+        },
+        {
+          "url": "/admin/admin-app.js?v=37",
+          "bytes": 322687,
+          "cacheControl": "no-store, no-cache, must-revalidate"
+        },
+        {
+          "url": "/admin/vendor/fonts/IBMPlexSans-400.woff2",
+          "bytes": 45712,
+          "cacheControl": "no-store, no-cache, must-revalidate"
+        },
+        {
+          "url": "/admin/vendor/fonts/SpaceGrotesk-700.woff2",
+          "bytes": 22288,
+          "cacheControl": "no-store, no-cache, must-revalidate"
+        },
+        {
+          "url": "/admin/vendor/fonts/IBMPlexMono-400.woff2",
+          "bytes": 14708,
+          "cacheControl": "no-store, no-cache, must-revalidate"
+        },
+        {
+          "url": "/admin/vendor/fonts/IBMPlexSans-700.woff2",
+          "bytes": 45712,
+          "cacheControl": "no-store, no-cache, must-revalidate"
+        },
+        {
+          "url": "/admin/vendor/fonts/IBMPlexMono-500.woff2",
+          "bytes": 14888,
+          "cacheControl": "no-store, no-cache, must-revalidate"
+        },
+        {
+          "url": "/admin/vendor/fonts/SpaceGrotesk-600.woff2",
+          "bytes": 22288,
+          "cacheControl": "no-store, no-cache, must-revalidate"
+        },
+        {
+          "url": "/admin/vendor/fonts/IBMPlexSans-600.woff2",
+          "bytes": 45712,
+          "cacheControl": "no-store, no-cache, must-revalidate"
+        },
+        {
+          "url": "/admin/vendor/fonts/IBMPlexSans-500.woff2",
+          "bytes": 45712,
+          "cacheControl": "no-store, no-cache, must-revalidate"
+        },
+        {
+          "url": "/admin/vendor/fonts/SpaceGrotesk-500.woff2",
+          "bytes": 22288,
+          "cacheControl": "no-store, no-cache, must-revalidate"
+        }
+      ]
+    },
+    {
+      "label": "3. return visit",
+      "transferredBytes": 947454,
+      "requests": 17,
+      "fontBytes": 279308,
+      "servedFromCache": 0,
+      "resources": [
+        {
+          "url": "/admin/index.html",
+          "bytes": 164694,
+          "cacheControl": "no-store, no-cache, must-revalidate"
+        },
+        {
+          "url": "/admin/admin.css?v=24",
+          "bytes": 107444,
+          "cacheControl": "no-store, no-cache, must-revalidate"
+        },
+        {
+          "url": "/admin/vendor/fonts.css?v=1",
+          "bytes": 3678,
+          "cacheControl": "no-store, no-cache, must-revalidate"
+        },
+        {
+          "url": "/admin/admin-icons.js?v=11",
+          "bytes": 10937,
+          "cacheControl": "no-store, no-cache, must-revalidate"
+        },
+        {
+          "url": "/admin/admin-errors.js?v=7",
+          "bytes": 4056,
+          "cacheControl": "no-store, no-cache, must-revalidate"
+        },
+        {
+          "url": "/admin/admin-store.js?v=10",
+          "bytes": 9322,
+          "cacheControl": "no-store, no-cache, must-revalidate"
+        },
+        {
+          "url": "/admin/vendor/alpine-csp-3.14.9.min.js",
+          "bytes": 45328,
+          "cacheControl": "no-store, no-cache, must-revalidate"
+        },
+        {
+          "url": "/admin/admin-app.js?v=37",
+          "bytes": 322687,
+          "cacheControl": "no-store, no-cache, must-revalidate"
+        },
+        {
+          "url": "/admin/vendor/fonts/IBMPlexSans-400.woff2",
+          "bytes": 45712,
+          "cacheControl": "no-store, no-cache, must-revalidate"
+        },
+        {
+          "url": "/admin/vendor/fonts/IBMPlexMono-400.woff2",
+          "bytes": 14708,
+          "cacheControl": "no-store, no-cache, must-revalidate"
+        },
+        {
+          "url": "/admin/vendor/fonts/SpaceGrotesk-700.woff2",
+          "bytes": 22288,
+          "cacheControl": "no-store, no-cache, must-revalidate"
+        },
+        {
+          "url": "/admin/vendor/fonts/IBMPlexSans-600.woff2",
+          "bytes": 45712,
+          "cacheControl": "no-store, no-cache, must-revalidate"
+        },
+        {
+          "url": "/admin/vendor/fonts/IBMPlexSans-500.woff2",
+          "bytes": 45712,
+          "cacheControl": "no-store, no-cache, must-revalidate"
+        },
+        {
+          "url": "/admin/vendor/fonts/IBMPlexMono-500.woff2",
+          "bytes": 14888,
+          "cacheControl": "no-store, no-cache, must-revalidate"
+        },
+        {
+          "url": "/admin/vendor/fonts/SpaceGrotesk-600.woff2",
+          "bytes": 22288,
+          "cacheControl": "no-store, no-cache, must-revalidate"
+        },
+        {
+          "url": "/admin/vendor/fonts/IBMPlexSans-700.woff2",
+          "bytes": 45712,
+          "cacheControl": "no-store, no-cache, must-revalidate"
+        },
+        {
+          "url": "/admin/vendor/fonts/SpaceGrotesk-500.woff2",
+          "bytes": 22288,
+          "cacheControl": "no-store, no-cache, must-revalidate"
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "coldBytes": 947454,
+    "warmBytes": 947454,
+    "savedBytes": 0,
+    "savedPct": 0,
+    "fontsCachedOnReturn": false,
+    "returnVisitsStable": true
+  }
+}

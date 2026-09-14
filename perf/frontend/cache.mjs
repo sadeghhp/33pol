@@ -13,12 +13,52 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { chromium } from 'playwright';
-import { BASE_URL, writeResult, run } from './lib/harness.mjs';
+import { BASE_URL, API_KEY, writeResult, run } from './lib/harness.mjs';
 
-const PROFILE = process.env.CACHE_PROFILE_DIR
-  ?? path.join(os.tmpdir(), '33pol-admin-cache-profile');
+/**
+ * The profile directory is wiped before the first visit, so its name is a safety interlock rather
+ * than a convention: CACHE_PROFILE_DIR must end in a directory called `33pol-admin-cache-profile`
+ * (optionally suffixed). Without that check a slip such as `CACHE_PROFILE_DIR=$HOME` would
+ * recursively delete a home directory the moment this script started.
+ */
+const PROFILE_DIR_NAME = '33pol-admin-cache-profile';
+const PROFILE = path.resolve(
+  process.env.CACHE_PROFILE_DIR ?? path.join(os.tmpdir(), PROFILE_DIR_NAME));
+
+function resetProfile(dir) {
+  const name = path.basename(dir);
+  if (!name.startsWith(PROFILE_DIR_NAME) || path.dirname(dir) === dir) {
+    throw new Error(
+      `refusing to delete ${dir}: CACHE_PROFILE_DIR must name a directory starting with ` +
+      `"${PROFILE_DIR_NAME}", because this script wipes it to produce a cold first visit.`);
+  }
+  if (fs.existsSync(dir) && !fs.statSync(dir).isDirectory()) {
+    throw new Error(`refusing to delete ${dir}: not a directory.`);
+  }
+  fs.rmSync(dir, { recursive: true, force: true });
+}
 
 const kb = b => `${(b / 1024).toFixed(1)} KB`;
+
+/**
+ * Every visit is measured with the console actually open, not parked at the auth gate.
+ *
+ * This is the whole point of the number: an operator returns to a console they are signed into, and
+ * the signed-in shell pulls several more faces and icons than the gate does. Measuring the gate
+ * would flatter the result by leaving out most of what a return visit actually costs. The key is
+ * kept in localStorage, so on a persistent profile the second and third visits are already signed
+ * in and there is no gate to fill — which is exactly the state being measured.
+ */
+async function signInIfGated(page) {
+  // Visibility, not presence: the gate stays in the DOM behind x-show once signed in, so an
+  // existence check would sit waiting to type into a hidden input on every return visit.
+  const gate = page.locator('#gate-apiKey');
+  if (await gate.isVisible().catch(() => false)) {
+    await gate.fill(API_KEY);
+    await page.click('button.action:has-text("Connect")');
+  }
+  await page.waitForSelector('.app-shell', { state: 'visible', timeout: 20000 });
+}
 
 async function visit(label) {
   const context = await chromium.launchPersistentContext(PROFILE, { args: ['--no-sandbox'] });
@@ -37,8 +77,11 @@ async function visit(label) {
       })());
     });
 
-    await page.goto(`${BASE_URL}/admin/index.html`, { waitUntil: 'networkidle' });
-    await page.waitForTimeout(2500);
+    // 'load', not 'networkidle': once the console is up, the 2s poll and the live stream mean the
+    // network is never idle.
+    await page.goto(`${BASE_URL}/admin/index.html`, { waitUntil: 'load' });
+    await signInIfGated(page);
+    await page.waitForTimeout(3000);
     const resources = await Promise.all(pending);
 
     const total = resources.reduce((sum, r) => sum + r.bytes, 0);
@@ -63,7 +106,7 @@ async function visit(label) {
 run(async () => {
   // A cold profile is the whole point of the first visit; leaving a previous run's cache in place
   // would report the first visit as already warm.
-  fs.rmSync(PROFILE, { recursive: true, force: true });
+  resetProfile(PROFILE);
 
   const visits = [];
   visits.push(await visit('1. first visit (cold)'));
