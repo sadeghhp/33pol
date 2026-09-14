@@ -32,6 +32,16 @@ function adminApp() {
    */
   const WALLBOARD_STALE_MS = 20000;
 
+  /**
+   * How long a polled fetch may be in flight before the next tick stops waiting for it.
+   *
+   * Deliberately far longer than any healthy admin request. It exists only as a release valve:
+   * nothing here aborts a fetch, so a request to a wedged gateway can hang for as long as the
+   * browser lets it, and a single-flight guard with no deadline would park the poll permanently
+   * with no way back.
+   */
+  const POLL_STALE_MS = 30000;
+
   /** Time-range presets for the Errors tab, in hours. `all` drops the lower bound entirely. */
   const ERROR_RANGES = [
     ['1h', 'Last hour', 1],
@@ -124,6 +134,11 @@ function adminApp() {
     requestsSlowOnly: false,
     requestsPaused: false,
     _pausedFrame: null,
+    /**
+     * Start times for the two fetches the 2s poll drives; 0 when idle. See `_beginPoll`.
+     */
+    _summaryInFlight: 0,
+    _requestsInFlight: 0,
     pinnedRequestIds: [],
     usage: null,
     usageEvents: null,
@@ -1485,6 +1500,30 @@ function adminApp() {
     },
 
     /**
+     * Single-flight guard for the loaders the 2s poll drives. Returns false when a previous tick's
+     * request is still running, which is the tick's cue to skip.
+     *
+     * setInterval does not await its callback, and a GET now backs off before its retry, so a tick
+     * waiting out a 429 can still be in flight when the next one fires. Answering a gateway that has
+     * just asked for less traffic by sending it more is the wrong move, so overlapping ticks skip
+     * instead of stacking.
+     *
+     * `POLL_STALE_MS` is what keeps that from becoming a worse bug than the one it fixes: a fetch
+     * that never settles would otherwise hold the flag forever and stop the vitals updating for the
+     * rest of the session.
+     */
+    _beginPoll(key) {
+      const started = this[key];
+      if (started && Date.now() - started < POLL_STALE_MS) return false;
+      this[key] = Date.now();
+      return true;
+    },
+
+    _endPoll(key) {
+      this[key] = 0;
+    },
+
+    /**
      * Guards against an out-of-order response overwriting a newer one. Typing "gpt" then "gpt-4o"
      * fires two requests, and without this the slower first can land last and repaint the table
      * with results for a query the operator has already moved past.
@@ -2530,24 +2569,39 @@ function adminApp() {
       }
     },
 
+    /**
+     * The live vitals — from the 2s poll (`silent`) or an explicit refresh.
+     *
+     * `_summarySeq` is shared by both branches on purpose: a manual Refresh and a poll tick write
+     * the same field, so without one sequence for the pair an overtaken reply could repaint the
+     * vitals with older numbers. `_sequenced` mutates only inside `apply`, and only while this is
+     * still the newest request for the key.
+     */
     async loadSummary(silent) {
-      if (silent) {
-        try {
-          this.summary = await this.apiJson('/admin/api/summary');
+      const fetchSummary = () => this._sequenced('_summarySeq',
+        () => this.apiJson('/admin/api/summary'),
+        body => {
+          this.summary = body;
           this.summaryUpdatedAt = Date.now();
           this.recordVitals();
+        });
+
+      if (silent) {
+        if (!this._beginPoll('_summaryInFlight')) return;
+        try {
+          await fetchSummary();
           this.pollFailCount = 0;
           this.overviewStale = false;
         } catch {
           this.pollFailCount++;
           if (this.pollFailCount >= 2) this.overviewStale = true;
+        } finally {
+          this._endPoll('_summaryInFlight');
         }
         return;
       }
       await this.runApi('overview', 'Loading summary…', async () => {
-        this.summary = await this.apiJson('/admin/api/summary');
-        this.summaryUpdatedAt = Date.now();
-        this.recordVitals();
+        await fetchSummary();
         this.pollFailCount = 0;
         this.overviewStale = false;
       });
@@ -3595,13 +3649,19 @@ function adminApp() {
 
     /** @param quiet true for the 2s poll tick, which must not flash the loading state or raise a banner. */
     async loadRequests(quiet) {
-      const fetchRequests = async () => {
-        const rows = (await this.apiJson('/admin/api/requests?limit=' + this.requestsFeedLimit)) ?? [];
-        if (this.requestsPaused) this._pausedFrame = rows;
-        else this.requests = rows;
-      };
+      // Sequenced for the same reason as loadSummary: the tail is replaced wholesale, so a reply
+      // that arrives after a newer one would show the operator a feed that is a tick stale.
+      const fetchRequests = () => this._sequenced('_requestsSeq',
+        () => this.apiJson('/admin/api/requests?limit=' + this.requestsFeedLimit),
+        rows => {
+          if (this.requestsPaused) this._pausedFrame = rows ?? [];
+          else this.requests = rows ?? [];
+        });
       if (quiet) {
-        try { await fetchRequests(); } catch { /* a transient blip is already reported by the summary poll */ }
+        if (!this._beginPoll('_requestsInFlight')) return;
+        try { await fetchRequests(); }
+        catch { /* a transient blip is already reported by the summary poll */ }
+        finally { this._endPoll('_requestsInFlight'); }
         return;
       }
       await this.runApi('overview', 'Loading requests…', fetchRequests);

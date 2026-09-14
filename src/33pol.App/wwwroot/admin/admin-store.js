@@ -165,7 +165,12 @@ document.addEventListener('alpine:init', () => {
             // Checked ahead of classifyAndThrow so a transient 503 cannot touch connection state or
             // raise a banner for a request that is about to succeed.
             if (i < max && RETRYABLE_STATUS.has(res.status)) {
-              await this._sleep(this.retryDelayMs(i, res));
+              const wait = this.retryDelayMs(i, res);
+              // Drain before waiting. An abandoned body keeps its connection checked out of the
+              // browser's per-origin pool until GC gets to it, which on the 2s poll is exactly the
+              // wrong moment to be one connection short.
+              try { await res.text(); } catch { /* already consumed or torn down */ }
+              await this._sleep(wait);
               continue;
             }
             const text = asText ? await res.text() : '';
