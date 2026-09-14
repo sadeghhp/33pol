@@ -23,11 +23,19 @@ public interface IRateLimitSettingsRepository
     /// gives no way to remove a rule, and two admins editing different scopes would each resurrect
     /// what the other deleted.
     /// </param>
-    Task SaveAsync(
+    /// <param name="expectedVersion">
+    /// The configuration version the caller based its change on. When supplied and no longer current
+    /// the write is abandoned and <see cref="Pol33.Core.Configuration.RateLimitVersionConflictException"/>
+    /// is thrown rather than erasing whatever landed in between — which, with a rule set replaced
+    /// wholesale, is what a stale write does. Pass null only for unconditional replacement.
+    /// </param>
+    /// <returns>The new configuration version.</returns>
+    Task<long> SaveAsync(
         bool enabled,
         bool adaptiveEnabled,
         RateLimitPolicy defaultTier,
         IReadOnlyDictionary<string, RateLimitPolicy> plans,
         IReadOnlyList<RateLimitRuleDefinition> rules,
+        long? expectedVersion = null,
         CancellationToken cancellationToken = default);
 }

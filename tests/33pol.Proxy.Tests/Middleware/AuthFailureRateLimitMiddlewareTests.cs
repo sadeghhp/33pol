@@ -13,6 +13,7 @@ using Pol33.Core.RateLimiting;
 using Pol33.Core.Security;
 using Pol33.Policy.RateLimiting;
 using Pol33.Proxy.Middleware;
+using Pol33.Proxy.Routing;
 
 namespace Pol33.Proxy.Tests.Middleware;
 
@@ -483,5 +484,100 @@ public sealed class AuthFailureRateLimitMiddlewareTests
     private sealed class StubConfigProvider(GatewayConfigSnapshot snapshot) : IGatewayConfigProvider
     {
         public GatewayConfigSnapshot Current { get; } = snapshot;
+    }
+
+    private sealed class FakeTimeProvider(DateTimeOffset start) : TimeProvider
+    {
+        private DateTimeOffset _now = start;
+
+        public override DateTimeOffset GetUtcNow() => _now;
+
+        public void Advance(TimeSpan by) => _now += by;
+    }
+
+    /// <summary>
+    /// Credential guessing is bounded by the configured rate, not by the configured rate times
+    /// however many requests the attacker keeps in flight.
+    /// </summary>
+    /// <remarks>
+    /// <para>Admission here is decided from a <em>peek</em>, which does not consume a token, and the
+    /// charge lands only once the security layer has said whether the credential was rejected. So a
+    /// caller that opens many requests at once has all of them peek before any of them charges, and
+    /// every one of them is admitted on the same single token.</para>
+    ///
+    /// <para>That part is inherent to charging for the outcome rather than the attempt, and it is
+    /// bounded: it costs one round. What made it unbounded was the bucket forgiving the surplus —
+    /// flooring at zero meant each refilled token bought another full round, so the sustained
+    /// guessing rate was the configured rate multiplied by the concurrency. The bucket now carries
+    /// the debt, so the round is paid for before another token is available.</para>
+    /// </remarks>
+    [Fact]
+    public async Task InvokeAsync_ManyConcurrentRejections_AreChargedForRatherThanForgiven()
+    {
+        const int Concurrency = 40;
+        var start = new DateTimeOffset(2026, 9, 14, 12, 0, 0, TimeSpan.Zero);
+        var clock = new FakeTimeProvider(start);
+        var store = new InMemoryDistributedRateLimitStore(timeProvider: clock);
+
+        // One token a second, and a bucket that starts with exactly one.
+        var policy = new RateLimitPolicy(Rpm: 60, Burst: 0, MaxConcurrentStreams: 0);
+        var resolver = new RateLimitPolicyResolver(new StubConfigProvider(new GatewayConfigSnapshot
+        {
+            RateLimits = new RateLimitsConfigSection { Enabled = true, Default = policy },
+        }));
+
+        // Every request is held inside the pipeline until all of them have been admitted, which is
+        // what makes them concurrent from the limiter's point of view.
+        var allInside = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var arrived = 0;
+
+        var middleware = new AuthFailureRateLimitMiddleware(
+            async context =>
+            {
+                RejectCredential(context);
+                if (Interlocked.Increment(ref arrived) == Concurrency)
+                {
+                    allInside.SetResult();
+                }
+
+                await allInside.Task;
+            },
+            resolver,
+            store,
+            new OpenAiErrorResponseWriter(),
+            Substitute.For<IGatewayMetricsCollector>(),
+            clock,
+            Options.Create(new RateLimitingOptions()));
+
+        // Spend the bucket down to its last token, one request at a time.
+        for (var i = 0; i < 59; i++)
+        {
+            var warmup = CreateContext("/v1/chat/completions");
+            RejectCredential(warmup);
+            store.DebitRequest(RateLimitPartition.ResolveAuthFailure(warmup), policy, clock.GetUtcNow());
+        }
+
+        var inFlight = Enumerable
+            .Range(0, Concurrency)
+            .Select(_ => middleware.InvokeAsync(CreateContext("/v1/chat/completions")))
+            .ToArray();
+
+        await Task.WhenAll(inFlight);
+
+        // The round got through — that much is inherent — but it was charged for. A second later
+        // there is still no token, because the debt is being refilled away first.
+        clock.Advance(TimeSpan.FromSeconds(1));
+        (await InvokeAsync(middleware, "/v1/chat/completions", authentication: Unauthenticated()))
+            .Should().Be(StatusCodes.Status429TooManyRequests);
+
+        // Forgiven, the very next token would have bought another full round.
+        clock.Advance(TimeSpan.FromSeconds(Concurrency - 2));
+        (await InvokeAsync(middleware, "/v1/chat/completions", authentication: Unauthenticated()))
+            .Should().Be(StatusCodes.Status429TooManyRequests);
+
+        // Once the debt is paid the address is usable again, and no later than that.
+        clock.Advance(TimeSpan.FromSeconds(3));
+        (await InvokeAsync(middleware, "/v1/chat/completions", authentication: Unauthenticated()))
+            .Should().Be(StatusCodes.Status401Unauthorized);
     }
 }

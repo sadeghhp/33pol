@@ -46,22 +46,53 @@ public sealed class InMemoryDistributedRateLimitStorePeekTests
     }
 
     /// <summary>
-    /// A debit past empty floors at zero. Letting the bucket go negative would make the partition
-    /// serve out several windows of penance for one burst it was never admitted for.
+    /// A debit past empty leaves the bucket owing, so an over-admission is paid for rather than
+    /// forgiven.
     /// </summary>
+    /// <remarks>
+    /// This is what makes the two peek-then-charge limiters enforce the rate they are configured with.
+    /// Both decide admission from a peek — which does not consume — and charge only once the outcome
+    /// is known, so every request that peeked before any of them charged was admitted on the same
+    /// token. Flooring at zero wrote the surplus off, and one token a second then bought one *round*
+    /// of however many requests the caller had in flight. Owing the difference means the next token is
+    /// not available until the debt has been refilled away.
+    /// </remarks>
     [Fact]
-    public void DebitRequest_PastEmpty_FloorsAtZeroRatherThanGoingNegative()
+    public void DebitRequest_PastEmpty_LeavesTheBucketOwingWhatItCouldNotPay()
     {
         var store = new InMemoryDistributedRateLimitStore();
         var policy = new RateLimitPolicy(Rpm: 60, Burst: 0, MaxConcurrentStreams: 0);
 
-        for (var i = 0; i < 500; i++)
+        // The bucket starts full, so the first 60 spend the budget and the next 10 are the debt.
+        for (var i = 0; i < 70; i++)
         {
             store.DebitRequest("t", policy, Now);
         }
 
-        // 60 rpm is a token a second: one second after the flood the partition is usable again.
-        store.PeekRequest("t", policy, Now.AddSeconds(1)).IsAcquired.Should().BeTrue();
+        // 60 rpm is a token a second, and ten were charged against an already-empty bucket.
+        store.PeekRequest("t", policy, Now.AddSeconds(9)).IsAcquired.Should().BeFalse();
+        store.PeekRequest("t", policy, Now.AddSeconds(11)).IsAcquired.Should().BeTrue();
+    }
+
+    /// <summary>
+    /// The debt is bounded at one full window, so a single extreme burst cannot lock a partition out
+    /// for longer than its own budget takes to refill.
+    /// </summary>
+    [Fact]
+    public void DebitRequest_FarPastEmpty_OwesAtMostOneWindow()
+    {
+        var store = new InMemoryDistributedRateLimitStore();
+        var policy = new RateLimitPolicy(Rpm: 60, Burst: 0, MaxConcurrentStreams: 0);
+
+        for (var i = 0; i < 5_000; i++)
+        {
+            store.DebitRequest("t", policy, Now);
+        }
+
+        // Capacity is 60 tokens at one a second: 60 seconds to clear the debt, then one more to earn
+        // a token — not the 5,000 seconds an unbounded debt would have cost.
+        store.PeekRequest("t", policy, Now.AddSeconds(60)).IsAcquired.Should().BeFalse();
+        store.PeekRequest("t", policy, Now.AddSeconds(62)).IsAcquired.Should().BeTrue();
     }
 
     /// <summary>Budget reporting is what the response headers are built from.</summary>

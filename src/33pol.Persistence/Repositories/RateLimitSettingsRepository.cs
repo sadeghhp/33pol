@@ -1,7 +1,9 @@
 using Microsoft.EntityFrameworkCore;
 using Pol33.Core.Abstractions;
+using Pol33.Core.Configuration;
 using Pol33.Core.RateLimiting;
 using Pol33.Persistence.Entities;
+using Pol33.Persistence.Infrastructure;
 
 namespace Pol33.Persistence.Repositories;
 
@@ -10,19 +12,61 @@ public sealed class RateLimitSettingsRepository(GatewayDbContext dbContext) : IR
     private const int DefaultsRowId = 1;
     private const int ConfigVersionRowId = 1;
 
-    public async Task SaveAsync(
+    public async Task<long> SaveAsync(
         bool enabled,
         bool adaptiveEnabled,
         RateLimitPolicy defaultTier,
         IReadOnlyDictionary<string, RateLimitPolicy> plans,
         IReadOnlyList<RateLimitRuleDefinition> rules,
+        long? expectedVersion = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(defaultTier);
         ArgumentNullException.ThrowIfNull(plans);
         ArgumentNullException.ThrowIfNull(rules);
 
+        long newVersion = 0;
+
+        // The whole read-check-write runs in one BEGIN IMMEDIATE transaction on SQLite, so a second
+        // writer blocks on the write lock before it reads the version and then sees the bumped value.
+        // The same wrapper the route table uses, for the same reason: both replace their table
+        // wholesale, so a write based on a stale read erases the other writer's rows rather than
+        // merging with them.
+        await GatewayWriteTransaction.RunAsync(
+            dbContext,
+            async ct =>
+            {
+                newVersion = await SaveCoreAsync(
+                    enabled, adaptiveEnabled, defaultTier, plans, rules, expectedVersion, ct)
+                    .ConfigureAwait(false);
+            },
+            cancellationToken).ConfigureAwait(false);
+
+        return newVersion;
+    }
+
+    private async Task<long> SaveCoreAsync(
+        bool enabled,
+        bool adaptiveEnabled,
+        RateLimitPolicy defaultTier,
+        IReadOnlyDictionary<string, RateLimitPolicy> plans,
+        IReadOnlyList<RateLimitRuleDefinition> rules,
+        long? expectedVersion,
+        CancellationToken cancellationToken)
+    {
         var now = DateTimeOffset.UtcNow;
+
+        // Read and checked before anything is staged, so a conflict costs no work and leaves nothing
+        // half-written.
+        var version = await dbContext.ConfigVersions
+            .FirstOrDefaultAsync(c => c.Id == ConfigVersionRowId, cancellationToken)
+            .ConfigureAwait(false);
+
+        var currentVersion = version?.Version ?? 0;
+        if (expectedVersion is long expected && expected != currentVersion)
+        {
+            throw new RateLimitVersionConflictException(expected, currentVersion);
+        }
 
         var defaults = await dbContext.RateLimitDefaults
             .FirstOrDefaultAsync(d => d.Id == DefaultsRowId, cancellationToken)
@@ -88,21 +132,17 @@ public sealed class RateLimitSettingsRepository(GatewayDbContext dbContext) : IR
             });
         }
 
-        // Bump the config version in the same SaveChanges so the change and its version signal
-        // commit atomically.
-        var version = await dbContext.ConfigVersions
-            .FirstOrDefaultAsync(c => c.Id == ConfigVersionRowId, cancellationToken)
-            .ConfigureAwait(false);
-
+        // Bumped in the same SaveChanges so the change and its version signal commit atomically.
         if (version is null)
         {
-            version = new ConfigVersionEntity { Id = ConfigVersionRowId, Version = 0 };
+            version = new ConfigVersionEntity { Id = ConfigVersionRowId, Version = currentVersion };
             dbContext.ConfigVersions.Add(version);
         }
 
-        version.Version += 1;
+        version.Version = currentVersion + 1;
         version.UpdatedAt = now;
 
         await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        return version.Version;
     }
 }

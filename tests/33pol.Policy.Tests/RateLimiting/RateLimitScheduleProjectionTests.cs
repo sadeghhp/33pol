@@ -1,5 +1,7 @@
+using Pol33.Core.Abstractions;
 using Pol33.Core.Configuration;
 using Pol33.Core.RateLimiting;
+using Pol33.Policy.RateLimiting;
 
 namespace Pol33.Policy.Tests.RateLimiting;
 
@@ -60,14 +62,54 @@ public sealed class RateLimitScheduleProjectionTests
         effective.Models["gpt-4"].Rpm.Should().Be(600);
     }
 
+    /// <summary>
+    /// A suspending window removes the rule from the projection rather than leaving an all-zero tier
+    /// behind. "Enforces nothing" and "is not configured" are the same thing in every scope that
+    /// looks a tier up and skips it — but not in the tenant scope, which <em>composes</em> an override
+    /// with the plan tier and reads a zero rpm as "keep the plan's rate, apply only my stream cap".
+    /// Absence is the only spelling of suspension that means the same thing everywhere.
+    /// </summary>
     [Fact]
-    public void Project_SuspendingWindow_LeavesAnUnlimitedEntry()
+    public void Project_SuspendingWindow_RemovesTheRuleFromTheProjection()
     {
         var stored = Stored(("model:gpt-4", Active(suspend: true)));
 
         var (effective, _) = RateLimitScheduleProjection.Project(stored, Now, 1);
 
-        effective.Models["gpt-4"].EnforcesNothing.Should().BeTrue();
+        effective.Models.ContainsKey("gpt-4").Should().BeFalse();
+    }
+
+    /// <summary>
+    /// The case suspension actually broke. A tenant override is composed with the plan or default
+    /// tier rather than replacing it, and an override with a zero rpm is the documented way to say
+    /// "keep the plan\'s rate, apply only my stream cap" — so a suspended override arrived as "keep
+    /// the plan\'s rate and cap streams at zero", and zero means unlimited. Pausing the rule removed
+    /// the tenant\'s stream cap instead of restoring the plan\'s, letting one tenant hold open every
+    /// slot in the per-model bulkhead exactly while an operator believed a restriction had been lifted.
+    /// </summary>
+    [Fact]
+    public void Project_SuspendingWindowOnATenantRule_RestoresTheDefaultTierRatherThanUncappingStreams()
+    {
+        var stored = Stored(("tenant:acme", Active(suspend: true))) with
+        {
+            Default = new RateLimitPolicy(1000, 100, 5),
+        };
+
+        var (effective, _) = RateLimitScheduleProjection.Project(stored, Now, 1);
+
+        effective.TenantOverrides.ContainsKey("acme").Should().BeFalse();
+
+        var resolver = new RateLimitPolicyResolver(
+            new StubConfigProvider(new GatewayConfigSnapshot { RateLimits = effective }));
+        var tier = resolver.Resolve(planSlug: null, tenantId: "acme", tenantSlug: null);
+
+        tier.MaxConcurrentStreams.Should().Be(5, "the default tier\'s cap applies while the override is paused");
+        tier.Rpm.Should().Be(1000);
+    }
+
+    private sealed class StubConfigProvider(GatewayConfigSnapshot snapshot) : IGatewayConfigProvider
+    {
+        public GatewayConfigSnapshot Current { get; } = snapshot;
     }
 
     [Fact]
@@ -109,6 +151,75 @@ public sealed class RateLimitScheduleProjectionTests
         transition.From.Rpm.Should().Be(3000);
         transition.To.Rpm.Should().Be(600);
         transition.Window.Should().BeNull();
+    }
+
+    /// <summary>
+    /// The preview compares every window with every other one, and the endpoint feeds it a
+    /// client-supplied array. The window ceiling is one of the rules validation enforces, so a set
+    /// past it is refused before the scan runs rather than after — otherwise the size of a quadratic
+    /// computation is the caller\'s to choose.
+    /// </summary>
+    [Fact]
+    public void Preview_PastTheWindowCeiling_IsRefusedWithoutScanning()
+    {
+        var windows = Enumerable
+            .Range(0, RateLimitConfigValidation.MaxWindowsPerRule + 1)
+            .Select(i => Active($"w{i}"))
+            .ToArray();
+        var rule = new RateLimitRuleDefinition("model", "gpt-4", 600, 60, 40) { Schedule = windows };
+
+        var preview = RateLimitWindowPreviewBuilder.Build(rule, "w0", Now);
+
+        preview.Valid.Should().BeFalse();
+        preview.Error.Should().Contain(RateLimitConfigValidation.MaxWindowsPerRule.ToString());
+        preview.Overlaps.Should().BeEmpty();
+    }
+
+    /// <summary>
+    /// Within the ceiling the composer still gets the whole answer, invalid rule or not — "these two
+    /// clash" and "this one is outranked" are what it acts on.
+    /// </summary>
+    [Fact]
+    public void Preview_AnInvalidRuleWithinTheCeiling_StillNamesOverlapsAndPrecedence()
+    {
+        var a = new RateLimitWindowDefinition(
+            "nightly", RateLimitWindowKinds.Weekly, 120, 0, 4,
+            Days: ["mon"], Start: "22:00", End: "23:00", TimeZone: "UTC");
+        var b = new RateLimitWindowDefinition(
+            "also-nightly", RateLimitWindowKinds.Weekly, 240, 0, 4,
+            Days: ["mon"], Start: "22:30", End: "23:30", TimeZone: "UTC");
+        var rule = new RateLimitRuleDefinition("model", "gpt-4", 600, 60, 40) { Schedule = [a, b] };
+
+        var preview = RateLimitWindowPreviewBuilder.Build(rule, "also-nightly", Now);
+
+        preview.Valid.Should().BeFalse();
+        preview.Overlaps.Should().ContainSingle().Which.Should().Be("nightly");
+    }
+
+    /// <summary>
+    /// Occurrences are capped the way transitions already were. They are built in the same loop and
+    /// grow faster — one per matching day, per window, per rule — so the list was the only unbounded
+    /// thing in a response an operator can repeat.
+    /// </summary>
+    [Fact]
+    public void Report_TruncatesOccurrencesAndSaysSo()
+    {
+        var daily = new RateLimitWindowDefinition(
+            "nightly", RateLimitWindowKinds.Weekly, 120, 0, 4,
+            Days: ["mon", "tue", "wed", "thu", "fri", "sat", "sun"], Start: "22:00", End: "23:00", TimeZone: "UTC");
+
+        // 400 rules x 7 nights x 8 weeks is well past the ceiling and nowhere near the configured one.
+        var rules = Enumerable
+            .Range(0, 400)
+            .Select(i => new RateLimitRuleDefinition("model", $"m{i}", 600, 0, 0) { Schedule = [daily] })
+            .ToArray();
+
+        var report = RateLimitScheduleReportBuilder.Build(rules, Now, Now, Now.AddDays(56), take: 50);
+
+        report.Occurrences.Should().HaveCount(RateLimitScheduleReportBuilder.MaxOccurrences);
+        report.OccurrencesTruncated.Should().BeTrue();
+        report.OccurrencesTotal.Should().BeGreaterThan(RateLimitScheduleReportBuilder.MaxOccurrences);
+        report.Occurrences.Should().BeInAscendingOrder(o => o.Start, "the soonest are what a calendar draws first");
     }
 
     [Fact]

@@ -108,6 +108,36 @@ public sealed class RateLimitRuleValidationTests
         error.Should().Contain("single partition");
     }
 
+    /// <summary>
+    /// Scope recognition has always been case-insensitive, so a mis-cased spelling was accepted as a
+    /// known scope — but the shape tests that decide whether a target must be <c>*</c> or a
+    /// <c>subject|model</c> pair were ordinal, so the rule skipped them entirely. It was stored,
+    /// returned by the GET, rendered in the console, and could never match anything.
+    /// </summary>
+    [Theory]
+    [InlineData("Anonymous", "acme")]
+    [InlineData("AUTH_FAILURE", "acme")]
+    [InlineData("Global", "gpt-4")]
+    public void TryValidateRules_AMisCasedSingletonScopeWithARealTarget_IsRejected(string scope, string target)
+    {
+        var rules = new[] { new RateLimitRuleDefinition(scope, target, 10, 0, 0) };
+
+        RateLimitConfigValidation.TryValidateRules(rules, out var error).Should().BeFalse();
+        error.Should().Contain("single partition");
+    }
+
+    /// <summary>The pair scopes had the same split, so a mis-cased one skipped the separator check.</summary>
+    [Theory]
+    [InlineData("Tenant_Model")]
+    [InlineData("API_KEY_MODEL")]
+    public void TryValidateRules_AMisCasedPairScopeWithoutASeparator_IsRejected(string scope)
+    {
+        var rules = new[] { new RateLimitRuleDefinition(scope, "acme", 10, 0, 0) };
+
+        RateLimitConfigValidation.TryValidateRules(rules, out var error).Should().BeFalse();
+        error.Should().Contain("pair");
+    }
+
     /// <summary>The anonymous tier is a singleton like the auth-failure one: one rule, target <c>*</c>.</summary>
     [Fact]
     public void TryValidateRules_AnAnonymousRule_IsAccepted()
@@ -165,13 +195,65 @@ public sealed class RateLimitRuleValidationTests
         error.Should().Contain("burst");
     }
 
-    /// <summary>Other scopes keep accepting a burst-free zero rpm and are not subject to the tenant rule.</summary>
-    [Fact]
-    public void TryValidateRules_AModelRuleWithZeroRpmAndABurst_IsStillAccepted()
+    /// <summary>
+    /// A zero rpm is "this rule does not limit the rate", so there is no rate to refill a burst with —
+    /// in every scope, not only <c>tenant</c>. The pair used to be accepted everywhere else and stored
+    /// a bucket of <c>burst</c> tokens refilling at the engine's floor of one token a minute, so the
+    /// scope was then held to one request per minute: the opposite of what the value means, and on a
+    /// <c>model</c> rule that is the whole gateway's throughput for that model.
+    /// </summary>
+    [Theory]
+    [InlineData(RateLimitScopeNames.Global, "*")]
+    [InlineData(RateLimitScopeNames.Tenant, "acme")]
+    [InlineData(RateLimitScopeNames.ApiKey, "key-1")]
+    [InlineData(RateLimitScopeNames.Model, "gpt-4")]
+    [InlineData(RateLimitScopeNames.TenantModel, "acme|gpt-4")]
+    [InlineData(RateLimitScopeNames.ApiKeyModel, "key-1|gpt-4")]
+    [InlineData(RateLimitScopeNames.Anonymous, "*")]
+    public void TryValidateRules_AZeroRpmWithABurst_IsRejectedInEveryScope(string scope, string target)
     {
-        var rules = new[] { new RateLimitRuleDefinition(RateLimitScopeNames.Model, "gpt-4", 0, 5, 3) };
+        var rules = new[] { new RateLimitRuleDefinition(scope, target, 0, 5, 3) };
+
+        RateLimitConfigValidation.TryValidateRules(rules, out var error).Should().BeFalse();
+        error.Should().Contain("burst");
+    }
+
+    /// <summary>A burst-free zero rpm still expresses "cap concurrency only" wherever concurrency applies.</summary>
+    [Theory]
+    [InlineData(RateLimitScopeNames.Tenant, "acme")]
+    [InlineData(RateLimitScopeNames.Model, "gpt-4")]
+    [InlineData(RateLimitScopeNames.Anonymous, "*")]
+    public void TryValidateRules_AZeroRpmWithNoBurstAndAStreamCap_IsAccepted(string scope, string target)
+    {
+        var rules = new[] { new RateLimitRuleDefinition(scope, target, 0, 0, 3) };
 
         RateLimitConfigValidation.TryValidateRules(rules, out var error).Should().BeTrue(error);
+    }
+
+    /// <summary>
+    /// <c>auth_failure</c> is metered by a limiter that only ever debits a token bucket, so a rule
+    /// there carrying nothing but a stream cap enforced nothing at all — and because the resolver
+    /// falls back to the default tier when the auth-failure tier has no rate, it quietly widened
+    /// credential guessing to whatever a paying tenant is allowed.
+    /// </summary>
+    [Theory]
+    [InlineData(0, 0, 5)]
+    [InlineData(0, 0, 0)]
+    public void TryValidateRules_AnAuthFailureRuleWithNoRate_IsRejected(int rpm, int burst, int streams)
+    {
+        var rules = new[] { new RateLimitRuleDefinition(RateLimitScopeNames.AuthFailure, "*", rpm, burst, streams) };
+
+        RateLimitConfigValidation.TryValidateRules(rules, out var error).Should().BeFalse();
+    }
+
+    /// <summary>A stream cap on the rate-only scope is refused rather than stored and ignored.</summary>
+    [Fact]
+    public void TryValidateRules_AnAuthFailureRuleWithAStreamCap_IsRejected()
+    {
+        var rules = new[] { new RateLimitRuleDefinition(RateLimitScopeNames.AuthFailure, "*", 60, 20, 5) };
+
+        RateLimitConfigValidation.TryValidateRules(rules, out var error).Should().BeFalse();
+        error.Should().Contain("maxConcurrentStreams");
     }
 
     /// <summary>

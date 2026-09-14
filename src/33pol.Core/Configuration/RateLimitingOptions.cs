@@ -255,5 +255,5 @@ public sealed class RateLimitTierOptions
     /// flag on the wire is a field clients would start reading and the gateway would have to keep.
     /// </summary>
     [JsonIgnore]
-    public bool EnforcesNothing => Rpm + Burst <= 0 && MaxConcurrentStreams <= 0;
+    public bool EnforcesNothing => Rpm <= 0 && MaxConcurrentStreams <= 0;
 }

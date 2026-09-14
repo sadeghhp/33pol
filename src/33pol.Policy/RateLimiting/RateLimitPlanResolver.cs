@@ -50,6 +50,13 @@ public sealed class RateLimitPlanResolver(
 
     private readonly ConcurrentDictionary<PlanCacheKey, RateLimitPlan> _cache = new();
 
+    // Tracked alongside the dictionary rather than read from it. ConcurrentDictionary.Count takes
+    // every bucket lock to produce an exact count, and the ceiling is checked on every cache miss —
+    // so with a cache key that carries the caller's partition, traffic from many distinct client
+    // addresses made each request take all of them. The same reason the store and the governor keep
+    // their own counters.
+    private int _cacheCount;
+
     public bool IsEnabled() => configProvider.Current.RateLimits.Enabled;
 
     public bool HasModelScopedRules()
@@ -86,12 +93,17 @@ public sealed class RateLimitPlanResolver(
 
         var plan = Build(rateLimits, subject, modelId, factorStep, anonymous);
 
-        if (_cache.Count >= MaxCacheEntries)
+        if (Volatile.Read(ref _cacheCount) >= MaxCacheEntries)
         {
             _cache.Clear();
+            Interlocked.Exchange(ref _cacheCount, 0);
         }
 
-        _cache[key] = plan;
+        if (_cache.TryAdd(key, plan))
+        {
+            Interlocked.Increment(ref _cacheCount);
+        }
+
         return plan;
     }
 

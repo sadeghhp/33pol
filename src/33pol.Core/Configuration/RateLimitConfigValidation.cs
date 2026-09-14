@@ -114,8 +114,6 @@ public static partial class RateLimitConfigValidation
                 return false;
             }
 
-            // Zero rpm and zero streams is a rule that enforces nothing. Accepting it would let an
-            // operator believe a limit is in place while every request walks past it.
             var tier = new RateLimitTierOptions
             {
                 Rpm = rule.Rpm,
@@ -123,44 +121,8 @@ public static partial class RateLimitConfigValidation
                 MaxConcurrentStreams = rule.MaxConcurrentStreams,
             };
 
-            if (tier.EnforcesNothing)
+            if (!TryValidateTierShape(tier, rule.Scope, $"rule '{rule.Identity}'", out error))
             {
-                error = $"rule '{rule.Identity}' enforces nothing; set rpm or maxConcurrentStreams above zero, or remove it.";
-                return false;
-            }
-
-            // Neither branch below sees a negative rpm: the tier check runs only above zero and the
-            // concurrency-only check only at zero, so -50 with a burst of 100 used to be stored as
-            // a 50-token bucket refilling at the floor rate, and reported as a negative limit.
-            if (rule.Rpm < 0)
-            {
-                error = $"rule '{rule.Identity}' has a negative rpm; use 0 to leave the rate unlimited by this rule.";
-                return false;
-            }
-
-            // A tenant override with rpm 0 inherits its plan's (or the default's) rate and applies
-            // only its stream cap. A burst alongside that zero would have no rate to refill it and
-            // no tier to belong to, so it is refused rather than silently dropped.
-            if (rule.Rpm == 0 &&
-                rule.Burst != 0 &&
-                string.Equals(rule.Scope, RateLimitScopeNames.Tenant, StringComparison.OrdinalIgnoreCase))
-            {
-                error = $"rule '{rule.Identity}' inherits the plan or default rate when rpm is 0; set burst to 0 as well.";
-                return false;
-            }
-
-            // Scoped rules may leave rpm at zero to cap only concurrency, so the shared tier check
-            // (which floors rpm at 1) is applied only when the rule limits the rate at all.
-            if (rule.Rpm > 0 && !TryValidateTier(tier, $"rule '{rule.Identity}'", out error))
-            {
-                return false;
-            }
-
-            if (rule.Rpm == 0 &&
-                (rule.Burst is < MinBurst or > MaxBurst ||
-                 rule.MaxConcurrentStreams is < MinMaxConcurrentStreams or > MaxMaxConcurrentStreams))
-            {
-                error = $"rule '{rule.Identity}' has a burst or maxConcurrentStreams outside the allowed range.";
                 return false;
             }
 
@@ -309,11 +271,12 @@ public static partial class RateLimitConfigValidation
                     continue;
                 }
 
-                if (!string.Equals(a.Kind, b.Kind, StringComparison.OrdinalIgnoreCase))
-                {
-                    continue;
-                }
-
+                // Rank first, kind second. A differing rank settles the pair whatever their kinds
+                // are, and testing kind first meant a once window and a weekly one were never
+                // compared at all — safe only while their default ranks differ. Priority is
+                // operator-settable, so two windows of different kinds can carry the same rank, be
+                // active together, and fall through to the evaluator's start-time-then-name
+                // tie-break: precisely the arbitrary answer the equal-rank refusal exists to prevent.
                 if (a.Rank != b.Rank)
                 {
                     continue;
@@ -324,7 +287,7 @@ public static partial class RateLimitConfigValidation
                     continue;
                 }
 
-                if (a.IsOnce ? OnceOverlap(a, b) : WeeklyOverlap(a, b))
+                if (Overlap(a, b))
                 {
                     result.Add((a.Name, b.Name));
                 }
@@ -332,6 +295,36 @@ public static partial class RateLimitConfigValidation
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// Whether two equal-ranked windows can be active at the same instant.
+    /// </summary>
+    /// <remarks>
+    /// Two windows of one kind are compared on that kind's own axis — instants for <c>once</c>,
+    /// minutes-of-week for <c>weekly</c>. A mixed pair has no shared axis, so it is answered
+    /// conservatively: a weekly window recurs indefinitely within its validity bounds, so if the once
+    /// window's span meets those bounds at all there is a week in which the two coincide. Refusing
+    /// the pair costs the operator one <c>priority</c> to say which should win; accepting it leaves
+    /// the answer to window naming.
+    /// </remarks>
+    private static bool Overlap(RateLimitWindowDefinition a, RateLimitWindowDefinition b)
+    {
+        if (string.Equals(a.Kind, b.Kind, StringComparison.OrdinalIgnoreCase))
+        {
+            return a.IsOnce ? OnceOverlap(a, b) : WeeklyOverlap(a, b);
+        }
+
+        var (once, weekly) = a.IsOnce ? (a, b) : (b, a);
+        var (onceStart, onceEnd) = OnceSpan(once);
+        if (onceEnd <= onceStart)
+        {
+            return false;
+        }
+
+        var weeklyFrom = weekly.ValidFrom ?? DateTimeOffset.MinValue;
+        var weeklyUntil = weekly.ValidUntil ?? DateTimeOffset.MaxValue;
+        return onceStart < weeklyUntil && weeklyFrom < onceEnd;
     }
 
     private static bool OnceOverlap(RateLimitWindowDefinition a, RateLimitWindowDefinition b)
@@ -426,7 +419,6 @@ public static partial class RateLimitConfigValidation
         string label,
         out string? error)
     {
-        error = null;
         var tier = new RateLimitTierOptions
         {
             Rpm = window.Rpm,
@@ -434,36 +426,92 @@ public static partial class RateLimitConfigValidation
             MaxConcurrentStreams = window.MaxConcurrentStreams,
         };
 
-        if (tier.EnforcesNothing)
-        {
-            error = $"{label} enforces nothing while active; set rpm or maxConcurrentStreams above zero, or mark it as suspending the rule.";
-            return false;
-        }
+        // The same shape rules as the rule's own base tier. A window is a tier that applies for a
+        // span of time, so a shape the rule itself may not hold must not become reachable by
+        // scheduling it — which is what a second, laxer copy of these checks produced.
+        return TryValidateTierShape(tier, rule.Scope, label, out error);
+    }
 
-        if (window.Rpm < 0)
+    /// <summary>
+    /// The shape a tier must have to mean what it says, applied identically to a rule's base tier and
+    /// to every window on it.
+    /// </summary>
+    /// <remarks>
+    /// <para>Three things are checked here that a plain range check cannot see.</para>
+    ///
+    /// <para><b>A zero rpm carries no burst.</b> Zero rpm is the documented "this rule does not limit
+    /// the request rate" value, so there is no rate to refill a burst with. Accepting the pair stored
+    /// a bucket of <c>burst</c> tokens refilling at the engine's floor of one token a minute, so a
+    /// scope an operator had marked as rate-unlimited was in fact held to one request per minute once
+    /// the burst was spent. The refusal used to apply to the <c>tenant</c> scope alone, though every
+    /// scope reads a zero rpm the same way.</para>
+    ///
+    /// <para><b>A rate-only scope carries no stream cap.</b> <c>auth_failure</c> is evaluated by a
+    /// limiter that only ever debits a token bucket, so a stream cap on it is inert — and a rule
+    /// carrying nothing but a stream cap passes the "enforces something" test while leaving the
+    /// gateway on the <em>default</em> tier for credential guessing, which is far wider than the
+    /// purpose-built one. Refused rather than silently ignored.</para>
+    ///
+    /// <para><b>Order matters.</b> The negative-rpm test runs first so <c>-50</c> is reported as a
+    /// negative rate rather than as a tier that enforces nothing, and the zero-rpm-with-burst test
+    /// runs before it so the operator is told which of the two numbers to change.</para>
+    /// </remarks>
+    private static bool TryValidateTierShape(
+        RateLimitTierOptions tier,
+        string scope,
+        string label,
+        out string? error)
+    {
+        error = null;
+
+        if (tier.Rpm < 0)
         {
             error = $"{label} has a negative rpm; use 0 to leave the rate unlimited by this rule.";
             return false;
         }
 
-        if (window.Rpm == 0 &&
-            window.Burst != 0 &&
-            string.Equals(rule.Scope, RateLimitScopeNames.Tenant, StringComparison.OrdinalIgnoreCase))
+        if (tier.Rpm == 0 && tier.Burst != 0)
         {
-            error = $"{label} inherits the plan or default rate when rpm is 0; set burst to 0 as well.";
+            error =
+                $"{label} has an rpm of 0, which leaves the rate unlimited by this rule, so its burst "
+                + "has no rate to refill it; set burst to 0 as well.";
             return false;
         }
 
-        if (window.Rpm > 0 && !TryValidateTier(tier, label, out error))
+        if (tier.Rpm == 0 && RateLimitScopeNames.IsRateOnly(scope))
         {
+            error =
+                $"{label} is in the '{scope}' scope, which limits the request rate only; set rpm above "
+                + "zero or remove the rule.";
             return false;
         }
 
-        if (window.Rpm == 0 &&
-            (window.Burst is < MinBurst or > MaxBurst ||
-             window.MaxConcurrentStreams is < MinMaxConcurrentStreams or > MaxMaxConcurrentStreams))
+        if (tier.MaxConcurrentStreams != 0 && RateLimitScopeNames.IsRateOnly(scope))
         {
-            error = $"{label} has a burst or maxConcurrentStreams outside the allowed range.";
+            error =
+                $"{label} is in the '{scope}' scope, which limits the request rate only; "
+                + "maxConcurrentStreams has no effect there and must be 0.";
+            return false;
+        }
+
+        // Zero rpm and zero streams is a tier that enforces nothing. Accepting it would let an
+        // operator believe a limit is in place while every request walks past it.
+        if (tier.EnforcesNothing)
+        {
+            error = $"{label} enforces nothing; set rpm or maxConcurrentStreams above zero, or remove it.";
+            return false;
+        }
+
+        // Scoped rules may leave rpm at zero to cap only concurrency, so the shared tier check
+        // (which floors rpm at 1) is applied only when the tier limits the rate at all.
+        if (tier.Rpm > 0)
+        {
+            return TryValidateTier(tier, label, out error);
+        }
+
+        if (tier.MaxConcurrentStreams is < MinMaxConcurrentStreams or > MaxMaxConcurrentStreams)
+        {
+            error = $"{label} has a maxConcurrentStreams outside the allowed range.";
             return false;
         }
 

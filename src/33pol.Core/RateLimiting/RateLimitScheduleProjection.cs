@@ -92,6 +92,28 @@ public static class RateLimitScheduleProjection
             Consider(ref next, evaluation.NextTransition);
 
             projected ??= new Dictionary<string, RateLimitPolicy>(basePolicies, StringComparer.OrdinalIgnoreCase);
+
+            if (evaluation.Suspended)
+            {
+                // Removed, not written as an all-zero tier. A suspending window means the rule
+                // enforces nothing while it runs, "as if it did not exist" — and for every scope but
+                // one, an all-zero tier says exactly that, because the resolvers skip a tier that
+                // enforces nothing.
+                //
+                // The tenant scope is the exception, and it read the all-zero tier as something else
+                // entirely. A tenant override is *composed* with the plan or default tier rather than
+                // replacing it, and an override with a zero rpm is the documented way to say "keep the
+                // plan's rate, apply only my stream cap". A suspended override therefore arrived as
+                // "keep the plan's rate, and cap streams at zero" — and zero means unlimited. Pausing a
+                // rule removed the tenant's stream cap instead of restoring the plan's, so one tenant
+                // could hold open every slot in the per-model bulkhead precisely while an operator
+                // believed a restriction had been lifted.
+                //
+                // Absence has no such second reading: no entry is no override, in every scope.
+                projected.Remove(target);
+                continue;
+            }
+
             projected[target] = evaluation.Effective;
         }
 

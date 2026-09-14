@@ -37,6 +37,17 @@ public sealed class AdminRateLimitsDto
     /// destroy them by omission.
     /// </remarks>
     public List<AdminRateLimitRuleDto>? Rules { get; set; }
+
+    /// <summary>
+    /// The configuration version this body was read at. Response-only; ignored on a PUT.
+    /// </summary>
+    /// <remarks>
+    /// The same value as the <c>ETag</c> on the GET, carried in the body as well so a browser client
+    /// can read it without exposing response headers to script. The write precondition is the
+    /// <c>If-Match</c> header alone — a version echoed in a request body is not a precondition, it is
+    /// just another field the caller controls.
+    /// </remarks>
+    public long Version { get; set; }
 }
 
 /// <param name="Scope">
@@ -63,8 +74,13 @@ public sealed record AdminRateLimitRuleDto(
     /// </summary>
     public List<AdminRateLimitWindowDto>? Schedule { get; init; }
 
+    /// <remarks>
+    /// The scope is canonicalised rather than merely trimmed. It is persisted verbatim and compared
+    /// against the canonical constants everywhere else, so a spelling like <c>"Anonymous"</c> used to
+    /// be stored as written and then never match the singleton it names.
+    /// </remarks>
     public RateLimitRuleDefinition ToDefinition() =>
-        new(Scope?.Trim() ?? string.Empty, Target ?? string.Empty, Rpm, Burst, MaxConcurrentStreams)
+        new(RateLimitScopeNames.Canonical(Scope), Target ?? string.Empty, Rpm, Burst, MaxConcurrentStreams)
         {
             Schedule = Schedule?.Select(static w => w.ToDefinition()).ToArray(),
         };

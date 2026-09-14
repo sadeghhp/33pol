@@ -29,8 +29,16 @@ public sealed record RateLimitPolicy(int Rpm, int Burst, int MaxConcurrentStream
     /// <summary>A rule that enforces neither control. Emitted for a scope the operator left unset.</summary>
     public static RateLimitPolicy Unlimited { get; } = new(0, 0, 0);
 
-    /// <summary>Total tokens the bucket may hold. Zero or less means the rate control is off.</summary>
-    public int Capacity => Rpm + Burst;
+    /// <summary>Total tokens the bucket may hold. Zero means this rule does not limit the rate.</summary>
+    /// <remarks>
+    /// A zero <see cref="Rpm"/> is the documented "this rule does not limit the request rate" value,
+    /// so it yields no capacity whatever the burst says. Summing the two unconditionally made
+    /// <c>rpm: 0, burst: 500</c> a 500-token bucket, and because the refill rate floors at one token a
+    /// minute the scope was then held to <em>one request per minute</em> once that burst was spent —
+    /// the opposite of what the value means. A burst with no rate to refill it is not a budget;
+    /// validation refuses the combination outright, and this makes the engine agree with it.
+    /// </remarks>
+    public int Capacity => Rpm <= 0 ? 0 : Rpm + Burst;
 
     public bool EnforcesRate => Capacity > 0;
 

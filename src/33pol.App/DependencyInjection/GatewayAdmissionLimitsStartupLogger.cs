@@ -2,6 +2,7 @@ using Microsoft.Extensions.Options;
 using Pol33.Core.Abstractions;
 using Pol33.Core.Configuration;
 using Pol33.Core.Models;
+using Pol33.Core.RateLimiting;
 
 namespace Pol33.App.DependencyInjection;
 
@@ -24,7 +25,8 @@ internal sealed class GatewayAdmissionLimitsStartupLogger(
     IModelRegistry registry,
     IGatewayAuthenticationState authState,
     IHostEnvironment environment,
-    ILogger<GatewayAdmissionLimitsStartupLogger> logger) : IHostedService
+    ILogger<GatewayAdmissionLimitsStartupLogger> logger,
+    IRateLimitConfigAdminService? rateLimitAdmin = null) : IHostedService
 {
     public Task StartAsync(CancellationToken cancellationToken)
     {
@@ -98,6 +100,36 @@ internal sealed class GatewayAdmissionLimitsStartupLogger(
                 + "unauthenticated callers separately.",
                 tier.Rpm,
                 tier.Burst);
+        }
+
+        // The auth-failure tier gets the same treatment as the anonymous one, and for the same
+        // reason: the scoped-rule seed is a one-shot stamped by RulesSeededAt, so a database seeded
+        // by a build that predates a scope never receives that scope's rule. With no auth-failure
+        // rule the resolver falls back to the *default* tier — sized for a paying tenant — and one
+        // address may then make thousands of credential guesses a minute with nothing saying so.
+        if (rateLimits.Enabled && authState.IsAuthenticationRequired && !rateLimits.AuthFailure.EnforcesRate)
+        {
+            logger.LogWarning(
+                "No auth-failure rate-limit tier is configured, so requests that fail authentication "
+                + "are counted against the default tier ({Rpm} rpm + {Burst} burst) per client address "
+                + "block. That is a credential-guessing allowance sized for legitimate traffic. Add a "
+                + "rule with scope 'auth_failure' and target '*' under Admin → Rate limits.",
+                tier.Rpm,
+                tier.Burst);
+        }
+
+        // The stored rules are validated once at startup, so a set that predates a validation rule —
+        // or was written by an older build — is reported rather than silently applied. Every refusal
+        // the admin API can give describes a rule that looks configured and does something other than
+        // what it says, so finding one already in the database is worth a line in the log.
+        if (rateLimitAdmin is not null &&
+            !RateLimitConfigValidation.TryValidateRules(rateLimitAdmin.GetCurrent().Rules, out var ruleError))
+        {
+            logger.LogWarning(
+                "The stored rate-limit rules would be refused if they were saved today: {Error} "
+                + "Re-save them under Admin → Rate limits; until then that rule may not enforce what "
+                + "it appears to.",
+                ruleError);
         }
 
         if (!options.Value.ForwardedHeaders.Enabled && !environment.IsDevelopment())

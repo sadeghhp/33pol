@@ -5,6 +5,45 @@ namespace Pol33.Core.Tests.Configuration;
 
 public sealed class RateLimitScheduleValidationTests
 {
+    /// <summary>
+    /// Two windows of different kinds were never compared, which is safe only while their default
+    /// ranks differ — <c>once</c> outranks <c>weekly</c>. Priority is operator-settable, so an equal
+    /// explicit rank across kinds produced two windows that could be active together with the winner
+    /// decided by start time and then by name: the arbitrary answer the equal-rank refusal exists to
+    /// prevent.
+    /// </summary>
+    [Fact]
+    public void TryValidateSchedule_AOnceAndAWeeklyWindowAtTheSamePriority_AreRejected()
+    {
+        var once = new RateLimitWindowDefinition(
+            "launch", RateLimitWindowKinds.Once, 3000, 0, 0, Priority: 150,
+            From: new DateTimeOffset(2026, 9, 14, 0, 0, 0, TimeSpan.Zero),
+            Until: new DateTimeOffset(2026, 9, 21, 0, 0, 0, TimeSpan.Zero));
+        var weekly = new RateLimitWindowDefinition(
+            "nightly", RateLimitWindowKinds.Weekly, 120, 0, 0, Priority: 150,
+            Days: ["mon"], Start: "22:00", End: "23:00", TimeZone: "UTC");
+        var rule = new RateLimitRuleDefinition("model", "gpt-4", 600, 0, 0) { Schedule = [once, weekly] };
+
+        RateLimitConfigValidation.TryValidateSchedule(rule, out var error).Should().BeFalse();
+        error.Should().Contain("same time");
+    }
+
+    /// <summary>Different ranks settle the pair, whatever their kinds — that is what a priority is for.</summary>
+    [Fact]
+    public void TryValidateSchedule_AOnceAndAWeeklyWindowAtDifferentPriorities_AreAccepted()
+    {
+        var once = new RateLimitWindowDefinition(
+            "launch", RateLimitWindowKinds.Once, 3000, 0, 0, Priority: 200,
+            From: new DateTimeOffset(2026, 9, 14, 0, 0, 0, TimeSpan.Zero),
+            Until: new DateTimeOffset(2026, 9, 21, 0, 0, 0, TimeSpan.Zero));
+        var weekly = new RateLimitWindowDefinition(
+            "nightly", RateLimitWindowKinds.Weekly, 120, 0, 0, Priority: 100,
+            Days: ["mon"], Start: "22:00", End: "23:00", TimeZone: "UTC");
+        var rule = new RateLimitRuleDefinition("model", "gpt-4", 600, 0, 0) { Schedule = [once, weekly] };
+
+        RateLimitConfigValidation.TryValidateSchedule(rule, out var error).Should().BeTrue(error);
+    }
+
     private const string Berlin = "Europe/Berlin";
 
     private static RateLimitRuleDefinition Rule(params RateLimitWindowDefinition[] windows) =>

@@ -9,6 +9,32 @@ public sealed class AdminRateLimitsDtoTests
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
+    /// <summary>
+    /// The scope is stored verbatim and compared against the canonical constants everywhere else, so
+    /// it is canonicalised on the way in rather than merely trimmed. Without it a payload spelled
+    /// <c>"Anonymous"</c> was persisted as written and never matched the singleton it names.
+    /// </summary>
+    [Theory]
+    [InlineData("Anonymous", "anonymous")]
+    [InlineData("  AUTH_FAILURE  ", "auth_failure")]
+    [InlineData("Tenant_Model", "tenant_model")]
+    [InlineData("model", "model")]
+    public void ToDefinition_CanonicalisesTheScope(string submitted, string expected)
+    {
+        var dto = new AdminRateLimitRuleDto(submitted, "*", 60, 0, 0);
+
+        dto.ToDefinition().Scope.Should().Be(expected);
+    }
+
+    /// <summary>An unrecognised scope is left alone so the validator can name it in its message.</summary>
+    [Fact]
+    public void ToDefinition_AnUnknownScope_IsLeftAsWritten()
+    {
+        var dto = new AdminRateLimitRuleDto(" Region ", "eu-west", 60, 0, 0);
+
+        dto.ToDefinition().Scope.Should().Be("Region");
+    }
+
     [Fact]
     public void RoundTrip_UsesCamelCasePropertyNames()
     {

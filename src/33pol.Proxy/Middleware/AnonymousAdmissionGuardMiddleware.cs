@@ -106,7 +106,7 @@ public sealed class AnonymousAdmissionGuardMiddleware
         // separate reason would split one limit across two rows. The scope is stamped on here
         // because a peek does not carry one — without it the answer would be the only rate refusal
         // in the gateway with no X-33pol-RateLimit-Scope header.
-        RateLimitResponseHeaders.Write(context, budget with { Scope = RateLimitScope.Tenant });
+        RateLimitResponseHeaders.Write(context, budget with { Scope = RateLimitScope.Tenant }, refused: true);
         _metrics.RecordRateLimitRejection("rate_limit:tenant", partition, modelId: null);
 
         var retryAfter = budget.RetryAfterSeconds ?? 1;

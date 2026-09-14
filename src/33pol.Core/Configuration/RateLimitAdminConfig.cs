@@ -22,4 +22,10 @@ public sealed class RateLimitAdminConfig
 
     /// <summary>Per-model, per-key and combined rules, plus the global and auth-failure singletons.</summary>
     public IReadOnlyList<RateLimitRuleDefinition> Rules { get; init; } = [];
+
+    /// <summary>
+    /// The configuration version this snapshot was read at, surfaced as an <c>ETag</c> so a writer can
+    /// say which version its change is based on.
+    /// </summary>
+    public long Version { get; init; }
 }

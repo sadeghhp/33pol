@@ -61,3 +61,57 @@ groups:
         annotations:
           summary: Circuit breaker open for one or more models
           description: Model {{ $labels.model }} circuit is open; see docs/runbooks/high-error-rate.md
+      # --- Rate limiting ---------------------------------------------------------------
+      # Until these existed the subsystem had no alerting at all: a partition-table flood
+      # degraded enforcement with nothing but a single log line to show for it, and a
+      # credential-stuffing run produced a clear metric signal nobody was watching.
+      - alert: GatewayRateLimitsNotEnforced
+        expr: sum(rate(gateway_rate_limit_forced_evictions_total[5m])) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: Rate limits are not being fully enforced
+          description: >-
+            The partition table is at its ceiling, so the sweep is evicting buckets that still
+            had budget spent. Each one starts full again on its next request, so the callers
+            being evicted are not being limited. Raise RateLimiting:InMemoryMaxPartitions or
+            shorten RateLimiting:InMemoryPartitionRetentionSeconds.
+            See docs/runbooks/rate-limit-admin.md#partition-ceiling
+      - alert: GatewayRateLimitPartitionsNearCeiling
+        expr: |
+          max(gateway_rate_limit_partitions{dimension!="ceiling"})
+            / clamp_min(max(gateway_rate_limit_partitions{dimension="ceiling"}), 1) > 0.8
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Rate-limit partition table above 80% of its ceiling
+          description: >-
+            Approaching the point at which enforcement starts being dropped to stay under the
+            ceiling. The ratio is computed against the exported ceiling rather than a literal,
+            so it tracks the configured value.
+            See docs/runbooks/rate-limit-admin.md#partition-ceiling
+      - alert: GatewayCredentialGuessing
+        expr: sum(rate(gateway_rate_limit_rejections_total{reason="auth_failure"}[5m])) > 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Sustained credential-guessing refusals
+          description: >-
+            One or more client address blocks are spending their auth-failure budget
+            continuously, which is what a credential-stuffing run looks like from here.
+            See docs/runbooks/rate-limit-admin.md#credential-guessing
+      - alert: GatewayControlPlaneThrottled
+        expr: sum(rate(gateway_rate_limit_rejections_total{reason="rate_limit:control_plane"}[5m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Admin API calls are being rate limited
+          description: >-
+            An operator credential is over the control-plane budget, so admin calls made with it
+            are refused. The budget is per credential and lives in appsettings
+            (RateLimiting:ControlPlane), so it cannot be raised from the console.
+            See docs/runbooks/rate-limit-admin.md#control-plane-budget

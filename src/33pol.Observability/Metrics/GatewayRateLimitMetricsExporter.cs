@@ -34,6 +34,14 @@ public sealed class GatewayRateLimitMetricsExporter(
             ObservePartitions,
             description: "Live rate-limit partitions per dimension against the configured ceiling");
 
+        // A counter, not a gauge: it only ever rises, and what an alert wants is the rate of change —
+        // "are limits being reset right now", not "have they ever been".
+        GatewayMeters.Meter.CreateObservableCounter(
+            "gateway_rate_limit_forced_evictions_total",
+            ObserveForcedEvictions,
+            description: "Partitions evicted with budget still spent, each of which starts full again "
+                + "on its next request; a non-zero rate means limits are not being fully enforced");
+
         GatewayMeters.Meter.CreateObservableGauge(
             "gateway_rate_limit_backed_off_partitions",
             ObserveBackoff,
@@ -80,6 +88,16 @@ public sealed class GatewayRateLimitMetricsExporter(
         yield return new Measurement<int>(
             stats.MaxPartitions,
             new KeyValuePair<string, object?>("dimension", "ceiling"));
+    }
+
+    private IEnumerable<Measurement<long>> ObserveForcedEvictions()
+    {
+        if (store is null)
+        {
+            yield break;
+        }
+
+        yield return new Measurement<long>(store.GetStats().ForcedEvictions);
     }
 
     private IEnumerable<Measurement<int>> ObserveBackoff()

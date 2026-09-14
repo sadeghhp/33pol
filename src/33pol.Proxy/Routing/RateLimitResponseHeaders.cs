@@ -16,7 +16,13 @@ namespace Pol33.Proxy.Routing;
 /// </remarks>
 public static class RateLimitResponseHeaders
 {
-    public static void Write(HttpContext context, RateLimitAcquireResult acquire)
+    /// <param name="refused">
+    /// Whether this is a response the gateway is refusing. On a refusal the standard
+    /// <c>RateLimit-*</c> names are written alongside the vendor-prefixed ones: nothing from an
+    /// upstream can overwrite them there, and a refusal is the response a client most needs to be
+    /// able to read without knowing the gateway's own header names.
+    /// </param>
+    public static void Write(HttpContext context, RateLimitAcquireResult acquire, bool refused = false)
     {
         if (acquire.Limit is not { } limit)
         {
@@ -24,9 +30,19 @@ public static class RateLimitResponseHeaders
         }
 
         var headers = context.Response.Headers;
+        var remaining = (acquire.Remaining ?? 0).ToString();
+        var reset = (acquire.ResetAfterSeconds ?? 0).ToString();
+
         headers[GatewayHeaders.RateLimitLimit] = limit.ToString();
-        headers[GatewayHeaders.RateLimitRemaining] = (acquire.Remaining ?? 0).ToString();
-        headers[GatewayHeaders.RateLimitReset] = (acquire.ResetAfterSeconds ?? 0).ToString();
+        headers[GatewayHeaders.RateLimitRemaining] = remaining;
+        headers[GatewayHeaders.RateLimitReset] = reset;
+
+        if (refused)
+        {
+            headers[GatewayHeaders.StandardRateLimitLimit] = limit.ToString();
+            headers[GatewayHeaders.StandardRateLimitRemaining] = remaining;
+            headers[GatewayHeaders.StandardRateLimitReset] = reset;
+        }
 
         if (acquire.Scope is { } scope)
         {

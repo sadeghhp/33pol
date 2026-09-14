@@ -14,12 +14,19 @@ public interface IRateLimitConfigAdminService
     /// against the older contract — which had no notion of scoped rules — updates the tiers it knows
     /// about without silently deleting rules it cannot see.
     /// </param>
+    /// <param name="expectedVersion">
+    /// The configuration version the caller read before composing this change, from the <c>ETag</c> on
+    /// the GET. When it is no longer current the write is refused with <c>409</c> rather than erasing
+    /// what landed in between. Null skips the check, which is what a client that sends no
+    /// <c>If-Match</c> gets.
+    /// </param>
     Task<RateLimitConfigUpdateResult> UpdateAsync(
         bool enabled,
         bool adaptiveEnabled,
         RateLimitTierOptions defaultTier,
         IReadOnlyDictionary<string, RateLimitTierOptions> plans,
         IReadOnlyList<RateLimitRuleDefinition>? rules = null,
+        long? expectedVersion = null,
         CancellationToken cancellationToken = default);
 
     /// <summary>

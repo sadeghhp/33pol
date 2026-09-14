@@ -26,12 +26,21 @@ public static class RateLimitKeys
     /// The bucket a caller's admin-API and model-listing requests are counted against.
     /// </summary>
     /// <remarks>
-    /// Separate from the caller's inference bucket, though sized by the same tier: the two are
-    /// different kinds of work, and letting an operator's console polling eat into the tenant's
-    /// inference budget — or the reverse — would make either one's limit unpredictable from the
-    /// other's traffic.
+    /// <para>Separate from the caller's inference bucket: the two are different kinds of work, and
+    /// letting an operator's console polling eat into the tenant's inference budget — or the reverse —
+    /// would make either one's limit unpredictable from the other's traffic.</para>
+    ///
+    /// <para>Keyed on the credential rather than the tenant, falling back to the tenant partition only
+    /// when there is no credential to key on. Every operator key belongs to the one operator tenant,
+    /// so a tenant-wide bucket was shared by every console session, wallboard and scripted admin
+    /// client at once: a handful of open Overview tabs polling twice a second reach the budget
+    /// together, and the answer — a <c>429</c> on every admin call — locks out the console that is the
+    /// only place to see what is happening. The tier is an appsettings guard rail read once at
+    /// startup, so there is no way to widen it from inside a running process either. Per-credential,
+    /// one runaway session spends its own budget and no one else's.</para>
     /// </remarks>
-    public static string ControlPlane(string partitionKey) => "cp:" + partitionKey;
+    public static string ControlPlane(string partitionKey, string? apiKeyId = null) =>
+        "cp:" + (string.IsNullOrEmpty(apiKeyId) ? partitionKey : apiKeyId);
 
     public static string Model(string modelId) => "m:" + modelId;
 

@@ -30,6 +30,7 @@ public sealed class RateLimitConfigAdminService(
         var rateLimits = StoredRateLimits;
         return new RateLimitAdminConfig
         {
+            Version = configProvider.Current.Version,
             Enabled = rateLimits.Enabled,
             AdaptiveEnabled = rateLimits.AdaptiveEnabled,
             Default = ToTierOptions(rateLimits.Default),
@@ -127,6 +128,7 @@ public sealed class RateLimitConfigAdminService(
         RateLimitTierOptions defaultTier,
         IReadOnlyDictionary<string, RateLimitTierOptions> plans,
         IReadOnlyList<RateLimitRuleDefinition>? rules = null,
+        long? expectedVersion = null,
         CancellationToken cancellationToken = default)
     {
         // Tier values are validated even when disabling, so re-enabling later cannot restore a
@@ -186,6 +188,7 @@ public sealed class RateLimitConfigAdminService(
                     ToPolicy(defaultTier),
                     planPolicies,
                     effectiveRules,
+                    expectedVersion,
                     cancellationToken)
                 .ConfigureAwait(false);
 
@@ -204,6 +207,21 @@ public sealed class RateLimitConfigAdminService(
                 effectiveRules.Sum(static r => r.Windows.Count));
             return RateLimitConfigUpdateResult.Ok(
                 enabled ? "Rate limits updated." : "Rate limits updated. Rate limiting is now disabled.");
+        }
+        catch (RateLimitVersionConflictException ex)
+        {
+            // Not an error to log at Error: somebody else saved first, and the caller is being told to
+            // go and look. The rule set is written wholesale, so letting this through would delete
+            // their change rather than merge with it.
+            logger.LogInformation(
+                "Rate-limit update refused: based on version {Expected}, current version is {Actual}.",
+                ex.ExpectedVersion,
+                ex.ActualVersion);
+
+            return RateLimitConfigUpdateResult.Fail(
+                "Rate limits were changed by someone else since this page was loaded. Reload to see the "
+                + "current configuration, then reapply your change.",
+                statusCode: 409);
         }
         catch (Exception ex)
         {

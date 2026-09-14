@@ -69,6 +69,10 @@ They are vendor-prefixed on purpose — the upstream provider's own `X-RateLimit
 
 A scoped rule keeps a **base tier** and may carry up to 16 **windows**: a different tier for a span of time. The base tier applies whenever no window is active, and whenever a window cannot be evaluated. Nothing about a window ever means "unlimited" by accident: a window that enforces nothing is refused unless it is explicitly marked `suspend`, which pauses the rule for the span (other scopes still apply).
 
+A suspended rule is treated as **absent** while its window runs, not as a rule with every number at zero. The distinction matters in the `tenant` and `anonymous` scopes, which compose with the plan or default tier rather than replacing it: an all-zero override there reads as "keep the plan's rate and cap streams at zero", and zero streams means *unlimited*. So pausing a tenant rule used to remove that tenant's stream cap rather than restore the plan's — letting it hold open every slot in the per-model bulkhead exactly while an operator believed a restriction had been lifted. Absence has no second reading: no entry is no override, in every scope.
+
+Two windows that can be active at once with no clear winner are refused at save time. That now includes a `once` and a `weekly` window carrying the **same explicit `priority`**: the kinds were previously never compared, which is safe only while their default ranks differ (`once` outranks `weekly`), and an equal explicit rank left the winner to be decided by start time and then by name.
+
 | Kind | Fields | Meaning |
 |------|--------|---------|
 | `once` | `from`, optional `until` | One span. No `until` is an open-ended step change: the tier from that instant on, for good. |
@@ -126,7 +130,11 @@ Body shape (camelCase JSON):
 }
 ```
 
-The fourth rule caps concurrency only: a scoped rule may leave `rpm` at `0`, which means "this rule does not limit the request rate". For a `tenant` rule that means the tenant keeps the rate — `rpm` and `burst` — of its plan or the default tier and takes the rule's `maxConcurrentStreams`; a `tenant` rule with `rpm: 0` must therefore also have `burst: 0`, since there is no rate of its own for that burst to belong to. (The *default* tier is still floored at 1 — a zero there would silently disable the gateway's only universal limit.)
+The fourth rule caps concurrency only: a scoped rule may leave `rpm` at `0`, which means "this rule does not limit the request rate" — the rate control is off for that scope entirely, and the bucket is not consulted. **A rule with `rpm: 0` must also have `burst: 0`, in every scope**: a burst is extra tokens above the rate, so without a rate there is nothing to refill it. The pair used to be accepted outside the `tenant` scope and stored a bucket of `burst` tokens refilling at the engine's floor of one token a minute, which held the scope to *one request per minute* once that burst was spent — on a `model` rule, that is the whole gateway's throughput for that model. It is refused at save time now, and a stored rule still in that shape is reported at startup.
+
+For a `tenant` rule, `rpm: 0` means the tenant keeps the rate — `rpm` and `burst` — of its plan or the default tier and takes only the rule's `maxConcurrentStreams`; the `anonymous` rule composes the same way against the default tier. (The *default* tier is still floored at 1 — a zero there would silently disable the gateway's only universal limit.)
+
+`auth_failure` is a **rate-only** scope: it is metered by a limiter that only ever debits a token bucket, so it needs `rpm` above zero and `maxConcurrentStreams: 0`. A rule there with only a stream cap enforced nothing and quietly left credential guessing on the default tier, so both shapes are refused.
 
 **`rules` is optional, and omitting it is not the same as sending `[]`.** Omitted means "I do not manage rules", and the stored set is carried through untouched — so a client written against the older contract cannot delete rules it cannot see. An empty array is a deliberate "there are no rules" and does delete them.
 
@@ -141,7 +149,10 @@ Validation (HTTP 400, `{ "message": "…" }`):
 - Rule `scope`: one of `global`, `tenant`, `api_key`, `model`, `tenant_model`, `api_key_model`, `auth_failure`, `anonymous`
 - Rule `target`: non-empty, no surrounding whitespace, max 256 chars; exactly one `|` for the pair scopes and none for the others; `*` for `global`, `auth_failure` and `anonymous`
 - `rpm` on a rule may be `0` ("this rule does not limit the rate") but never negative
-- A `tenant` rule with `rpm: 0` must have `burst: 0`; it inherits its rate from the plan or default tier
+- A rule with `rpm: 0` must have `burst: 0`, in every scope — there is no rate for a burst to refill against
+- A `tenant` or `anonymous` rule with `rpm: 0` inherits its rate from the plan or default tier and contributes only its stream cap
+- An `auth_failure` rule needs `rpm` above zero and `maxConcurrentStreams: 0`: the scope limits the request rate only
+- Scope names are case-insensitive and stored canonically, so `Anonymous` and `anonymous` are the same rule and both are held to that scope's target shape
 - A rule must enforce something — `rpm` and `maxConcurrentStreams` both zero is rejected rather than accepted as a limit that never fires
 - No two rules may share a (scope, target); duplicates are rejected rather than last-one-wins, so the applied configuration never depends on serialisation order
 - At most 2 000 rules
@@ -270,3 +281,54 @@ Worth alerting on:
 - **Composed scopes are ANDed:** a rule you add to bound one caller applies to every request that matches it. A `model` rule with a small `rpm` throttles *all* tenants on that model, which is usually what you want but is not a per-tenant limit — use `tenant_model` for that.
 - **Adaptive enforcement is bounded but not free:** it can hold a model at `MinFactor` of its configured rate for as long as the model stays saturated. The floor is what keeps that a degradation rather than an outage; check `gateway_rate_limit_adaptive_factor` before concluding a tier is misconfigured.
 - **The usage report is in-memory:** it resets with the process and reaches back three hours. It is an operational view, not an audit trail — the billing rollups are the durable record.
+
+## Concurrent edits
+
+`GET /admin/api/rate-limits` returns the configuration version as a weak `ETag`, and repeats it as
+`version` in the body. Send it back as `If-Match` on the `PUT` and a write based on a version that is
+no longer current is refused with `409` instead of going through. That matters because the rule set is
+replaced **wholesale** — a partial update would give no way to delete a rule — so a save based on a
+stale read does not merge with whatever landed in between, it erases it. Two operators with the page
+open would each save their own complete set and the second would silently win, including for
+`auth_failure` and `anonymous`. The console sends the header and offers a reload on `409`; a client
+that sends no `If-Match` (or `*`) still gets an unconditional write.
+
+<a id="partition-ceiling"></a>
+## Partition ceiling
+
+Every partition — a tenant, an API key, a model, a client address block — holds one bucket, capped at
+`RateLimiting:InMemoryMaxPartitions` (50,000). Past the ceiling the maintenance sweep evicts
+least-recently-seen partitions, preferring ones already at capacity because resetting those costs
+nothing. When there are not enough of those it has to evict buckets with budget still spent, and each
+of those **starts full again on its next request** — so the callers being evicted are, for that
+moment, not limited.
+
+`gateway_rate_limit_forced_evictions_total` counts them and `GatewayRateLimitsNotEnforced` alerts on
+the rate. `gateway_rate_limit_partitions` against its `dimension="ceiling"` series is the early
+warning (`GatewayRateLimitPartitionsNearCeiling` at 80%). The fix is to raise
+`InMemoryMaxPartitions` or shorten `InMemoryPartitionRetentionSeconds`; a sustained flood of distinct
+client addresses is the usual cause, and `ForwardedHeaders` being misconfigured is the usual reason
+one client looks like many.
+
+<a id="credential-guessing"></a>
+## Credential guessing
+
+`GatewayCredentialGuessing` fires on a sustained rate of `auth_failure` refusals, which is what a
+credential-stuffing run looks like from the gateway. Check which address blocks are involved before
+widening anything: the budget is per address block, and an ingress without `ForwardedHeaders` collapses
+every caller into one.
+
+Admission here is decided from a peek and charged once the security layer has said whether the
+credential was rejected, so a caller with many requests in flight gets one round through on a single
+token. That round is charged for — the bucket carries the debt, bounded at one window — so the
+sustained rate is the configured one rather than the configured one times the concurrency.
+
+<a id="control-plane-budget"></a>
+## Control-plane budget
+
+`/admin/api/*` and `GET /v1/models` are metered per **credential** (per client address block when
+unauthenticated), sized by `RateLimiting:ControlPlane`. Per credential rather than per tenant because
+every operator key belongs to the one operator tenant: a shared bucket meant a handful of open console
+tabs polling twice a second could reach it together and lock every operator out of the console — and
+the tier is read once at startup from appsettings, so there is no way to widen it from inside a running
+process. `GatewayControlPlaneThrottled` alerts when one is over its budget.

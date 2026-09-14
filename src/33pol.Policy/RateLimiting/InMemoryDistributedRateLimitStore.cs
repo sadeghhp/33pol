@@ -45,6 +45,10 @@ public sealed class InMemoryDistributedRateLimitStore : IDistributedRateLimitSto
     // by the maintenance sweep, which is single-threaded, so it needs no interlocking.
     private bool _forcingEviction;
 
+    // How many such partitions have been dropped since start. Read by the metrics exporter, so it is
+    // published as a number an alert can watch rather than only as the log line below.
+    private long _forcedEvictions;
+
     public InMemoryDistributedRateLimitStore(
         IOptions<RateLimitingOptions>? options = null,
         TimeProvider? timeProvider = null,
@@ -345,7 +349,8 @@ public sealed class InMemoryDistributedRateLimitStore : IDistributedRateLimitSto
     public RateLimitStoreStats GetStats() => new(
         Volatile.Read(ref _requestPartitionCount),
         Volatile.Read(ref _streamPartitionCount),
-        _maxPartitions);
+        _maxPartitions,
+        Interlocked.Read(ref _forcedEvictions));
 
     private void ReleaseSlots(ReadOnlySpan<string> keys)
     {
@@ -548,6 +553,8 @@ public sealed class InMemoryDistributedRateLimitStore : IDistributedRateLimitSto
         // same line while telling them nothing new. One line when it starts, one when it stops.
         if (forced > 0)
         {
+            Interlocked.Add(ref _forcedEvictions, forced);
+
             if (!_forcingEviction)
             {
                 _forcingEviction = true;
@@ -647,7 +654,10 @@ public sealed class InMemoryDistributedRateLimitStore : IDistributedRateLimitSto
         /// <summary>Report the fill without changing it.</summary>
         Peek,
 
-        /// <summary>Take one token whether or not the bucket holds one, flooring at empty.</summary>
+        /// <summary>
+        /// Take one token whether or not the bucket holds one, letting the bucket owe what it could
+        /// not pay.
+        /// </summary>
         ForceTake,
 
         /// <summary>Give one token back, for a request another scope went on to refuse.</summary>
@@ -762,9 +772,23 @@ public sealed class InMemoryDistributedRateLimitStore : IDistributedRateLimitSto
                 }
                 else if (!hasToken && operation == TokenOperation.ForceTake)
                 {
-                    // The caller already committed to the cost; an empty bucket floors at zero
-                    // rather than going negative, which would take several windows to work off.
-                    _tokens = 0;
+                    // The bucket goes into debt rather than flooring at zero, down to one window's
+                    // worth.
+                    //
+                    // A force-take is how the two out-of-band limiters charge for a request they let
+                    // through: both decide admission from a *peek*, which does not consume, and only
+                    // charge once the outcome is known. So every request that peeked before any of
+                    // them charged was admitted on the same token, and flooring at zero then forgave
+                    // the surplus — one token per second admitted one *round* of however many requests
+                    // the caller had in flight, not one request. For the auth-failure budget that is
+                    // the ceiling on credential guessing, multiplied by the attacker's concurrency.
+                    //
+                    // Owing the difference is what makes the sustained rate come out at rpm again: the
+                    // debt is worked off at the refill rate before the next token is available, so a
+                    // burst is paid for rather than repeated. The floor bounds the penance at one full
+                    // window, so a caller cannot be locked out for longer than its own budget takes to
+                    // refill however far past it a single burst went.
+                    _tokens = Math.Max(-capacity, _tokens - 1.0);
                 }
 
                 var retryAfter = hasToken

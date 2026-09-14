@@ -116,6 +116,9 @@ document.addEventListener('alpine:init', () => {
     classifyAndThrow(status, statusText, text, editModelUrl) {
       const err = window.AdminErrors.classifyError(status, statusText, text, { editModelUrl });
       const e = new Error(err.message);
+      // The HTTP status, so a caller that needs to branch on one can test it instead of matching the
+      // number inside the rendered message — which is how a wording change becomes a silent bug.
+      e.status = status;
       e.title = err.title;
       e.detail = err.detail;
       e.global = err.global;

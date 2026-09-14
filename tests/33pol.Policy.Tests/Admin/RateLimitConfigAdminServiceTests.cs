@@ -31,6 +31,67 @@ public sealed class RateLimitConfigAdminServiceTests
         refresher.Refreshed.Should().BeTrue();
     }
 
+    /// <summary>
+    /// A rule set is replaced wholesale, so a write based on a stale read does not merge with what
+    /// landed in between — it erases it. Two operators with the page open would each save their own
+    /// complete set and the second would win silently, including for rules like <c>auth_failure</c>.
+    /// </summary>
+    [Fact]
+    public async Task UpdateAsync_WhenTheConfigurationMovedUnderTheCaller_IsRefusedWith409()
+    {
+        var repo = new RecordingRepository { CurrentVersion = 7 };
+        var service = CreateService(new StubServiceProvider(repo, new RecordingRefresher()));
+
+        var result = await service.UpdateAsync(
+            enabled: true,
+            adaptiveEnabled: false,
+            new RateLimitTierOptions { Rpm = 30, Burst = 3, MaxConcurrentStreams = 3 },
+            new Dictionary<string, RateLimitTierOptions>(StringComparer.OrdinalIgnoreCase),
+            rules: null,
+            expectedVersion: 5);
+
+        result.Success.Should().BeFalse();
+        result.StatusCode.Should().Be(409);
+        result.Message.Should().Contain("someone else");
+        repo.SavedDefault.Should().BeNull("nothing is written when the precondition fails");
+    }
+
+    /// <summary>A write based on the current version goes through, and the version is passed on.</summary>
+    [Fact]
+    public async Task UpdateAsync_WithTheCurrentVersion_Succeeds()
+    {
+        var repo = new RecordingRepository { CurrentVersion = 7 };
+        var service = CreateService(new StubServiceProvider(repo, new RecordingRefresher()));
+
+        var result = await service.UpdateAsync(
+            enabled: true,
+            adaptiveEnabled: false,
+            new RateLimitTierOptions { Rpm = 30, Burst = 3, MaxConcurrentStreams = 3 },
+            new Dictionary<string, RateLimitTierOptions>(StringComparer.OrdinalIgnoreCase),
+            rules: null,
+            expectedVersion: 7);
+
+        result.Success.Should().BeTrue();
+        repo.SavedExpectedVersion.Should().Be(7);
+    }
+
+    /// <summary>No precondition is an unconditional write, which is what an older client sends.</summary>
+    [Fact]
+    public async Task UpdateAsync_WithoutAnExpectedVersion_DoesNotCheck()
+    {
+        var repo = new RecordingRepository { CurrentVersion = 7 };
+        var service = CreateService(new StubServiceProvider(repo, new RecordingRefresher()));
+
+        var result = await service.UpdateAsync(
+            enabled: true,
+            adaptiveEnabled: false,
+            new RateLimitTierOptions { Rpm = 30, Burst = 3, MaxConcurrentStreams = 3 },
+            new Dictionary<string, RateLimitTierOptions>(StringComparer.OrdinalIgnoreCase));
+
+        result.Success.Should().BeTrue();
+        repo.SavedExpectedVersion.Should().BeNull();
+    }
+
     [Fact]
     public async Task UpdateAsync_InvalidRpm_ReturnsValidationError()
     {
@@ -267,20 +328,33 @@ public sealed class RateLimitConfigAdminServiceTests
 
         public bool? SavedAdaptiveEnabled { get; private set; }
 
-        public Task SaveAsync(
+        public long? SavedExpectedVersion { get; private set; }
+
+        /// <summary>The version the repository claims to hold, for the conflict path.</summary>
+        public long CurrentVersion { get; set; }
+
+        public Task<long> SaveAsync(
             bool enabled,
             bool adaptiveEnabled,
             RateLimitPolicy defaultTier,
             IReadOnlyDictionary<string, RateLimitPolicy> plans,
             IReadOnlyList<RateLimitRuleDefinition> rules,
+            long? expectedVersion = null,
             CancellationToken cancellationToken = default)
         {
+            SavedExpectedVersion = expectedVersion;
+
+            if (expectedVersion is long expected && expected != CurrentVersion)
+            {
+                throw new RateLimitVersionConflictException(expected, CurrentVersion);
+            }
+
             SavedEnabled = enabled;
             SavedAdaptiveEnabled = adaptiveEnabled;
             SavedDefault = defaultTier;
             SavedPlans = plans;
             SavedRules = rules;
-            return Task.CompletedTask;
+            return Task.FromResult(++CurrentVersion);
         }
     }
 

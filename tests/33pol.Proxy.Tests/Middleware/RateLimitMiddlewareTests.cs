@@ -4,7 +4,9 @@ using NSubstitute;
 using Pol33.Core.Abstractions;
 using Pol33.Core.Configuration;
 using Pol33.Core.Errors;
+using Pol33.Core.Identity;
 using Pol33.Core.RateLimiting;
+using Pol33.Core.Security;
 using Pol33.Policy.RateLimiting;
 using Pol33.Proxy.Middleware;
 using Pol33.Proxy.Parsing;
@@ -273,6 +275,89 @@ public sealed class RateLimitMiddlewareTests
     }
 
     /// <summary>
+    /// A refusal carries the standard <c>RateLimit-*</c> names as well as the vendor-prefixed ones.
+    /// </summary>
+    /// <remarks>
+    /// The prefix exists because an upstream provider\'s own budget headers are copied onto the
+    /// response after the limiter has run, so an unprefixed name would be silently overwritten by a
+    /// number about a different limit. That cannot happen on a refusal — a 429 the gateway writes
+    /// never reaches an upstream — so on exactly the response a client most needs to read, the
+    /// standard names were carrying nothing.
+    /// </remarks>
+    [Fact]
+    public async Task InvokeAsync_Refusal_CarriesTheStandardRateLimitHeadersToo()
+    {
+        var middleware = CreateMiddleware(
+            new RateLimitsConfigSection { Default = new RateLimitPolicy(1, 0, 0) },
+            out _);
+
+        await InvokeAsync(middleware, "/v1/chat/completions", "POST");
+
+        var refused = CreateContext("/v1/chat/completions", "POST");
+        await middleware.InvokeAsync(refused);
+
+        refused.Response.StatusCode.Should().Be(StatusCodes.Status429TooManyRequests);
+        refused.Response.Headers[GatewayHeaders.StandardRateLimitLimit].ToString().Should().Be("1");
+        refused.Response.Headers[GatewayHeaders.StandardRateLimitRemaining].ToString().Should().Be("0");
+        refused.Response.Headers[GatewayHeaders.StandardRateLimitReset].ToString().Should().NotBeNullOrEmpty();
+
+        // The prefixed ones are unchanged, so anything written against the gateway keeps working.
+        refused.Response.Headers[GatewayHeaders.RateLimitLimit].ToString().Should().Be("1");
+    }
+
+    /// <summary>
+    /// An admitted response keeps the prefixed names only: there an upstream\'s own budget headers
+    /// land on the same response, and the unprefixed ones are theirs to set.
+    /// </summary>
+    [Fact]
+    public async Task InvokeAsync_Admitted_CarriesOnlyThePrefixedHeaders()
+    {
+        var middleware = CreateMiddleware(
+            new RateLimitsConfigSection { Default = new RateLimitPolicy(10, 0, 0) },
+            out _);
+
+        var admitted = CreateContext("/v1/chat/completions", "POST");
+        await middleware.InvokeAsync(admitted);
+
+        admitted.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        admitted.Response.Headers[GatewayHeaders.RateLimitLimit].ToString().Should().Be("10");
+        admitted.Response.Headers.ContainsKey(GatewayHeaders.StandardRateLimitLimit).Should().BeFalse();
+    }
+
+    /// <summary>
+    /// The control-plane budget is per credential, not per tenant.
+    /// </summary>
+    /// <remarks>
+    /// Every operator key belongs to the one operator tenant, so a tenant-wide bucket was shared by
+    /// every console session, wallboard and scripted admin client at once — a handful of open tabs
+    /// polling twice a second reach it together, and the answer is a 429 on every admin call, which
+    /// locks out the console that is the only place to see what is happening. The tier is an
+    /// appsettings guard rail read once at startup, so there is no way to widen it from inside a
+    /// running process either.
+    /// </remarks>
+    [Fact]
+    public async Task InvokeAsync_OneConsoleSessionOverItsBudget_DoesNotRefuseTheOthers()
+    {
+        var middleware = CreateMiddleware(
+            new RateLimitsConfigSection { Default = new RateLimitPolicy(10_000, 0, 0) },
+            out _,
+            controlPlaneRpm: 1);
+
+        var noisy = CreateContext("/admin/api/overview", "GET", apiKeyId: "session-a");
+        await middleware.InvokeAsync(noisy);
+        noisy.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+
+        var noisyAgain = CreateContext("/admin/api/overview", "GET", apiKeyId: "session-a");
+        await middleware.InvokeAsync(noisyAgain);
+        noisyAgain.Response.StatusCode.Should().Be(StatusCodes.Status429TooManyRequests);
+
+        // Same tenant, different credential: unaffected.
+        var other = CreateContext("/admin/api/overview", "GET", apiKeyId: "session-b");
+        await middleware.InvokeAsync(other);
+        other.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+    }
+
+    /// <summary>
     /// The static console is files, not API calls. Rate-limiting a page load would only break the
     /// console it is meant to protect.
     /// </summary>
@@ -485,13 +570,27 @@ public sealed class RateLimitMiddlewareTests
         return context.Response.StatusCode;
     }
 
-    private static DefaultHttpContext CreateContext(string path, string method)
+    private static DefaultHttpContext CreateContext(string path, string method, string? apiKeyId = null)
     {
         var context = new DefaultHttpContext();
         context.Request.Method = method;
         context.Request.Path = path;
+
+        if (apiKeyId is not null)
+        {
+            context.Items[TenantContextKeys.HttpContextItemKey] = new TenantContext
+            {
+                TenantId = OperatorTenantId,
+                ApiKeyId = apiKeyId,
+                Role = ApiKeyRole.Admin,
+            };
+        }
+
         return context;
     }
+
+    /// <summary>Every operator key the console issues belongs to this one tenant.</summary>
+    private const string OperatorTenantId = "operator";
 
     private static RateLimitMiddleware CreateMiddleware(
         RateLimitsConfigSection rateLimits,

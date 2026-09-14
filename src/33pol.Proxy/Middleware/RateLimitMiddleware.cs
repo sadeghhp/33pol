@@ -142,7 +142,7 @@ public sealed class RateLimitMiddleware
             // One bucket, no stages: no body to parse, no model to scope by, and no unroutable-body
             // answer to give — the endpoint behind this reads its own payload.
             var control = AcquireControlPlane(subject, now);
-            RateLimitResponseHeaders.Write(context, control);
+            RateLimitResponseHeaders.Write(context, control, refused: !control.IsAcquired);
 
             if (!control.IsAcquired)
             {
@@ -159,7 +159,13 @@ public sealed class RateLimitMiddleware
         // Kept in a synchronous helper because the rule set is a span over the cached plan, and a
         // span cannot live across an await. Holding it only inside a non-async frame is also what
         // guarantees no rule set outlives the decision it was built for.
-        var tightest = AcquireIdentityScopes(subject, now);
+        // The plan is held across both stages, not re-resolved for the refund. It is immutable and
+        // cached, so holding the reference costs nothing — and re-resolving meant that a config edit
+        // or a schedule boundary landing during the body parse handed stage two a different rule set
+        // to refund against than stage one had charged.
+        var identityPlan = _planResolver.Resolve(subject, modelId: null);
+
+        var tightest = AcquireIdentityScopes(identityPlan, now);
         if (!tightest.IsAcquired)
         {
             await RejectAsync(context, subject, modelId: null, tightest, now).ConfigureAwait(false);
@@ -182,7 +188,7 @@ public sealed class RateLimitMiddleware
             if (model is not null && await IsModelChargeableAsync(context, model).ConfigureAwait(false))
             {
                 // --- Stage two: the scopes that do. ---
-                var modelScopes = AcquireModelScopes(subject, model.Id, now);
+                var modelScopes = AcquireModelScopes(subject, model.Id, identityPlan, now);
                 if (!modelScopes.IsAcquired)
                 {
                     await RejectAsync(context, subject, model.Id, modelScopes, now).ConfigureAwait(false);
@@ -209,15 +215,16 @@ public sealed class RateLimitMiddleware
     }
 
     /// <summary>Takes a token from every scope that can be decided without the request body.</summary>
-    private RateLimitAcquireResult AcquireIdentityScopes(in RateLimitSubject subject, DateTimeOffset now) =>
-        _rateLimitStore.TryAcquireAll(_planResolver.Resolve(subject, modelId: null).IdentityRules, now);
+    private RateLimitAcquireResult AcquireIdentityScopes(RateLimitPlan identityPlan, DateTimeOffset now) =>
+        _rateLimitStore.TryAcquireAll(identityPlan.IdentityRules, now);
 
     /// <summary>
     /// Takes the caller's one token for an admin-API or model-listing request.
     /// </summary>
     /// <remarks>
-    /// One bucket per caller, in a partition of its own so console polling and inference cannot
-    /// spend each other's budget. No scope is stamped on the result: every
+    /// One bucket per credential — per client address block when there is none — in a partition of
+    /// its own so console polling and inference cannot spend each other's budget, and so one console
+    /// session cannot refuse every other operator. No scope is stamped on the result: every
     /// <see cref="RateLimitScope"/> names a dimension an operator can write a rule against, and this
     /// budget is not one of them — labelling the answer <c>tenant</c> would point a client at the
     /// tenant tier, which is not the number it was just refused by.
@@ -230,7 +237,7 @@ public sealed class RateLimitMiddleware
         }
 
         return _rateLimitStore.TryAcquireRequest(
-            RateLimitKeys.ControlPlane(subject.PartitionKey),
+            RateLimitKeys.ControlPlane(subject.PartitionKey, subject.ApiKeyId),
             _controlPlanePolicy,
             now);
     }
@@ -286,13 +293,16 @@ public sealed class RateLimitMiddleware
     /// Takes a token from every model-scoped rule, refunding the first stage if one of them refuses.
     /// </summary>
     /// <remarks>
-    /// The identity rules are re-resolved rather than carried in from the first stage: a resolved
-    /// plan is cached, so this is a dictionary lookup returning the very same array, and it avoids
-    /// holding a span across the await that sits between the two stages.
+    /// The first stage's rule set is carried in as a <see cref="RateLimitPlan"/> rather than a span:
+    /// a span cannot live across the await between the two stages, but the plan behind it is an
+    /// immutable cached object and holding the reference is free. Re-resolving here instead read
+    /// whatever configuration was current *after* the parse, so an admin write or a schedule boundary
+    /// arriving during it refunded a different set of buckets than the ones stage one charged.
     /// </remarks>
     private RateLimitAcquireResult AcquireModelScopes(
         in RateLimitSubject subject,
         string modelId,
+        RateLimitPlan identityPlan,
         DateTimeOffset now)
     {
         var modelRules = _planResolver.Resolve(subject, modelId).ModelRules;
@@ -304,10 +314,11 @@ public sealed class RateLimitMiddleware
         var result = _rateLimitStore.TryAcquireAll(modelRules, now);
         if (!result.IsAcquired)
         {
-            // Hand back what the first stage took. Without it, a caller pinned by a narrow per-model
-            // limit would still spend its tenant-wide budget on every attempt, so one throttled model
-            // would eventually rate-limit that tenant everywhere.
-            _rateLimitStore.RefundAll(_planResolver.Resolve(subject, modelId: null).IdentityRules, now);
+            // Hand back what the first stage took — from the very rule set it took it with. Without
+            // this, a caller pinned by a narrow per-model limit would still spend its tenant-wide
+            // budget on every attempt, so one throttled model would eventually rate-limit that tenant
+            // everywhere.
+            _rateLimitStore.RefundAll(identityPlan.IdentityRules, now);
         }
 
         return result;
@@ -478,7 +489,7 @@ public sealed class RateLimitMiddleware
         RateLimitAcquireResult acquire,
         DateTimeOffset now)
     {
-        RateLimitResponseHeaders.Write(context, acquire);
+        RateLimitResponseHeaders.Write(context, acquire, refused: true);
 
         var scope = acquire.Scope;
         var reason = acquire.Control == RateLimitControl.Concurrency

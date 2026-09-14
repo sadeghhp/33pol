@@ -2685,6 +2685,10 @@ function adminApp() {
       });
       const rules = data.rules ?? data.Rules ?? [];
       return {
+        // The version this configuration was read at, sent back as If-Match so a save that is based
+        // on a stale read is refused rather than erasing whatever landed in between. Rules are
+        // replaced wholesale, so a stale save does not merge — it deletes.
+        version: data.version ?? data.Version ?? null,
         // ?? not || so an explicit false is preserved; absent means enforcing, matching the server default.
         enabled: data.enabled ?? data.Enabled ?? true,
         // Absent means off: a gateway enforces exactly what it was configured to until someone asks
@@ -2829,8 +2833,11 @@ function adminApp() {
         if (!key) continue;
         plans[key] = this.rlTierPayload(t);
       }
-      // Rows with no target are dropped rather than sent: an empty target is the half-typed state of
-      // a rule the operator has not finished, and the server would reject the whole save for it.
+      // Rows with no target are left out of the payload: an empty target is the half-typed state of
+      // a rule the operator has not finished, and the server would reject the whole save for it. The
+      // save is blocked when there are any (see saveRateLimits) rather than quietly going ahead —
+      // because the server replaces the rule set wholesale, sending the payload without them deletes
+      // them, and the operator was told "Rate limits saved."
       const rules = (cfg.rules || [])
         .filter((row) => String(row.target ?? '').trim() !== '')
         .map((row) => ({
@@ -2850,8 +2857,32 @@ function adminApp() {
       };
     },
 
+    /** The If-Match header for a save, when the loaded configuration told us its version. */
+    rlIfMatchHeaders() {
+      const version = this.rateLimits?.version;
+      return version === null || version === undefined ? {} : { 'If-Match': 'W/"' + version + '"' };
+    },
+
+    /** Draft rules the server would refuse, and saving would therefore delete. */
+    rlIncompleteRules() {
+      return (this.rlDraft?.rules || []).filter((row) => String(row.target ?? '').trim() === '');
+    },
+
     async saveRateLimits() {
       if (!this.rlDraft) return;
+
+      // Refused here rather than filtered out of the payload. A rule set is saved wholesale, so a row
+      // the payload leaves out is a row the save deletes — and the operator would have been told the
+      // save succeeded.
+      const incomplete = this.rlIncompleteRules();
+      if (incomplete.length) {
+        this.rateLimitFieldError = incomplete.length === 1
+          ? 'One rule has no target yet. Give it one, or remove it, then save.'
+          : incomplete.length + ' rules have no target yet. Give them one, or remove them, then save.';
+        this.toast(this.rateLimitFieldError);
+        return;
+      }
+
       this.closeRateLimitDrawers();
       await this.runApi('settings', 'Saving rate limits…', async () => {
         this.rateLimitFieldError = '';
@@ -2859,6 +2890,7 @@ function adminApp() {
         try {
           const body = await this.apiJson('/admin/api/rate-limits', {
             method: 'PUT',
+            headers: this.rlIfMatchHeaders(),
             body: JSON.stringify(this.buildRateLimitsPayload())
           });
           this.toast(body?.message || 'Rate limits saved.');
@@ -2866,6 +2898,15 @@ function adminApp() {
           await this.loadRateLimits(true);
         } catch (e) {
           const status = String(e.title || '') + ' ' + String(e.message || '');
+          if (e.status === 409) {
+            // Somebody else saved first. The draft is deliberately kept: it is the operator's work,
+            // and reloading over it is what the confirm on Reload exists to prevent.
+            this.rateLimitFieldError =
+              'Rate limits were changed by someone else since this page was loaded. '
+              + 'Reload to see the current configuration, then reapply your change.';
+            this.toast('Someone else changed rate limits — reload before saving.');
+            throw e;
+          }
           if (/503/.test(status) || /configured database/i.test(status)) {
             this.rlReadOnlyReason = 'This gateway has no database, so rate limits are read-only here.';
           } else if (/403/.test(status)) {

@@ -46,4 +46,28 @@ public static class GatewayHeaders
     /// the interesting case invisible among the ordinary ones.
     /// </remarks>
     public const string RateLimitAdaptive = "X-33pol-RateLimit-Adaptive";
+
+    /// <summary>
+    /// The IETF <c>RateLimit-*</c> names, written <em>only</em> on a response the gateway refuses
+    /// itself.
+    /// </summary>
+    /// <remarks>
+    /// <para>The vendor prefix above exists because an upstream provider's own budget headers are
+    /// copied onto the response after the limiter has run, so an unprefixed name would be silently
+    /// overwritten by a number about a different limit entirely. That collision cannot happen on a
+    /// refusal: a <c>429</c> the gateway writes never reaches an upstream, so there is nothing to be
+    /// overwritten by — and on exactly the response a client most needs to read, the standard names
+    /// carried nothing.</para>
+    ///
+    /// <para>Both spellings are sent. Generic clients and SDK middleware read these; anything written
+    /// against the gateway keeps reading the prefixed ones, which are still the only ones present on
+    /// an admitted response.</para>
+    /// </remarks>
+    public const string StandardRateLimitLimit = "RateLimit-Limit";
+
+    /// <inheritdoc cref="StandardRateLimitLimit"/>
+    public const string StandardRateLimitRemaining = "RateLimit-Remaining";
+
+    /// <inheritdoc cref="StandardRateLimitLimit"/>
+    public const string StandardRateLimitReset = "RateLimit-Reset";
 }

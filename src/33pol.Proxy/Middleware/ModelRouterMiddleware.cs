@@ -347,7 +347,7 @@ public sealed class ModelRouterMiddleware
                             refusedAt);
                     }
 
-                    RateLimitResponseHeaders.Write(context, streamAcquire);
+                    RateLimitResponseHeaders.Write(context, streamAcquire, refused: true);
                     await RejectAtAdmissionAsync(
                         context,
                         modelConfig.Id,

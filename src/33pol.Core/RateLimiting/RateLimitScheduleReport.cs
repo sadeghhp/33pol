@@ -63,12 +63,27 @@ public sealed record RateLimitScheduleReport(
     IReadOnlyList<ScheduleOccurrence> Occurrences,
     IReadOnlyList<ScheduleTransition> Transitions,
     int TransitionsTotal,
-    bool TransitionsTruncated);
+    bool TransitionsTruncated,
+    int OccurrencesTotal = 0,
+    bool OccurrencesTruncated = false);
 
 /// <summary>Builds <see cref="RateLimitScheduleReport"/> from the stored configuration.</summary>
 public static class RateLimitScheduleReportBuilder
 {
     public const int MaxTransitions = 500;
+
+    /// <summary>
+    /// Ceiling on the calendar spans one report may carry.
+    /// </summary>
+    /// <remarks>
+    /// Transitions were capped from the start and occurrences were not, though they are built in the
+    /// same loop and grow faster: a weekly window yields one occurrence per matching day, so the list
+    /// scales as rules × windows × days. At the configured ceilings — 2,000 rules, 16 windows each,
+    /// and the 62-day range the endpoint allows — that is nearly two million records serialised into
+    /// one response, from a request an operator can repeat. Capped, with the total reported, so a
+    /// console can say the calendar was trimmed rather than quietly drawing a partial one.
+    /// </remarks>
+    public const int MaxOccurrences = 2_000;
 
     public static RateLimitScheduleReport Build(
         IReadOnlyList<RateLimitRuleDefinition> rules,
@@ -132,15 +147,21 @@ public static class RateLimitScheduleReportBuilder
         var limit = Math.Clamp(take, 1, MaxTransitions);
         var truncated = transitions.Count > limit;
 
+        // Both lists are trimmed from the front, so what survives is the soonest of each — the part a
+        // calendar draws first and the part an operator is actually looking for.
+        var occurrencesTruncated = occurrences.Count > MaxOccurrences;
+
         return new RateLimitScheduleReport(
             at,
             from,
             to,
             statuses,
-            occurrences,
+            occurrencesTruncated ? occurrences.Take(MaxOccurrences).ToArray() : occurrences,
             truncated ? transitions.Take(limit).ToArray() : transitions,
             transitions.Count,
-            truncated);
+            truncated,
+            occurrences.Count,
+            occurrencesTruncated);
     }
 
     private static ScheduleWindowStatus DescribeWindow(RateLimitWindowDefinition window, DateTimeOffset at)
@@ -256,6 +277,26 @@ public static class RateLimitWindowPreviewBuilder
         ArgumentNullException.ThrowIfNull(rule);
 
         var windows = rule.Windows;
+
+        // The size gate comes before anything is computed. Every other refusal below still describes
+        // the rule in full — a composer needs to be told *why* its window is invalid and what it
+        // clashes with — but the overlap scan is quadratic in the window count, and the window
+        // ceiling is itself one of the rules validation enforces. So a set past that ceiling is the
+        // one case where continuing would mean running a scan whose size the caller chose, and it is
+        // answered here with the refusal a save would give it and no work at all.
+        if (windows.Count > RateLimitConfigValidation.MaxWindowsPerRule)
+        {
+            return new RateLimitWindowPreview(
+                false,
+                $"A rule may not have more than {RateLimitConfigValidation.MaxWindowsPerRule} windows.",
+                null,
+                null,
+                false,
+                [],
+                [],
+                []);
+        }
+
         var candidate = windows.FirstOrDefault(w =>
             string.Equals(w.Name, candidateName, StringComparison.OrdinalIgnoreCase));
 
@@ -270,12 +311,7 @@ public static class RateLimitWindowPreviewBuilder
             error = validationError;
         }
 
-        var overlaps = RateLimitConfigValidation
-            .FindWindowOverlaps(windows)
-            .Where(pair => Involves(pair, candidateName))
-            .Select(pair => string.Equals(pair.First, candidateName, StringComparison.OrdinalIgnoreCase) ? pair.Second : pair.First)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
+        var overlaps = OverlapsWith(windows, candidateName);
 
         var others = windows.Where(w => !ReferenceEquals(w, candidate)).ToArray();
         var outrankedBy = others.Where(w => w.Rank > candidate.Rank).Select(w => w.Name).ToArray();
@@ -294,6 +330,14 @@ public static class RateLimitWindowPreviewBuilder
             outrankedBy,
             outranks);
     }
+
+    /// <summary>The other windows the named one can be active alongside without a clear winner.</summary>
+    private static string[] OverlapsWith(IReadOnlyList<RateLimitWindowDefinition> windows, string candidateName) =>
+        [.. RateLimitConfigValidation
+            .FindWindowOverlaps(windows)
+            .Where(pair => Involves(pair, candidateName))
+            .Select(pair => string.Equals(pair.First, candidateName, StringComparison.OrdinalIgnoreCase) ? pair.Second : pair.First)
+            .Distinct(StringComparer.OrdinalIgnoreCase)];
 
     private static bool Involves((string First, string Second) pair, string name) =>
         string.Equals(pair.First, name, StringComparison.OrdinalIgnoreCase) ||
