@@ -1,0 +1,21 @@
+{
+  "name": "33pol-admin-perf-harness",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Browser performance harness for the 33pol admin console. Development tooling only — never shipped, never referenced by the gateway.",
+  "scripts": {
+    "measure": "node measure.mjs",
+    "attribute": "node attribute.mjs",
+    "accum": "node accum.mjs",
+    "coverage": "node coverage.mjs",
+    "all": "node measure.mjs && node attribute.mjs && node accum.mjs && node coverage.mjs",
+    "postinstall-browser": "playwright install chromium"
+  },
+  "devDependencies": {
+    "playwright": "1.49.1"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

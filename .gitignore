@@ -3,10 +3,14 @@
 **/obj/**
 TestResults/
 TestResults-*
-# perf run artifacts; keep CI scripts and k6 sources in repo
+# perf run artifacts; keep CI scripts, k6 sources and the frontend harness in repo
 perf/*
 !perf/ci/
 !perf/k6/
+!perf/frontend/
+# ...but never the harness's own install tree or ad-hoc run output.
+perf/frontend/node_modules/
+perf/frontend/results/
 
 # API keys, tokens, and environment secrets
 .env

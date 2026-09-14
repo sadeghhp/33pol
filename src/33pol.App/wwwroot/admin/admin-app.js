@@ -193,7 +193,12 @@ function adminApp() {
     logsLevel: 'all',
     logsSearch: '',
     logsCapacity: 0,
-    logsPageSize: 200,
+    /**
+     * 200 rows put ~5,500 DOM nodes and ~4,000 bindings on the page — each row also carries a hidden
+     * detail row — and none of it is released when you leave the tab. 50 matches what the Errors tab
+     * already pages at, and the search and level filters are the way to reach further back.
+     */
+    logsPageSize: 50,
     logsAutoRefresh: false,
     logsTotal: 0,
     logsLoadError: '',

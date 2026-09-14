@@ -1,0 +1,343 @@
+{
+  "baseUrl": "http://127.0.0.1:5080",
+  "at": "2026-09-13T12:54:43.131Z",
+  "idleWindowMs": 20000,
+  "cold": {
+    "loadMs": 654,
+    "transferredBytes": 668146,
+    "requests": 8,
+    "fromCache": 0,
+    "uncompressed": 8,
+    "resources": [
+      {
+        "url": "/admin/index.html",
+        "status": 200,
+        "bytes": 164694,
+        "encoding": "none",
+        "cacheControl": "no-store, no-cache, must-revalidate"
+      },
+      {
+        "url": "/admin/vendor/fonts.css?v=1",
+        "status": 200,
+        "bytes": 3678,
+        "encoding": "none",
+        "cacheControl": "no-store, no-cache, must-revalidate"
+      },
+      {
+        "url": "/admin/admin.css?v=24",
+        "status": 200,
+        "bytes": 107444,
+        "encoding": "none",
+        "cacheControl": "no-store, no-cache, must-revalidate"
+      },
+      {
+        "url": "/admin/admin-errors.js?v=7",
+        "status": 200,
+        "bytes": 4056,
+        "encoding": "none",
+        "cacheControl": "no-store, no-cache, must-revalidate"
+      },
+      {
+        "url": "/admin/admin-icons.js?v=11",
+        "status": 200,
+        "bytes": 10937,
+        "encoding": "none",
+        "cacheControl": "no-store, no-cache, must-revalidate"
+      },
+      {
+        "url": "/admin/admin-store.js?v=10",
+        "status": 200,
+        "bytes": 9322,
+        "encoding": "none",
+        "cacheControl": "no-store, no-cache, must-revalidate"
+      },
+      {
+        "url": "/admin/vendor/alpine-csp-3.14.9.min.js",
+        "status": 200,
+        "bytes": 45328,
+        "encoding": "none",
+        "cacheControl": "no-store, no-cache, must-revalidate"
+      },
+      {
+        "url": "/admin/admin-app.js?v=37",
+        "status": 200,
+        "bytes": 322687,
+        "encoding": "none",
+        "cacheControl": "no-store, no-cache, must-revalidate"
+      }
+    ]
+  },
+  "navTiming": {
+    "domInteractive": 140,
+    "domContentLoaded": 663,
+    "load": 763
+  },
+  "authGate": {
+    "domNodes": 1755,
+    "boundAttrs": 1102,
+    "byKind": {
+      "x-data": 1,
+      "@on": 189,
+      "x-for": 53,
+      ":bind": 256,
+      "x-show": 193,
+      "x-html": 116,
+      "x-model": 58,
+      "x-text": 208,
+      "x-transition": 12,
+      "x-indeterminate": 1,
+      "x-if": 14,
+      "x-ref": 1
+    },
+    "detailRowsMounted": 0,
+    "solidRoots": 0
+  },
+  "signInToFirstRowMs": 2487,
+  "overview": {
+    "domNodes": 4149,
+    "boundAttrs": 2761,
+    "byKind": {
+      "x-data": 1,
+      "@on": 381,
+      "x-for": 57,
+      ":bind": 749,
+      "x-show": 285,
+      "x-html": 174,
+      "x-model": 58,
+      "x-text": 1028,
+      "x-transition": 12,
+      "x-indeterminate": 1,
+      "x-if": 14,
+      "x-ref": 1
+    },
+    "detailRowsMounted": 25,
+    "solidRoots": 0
+  },
+  "liveMode": "stream",
+  "idleOverview": {
+    "windowMs": 20000,
+    "taskS": 6.138,
+    "cpuPct": 30.7,
+    "scriptS": 4.779,
+    "layoutS": 0.013,
+    "recalcStyleS": 0.388,
+    "layoutCount": 12,
+    "recalcStyleCount": 47,
+    "nodes": 20205,
+    "jsEventListeners": 474,
+    "jsHeapUsedMB": 14.6,
+    "longTasks": {
+      "count": 60,
+      "maxMs": 398,
+      "all": [
+        149,
+        398,
+        80,
+        371,
+        274,
+        92,
+        250,
+        129,
+        78,
+        110,
+        114,
+        74,
+        62,
+        72,
+        69,
+        122,
+        128,
+        328,
+        97,
+        81,
+        89,
+        68,
+        71,
+        65,
+        59,
+        120,
+        153,
+        93,
+        233,
+        123,
+        82,
+        73,
+        75,
+        84,
+        66,
+        106,
+        112,
+        136,
+        77,
+        165,
+        85,
+        99,
+        105,
+        82,
+        81,
+        106,
+        128,
+        122,
+        197,
+        94,
+        194,
+        76,
+        57,
+        92,
+        80,
+        79,
+        140,
+        118,
+        119,
+        80
+      ]
+    }
+  },
+  "tabSwitchMs": {
+    "toLogs": 594,
+    "toKeys": 118,
+    "backToOverview": 980,
+    "toLogsAgain": 363
+  },
+  "logs": {
+    "domNodes": 8475,
+    "boundAttrs": 5954,
+    "byKind": {
+      "x-data": 1,
+      "@on": 896,
+      "x-for": 57,
+      ":bind": 1470,
+      "x-show": 800,
+      "x-html": 380,
+      "x-model": 58,
+      "x-text": 2264,
+      "x-transition": 12,
+      "x-indeterminate": 1,
+      "x-if": 14,
+      "x-ref": 1
+    },
+    "detailRowsMounted": 128,
+    "solidRoots": 0,
+    "rowCount": 103
+  },
+  "idleLogs": {
+    "windowMs": 20000,
+    "taskS": 2.241,
+    "cpuPct": 11.2,
+    "scriptS": 1.987,
+    "layoutS": 0,
+    "recalcStyleS": 0.002,
+    "layoutCount": 0,
+    "recalcStyleCount": 10,
+    "nodes": 38613,
+    "jsEventListeners": 991,
+    "jsHeapUsedMB": 20.7
+  },
+  "warm": {
+    "loadMs": 3145,
+    "transferredBytes": 857166,
+    "requests": 14,
+    "fromCache": 0,
+    "uncompressed": 14,
+    "resources": [
+      {
+        "url": "/admin/index.html",
+        "status": 200,
+        "bytes": 164694,
+        "encoding": "none",
+        "cacheControl": "no-store, no-cache, must-revalidate"
+      },
+      {
+        "url": "/admin/vendor/fonts.css?v=1",
+        "status": 200,
+        "bytes": 3678,
+        "encoding": "none",
+        "cacheControl": "no-store, no-cache, must-revalidate"
+      },
+      {
+        "url": "/admin/admin.css?v=24",
+        "status": 200,
+        "bytes": 107444,
+        "encoding": "none",
+        "cacheControl": "no-store, no-cache, must-revalidate"
+      },
+      {
+        "url": "/admin/admin-store.js?v=10",
+        "status": 200,
+        "bytes": 9322,
+        "encoding": "none",
+        "cacheControl": "no-store, no-cache, must-revalidate"
+      },
+      {
+        "url": "/admin/admin-icons.js?v=11",
+        "status": 200,
+        "bytes": 10937,
+        "encoding": "none",
+        "cacheControl": "no-store, no-cache, must-revalidate"
+      },
+      {
+        "url": "/admin/admin-errors.js?v=7",
+        "status": 200,
+        "bytes": 4056,
+        "encoding": "none",
+        "cacheControl": "no-store, no-cache, must-revalidate"
+      },
+      {
+        "url": "/admin/vendor/alpine-csp-3.14.9.min.js",
+        "status": 200,
+        "bytes": 45328,
+        "encoding": "none",
+        "cacheControl": "no-store, no-cache, must-revalidate"
+      },
+      {
+        "url": "/admin/admin-app.js?v=37",
+        "status": 200,
+        "bytes": 322687,
+        "encoding": "none",
+        "cacheControl": "no-store, no-cache, must-revalidate"
+      },
+      {
+        "url": "/admin/vendor/fonts/IBMPlexSans-400.woff2",
+        "status": 200,
+        "bytes": 45712,
+        "encoding": "none",
+        "cacheControl": "no-store, no-cache, must-revalidate"
+      },
+      {
+        "url": "/admin/vendor/fonts/SpaceGrotesk-700.woff2",
+        "status": 200,
+        "bytes": 22288,
+        "encoding": "none",
+        "cacheControl": "no-store, no-cache, must-revalidate"
+      },
+      {
+        "url": "/admin/vendor/fonts/IBMPlexMono-400.woff2",
+        "status": 200,
+        "bytes": 14708,
+        "encoding": "none",
+        "cacheControl": "no-store, no-cache, must-revalidate"
+      },
+      {
+        "url": "/admin/vendor/fonts/IBMPlexSans-600.woff2",
+        "status": 200,
+        "bytes": 45712,
+        "encoding": "none",
+        "cacheControl": "no-store, no-cache, must-revalidate"
+      },
+      {
+        "url": "/admin/vendor/fonts/IBMPlexSans-500.woff2",
+        "status": 200,
+        "bytes": 45712,
+        "encoding": "none",
+        "cacheControl": "no-store, no-cache, must-revalidate"
+      },
+      {
+        "url": "/admin/vendor/fonts/IBMPlexMono-500.woff2",
+        "status": 200,
+        "bytes": 14888,
+        "encoding": "none",
+        "cacheControl": "no-store, no-cache, must-revalidate"
+      }
+    ]
+  }
+}

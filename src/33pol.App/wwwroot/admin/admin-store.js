@@ -1,4 +1,15 @@
 document.addEventListener('alpine:init', () => {
+  /**
+   * Retry pacing. Only statuses that mean "not now, try again" are retried, and only on requests
+   * that already carry a retry budget (GET). Everything else still surfaces on the first response,
+   * exactly as before.
+   */
+  const RETRYABLE_STATUS = new Set([429, 503]);
+  const RETRY_BASE_MS = 250;
+  const RETRY_JITTER = 0.25;
+  /** Never park a caller longer than the 2s poll's own cadence. */
+  const RETRY_MAX_WAIT_MS = 2000;
+
   const emptyLoading = () => ({
     overview: false,
     usage: false,
@@ -116,6 +127,31 @@ document.addEventListener('alpine:init', () => {
       throw e;
     },
 
+    _sleep(ms) {
+      return ms > 0 ? new Promise(resolve => setTimeout(resolve, ms)) : Promise.resolve();
+    },
+
+    /**
+     * How long to wait before the next attempt.
+     *
+     * A server that states Retry-After is answered on its own terms, capped: the 2s poll calls
+     * through here, and parking a tick for the 60s a rate limiter might ask for would freeze the
+     * live vitals for half a minute and stack up timers behind it. Without that header the wait is
+     * exponential from 250ms with +/-25% jitter — the jitter matters because several panels refresh
+     * on the same tick, and a fixed backoff would have them all retry in lockstep.
+     */
+    retryDelayMs(attempt, response) {
+      const header = response?.headers?.get?.('Retry-After');
+      if (header) {
+        const seconds = Number(header);
+        const ms = Number.isFinite(seconds) ? seconds * 1000 : Date.parse(header) - Date.now();
+        if (Number.isFinite(ms) && ms >= 0) return Math.min(ms, RETRY_MAX_WAIT_MS);
+      }
+      const base = RETRY_BASE_MS * Math.pow(2, attempt);
+      const jitter = base * RETRY_JITTER * (Math.random() * 2 - 1);
+      return Math.max(0, Math.round(Math.min(base + jitter, RETRY_MAX_WAIT_MS)));
+    },
+
     async fetchWithRetry(url, options, editModelUrl, retries, readBodyAsText) {
       const max = retries ?? 1;
       const asText = readBodyAsText !== false;
@@ -124,6 +160,14 @@ document.addEventListener('alpine:init', () => {
         try {
           const res = await fetch(url, options);
           if (!res.ok) {
+            // Retried only while a budget remains, which apiFetch grants to GET and never to a
+            // mutation — so a POST that may already have been applied is still never replayed.
+            // Checked ahead of classifyAndThrow so a transient 503 cannot touch connection state or
+            // raise a banner for a request that is about to succeed.
+            if (i < max && RETRYABLE_STATUS.has(res.status)) {
+              await this._sleep(this.retryDelayMs(i, res));
+              continue;
+            }
             const text = asText ? await res.text() : '';
             this.classifyAndThrow(res.status, res.statusText, text, editModelUrl);
           }
@@ -138,6 +182,9 @@ document.addEventListener('alpine:init', () => {
           if (i === max) {
             this.classifyAndThrow(0, 'Failed to fetch', String(e), editModelUrl);
           }
+          // The retry used to be immediate, which meant a gateway still coming up was hit twice
+          // inside a millisecond and reported as down.
+          await this._sleep(this.retryDelayMs(i));
         }
       }
       throw lastErr;

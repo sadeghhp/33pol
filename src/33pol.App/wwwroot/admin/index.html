@@ -16,6 +16,13 @@
        script-src 'self' (AdminSecurityHeaders.cs) — the stock build needs 'unsafe-eval'. The cost
        is that no expression below may contain an operator, a ternary or a call with arguments:
        every value comes from a getter, a zero-argument method, or a {get,set} pair on adminApp. -->
+  <!-- The body faces are only discoverable after fonts.css has been fetched and parsed, so without
+       these the console paints in a fallback face and reflows once the real one lands. Only the two
+       weights that carry body copy are preloaded: preloading a face the first screen does not use
+       costs bandwidth ahead of the assets that do. The remaining faces keep arriving on demand via
+       font-display: swap. -->
+  <link rel="preload" as="font" type="font/woff2" href="vendor/fonts/IBMPlexSans-400.woff2" crossorigin />
+  <link rel="preload" as="font" type="font/woff2" href="vendor/fonts/IBMPlexSans-500.woff2" crossorigin />
   <link rel="stylesheet" href="vendor/fonts.css?v=1" />
   <link rel="stylesheet" href="admin.css?v=24" />
   <script defer src="admin-icons.js?v=11"></script>

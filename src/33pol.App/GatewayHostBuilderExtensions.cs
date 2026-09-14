@@ -1,4 +1,6 @@
 using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.AspNetCore.ResponseCompression;
+using Microsoft.AspNetCore.StaticFiles;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.Extensions.Options;
 using OpenTelemetry.Metrics;
@@ -47,6 +49,46 @@ public static class GatewayHostBuilderExtensions
                     resilience.MinRequestBodyBytesPerSecond,
                     TimeSpan.FromSeconds(Math.Max(1, resilience.MinRequestBodyDataRateGraceSeconds)))
                 : null;
+        });
+
+        builder.Services.AddResponseCompression(options =>
+        {
+            // Every admin asset was previously served uncompressed: a cold console cost ~650 KB and a
+            // reload ~857 KB, almost all of it text. Brotli is listed first so a modern browser gets
+            // it and gzip only covers the stragglers.
+            options.Providers.Add<BrotliCompressionProvider>();
+            options.Providers.Add<GzipCompressionProvider>();
+
+            // On by default this is off, because compressing a secret-bearing response whose content
+            // an attacker can partly control is the BREACH precondition. It does not apply here: the
+            // admin API authenticates with an X-API-Key header rather than an ambient cookie, so a
+            // cross-origin page cannot make the browser issue an authenticated request in the first
+            // place, and `connect-src 'self'` plus `frame-ancestors 'none'` (AdminSecurityHeaders)
+            // close the paths that would let one observe the sizes.
+            options.EnableForHttps = true;
+
+            // An explicit list rather than ResponseCompressionDefaults: the defaults omit
+            // text/javascript and image/svg+xml, and leaving the set implicit is how a streaming
+            // content type quietly acquires a compressor in a future framework version.
+            options.MimeTypes =
+            [
+                "text/html",
+                "text/css",
+                "text/javascript",
+                "application/javascript",
+                "application/json",
+                "image/svg+xml",
+            ];
+
+            // Load-bearing, and the one way this change could break production. Compressing the
+            // admin live feed would hold frames in the compressor's buffer instead of flushing them,
+            // so the Overview's push stream would stall and fall back to 2 s polling — or appear to
+            // work and then go silent. text/event-stream is absent from MimeTypes above, so this is
+            // belt and braces; it is stated explicitly because it must survive anyone editing that
+            // list. Guarded by AdminAssetCachingTests.LiveStream_IsNotCompressed.
+            // woff2 is deliberately absent too: it is already compressed, so a second pass costs CPU
+            // and returns nothing.
+            options.ExcludedMimeTypes = ["text/event-stream"];
         });
 
         return builder;
@@ -116,6 +158,11 @@ public static class GatewayHostBuilderExtensions
         app.MapAdminOverviewEndpoints();
         app.MapMaintenanceAdminEndpoints();
         app.MapModelsEndpoints();
+        // Ahead of the static-file handler so the assets it serves are compressed. Placement relative
+        // to the endpoint middleware is not a choice: WebApplication runs the terminal endpoint
+        // middleware after all of this, so the compressor wraps the admin API too — which is exactly
+        // why text/event-stream is excluded where it is registered.
+        app.UseResponseCompression();
         app.UseDefaultFiles();
         app.UseStaticFiles(new StaticFileOptions
         {
@@ -123,8 +170,10 @@ public static class GatewayHostBuilderExtensions
             {
                 if (ctx.Context.Request.Path.StartsWithSegments("/admin", StringComparison.OrdinalIgnoreCase))
                 {
-                    ctx.Context.Response.Headers.CacheControl = "no-store, no-cache, must-revalidate";
-                    ctx.Context.Response.Headers.Pragma = "no-cache";
+                    ApplyAdminCachePolicy(ctx);
+                    // Outside the cache decision on purpose: every branch is still the admin console,
+                    // and a header set for one kind of asset but not another is how a surface loses
+                    // its CSP without anyone noticing.
                     AdminSecurityHeaders.Apply(ctx.Context.Response.Headers);
                 }
             }
@@ -141,6 +190,41 @@ public static class GatewayHostBuilderExtensions
         }
 
         return app;
+    }
+
+    /// <summary>
+    /// Cache policy for <c>/admin</c> static assets.
+    /// </summary>
+    /// <remarks>
+    /// One policy for the whole surface used to mean <c>no-store</c> on everything, so a reload
+    /// re-fetched ~857 KB — including 279 KB of fonts that have never changed — with not one cache
+    /// hit. The split is by how an asset is versioned, not by what it is:
+    /// <list type="bullet">
+    /// <item><description><c>/admin/vendor/**</c> carries its version in the filename
+    /// (<c>alpine-csp-3.14.9.min.js</c>) or is immutable by nature (a woff2 face), so a new build is
+    /// always a new URL and it can be cached for a year.</description></item>
+    /// <item><description>Everything else — <c>index.html</c> and the hand-versioned
+    /// <c>?v=N</c> assets — stays <c>no-store</c>. A query string is not part of the identity for
+    /// every intermediary, so caching those immutably would strand operators on a stale console.
+    /// Content-hashed filenames move them to the immutable branch once the frontend build lands;
+    /// until then the conservative branch is the correct one.</description></item>
+    /// </list>
+    /// </remarks>
+    private static void ApplyAdminCachePolicy(StaticFileResponseContext ctx)
+    {
+        var headers = ctx.Context.Response.Headers;
+
+        if (ctx.Context.Request.Path.StartsWithSegments("/admin/vendor", StringComparison.OrdinalIgnoreCase))
+        {
+            headers.CacheControl = "public, max-age=31536000, immutable";
+            // The old policy set Pragma on every admin response; leaving it on an immutable asset
+            // would contradict Cache-Control for HTTP/1.0 intermediaries.
+            headers.Remove("Pragma");
+            return;
+        }
+
+        headers.CacheControl = "no-store, no-cache, must-revalidate";
+        headers.Pragma = "no-cache";
     }
 
     /// <summary>
