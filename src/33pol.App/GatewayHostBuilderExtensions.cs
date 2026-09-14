@@ -206,25 +206,17 @@ public static class GatewayHostBuilderExtensions
     /// Cache policy for <c>/admin</c> static assets.
     /// </summary>
     /// <remarks>
-    /// One policy for the whole surface used to mean <c>no-store</c> on everything, so a reload
-    /// re-fetched ~857 KB — including 279 KB of fonts that have never changed — with not one cache
-    /// hit. The split is by how an asset is versioned, not by what it is:
-    /// <list type="bullet">
-    /// <item><description><c>/admin/vendor/**</c> carries its version in the filename
-    /// (<c>alpine-csp-3.14.9.min.js</c>) or is immutable by nature (a woff2 face), so a new build is
-    /// always a new URL and it can be cached for a year.</description></item>
-    /// <item><description>Everything else — <c>index.html</c> and the hand-versioned
-    /// <c>?v=N</c> assets — stays <c>no-store</c>. A query string is not part of the identity for
-    /// every intermediary, so caching those immutably would strand operators on a stale console.
-    /// Content-hashed filenames move them to the immutable branch once the frontend build lands;
-    /// until then the conservative branch is the correct one.</description></item>
-    /// </list>
+    /// One policy for the whole surface used to mean <c>no-store</c> on everything, so every visit
+    /// re-fetched ~925 KB — including 273 KB of fonts that have never changed — with not one cache
+    /// hit. The split is by whether the asset's <em>URL path</em> identifies its content, which is
+    /// the only thing that makes a year-long <c>immutable</c> safe. See
+    /// <see cref="IsImmutablyAddressed"/>; everything else stays <c>no-store</c>.
     /// </remarks>
     private static void ApplyAdminCachePolicy(StaticFileResponseContext ctx)
     {
         var headers = ctx.Context.Response.Headers;
 
-        if (ctx.Context.Request.Path.StartsWithSegments("/admin/vendor", StringComparison.OrdinalIgnoreCase))
+        if (IsImmutablyAddressed(ctx.Context.Request.Path))
         {
             headers.CacheControl = "public, max-age=31536000, immutable";
             // The old policy set Pragma on every admin response; leaving it on an immutable asset
@@ -235,6 +227,72 @@ public static class GatewayHostBuilderExtensions
 
         headers.CacheControl = "no-store, no-cache, must-revalidate";
         headers.Pragma = "no-cache";
+    }
+
+    /// <summary>
+    /// True when the request path alone identifies the bytes, so the same URL can never come to
+    /// mean something else and a year is safe.
+    /// </summary>
+    /// <remarks>
+    /// Two forms qualify today:
+    /// <list type="bullet">
+    /// <item><description>A binary font face under <c>/admin/vendor/fonts/</c>. These are vendored
+    /// artefacts, not source: a different face is a different file. (If one is ever re-subsetted,
+    /// add it under a new name rather than editing it in place.)</description></item>
+    /// <item><description>A version in the file name — <c>alpine-csp-3.14.9.min.js</c> — so an
+    /// upgrade is necessarily a new URL. Content-hashed names (<c>app-a1b2c3d4.js</c>) join this
+    /// clause once the frontend build lands.</description></item>
+    /// </list>
+    /// Directory is deliberately <em>not</em> the test. <c>vendor/fonts.css</c> lives beside the
+    /// faces but is hand-maintained source versioned only by <c>?v=1</c>, exactly like
+    /// <c>admin.css?v=24</c>; a query string is not part of the cache identity for every
+    /// intermediary, so anything versioned that way must stay <c>no-store</c> or an edit strands
+    /// operators on a stale console for a year.
+    /// </remarks>
+    private static bool IsImmutablyAddressed(PathString path)
+    {
+        var value = path.Value;
+        if (string.IsNullOrEmpty(value))
+        {
+            return false;
+        }
+
+        if (path.StartsWithSegments("/admin/vendor/fonts", StringComparison.OrdinalIgnoreCase)
+            && value.EndsWith(".woff2", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return HasVersionInFileName(value.AsSpan(value.LastIndexOf('/') + 1));
+    }
+
+    /// <summary>
+    /// Looks for a numeric version segment in a file name: a run of digits introduced by <c>-</c> or
+    /// <c>.</c> and closed by <c>.</c>, which matches the <c>3</c>, <c>14</c> and <c>9</c> of
+    /// <c>alpine-csp-3.14.9.min.js</c> while rejecting <c>admin-app.js</c> and <c>fonts.css</c>.
+    /// </summary>
+    private static bool HasVersionInFileName(ReadOnlySpan<char> fileName)
+    {
+        for (var i = 1; i < fileName.Length; i++)
+        {
+            if (fileName[i - 1] is not ('-' or '.'))
+            {
+                continue;
+            }
+
+            var end = i;
+            while (end < fileName.Length && char.IsAsciiDigit(fileName[end]))
+            {
+                end++;
+            }
+
+            if (end > i && end < fileName.Length && fileName[end] == '.')
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>

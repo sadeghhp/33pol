@@ -95,6 +95,27 @@ public sealed class AdminAssetCachingTests
         response.Headers.Pragma.Should().BeEmpty();
     }
 
+    /// <summary>
+    /// <c>vendor/fonts.css</c> is the trap in the rule above: it sits beside the immutable faces but
+    /// is hand-maintained source versioned only by <c>?v=1</c>. Caching it for a year on the
+    /// strength of its directory would strand every operator whose browser had seen it the moment a
+    /// face was added, and the edit that caused it would look harmless.
+    /// </summary>
+    [Fact]
+    public async Task HandVersionedVendorCss_IsNotImmutablyCached()
+    {
+        using var factory = GatewayWebApplicationFactory.Create();
+        using var client = factory.CreateClient();
+
+        var response = await GetAsync(client, "/admin/vendor/fonts.css?v=1");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var cacheControl = response.Headers.CacheControl!.ToString();
+        cacheControl.Should().Contain(
+            "no-store", "fonts.css is source, versioned by query string like every other ?v=N asset");
+        cacheControl.Should().NotContain("immutable");
+    }
+
     [Theory]
     [InlineData("/admin/admin.css?v=24")]
     [InlineData("/admin/admin-app.js?v=37")]
