@@ -9,8 +9,8 @@ namespace Pol33.Integration.Tests.Admin;
 /// compressed.
 /// </summary>
 /// <remarks>
-/// The console used to serve every asset <c>no-store</c> and uncompressed, so a reload re-fetched
-/// roughly 857 KB — 279 KB of it fonts that have never changed — without a single cache hit. These
+/// The console used to serve every asset <c>no-store</c> and uncompressed, so every visit re-fetched
+/// roughly 925 KB — 273 KB of it fonts that have never changed — without a single cache hit. These
 /// tests pin the two halves of the fix and, more importantly, the edges it must not cross: the
 /// bootstrap document must stay uncacheable, the live stream must stay uncompressed, and the
 /// security headers must survive on every branch.
@@ -167,6 +167,33 @@ public sealed class AdminAssetCachingTests
         read.Should().BeGreaterThan(0, "the live stream must deliver bytes, not buffer them");
         new string(buffer, 0, read).Should().StartWith(
             "event: update", "the first frame is the current summary");
+    }
+
+    /// <summary>
+    /// Compression is scoped to <c>/admin</c>, and the scope is the point.
+    /// </summary>
+    /// <remarks>
+    /// The compressor has to sit ahead of the static-file handler to reach the console's assets, and
+    /// WebApplication runs the terminal endpoint middleware after everything registered there — so
+    /// registering it unscoped silently puts a compressor on the inference data path too. That is
+    /// CPU spent per response on a proxy whose overhead is a measured design constraint, for nothing:
+    /// an upstream that already compressed is passed through untouched, and a streamed token chunk
+    /// is far too small to compress. This test is the boundary; <c>/</c> is an unauthenticated JSON
+    /// endpoint outside <c>/admin</c> that the unscoped registration did compress.
+    /// </remarks>
+    [Fact]
+    public async Task NonAdminResponses_AreNotCompressed()
+    {
+        using var factory = GatewayWebApplicationFactory.Create();
+        using var client = factory.CreateClient();
+
+        var response = await GetAsync(client, "/", "br");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        response.Content.Headers.ContentType!.MediaType.Should().Be("application/json");
+        response.Content.Headers.ContentEncoding.Should().BeEmpty(
+            "response compression is an /admin asset-delivery measure and must not reach the gateway's "
+            + "own data path");
     }
 
     /// <summary>

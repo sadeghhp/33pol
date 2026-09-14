@@ -53,9 +53,10 @@ public static class GatewayHostBuilderExtensions
 
         builder.Services.AddResponseCompression(options =>
         {
-            // Every admin asset was previously served uncompressed: a cold console cost ~650 KB and a
-            // reload ~857 KB, almost all of it text. Brotli is listed first so a modern browser gets
-            // it and gzip only covers the stragglers.
+            // Every admin asset was previously served uncompressed: a signed-in visit cost ~925 KB,
+            // some 650 KB of it text that had never been encoded at all (measured — see
+            // perf/frontend/baseline/2026-09-14-afeb6e0-pre-m1-cache.json). Brotli is listed first so
+            // a modern browser gets it and gzip only covers the stragglers.
             options.Providers.Add<BrotliCompressionProvider>();
             options.Providers.Add<GzipCompressionProvider>();
 
@@ -158,11 +159,20 @@ public static class GatewayHostBuilderExtensions
         app.MapAdminOverviewEndpoints();
         app.MapMaintenanceAdminEndpoints();
         app.MapModelsEndpoints();
-        // Ahead of the static-file handler so the assets it serves are compressed. Placement relative
-        // to the endpoint middleware is not a choice: WebApplication runs the terminal endpoint
-        // middleware after all of this, so the compressor wraps the admin API too — which is exactly
-        // why text/event-stream is excluded where it is registered.
-        app.UseResponseCompression();
+        // Ahead of the static-file handler so the console's assets are compressed, and scoped to
+        // /admin rather than global. The scope is the load-bearing part: WebApplication runs the
+        // terminal endpoint middleware after everything registered here, so an unscoped
+        // UseResponseCompression would also wrap the inference data path — spending CPU on a proxy
+        // whose overhead is a measured design constraint (perf/k6/scripts/overhead-compare.js) for
+        // no gain. An upstream that compresses is already passed through untouched, and a streamed
+        // token chunk is far too small to compress, so per-chunk framing would be the only result.
+        // UseWhen branches and rejoins, so /admin still reaches the same static-file and endpoint
+        // middleware below; everything else reaches them without a compressor in the way.
+        // Within the branch the compressor still wraps the admin API as well as the assets — which
+        // is exactly why text/event-stream is excluded where it is registered.
+        app.UseWhen(
+            context => context.Request.Path.StartsWithSegments("/admin", StringComparison.OrdinalIgnoreCase),
+            admin => admin.UseResponseCompression());
         app.UseDefaultFiles();
         app.UseStaticFiles(new StaticFileOptions
         {
