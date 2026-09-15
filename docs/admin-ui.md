@@ -212,7 +212,7 @@ GET requests retry once on network failure. Usage export uses `downloadBlob` wit
 **API key metadata:** Create or **Edit** keys with **Label**, **Assignee**, **Cost center**, and **Description**. Assignee is for ownership display; cost center is independent and drives FinOps rollups when set (overrides tenant default on inference). List with `GET /admin/api/keys?includeUsageSummary=true` for month-to-date cost/request counts and **Last used**.
 
 **Usage filters:** Usage tab supports **Cost center** and **API key** filters on rollups (cost center) and billing events (both). Use **Usage** on a key row to jump here filtered to that key.
-| Settings | `GET /admin/api/config/status`, `POST /admin/api/config/reload`, `GET/PUT /admin/api/rate-limits`, `GET /admin/api/rate-limits/schedule`, `POST /admin/api/rate-limits/windows/preview`, `GET /admin/api/rate-limits/usage` |
+| Settings | `GET /admin/api/config/status`, `POST /admin/api/config/reload`, `GET/PUT /admin/api/rate-limits`, `GET /admin/api/rate-limits/schedule`, `POST /admin/api/rate-limits/schedule/preview`, `POST /admin/api/rate-limits/windows/preview`, `GET /admin/api/rate-limits/usage` |
 
 **Errors query parameters** (shared by groups, occurrences and export): `from`, `to` (ISO-8601),
 `level`, `modelId`, `status`, `code`, `tenantId`, `requestId`, `fingerprint`, `search`,
@@ -352,6 +352,34 @@ When the gateway runs in Docker, upstream URLs must use `http://host.docker.inte
       button stays disabled until the key's prefix is typed exactly; after deleting, the row is gone
       and the toast reads "Its history is kept"
 - [ ] **Settings:** config status; reload with confirm
+- [ ] **Rate limits:** **New rule** → *Failed sign-ins* seeds 20/10 and *Anonymous callers* 30/10/2,
+      not the generic 600/60; *Whole gateway* leaves RPM blank and **Create rule** refuses until it
+      is named
+- [ ] **Rate limits:** type over the seeded numbers, then step **Back** and pick another scope →
+      your numbers survive; pick another scope without typing → the seed follows the scope
+- [ ] **Rate limits:** step 3 states what the scope enforces today, and warns (without blocking)
+      when the number entered is no tighter than that
+- [ ] **Rate limits:** RPM above 1,000,000 or Streams above 10,000 is refused by the drawer that
+      owns the field, before Save
+- [ ] **Rate limits:** toggling **Enforce rate limits** off asks first, naming the rule and window
+      counts; Cancel *and* Escape both put the switch back
+- [ ] **Rate limits:** a save the server refuses offers a link back to the rule, plan or default
+      tier the message names
+- [ ] **Rate limits:** the status card states that an exceeded limit returns `429` with
+      `Retry-After` and that nothing is queued
+- [ ] **Rate limits:** window form → tick **Pause this rule instead** → the tier heading disappears
+      with its inputs, not just the inputs
+- [ ] **Rate limits:** add a window to a rule but do not save → the **Calendar** heading shows a
+      **draft** tag, its subtitle says it is drawn from the unsaved draft, and the new window is on
+      the timeline; **Discard** puts both back to the saved configuration
+- [ ] **Rate limits:** with a draft staged, **Preview at** answers for the draft too — it and the
+      calendar never describe different configurations
+- [ ] **Rate limits:** open a rule with a staged change → the drawer's week strip reads
+      **as drafted**, and **as saved** once there is no draft
+- [ ] **Rate limits (keyboard):** in **New rule**, Tab reaches the scope group once, then the arrow
+      keys move and select between the eight cards
+- [ ] **Rate limits (screen reader):** the scope filter chips, the **Every week / One time** toggle
+      and the weekday picker each report their pressed state
 - [ ] **Logs:** typing in search neither flashes the skeleton nor raises the global banner; the
       truncation hint reads "Showing N of M matching entries"; Request ID is populated
 - [ ] **Errors:** repeated failures collapse into one row with an occurrence count and first/last seen

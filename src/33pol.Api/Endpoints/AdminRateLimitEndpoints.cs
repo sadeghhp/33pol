@@ -22,6 +22,7 @@ public static class AdminRateLimitEndpoints
         group.MapPut("/", PutAsync);
         group.MapGet("/usage", GetUsageAsync);
         group.MapGet("/schedule", GetSchedule);
+        group.MapPost("/schedule/preview", PreviewSchedule);
         group.MapPost("/windows/preview", PreviewWindow);
 
         return endpoints;
@@ -49,28 +50,56 @@ public static class AdminRateLimitEndpoints
     {
         var now = (timeProvider ?? TimeProvider.System).GetUtcNow();
 
-        var reference = at ?? now;
-        if (!string.IsNullOrWhiteSpace(atLocal))
+        if (!TryResolveScheduleWindow(now, at, atLocal, timeZone, from, to, out var window, out var error))
         {
-            if (!TryResolveLocal(atLocal, timeZone, out reference, out var error))
-            {
-                return Results.BadRequest(new { message = error });
-            }
+            return Results.BadRequest(new { message = error });
+        }
+
+        return Results.Json(service.GetSchedule(window.At, window.From, window.To, take ?? 50));
+    }
+
+    /// <summary>
+    /// The instant and range a schedule report is built over, resolved from the parameters both the
+    /// stored and the preview route accept. Shared so the two cannot drift into disagreeing about
+    /// what a valid range is — the preview exists to answer the same question about a different
+    /// rule set, and would be worth little if it also answered over a different window.
+    /// </summary>
+    private static bool TryResolveScheduleWindow(
+        DateTimeOffset now,
+        DateTimeOffset? at,
+        string? atLocal,
+        string? timeZone,
+        DateTimeOffset? from,
+        DateTimeOffset? to,
+        out (DateTimeOffset At, DateTimeOffset From, DateTimeOffset To) window,
+        out string? error)
+    {
+        window = default;
+        error = null;
+
+        var reference = at ?? now;
+        if (!string.IsNullOrWhiteSpace(atLocal) &&
+            !TryResolveLocal(atLocal, timeZone, out reference, out error))
+        {
+            return false;
         }
 
         var rangeFrom = from ?? now;
         var rangeTo = to ?? rangeFrom.AddDays(7);
         if (rangeTo <= rangeFrom)
         {
-            return Results.BadRequest(new { message = "to must be after from." });
+            error = "to must be after from.";
+            return false;
         }
 
         if (rangeTo - rangeFrom > TimeSpan.FromDays(62))
         {
-            return Results.BadRequest(new { message = "The calendar range may not exceed 62 days." });
+            error = "The calendar range may not exceed 62 days.";
+            return false;
         }
 
-        return Results.Json(service.GetSchedule(reference, rangeFrom, rangeTo, take ?? 50));
+        window = (reference, rangeFrom, rangeTo);
+        return true;
     }
 
     /// <summary>A wall-clock time in a zone (<c>yyyy-MM-ddTHH:mm</c>) as an instant.</summary>
@@ -103,6 +132,61 @@ public static class AdminRateLimitEndpoints
 
         instant = new DateTimeOffset(unspecified, zone.GetUtcOffset(unspecified)).ToUniversalTime();
         return true;
+    }
+
+    /// <summary>
+    /// The schedule report for a rule set the caller has staged but not saved. Pure computation over
+    /// the submitted rules; nothing is persisted and the stored configuration is not read.
+    /// </summary>
+    /// <remarks>
+    /// The rules are held to exactly what a save would hold them to, and a set that would be refused
+    /// is refused here with the same message. That is the point rather than a side effect: an
+    /// operator learns their draft is invalid while the drawer that owns the mistake is still open,
+    /// instead of at the save that closed it.
+    /// </remarks>
+    private static IResult PreviewSchedule(
+        IRateLimitConfigAdminService service,
+        TimeProvider? timeProvider,
+        [FromBody] AdminRateLimitSchedulePreviewDto? request)
+    {
+        if (request is null)
+        {
+            return Results.BadRequest(new { message = "Request body is required." });
+        }
+
+        var submitted = request.Rules ?? [];
+
+        // TryValidateRules below enforces this too; checking first only avoids materialising a set
+        // that is already too large to accept. Same wording deliberately, so the preview and the
+        // save cannot describe one refusal two ways.
+        if (submitted.Count > RateLimitConfigValidation.MaxRules)
+        {
+            return Results.BadRequest(new
+            {
+                message = $"rules may not exceed {RateLimitConfigValidation.MaxRules} entries.",
+            });
+        }
+
+        var rules = submitted
+            .Where(static r => r is not null)
+            .Select(static r => r.ToDefinition())
+            .ToArray();
+
+        if (!RateLimitConfigValidation.TryValidateRules(rules, out var ruleError))
+        {
+            return Results.BadRequest(new { message = ruleError });
+        }
+
+        var now = (timeProvider ?? TimeProvider.System).GetUtcNow();
+        if (!TryResolveScheduleWindow(
+                now, request.At, request.AtLocal, request.TimeZone, request.From, request.To,
+                out var window,
+                out var error))
+        {
+            return Results.BadRequest(new { message = error });
+        }
+
+        return Results.Json(service.GetSchedule(rules, window.At, window.From, window.To, request.Take ?? 50));
     }
 
     /// <summary>

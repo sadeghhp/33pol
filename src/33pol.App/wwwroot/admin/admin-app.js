@@ -285,7 +285,9 @@ function adminApp() {
     rlWindowPreview: null,
     rlWindowError: '',
     rlNewRuleOpen: false,
-    rlNewRule: { step: 1, scope: 'model', subject: '', model: '', target: '', rpm: 600, burst: 60, maxConcurrentStreams: 0 },
+    // Seeded per scope by rlSeedNewRuleTier(); `touched` records that the operator typed over the
+    // seed, so changing scope afterwards does not overwrite their numbers.
+    rlNewRule: { step: 1, scope: 'model', subject: '', model: '', target: '', rpm: 0, burst: 0, maxConcurrentStreams: 0, touched: false },
     rlNewRuleError: '',
     corsOrigins: null,
     corsFieldError: '',
@@ -2266,8 +2268,16 @@ function adminApp() {
       });
     },
 
-    cancelConfirm() {
+    /**
+     * Dismissing the dialog. `onCancel` exists for the case where the control that raised it has
+     * already moved — a switch that flips before it asks — and must be put back; a dialog that only
+     * gates an action leaves it out. Runs on Escape and on backdrop dismissal too, both of which
+     * land here, so there is no path that abandons the change half-applied.
+     */
+    async cancelConfirm() {
+      const d = this.confirmDialog;
       this.confirmDialog = null;
+      if (d?.onCancel) await d.onCancel();
       const el = this._confirmReturnFocus;
       this._confirmReturnFocus = null;
       if (el && el.focus) el.focus();
@@ -2785,7 +2795,33 @@ function adminApp() {
       this.rlDraft = this.rlClone(this.rateLimits);
       this.rateLimitFieldError = '';
       this.closeRateLimitDrawers();
+      this.queueRateLimitScheduleRefresh();
       this.toast('Changes discarded.');
+    },
+
+    /**
+     * The master switch, with a confirmation on the way down only. Turning enforcement off stages
+     * like any other edit and reads in the save bar as one change among several, which understates
+     * it: every rule and every window stops applying at once. The switch moves first so the control
+     * never lies about its own state, and a cancel puts it back.
+     */
+    setRateLimitEnforcement(value) {
+      if (!this.rlDraft) return;
+      this.rlDraft.enabled = value;
+      if (value) return;
+
+      const rules = (this.rlDraft.rules || []).length;
+      const windows = (this.rlDraft.rules || []).reduce((n, r) => n + (r.schedule || []).length, 0);
+      this.openConfirm({
+        title: 'Stop enforcing rate limits?',
+        message: this.formatNum(rules) + ' rule' + (rules === 1 ? '' : 's') + ' and '
+          + this.formatNum(windows) + ' schedule window' + (windows === 1 ? '' : 's')
+          + ' stop applying to every caller once you save. Quotas and budgets still apply, and nothing is deleted.',
+        confirmLabel: 'Stop enforcing',
+        danger: true,
+        onConfirm: () => {},
+        onCancel: () => { if (this.rlDraft) this.rlDraft.enabled = true; }
+      });
     },
 
     closeRateLimitDrawers() {
@@ -2801,6 +2837,30 @@ function adminApp() {
         burst: Number(t?.burst) || 0,
         maxConcurrentStreams: Number(t?.maxConcurrentStreams) || 0
       };
+    },
+
+    /**
+     * The server's numeric bounds, mirrored so an out-of-range number is caught in the drawer that
+     * owns it rather than at Save, by which point the drawer has closed and the message speaks in
+     * the API's words rather than the field's. Kept in step with RateLimitConfigValidation (MinRpm,
+     * MaxRpm, MinBurst, MaxBurst, MaxMaxConcurrentStreams); the server remains the authority, this
+     * only moves the message closer to the mistake.
+     *
+     * `floorRpm` is true for a tier, which has no "does not limit the rate" reading: a plan or the
+     * default must name a rate. A scoped rule may leave rpm at zero to cap only concurrency.
+     */
+    rlTierBoundsError(tier, floorRpm) {
+      const minRpm = floorRpm ? 1 : 0;
+      if (!Number.isInteger(tier.rpm) || tier.rpm < minRpm || tier.rpm > 1000000) {
+        return 'RPM must be a whole number between ' + minRpm + ' and 1,000,000.';
+      }
+      if (!Number.isInteger(tier.burst) || tier.burst < 0 || tier.burst > 1000000) {
+        return 'Burst must be a whole number between 0 and 1,000,000.';
+      }
+      if (!Number.isInteger(tier.maxConcurrentStreams) || tier.maxConcurrentStreams < 0 || tier.maxConcurrentStreams > 10000) {
+        return 'Streams must be a whole number between 0 and 10,000.';
+      }
+      return '';
     },
 
     rlWindowPayload(w) {
@@ -2866,6 +2926,40 @@ function adminApp() {
     /** Draft rules the server would refuse, and saving would therefore delete. */
     rlIncompleteRules() {
       return (this.rlDraft?.rules || []).filter((row) => String(row.target ?? '').trim() === '');
+    },
+
+    /**
+     * The thing a refused save is complaining about, recovered from the server's message. Every
+     * validation path names its subject — `rule 'model:gpt-4'`, `plans['standard']`, `default` —
+     * so the console can offer the way back to the drawer that owns it rather than leaving the
+     * operator to find it. Returns null when the message names nothing openable.
+     */
+    rlSaveErrorTarget() {
+      const message = String(this.rateLimitFieldError || '');
+      if (!message) return null;
+
+      const rule = message.match(/rule '([^']+)'/);
+      if (rule) {
+        const identity = this.rlIdentity(...String(rule[1]).split(':'));
+        const found = this.rlFindDraftRule(identity);
+        if (found) {
+          const info = this.rlScopeInfo(found.scope);
+          const name = info.singleton ? info.name : found.target;
+          return { label: 'Open ' + info.short.toLowerCase() + ' “' + name + '”', open: () => this.openRateLimitRule(identity) };
+        }
+        return null;
+      }
+
+      const plan = message.match(/plans\['([^']+)'\]/);
+      if (plan && this.rlDraft?.plans?.[plan[1]]) {
+        return { label: 'Open plan “' + plan[1] + '”', open: () => this.openRateLimitTier('plan', plan[1]) };
+      }
+
+      if (/^default\b/.test(message)) {
+        return { label: 'Open the default tier', open: () => this.openRateLimitTier('default', '') };
+      }
+
+      return null;
     },
 
     async saveRateLimits() {
@@ -3100,14 +3194,42 @@ function adminApp() {
       return { from, to, days };
     },
 
+    /**
+     * Redraw the calendar after the draft changed. Debounced because a rule drawer can apply several
+     * edits in a row, and each one would otherwise cost a round trip whose answer the next edit
+     * immediately invalidates. Only rules feed the schedule report, so tier and plan edits do not
+     * call this.
+     */
+    queueRateLimitScheduleRefresh() {
+      if (this._rlDraftScheduleTimer) clearTimeout(this._rlDraftScheduleTimer);
+      this._rlDraftScheduleTimer = setTimeout(() => {
+        this._rlDraftScheduleTimer = null;
+        void this.loadRateLimitSchedule();
+      }, 300);
+    },
+
     async loadRateLimitSchedule() {
       this.rlScheduleError = '';
       if (this._rlScheduleTimer) { clearTimeout(this._rlScheduleTimer); this._rlScheduleTimer = null; }
       try {
         const { from, to } = this.rlRangeFromTo();
-        this.rlSchedule = await this.apiJson(
-          '/admin/api/rate-limits/schedule?from=' + encodeURIComponent(from.toISOString()) +
-          '&to=' + encodeURIComponent(to.toISOString()) + '&take=200');
+        // A dirty draft is what the operator is actually asking about: the calendar exists to answer
+        // "did I get this schedule right?", and the saved configuration cannot answer that for a
+        // change that has not been saved. The preview route computes the same report over the
+        // staged rules; with nothing staged the two are identical, so the GET stays the default.
+        this.rlSchedule = this.rateLimitsDirty
+          ? await this.apiJson('/admin/api/rate-limits/schedule/preview', {
+            method: 'POST',
+            body: JSON.stringify({
+              rules: this.buildRateLimitsPayload().rules,
+              from: from.toISOString(),
+              to: to.toISOString(),
+              take: 200
+            })
+          })
+          : await this.apiJson(
+            '/admin/api/rate-limits/schedule?from=' + encodeURIComponent(from.toISOString()) +
+            '&to=' + encodeURIComponent(to.toISOString()) + '&take=200');
         this.rlScheduleLoadedAt = Date.now();
         // Re-read when the next window boundary passes so the "in force" column turns over on
         // its own; capped so a distant change does not pin a multi-day timer.
@@ -3148,9 +3270,21 @@ function adminApp() {
       const local = String(this.rlPreviewAt || '').trim();
       if (!local) { this.rlPreview = null; return; }
       try {
-        this.rlPreview = await this.apiJson(
-          '/admin/api/rate-limits/schedule?atLocal=' + encodeURIComponent(local) +
-          '&timeZone=' + encodeURIComponent(this.rlZoneOrDefault()) + '&take=1');
+        // Answers for the draft whenever the calendar beside it does; two panels disagreeing about
+        // which configuration they describe would be worse than either being saved-only.
+        this.rlPreview = this.rateLimitsDirty
+          ? await this.apiJson('/admin/api/rate-limits/schedule/preview', {
+            method: 'POST',
+            body: JSON.stringify({
+              rules: this.buildRateLimitsPayload().rules,
+              atLocal: local,
+              timeZone: this.rlZoneOrDefault(),
+              take: 1
+            })
+          })
+          : await this.apiJson(
+            '/admin/api/rate-limits/schedule?atLocal=' + encodeURIComponent(local) +
+            '&timeZone=' + encodeURIComponent(this.rlZoneOrDefault()) + '&take=1');
       } catch (e) {
         this.rlPreview = null;
         this.rlPreviewError = e.message || 'Could not evaluate that instant.';
@@ -3194,18 +3328,22 @@ function adminApp() {
     applyRateLimitTier() {
       const t = this.rlTier;
       const tier = this.rlTierPayload(t);
-      if (t.kind === 'default' && tier.rpm < 1) {
-        this.rlTierError = 'The default tier needs at least 1 rpm; there is no unlimited value.';
+      // The "needs a rate" messages come first: they say why zero is refused, which a range cannot.
+      if (tier.rpm < 1) {
+        this.rlTierError = t.kind === 'default'
+          ? 'The default tier needs at least 1 rpm; there is no unlimited value.'
+          : 'A plan tier needs at least 1 rpm.';
+        return;
+      }
+      const bounds = this.rlTierBoundsError(tier, true);
+      if (bounds) {
+        this.rlTierError = bounds;
         return;
       }
       if (t.kind === 'plan') {
         const slug = String(t.slug || '').trim();
         if (!/^[A-Za-z][A-Za-z0-9_-]*$/.test(slug)) {
           this.rlTierError = 'Plan slug: letters, digits, hyphen or underscore, starting with a letter.';
-          return;
-        }
-        if (tier.rpm < 1) {
-          this.rlTierError = 'A plan tier needs at least 1 rpm.';
           return;
         }
         const clash = Object.keys(this.rlDraft.plans).find(k => k.toLowerCase() === slug.toLowerCase() && k !== t.originalSlug);
@@ -3224,9 +3362,20 @@ function adminApp() {
     confirmRemoveRateLimitPlan() {
       const slug = this.rlTier.originalSlug;
       if (!slug) return;
+      // The count and the tier are both already on screen behind this dialog; saying them here is
+      // the difference between approving a change and approving a change whose scale is known.
+      const affected = this.rlKnownTenants().filter(t => String(t.plan || '').toLowerCase() === slug.toLowerCase()).length;
+      const fallback = this.rlTierText(this.rlDraft?.default);
+      // Qualified deliberately: the count comes from the overview's top consumers this month, so it
+      // is a floor rather than a roster. Overstating certainty in a destructive dialog is worse
+      // than naming where the number came from.
+      const seen = affected > 0
+        ? this.formatNum(affected) + ' tenant' + (affected === 1 ? '' : 's') + ' seen this month '
+          + (affected === 1 ? 'is' : 'are') + ' on this plan. '
+        : '';
       this.openConfirm({
         title: 'Remove plan tier “' + slug + '”?',
-        message: 'Tenants on this plan fall back to the default tier once you save.',
+        message: seen + 'Every tenant on it falls back to the default tier (' + fallback + ') once you save.',
         confirmLabel: 'Remove plan',
         danger: true,
         onConfirm: () => {
@@ -3272,6 +3421,11 @@ function adminApp() {
         this.rlRuleError = 'A rule must limit something: set rpm or streams above zero.';
         return;
       }
+      const bounds = this.rlTierBoundsError(tier, false);
+      if (bounds) {
+        this.rlRuleError = bounds;
+        return;
+      }
       if (rule.scope === 'tenant' && tier.rpm === 0 && tier.burst !== 0) {
         this.rlRuleError = 'A tenant rule with rpm 0 keeps the plan rate; set burst to 0 as well.';
         return;
@@ -3279,6 +3433,7 @@ function adminApp() {
       Object.assign(rule, tier, { schedule: this.rlClone(this.rlRule.schedule) });
       this.rlRuleDrawerOpen = false;
       this.rlWindowOpen = false;
+      this.queueRateLimitScheduleRefresh();
     },
 
     confirmDeleteRateLimitRule() {
@@ -3293,6 +3448,7 @@ function adminApp() {
           this.rlDraft.rules = this.rlDraft.rules.filter(r => this.rlIdentity(r.scope, r.target) !== identity);
           this.rlRuleDrawerOpen = false;
           this.rlWindowOpen = false;
+          this.queueRateLimitScheduleRefresh();
         }
       });
     },
@@ -3395,6 +3551,13 @@ function adminApp() {
       if (w.kind === 'weekly' && !w.days.length) return 'Pick at least one day.';
       if (w.kind === 'weekly' && (!w.start || !w.end)) return 'Set a start and an end time.';
       if (!w.suspend && w.rpm <= 0 && w.maxConcurrentStreams <= 0) return 'Set rpm or streams above zero, or pause the rule instead.';
+      // A suspending window ignores its numbers, so only a tier-bearing one is range-checked.
+      if (!w.suspend) {
+        const bounds = this.rlTierBoundsError(
+          { rpm: w.rpm, burst: w.burst, maxConcurrentStreams: w.maxConcurrentStreams },
+          false);
+        if (bounds) return bounds;
+      }
       return '';
     },
 
@@ -3492,9 +3655,37 @@ function adminApp() {
 
     // ---- new rule flow ----
 
+    /**
+     * The numbers a new rule starts from, by scope. One table for every scope rather than one
+     * number for all of them, because the protective scopes mean something different: 600 rpm of
+     * failed sign-ins is ten times looser than the tier this gateway ships with, so an operator
+     * adding credential-guessing protection and keeping the seed would have weakened it while
+     * believing they had tightened it. The gateway ceiling is deliberately blank — there is no
+     * number that is right for every deployment, and a wrong one throttles everything at once.
+     */
+    rlDefaultTierFor(scope) {
+      if (scope === 'auth_failure') return { rpm: 20, burst: 10, maxConcurrentStreams: 0 };
+      if (scope === 'anonymous') return { rpm: 30, burst: 10, maxConcurrentStreams: 2 };
+      if (scope === 'global') return { rpm: '', burst: 0, maxConcurrentStreams: 0 };
+      return { rpm: 600, burst: 60, maxConcurrentStreams: 0 };
+    },
+
+    /** Applies the scope's seed, unless the operator has already typed over it. */
+    rlSeedNewRuleTier() {
+      if (this.rlNewRule.touched) return;
+      Object.assign(this.rlNewRule, this.rlDefaultTierFor(this.rlNewRule.scope));
+    },
+
+    /** Marks the tier as the operator's, so a later scope change leaves their numbers alone. */
+    setRateLimitNewRuleTier(field, value) {
+      this.rlNewRule[field] = value;
+      this.rlNewRule.touched = true;
+    },
+
     openRateLimitNewRule() {
       if (!this.rlDraft || !this.rateLimitsEditable) return;
-      this.rlNewRule = { step: 1, scope: 'model', subject: '', model: '', target: '', rpm: 600, burst: 60, maxConcurrentStreams: 0 };
+      this.rlNewRule = { step: 1, scope: 'model', subject: '', model: '', target: '', rpm: 0, burst: 0, maxConcurrentStreams: 0, touched: false };
+      this.rlSeedNewRuleTier();
       this.rlNewRuleError = '';
       this.rlNewRuleOpen = true;
     },
@@ -3505,7 +3696,30 @@ function adminApp() {
 
     setRateLimitNewRuleScope(id) {
       this.rlNewRule.scope = id;
+      this.rlSeedNewRuleTier();
       this.rlNewRuleError = '';
+    },
+
+    /**
+     * Arrow-key traversal for the scope radiogroup. The cards carry role="radio", which promises a
+     * keyboard user can move between them with the arrows and reach the group with one Tab; roving
+     * tabindex (see rlNewRuleView.scopeCards) supplies the second half of that promise.
+     */
+    rateLimitScopeKeydown(event, id) {
+      const keys = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
+      const step = keys[event?.key];
+      if (!step) return;
+      event.preventDefault();
+      const scopes = this.rlScopeCatalog();
+      const at = scopes.findIndex(s => s.id === id);
+      if (at < 0) return;
+      const next = scopes[(at + step + scopes.length) % scopes.length];
+      this.setRateLimitNewRuleScope(next.id);
+      // Selection follows focus in a radiogroup, so focus has to follow it back.
+      this.$nextTick(() => {
+        const el = document.getElementById('rl-scope-' + next.id);
+        if (el && el.focus) el.focus();
+      });
     },
 
     rlNewRuleTarget() {
@@ -3562,7 +3776,14 @@ function adminApp() {
         return;
       }
       if (tier.rpm === 0 && tier.maxConcurrentStreams === 0) {
-        this.rlNewRuleError = 'A rule must limit something: set rpm or streams above zero.';
+        this.rlNewRuleError = n.scope === 'global'
+          ? 'Name the ceiling: set rpm above zero. There is no default that is right for every gateway.'
+          : 'A rule must limit something: set rpm or streams above zero.';
+        return;
+      }
+      const bounds = this.rlTierBoundsError(tier, false);
+      if (bounds) {
+        this.rlNewRuleError = bounds;
         return;
       }
       if (n.scope === 'tenant' && tier.rpm === 0 && tier.burst !== 0) {
@@ -3571,6 +3792,7 @@ function adminApp() {
       }
       this.rlDraft.rules.push({ scope: n.scope, target, ...tier, schedule: [] });
       this.rlNewRuleOpen = false;
+      this.queueRateLimitScheduleRefresh();
       if (andSchedule) {
         this.openRateLimitRule(this.rlIdentity(n.scope, target));
         this.openRateLimitWindow(-1);
@@ -4230,7 +4452,14 @@ function adminApp() {
         rateLimits: {
           usageMinutes: b('rateLimitUsageMinutes')
         },
-        rlDraft: { enabled: b('rlDraft.enabled'), adaptiveEnabled: b('rlDraft.adaptiveEnabled') },
+        rlDraft: {
+          // Turning enforcement off asks first; see setRateLimitEnforcement.
+          enabled: {
+            get() { return self.rlDraft?.enabled; },
+            set(v) { self.setRateLimitEnforcement(v); }
+          },
+          adaptiveEnabled: b('rlDraft.adaptiveEnabled')
+        },
         rlFilterText: b('rlFilterText'),
         rlZone: b('rlZone'),
         rlRangeDays: b('rlRangeDays'),
@@ -4244,9 +4473,22 @@ function adminApp() {
           start: b('rlWindow.start'), end: b('rlWindow.end'), timeZone: b('rlWindow.timeZone'),
           validFromLocal: b('rlWindow.validFromLocal'), validUntilLocal: b('rlWindow.validUntilLocal')
         },
+        // The three tier fields record that the operator typed over the scope's seed, so switching
+        // scope afterwards keeps their numbers instead of re-seeding over them.
         rlNewRule: {
           subject: b('rlNewRule.subject'), model: b('rlNewRule.model'), target: b('rlNewRule.target'),
-          rpm: b('rlNewRule.rpm'), burst: b('rlNewRule.burst'), maxConcurrentStreams: b('rlNewRule.maxConcurrentStreams')
+          rpm: {
+            get() { return self.rlNewRule.rpm; },
+            set(v) { self.setRateLimitNewRuleTier('rpm', v); }
+          },
+          burst: {
+            get() { return self.rlNewRule.burst; },
+            set(v) { self.setRateLimitNewRuleTier('burst', v); }
+          },
+          maxConcurrentStreams: {
+            get() { return self.rlNewRule.maxConcurrentStreams; },
+            set(v) { self.setRateLimitNewRuleTier('maxConcurrentStreams', v); }
+          }
         },
         newKey: {
           role: b('newKey.role'),
@@ -6527,6 +6769,16 @@ function adminApp() {
     get rateLimitsReadOnlyText() { return this.rlReadOnlyReason || ''; },
     get rateLimitsDisabled() { return !!this.rlDraft && !this.rlDraft.enabled; },
 
+    /** The "take me to it" affordance beside a refused save; hidden when nothing is openable. */
+    get rlSaveErrorView() {
+      const target = this.rlSaveErrorTarget();
+      return {
+        show: !!target,
+        label: target ? target.label : '',
+        open: target ? target.open : () => {}
+      };
+    },
+
     get rateLimitsDirty() {
       if (!this.rateLimits || !this.rlDraft) return false;
       return JSON.stringify(this.buildRateLimitsPayload(this.rlDraft)) !==
@@ -6661,6 +6913,7 @@ function adminApp() {
       return chips.map(c => ({
         key: c.id, label: c.label, count: String(c.count),
         cls: (this.rlFilterScope || 'all') === c.id ? 'active' : '',
+        pressed: (this.rlFilterScope || 'all') === c.id ? 'true' : 'false',
         select: () => this.setRateLimitScopeFilter(c.id)
       }));
     },
@@ -6818,7 +7071,13 @@ function adminApp() {
         showNow: now >= from.getTime() && now <= to.getTime(),
         legend: [...legendMap.values()].map((l, i) => ({ key: i, cls: 'rl-legend-swatch ' + l.cls, text: l.text })),
         rangeText: new Intl.DateTimeFormat(undefined, { timeZone: zone, day: 'numeric', month: 'short' }).format(from) + ' – ' +
-          new Intl.DateTimeFormat(undefined, { timeZone: zone, day: 'numeric', month: 'short' }).format(new Date(to.getTime() - 1))
+          new Intl.DateTimeFormat(undefined, { timeZone: zone, day: 'numeric', month: 'short' }).format(new Date(to.getTime() - 1)),
+        // Which configuration is on screen. The panel used to say "unsaved edits are not drawn"
+        // and mean it; now it draws them, so it has to say which it is showing.
+        draft: this.rateLimitsDirty,
+        sourceText: this.rateLimitsDirty
+          ? 'Drawn from your unsaved draft, so you can check a schedule before saving it.'
+          : 'From the saved configuration.'
       };
     },
 
@@ -6946,6 +7205,8 @@ function adminApp() {
         noWindows: windows.length === 0,
         bands,
         hasBands: bands.length > 0,
+        // The strip is drawn from whichever report the calendar holds, so it says which that is.
+        bandsSource: this.rateLimitsDirty ? 'as drafted' : 'as saved',
         nowStyle: 'left: ' + pct(now) + '%',
         usageText: row ? this.formatNum(row.requests) + ' requests · ' + this.formatNum(row.rejected) + ' refused · ' + (row.requestsPerMinute ?? 0).toFixed(1) + ' req/min' : 'No traffic recorded for this rule',
         usageWindow: 'Last ' + windowMinutes + ' min',
@@ -6991,11 +7252,15 @@ function adminApp() {
         eyebrow: (this.rlRule.target === '*' ? this.rlScopeInfo(this.rlRule.scope).name : this.rlRule.target) + ' · window',
         isOnce, isWeekly: !isOnce,
         kindRows: [
-          { key: 'weekly', label: 'Every week', cls: !isOnce ? 'active' : '', select: () => this.setRateLimitWindowKind('weekly') },
-          { key: 'once', label: 'One time', cls: isOnce ? 'active' : '', select: () => this.setRateLimitWindowKind('once') }
+          { key: 'weekly', label: 'Every week', cls: !isOnce ? 'active' : '', pressed: !isOnce ? 'true' : 'false', select: () => this.setRateLimitWindowKind('weekly') },
+          { key: 'once', label: 'One time', cls: isOnce ? 'active' : '', pressed: isOnce ? 'true' : 'false', select: () => this.setRateLimitWindowKind('once') }
         ],
         dayRows: this.rlDayLabels().map(([id, label]) => ({
-          key: id, label, cls: (f.days || []).includes(id) ? 'on' : '', toggle: () => this.toggleRateLimitWindowDay(id)
+          key: id,
+          label,
+          cls: (f.days || []).includes(id) ? 'on' : '',
+          pressed: (f.days || []).includes(id) ? 'true' : 'false',
+          toggle: () => this.toggleRateLimitWindowDay(id)
         })),
         summary,
         next,
@@ -7055,6 +7320,26 @@ function adminApp() {
       return out.slice(0, 6);
     },
 
+    /**
+     * What already applies to a scope that has no rule yet, so the numbers in step 3 are typed
+     * against a reference instead of into a blank. Reaching step 3 means no rule exists for this
+     * target — creation refuses a duplicate — so for the two protective scopes the honest answer
+     * is the default tier they fall back to.
+     */
+    rlScopeBaselineFor(scope) {
+      const fallback = Number(this.rlDraft?.default?.rpm) || 0;
+      if (scope === 'global') {
+        return { rpm: 0, text: 'No gateway ceiling is set today. This rule would be the first, and it applies to every inference request.' };
+      }
+      if (scope === 'auth_failure') {
+        return { rpm: fallback, text: 'Failed sign-ins currently fall back to the default tier, ' + this.formatNum(fallback) + ' rpm per client address.' };
+      }
+      if (scope === 'anonymous') {
+        return { rpm: fallback, text: 'Anonymous callers currently fall back to the default tier, ' + this.formatNum(fallback) + ' rpm per client address.' };
+      }
+      return { rpm: 0, text: 'Callers are already held to their tenant tier (default ' + this.formatNum(fallback) + ' rpm). A rule here only tightens that further.' };
+    },
+
     get rlNewRuleView() {
       const n = this.rlNewRule;
       const info = this.rlScopeInfo(n.scope);
@@ -7074,6 +7359,8 @@ function adminApp() {
         ? (this.models || []).some(m => (m.id || '').toLowerCase() === n.target.trim().toLowerCase() || (m.aliases || []).some(a => a.toLowerCase() === n.target.trim().toLowerCase()))
         : null;
       const capacity = tier.rpm + tier.burst;
+      const baseline = this.rlScopeBaselineFor(n.scope);
+      const looser = baseline.rpm > 0 && tier.rpm > 0 && tier.rpm >= baseline.rpm;
       const subject = info.singleton ? info.name : (info.pair ? (n.subject || '?') + ' on ' + (n.model || '?') : (target || '?'));
       const summary = tier.rpm > 0
         ? subject + ' may take ' + this.formatNum(tier.rpm) + ' requests a minute' +
@@ -7090,10 +7377,16 @@ function adminApp() {
         ],
         title: step === 1 ? 'What should it limit?' : step === 2 ? 'Which ' + info.short.toLowerCase() + '?' : 'How much?',
         scopeCards: this.rlScopeCatalog().map(s => ({
-          key: s.id, name: s.name, desc: s.desc,
+          key: s.id,
+          id: 'rl-scope-' + s.id,
+          name: s.name,
+          desc: s.desc,
           cls: 'rl-scope-card' + (n.scope === s.id ? ' sel' : ''),
           ariaChecked: n.scope === s.id ? 'true' : 'false',
-          select: () => this.setRateLimitNewRuleScope(s.id)
+          // Roving tabindex: one stop for the whole group, arrows move within it.
+          tabIndex: n.scope === s.id ? '0' : '-1',
+          select: () => this.setRateLimitNewRuleScope(s.id),
+          onKey: (e) => this.rateLimitScopeKeydown(e, s.id)
         })),
         isStep1: step === 1, isStep2: step === 2, isStep3: step === 3, notStep3: step !== 3,
         isPair: !!info.pair,
@@ -7105,6 +7398,14 @@ function adminApp() {
         unknownNote: known === false ? 'Not a registered model. The rule is stored and applies as soon as a model with this id exists.' : '',
         summary,
         summaryTitle: info.singleton ? info.name : subject,
+        baselineText: baseline.text,
+        // A warning, never a block: an operator may have a reason to set a limit that binds no
+        // tighter than what is already there, but they should not do it by accident on the two
+        // scopes where a loose number is a weakened control rather than a generous one.
+        looserWarning: looser
+          ? 'At ' + this.formatNum(tier.rpm) + ' rpm this rule is no tighter than the '
+            + this.formatNum(baseline.rpm) + ' rpm already in force, so it would not change what this scope allows.'
+          : '',
         error: this.rlNewRuleError || '',
         showBack: step > 1,
         nextLabel: step === 1 ? (info.singleton ? 'Set the limit' : 'Choose the ' + info.short.toLowerCase()) : 'Set the limit',

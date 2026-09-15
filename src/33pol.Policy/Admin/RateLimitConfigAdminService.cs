@@ -112,7 +112,17 @@ public sealed class RateLimitConfigAdminService(
     public RateLimitScheduleReport GetSchedule(DateTimeOffset at, DateTimeOffset from, DateTimeOffset to, int take)
     {
         var stored = StoredRateLimits;
-        var rules = WithSchedules(ToRules(stored), stored);
+        return GetSchedule(WithSchedules(ToRules(stored), stored), at, from, to, take);
+    }
+
+    public RateLimitScheduleReport GetSchedule(
+        IReadOnlyList<RateLimitRuleDefinition> rules,
+        DateTimeOffset at,
+        DateTimeOffset from,
+        DateTimeOffset to,
+        int take)
+    {
+        ArgumentNullException.ThrowIfNull(rules);
         return RateLimitScheduleReportBuilder.Build(rules, at, from, to, take);
     }
 

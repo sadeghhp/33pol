@@ -37,6 +37,23 @@ public interface IRateLimitConfigAdminService
     RateLimitScheduleReport GetSchedule(DateTimeOffset at, DateTimeOffset from, DateTimeOffset to, int take);
 
     /// <summary>
+    /// The same report for a rule set the caller supplies rather than the stored one, so a console
+    /// can show what a staged change would do before it is saved. Pure computation: nothing is
+    /// persisted and the live configuration is not read.
+    /// </summary>
+    /// <param name="rules">
+    /// The complete candidate set. Empty means "no scoped rules", not "use the stored ones" — a
+    /// preview has nothing to fall back to, and silently substituting the stored set would answer a
+    /// question the caller did not ask.
+    /// </param>
+    RateLimitScheduleReport GetSchedule(
+        IReadOnlyList<RateLimitRuleDefinition> rules,
+        DateTimeOffset at,
+        DateTimeOffset from,
+        DateTimeOffset to,
+        int take);
+
+    /// <summary>
     /// How a window an operator is composing would behave, before it is saved: validity, next
     /// occurrence, and how it stands against the rule's other windows.
     /// </summary>

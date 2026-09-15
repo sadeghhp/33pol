@@ -28,7 +28,7 @@
   <script defer src="admin-icons.js?v=11"></script>
   <script defer src="admin-errors.js?v=7"></script>
   <script defer src="admin-store.js?v=11"></script>
-  <script defer src="admin-app.js?v=38"></script>
+  <script defer src="admin-app.js?v=40"></script>
   <script defer src="vendor/alpine-csp-3.14.9.min.js"></script>
 </head>
 <body x-data="adminApp" x-cloak @keydown.window="onModalKeydown">
@@ -1738,7 +1738,7 @@
                   <div class="rl-status-text">
                     <div class="rl-status-title" :class="rlStatusView.titleClass" x-text="rlStatusView.title"></div>
                     <div class="rl-status-sub">
-                      <label class="rl-switch sm" title="Adapt model limits to load">
+                      <label class="rl-switch sm" title="When the gateway is saturated, model limits may be reduced below the numbers set here, and restored as load falls.">
                         <input type="checkbox" role="switch" x-model="mdl.rlDraft.adaptiveEnabled" :aria-checked="rlStatusView.adaptiveAria" :disabled="rateLimitsLocked" aria-label="Adapt model limits to load" />
                         <span class="rl-switch-track"></span>
                         <span x-text="rlStatusView.adaptiveText"></span>
@@ -1759,6 +1759,7 @@
                   </div>
                 </div>
                 <p class="notice error" x-show="rateLimitsDisabled">Rate limiting is disabled — clients can send unlimited requests. Quotas and budgets still apply. Schedules are paused, not deleted.</p>
+                <p class="hint">Over a limit, a request is refused with <code>429</code> and a <code>Retry-After</code> telling the client when to come back. Nothing is queued or slowed &mdash; a refused request is a failed one. Adaptive load shedding, when on, may lower model limits below the numbers set here while the gateway is saturated.</p>
 
                 <!-- Tiers -->
                 <div class="rl-section">
@@ -1793,7 +1794,7 @@
                     </div>
                     <div class="rl-chips" role="group" aria-label="Filter by scope">
                       <template x-for="c in rlScopeChips" :key="c.key">
-                        <button type="button" class="preset" :class="c.cls" @click="c.select"><span x-text="c.label"></span> <i x-text="c.count"></i></button>
+                        <button type="button" class="preset" :class="c.cls" :aria-pressed="c.pressed" @click="c.select"><span x-text="c.label"></span> <i x-text="c.count"></i></button>
                       </template>
                     </div>
                   </div>
@@ -1828,7 +1829,10 @@
                 <!-- Calendar -->
                 <div class="rl-section">
                   <div class="rl-section-head">
-                    <div><h3>Calendar</h3><p class="sub">When limits change, <span x-text="rlTimelineView.rangeText"></span>. From the saved configuration; unsaved edits are not drawn until you save.</p></div>
+                    <div>
+                      <h3>Calendar <span class="tag accent" x-show="rlTimelineView.draft">draft</span></h3>
+                      <p class="sub">When limits change, <span x-text="rlTimelineView.rangeText"></span>. <span x-text="rlTimelineView.sourceText"></span></p>
+                    </div>
                     <div class="rl-cal-controls">
                       <select x-model.number="mdl.rlRangeDays" @change="onRateLimitRangeChange" aria-label="Calendar range">
                         <template x-for="o in rlRangeOptions" :key="o.value"><option :value="o.value" x-text="o.label"></option></template>
@@ -1912,6 +1916,7 @@
                   </ul>
                 </div>
                 <p class="field-error" x-show="rateLimitFieldError" x-text="rateLimitFieldError"></p>
+                <button type="button" class="rl-link" x-show="rlSaveErrorView.show" @click="rlSaveErrorView.open" x-text="rlSaveErrorView.label"></button>
               </div>
             </template>
           </div>
@@ -2307,10 +2312,11 @@
             <h4 class="rl-h4">Base tier</h4>
             <p class="hint">Applies whenever no window is active, and whenever a window cannot be evaluated.</p>
             <div class="rl-bignums">
-              <label class="rl-bignum">RPM<input type="number" min="0" x-model.number="mdl.rlRule.rpm" :disabled="rateLimitsLocked" title="Sustained requests per minute. 0 = this rule does not limit the rate." /></label>
-              <label class="rl-bignum">Burst<input type="number" min="0" x-model.number="mdl.rlRule.burst" :disabled="rateLimitsLocked" title="Extra requests allowed at once after a quiet spell, on top of RPM." /></label>
-              <label class="rl-bignum">Streams<input type="number" min="0" x-model.number="mdl.rlRule.maxConcurrentStreams" :disabled="rateLimitsLocked" title="Concurrent streaming responses. 0 = unlimited." /></label>
+              <label class="rl-bignum">RPM<input type="number" min="0" max="1000000" x-model.number="mdl.rlRule.rpm" :disabled="rateLimitsLocked" title="Sustained requests per minute. 0 = this rule does not limit the rate." /></label>
+              <label class="rl-bignum">Burst<input type="number" min="0" max="1000000" x-model.number="mdl.rlRule.burst" :disabled="rateLimitsLocked" title="Extra requests allowed at once after a quiet spell, on top of RPM." /></label>
+              <label class="rl-bignum">Streams<input type="number" min="0" max="10000" x-model.number="mdl.rlRule.maxConcurrentStreams" :disabled="rateLimitsLocked" title="Concurrent streaming responses. 0 = unlimited." /></label>
             </div>
+            <p class="hint">Sustained requests a minute, the extra allowed at once after a quiet spell, and how many streaming responses may be open together. 0 streams means unlimited.</p>
             <p class="field-error" x-show="rlRuleDrawerView.error" x-text="rlRuleDrawerView.error"></p>
           </div>
 
@@ -2331,7 +2337,7 @@
           </div>
 
           <div class="drawer-section" x-show="rlRuleDrawerView.hasBands">
-            <h4 class="rl-h4">This week <span class="muted">as saved</span></h4>
+            <h4 class="rl-h4">This week <span class="muted" x-text="rlRuleDrawerView.bandsSource"></span></h4>
             <div class="rl-tl-track mini">
               <div class="rl-tl-grid"></div>
               <template x-for="b in rlRuleDrawerView.bands" :key="b.key"><div :class="b.cls" :style="b.style" :title="b.title"></div></template>
@@ -2367,7 +2373,7 @@
           </div>
 
           <div class="rl-seg full" role="group" aria-label="Window kind">
-            <template x-for="k in rlWindowView.kindRows" :key="k.key"><button type="button" :class="k.cls" @click="k.select" x-text="k.label"></button></template>
+            <template x-for="k in rlWindowView.kindRows" :key="k.key"><button type="button" :class="k.cls" :aria-pressed="k.pressed" @click="k.select" x-text="k.label"></button></template>
           </div>
 
           <label>Name <input type="text" x-model="mdl.rlWindow.name" @input="queueRateLimitWindowPreview" placeholder="off-peak" maxlength="64" /></label>
@@ -2375,7 +2381,7 @@
           <div x-show="rlWindowView.isWeekly">
             <label class="rl-inline-label">Days it starts</label>
             <div class="rl-days" role="group" aria-label="Days">
-              <template x-for="d in rlWindowView.dayRows" :key="d.key"><button type="button" :class="d.cls" @click="d.toggle" x-text="d.label"></button></template>
+              <template x-for="d in rlWindowView.dayRows" :key="d.key"><button type="button" :class="d.cls" :aria-pressed="d.pressed" @click="d.toggle" x-text="d.label"></button></template>
             </div>
             <div class="rl-3col">
               <label>From <input type="time" x-model="mdl.rlWindow.start" @change="queueRateLimitWindowPreview" step="60" /></label>
@@ -2401,11 +2407,13 @@
             <p class="hint">Leave Until empty for a change that starts at From and stays in force; that is how a planned baseline change is expressed without editing the base numbers at 2 a.m.</p>
           </div>
 
-          <label class="rl-inline-label">Limit during the window</label>
-          <div class="rl-bignums" x-show="rlWindowView.showTier">
-            <label class="rl-bignum">RPM<input type="number" min="0" x-model.number="mdl.rlWindow.rpm" @input="queueRateLimitWindowPreview" /></label>
-            <label class="rl-bignum">Burst<input type="number" min="0" x-model.number="mdl.rlWindow.burst" @input="queueRateLimitWindowPreview" /></label>
-            <label class="rl-bignum">Streams<input type="number" min="0" x-model.number="mdl.rlWindow.maxConcurrentStreams" @input="queueRateLimitWindowPreview" /></label>
+          <div x-show="rlWindowView.showTier">
+            <label class="rl-inline-label">Limit during the window</label>
+            <div class="rl-bignums">
+              <label class="rl-bignum">RPM<input type="number" min="0" max="1000000" x-model.number="mdl.rlWindow.rpm" @input="queueRateLimitWindowPreview" title="Sustained requests per minute while the window runs." /></label>
+              <label class="rl-bignum">Burst<input type="number" min="0" max="1000000" x-model.number="mdl.rlWindow.burst" @input="queueRateLimitWindowPreview" title="Extra requests allowed at once, on top of RPM." /></label>
+              <label class="rl-bignum">Streams<input type="number" min="0" max="10000" x-model.number="mdl.rlWindow.maxConcurrentStreams" @input="queueRateLimitWindowPreview" title="Concurrent streaming responses. 0 = unlimited." /></label>
+            </div>
           </div>
           <label class="checkbox"><input type="checkbox" x-model="mdl.rlWindow.suspend" @change="queueRateLimitWindowPreview" /> Pause this rule instead <span class="muted">· nothing is enforced by it while the window runs</span></label>
 
@@ -2449,10 +2457,11 @@
       <p class="hint" x-text="rlTierView.hint"></p>
       <label x-show="rlTierView.isPlan">Plan slug <input type="text" x-model="mdl.rlTier.slug" placeholder="standard" title="Tenants whose plan is this slug use this tier instead of the default." /></label>
       <div class="rl-bignums">
-        <label class="rl-bignum">RPM<input type="number" min="1" x-model.number="mdl.rlTier.rpm" title="Sustained requests per minute. Minimum 1; there is no unlimited value." /></label>
-        <label class="rl-bignum">Burst<input type="number" min="0" x-model.number="mdl.rlTier.burst" title="Extra requests allowed at once after a quiet spell, on top of RPM." /></label>
-        <label class="rl-bignum">Streams<input type="number" min="0" x-model.number="mdl.rlTier.maxConcurrentStreams" title="Concurrent streaming responses per tenant. 0 = unlimited." /></label>
+        <label class="rl-bignum">RPM<input type="number" min="1" max="1000000" x-model.number="mdl.rlTier.rpm" title="Sustained requests per minute. Minimum 1; there is no unlimited value." /></label>
+        <label class="rl-bignum">Burst<input type="number" min="0" max="1000000" x-model.number="mdl.rlTier.burst" title="Extra requests allowed at once after a quiet spell, on top of RPM." /></label>
+        <label class="rl-bignum">Streams<input type="number" min="0" max="10000" x-model.number="mdl.rlTier.maxConcurrentStreams" title="Concurrent streaming responses per tenant. 0 = unlimited." /></label>
       </div>
+      <p class="hint">Sustained requests a minute, the extra allowed at once after a quiet spell, and how many streaming responses one tenant may hold open. 0 streams means unlimited.</p>
       <div class="rl-summary" x-text="rlTierView.summary"></div>
       <p class="field-error" x-show="rlTierError" x-text="rlTierError"></p>
       <div class="drawer-footer">
@@ -2479,7 +2488,7 @@
 
       <div x-show="rlNewRuleView.isStep1" class="rl-scopes" role="radiogroup" aria-label="Scope">
         <template x-for="s in rlNewRuleView.scopeCards" :key="s.key">
-          <button type="button" :class="s.cls" @click="s.select" role="radio" :aria-checked="s.ariaChecked"><b x-text="s.name"></b><span x-text="s.desc"></span></button>
+          <button type="button" :id="s.id" :class="s.cls" @click="s.select" @keydown="s.onKey" role="radio" :aria-checked="s.ariaChecked" :tabindex="s.tabIndex"><b x-text="s.name"></b><span x-text="s.desc"></span></button>
         </template>
       </div>
 
@@ -2502,12 +2511,14 @@
       </div>
 
       <div x-show="rlNewRuleView.isStep3">
+        <p class="hint" x-text="rlNewRuleView.baselineText"></p>
         <div class="rl-bignums">
-          <label class="rl-bignum">RPM<input type="number" min="0" x-model.number="mdl.rlNewRule.rpm" title="0 = this rule does not limit the rate." /></label>
-          <label class="rl-bignum">Burst<input type="number" min="0" x-model.number="mdl.rlNewRule.burst" /></label>
-          <label class="rl-bignum">Streams<input type="number" min="0" x-model.number="mdl.rlNewRule.maxConcurrentStreams" title="0 = unlimited." /></label>
+          <label class="rl-bignum">RPM<input type="number" min="0" max="1000000" x-model.number="mdl.rlNewRule.rpm" title="Sustained requests per minute. 0 = this rule does not limit the rate." /></label>
+          <label class="rl-bignum">Burst<input type="number" min="0" max="1000000" x-model.number="mdl.rlNewRule.burst" title="Extra requests allowed at once after a quiet spell, on top of RPM." /></label>
+          <label class="rl-bignum">Streams<input type="number" min="0" max="10000" x-model.number="mdl.rlNewRule.maxConcurrentStreams" title="Concurrent streaming responses. 0 = unlimited." /></label>
         </div>
         <p class="hint" x-show="rlNewRuleView.isTenant">A tenant rule with RPM 0 keeps the plan&rsquo;s rate and only caps streams.</p>
+        <p class="notice warn" x-show="rlNewRuleView.looserWarning" x-text="rlNewRuleView.looserWarning"></p>
         <div class="rl-summary"><b x-text="rlNewRuleView.summaryTitle"></b><span class="next" x-text="rlNewRuleView.summary"></span><span class="next">Tenant and key limits still apply on top.</span></div>
       </div>
 
