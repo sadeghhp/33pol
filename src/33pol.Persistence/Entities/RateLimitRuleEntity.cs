@@ -39,6 +39,18 @@ public sealed class RateLimitRuleEntity
     public int MaxConcurrentStreams { get; set; }
 
     /// <summary>
+    /// Whether the rule is enforced. A disabled rule keeps its tier and its windows and stays in the
+    /// admin's list; it simply never reaches the maps the request path reads. That is the difference
+    /// between turning a limit off for an incident and deleting it — deleting takes the schedule with
+    /// it, and an operator at 3 a.m. should not have to choose between those.
+    /// </summary>
+    /// <remarks>
+    /// Defaults to true so every row written before this column existed reads as enforced, which is
+    /// what it was.
+    /// </remarks>
+    public bool Enabled { get; set; } = true;
+
+    /// <summary>
     /// The rule's schedule windows as one JSON document (see
     /// <c>RateLimitScheduleJson</c>), or null for a rule with no windows. A document rather than a
     /// child table because windows are only ever read and written with their rule.

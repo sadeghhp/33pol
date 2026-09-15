@@ -127,6 +127,7 @@ public sealed class RateLimitSettingsRepository(GatewayDbContext dbContext) : IR
                 Rpm = rule.Rpm,
                 Burst = rule.Burst,
                 MaxConcurrentStreams = rule.MaxConcurrentStreams,
+                Enabled = rule.Enabled,
                 ScheduleJson = RateLimitScheduleJson.Serialize(rule.Schedule),
                 UpdatedAt = now,
             });

@@ -50,47 +50,71 @@ public sealed class RateLimitConfigAdminService(
     {
         var rules = new List<RateLimitRuleDefinition>();
 
-        if (!rateLimits.Global.EnforcesNothing)
-        {
-            rules.Add(RateLimitRuleDefinition.FromPolicy(
-                RateLimitScopeNames.Global,
-                RateLimitScopeNames.SingletonTarget,
-                rateLimits.Global));
-        }
+        AddSingleton(rules, rateLimits, RateLimitScopeNames.Global, rateLimits.Global);
 
-        AddScope(rules, RateLimitScopeNames.Tenant, rateLimits.TenantOverrides);
-        AddScope(rules, RateLimitScopeNames.ApiKey, rateLimits.ApiKeys);
-        AddScope(rules, RateLimitScopeNames.Model, rateLimits.Models);
-        AddScope(rules, RateLimitScopeNames.TenantModel, rateLimits.TenantModels);
-        AddScope(rules, RateLimitScopeNames.ApiKeyModel, rateLimits.ApiKeyModels);
+        AddScope(rules, rateLimits, RateLimitScopeNames.Tenant, rateLimits.TenantOverrides);
+        AddScope(rules, rateLimits, RateLimitScopeNames.ApiKey, rateLimits.ApiKeys);
+        AddScope(rules, rateLimits, RateLimitScopeNames.Model, rateLimits.Models);
+        AddScope(rules, rateLimits, RateLimitScopeNames.TenantModel, rateLimits.TenantModels);
+        AddScope(rules, rateLimits, RateLimitScopeNames.ApiKeyModel, rateLimits.ApiKeyModels);
 
-        if (!rateLimits.AuthFailure.EnforcesNothing)
-        {
-            rules.Add(RateLimitRuleDefinition.FromPolicy(
-                RateLimitScopeNames.AuthFailure,
-                RateLimitScopeNames.SingletonTarget,
-                rateLimits.AuthFailure));
-        }
-
-        if (!rateLimits.Anonymous.EnforcesNothing)
-        {
-            rules.Add(RateLimitRuleDefinition.FromPolicy(
-                RateLimitScopeNames.Anonymous,
-                RateLimitScopeNames.SingletonTarget,
-                rateLimits.Anonymous));
-        }
+        AddSingleton(rules, rateLimits, RateLimitScopeNames.AuthFailure, rateLimits.AuthFailure);
+        AddSingleton(rules, rateLimits, RateLimitScopeNames.Anonymous, rateLimits.Anonymous);
 
         return rules;
     }
 
+    /// <summary>
+    /// A scope with one partition. A switched-off rule lives in the side-car rather than the scope's
+    /// tier, so it is looked for there first; the live tier is only a rule when it enforces something.
+    /// </summary>
+    private static void AddSingleton(
+        List<RateLimitRuleDefinition> rules,
+        Core.Configuration.RateLimitsConfigSection stored,
+        string scope,
+        RateLimitPolicy policy)
+    {
+        var target = RateLimitScopeNames.SingletonTarget;
+
+        if (stored.DisabledRules.TryGetValue(RateLimitScheduleProjection.Identity(scope, target), out var off))
+        {
+            rules.Add(RateLimitRuleDefinition.FromPolicy(scope, target, off) with { Enabled = false });
+            return;
+        }
+
+        if (!policy.EnforcesNothing)
+        {
+            rules.Add(RateLimitRuleDefinition.FromPolicy(scope, target, policy));
+        }
+    }
+
+    /// <summary>
+    /// Every rule in a scope, enforced or not, ordered together by target. Switching a rule off must
+    /// not move it in the list — an operator reading the page should see it stay where it was and go
+    /// grey, and a diff between two GETs should show one changed field rather than a reordering.
+    /// </summary>
     private static void AddScope(
         List<RateLimitRuleDefinition> rules,
+        Core.Configuration.RateLimitsConfigSection stored,
         string scope,
         IReadOnlyDictionary<string, RateLimitPolicy> map)
     {
-        foreach (var (target, policy) in map.OrderBy(static p => p.Key, StringComparer.Ordinal))
+        // Identities are "scope:target"; the colon is what keeps "tenant" from also matching
+        // "tenant_model", and stripping a known prefix is what keeps a target that itself contains a
+        // colon (an "llama3:8b" model id) intact.
+        var prefix = scope + ":";
+        var switchedOff = stored.DisabledRules
+            .Where(p => p.Key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            .Select(p => (Target: p.Key[prefix.Length..], p.Value, Enabled: false));
+
+        var all = map
+            .Select(p => (Target: p.Key, p.Value, Enabled: true))
+            .Concat(switchedOff)
+            .OrderBy(static e => e.Target, StringComparer.Ordinal);
+
+        foreach (var (target, policy, enabled) in all)
         {
-            rules.Add(RateLimitRuleDefinition.FromPolicy(scope, target, policy));
+            rules.Add(RateLimitRuleDefinition.FromPolicy(scope, target, policy) with { Enabled = enabled });
         }
     }
 
@@ -123,7 +147,13 @@ public sealed class RateLimitConfigAdminService(
         int take)
     {
         ArgumentNullException.ThrowIfNull(rules);
-        return RateLimitScheduleReportBuilder.Build(rules, at, from, to, take);
+
+        // A switched-off rule enforces nothing, so it has nothing to say about what is in force or
+        // when that changes; leaving it in would draw windows on the calendar that can never take
+        // effect. Filtered here rather than in the builder, which stays a pure function of the rules
+        // it is handed — both overloads funnel through this one, so neither can forget.
+        var enforced = rules.Where(static r => r is { Enabled: true }).ToArray();
+        return RateLimitScheduleReportBuilder.Build(enforced, at, from, to, take);
     }
 
     public RateLimitWindowPreview PreviewWindow(RateLimitRuleDefinition rule, string candidateName)

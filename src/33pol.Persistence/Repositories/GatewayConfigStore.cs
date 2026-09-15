@@ -76,15 +76,30 @@ public sealed class GatewayConfigStore(
         // reinterpreted as some other scope's limit.
         var byScope = new Dictionary<string, Dictionary<string, RateLimitPolicy>>(StringComparer.OrdinalIgnoreCase);
         var schedules = new Dictionary<string, IReadOnlyList<RateLimitWindowDefinition>>(StringComparer.OrdinalIgnoreCase);
+        var disabled = new Dictionary<string, RateLimitPolicy>(StringComparer.OrdinalIgnoreCase);
         foreach (var rule in rules)
         {
-            if (!byScope.TryGetValue(rule.Scope, out var map))
-            {
-                map = new Dictionary<string, RateLimitPolicy>(StringComparer.OrdinalIgnoreCase);
-                byScope[rule.Scope] = map;
-            }
+            var policy = new RateLimitPolicy(rule.Rpm, rule.Burst, rule.MaxConcurrentStreams);
+            var identity = RateLimitScheduleProjection.Identity(rule.Scope, rule.TargetKey);
 
-            map[rule.TargetKey] = new RateLimitPolicy(rule.Rpm, rule.Burst, rule.MaxConcurrentStreams);
+            // A switched-off rule is kept out of the scope maps entirely, because presence in them is
+            // what enforcement means. Its tier travels in the side-car so the admin surface can still
+            // list it and switch it back on; its windows are read below either way, so pausing a rule
+            // and resuming it does not cost the schedule.
+            if (rule.Enabled)
+            {
+                if (!byScope.TryGetValue(rule.Scope, out var map))
+                {
+                    map = new Dictionary<string, RateLimitPolicy>(StringComparer.OrdinalIgnoreCase);
+                    byScope[rule.Scope] = map;
+                }
+
+                map[rule.TargetKey] = policy;
+            }
+            else
+            {
+                disabled[identity] = policy;
+            }
 
             // A schedule that cannot be read applies the base tier, never nothing: the rule stays
             // in force at its configured numbers and the windows are simply absent until fixed.
@@ -99,7 +114,7 @@ public sealed class GatewayConfigStore(
             }
             else if (windows.Count > 0)
             {
-                schedules[RateLimitScheduleProjection.Identity(rule.Scope, rule.TargetKey)] = windows;
+                schedules[identity] = windows;
             }
         }
 
@@ -124,6 +139,7 @@ public sealed class GatewayConfigStore(
             AuthFailure = Single(byScope, RateLimitScopeNames.AuthFailure),
             Anonymous = Single(byScope, RateLimitScopeNames.Anonymous),
             Schedules = schedules,
+            DisabledRules = disabled,
         };
     }
 

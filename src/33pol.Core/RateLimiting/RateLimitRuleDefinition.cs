@@ -25,6 +25,17 @@ public sealed record RateLimitRuleDefinition(
     /// </summary>
     public IReadOnlyList<RateLimitWindowDefinition>? Schedule { get; init; }
 
+    /// <summary>
+    /// Whether the rule is enforced. A disabled rule keeps its tier and its windows and is still
+    /// listed by the admin API; it is simply absent from the maps the request path reads, so it
+    /// enforces nothing — the difference between switching a limit off and deleting it.
+    /// </summary>
+    /// <remarks>
+    /// Defaults to true, so a client that predates the flag and a rule loaded from a row written
+    /// before the column existed both read as enforced.
+    /// </remarks>
+    public bool Enabled { get; init; } = true;
+
     /// <summary>The windows to evaluate: the schedule, or none.</summary>
     public IReadOnlyList<RateLimitWindowDefinition> Windows => Schedule ?? [];
 

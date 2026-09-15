@@ -24,11 +24,11 @@
   <link rel="preload" as="font" type="font/woff2" href="vendor/fonts/IBMPlexSans-400.woff2" crossorigin />
   <link rel="preload" as="font" type="font/woff2" href="vendor/fonts/IBMPlexSans-500.woff2" crossorigin />
   <link rel="stylesheet" href="vendor/fonts.css?v=1" />
-  <link rel="stylesheet" href="admin.css?v=24" />
+  <link rel="stylesheet" href="admin.css?v=25" />
   <script defer src="admin-icons.js?v=11"></script>
   <script defer src="admin-errors.js?v=7"></script>
   <script defer src="admin-store.js?v=11"></script>
-  <script defer src="admin-app.js?v=40"></script>
+  <script defer src="admin-app.js?v=41"></script>
   <script defer src="vendor/alpine-csp-3.14.9.min.js"></script>
 </head>
 <body x-data="adminApp" x-cloak @keydown.window="onModalKeydown">
@@ -1806,10 +1806,16 @@
                   <p class="hint" x-show="rlNoFilteredRules">No rule matches that filter.</p>
                   <div class="rl-rules card" x-show="rlHasRules">
                     <table class="rl-rules-table">
-                      <thead><tr><th class="rl-col-rule">Rule</th><th class="rl-col-tier">Base tier</th><th class="rl-col-sched">Schedule</th><th>In force now</th><th class="rl-col-chev"></th></tr></thead>
+                      <thead><tr><th class="rl-col-on">On</th><th class="rl-col-rule">Rule</th><th class="rl-col-tier">Base tier</th><th class="rl-col-sched">Schedule</th><th>In force now</th><th class="rl-col-chev"></th></tr></thead>
                       <tbody>
                         <template x-for="r in rlRuleRows" :key="r.key">
                           <tr class="rl-row" :class="r.rowCls" @click="r.open" tabindex="0" @keydown.enter="r.open" @keydown.space.prevent="r.open" :aria-label="r.ariaLabel">
+                            <td class="rl-col-on" @click.stop>
+                              <label class="rl-switch sm" :title="r.enabledLabel">
+                                <input type="checkbox" role="switch" :checked="r.enabled" :aria-checked="r.enabledAria" :aria-label="r.enabledLabel" :disabled="rateLimitsLocked" @change="r.toggle" />
+                                <span class="rl-switch-track"></span>
+                              </label>
+                            </td>
                             <td><span class="rl-target" x-text="r.target"></span><span class="rl-scope" x-text="r.scope"></span></td>
                             <td><span class="rl-nums" x-text="r.tier"></span></td>
                             <td><span :class="r.windowsCls" x-text="r.windowsText"></span></td>
@@ -2306,6 +2312,12 @@
           <div :class="rlRuleDrawerView.forceCls">
             <span :class="rlRuleDrawerView.forceDot"></span>
             <div><span class="big" x-text="rlRuleDrawerView.forceBig"></span><div class="rest" x-text="rlRuleDrawerView.forceSub"></div></div>
+            <span class="spacer"></span>
+            <label class="rl-switch sm" title="Enforce this rule. Switching it off keeps the tier and windows below.">
+              <input type="checkbox" role="switch" x-model="mdl.rlRule.enabled" :aria-checked="rlRuleDrawerView.enabledAria" :disabled="rateLimitsLocked" aria-label="Enforce this rule" />
+              <span class="rl-switch-track"></span>
+              <span x-text="rlRuleDrawerView.enabledText"></span>
+            </label>
           </div>
 
           <div class="drawer-section">
@@ -2355,7 +2367,7 @@
 
           <div class="drawer-footer">
             <div class="modal-actions rl-drawer-actions">
-              <button type="button" class="action ghost danger-text" @click="confirmDeleteRateLimitRule" x-show="rateLimitsEditable">Delete rule</button>
+              <button type="button" class="action ghost danger-text" @click="confirmDeleteRateLimitRule" x-show="rateLimitsEditable">Delete permanently</button>
               <span class="spacer"></span>
               <button type="button" class="action secondary" @click="closeRateLimitRule">Cancel</button>
               <button type="button" class="action" @click="applyRateLimitRule" :disabled="rateLimitsLocked">Done</button>

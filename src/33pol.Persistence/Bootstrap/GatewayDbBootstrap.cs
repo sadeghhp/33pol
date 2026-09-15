@@ -200,6 +200,10 @@ public sealed class GatewayDbBootstrap
                     Rpm = rule.Rpm,
                     Burst = rule.Burst,
                     MaxConcurrentStreams = rule.MaxConcurrentStreams,
+                    // Configuration has no way to express a switched-off rule, so this is always
+                    // true today; written from the definition rather than left to the column default
+                    // so it stays correct if it ever gains one.
+                    Enabled = rule.Enabled,
                     UpdatedAt = now,
                 });
                 seededRules++;

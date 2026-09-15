@@ -2712,6 +2712,9 @@ function adminApp() {
           scope: r.scope ?? r.Scope ?? 'model',
           target: r.target ?? r.Target ?? '',
           ...tier(r),
+          // ?? not || so an explicit false survives; absent means enforced, matching a gateway that
+          // predates the flag.
+          enabled: (r.enabled ?? r.Enabled) !== false,
           schedule: (Array.isArray(r.schedule ?? r.Schedule) ? (r.schedule ?? r.Schedule) : [])
             .map((w) => this.normalizeRateLimitWindow(w))
         }))
@@ -2904,6 +2907,9 @@ function adminApp() {
           scope: String(row.scope ?? '').trim(),
           target: String(row.target ?? '').trim(),
           ...this.rlTierPayload(row),
+          // Sent explicitly rather than omitted when true: the payload replaces the rule set
+          // wholesale, so a field left out is a field the server fills with its own default.
+          enabled: row.enabled !== false,
           // Always an array: the draft is the complete truth, and an absent field would tell the
           // server to keep whatever windows it has stored.
           schedule: (row.schedule || []).map((w) => this.rlWindowPayload(w))
@@ -3399,6 +3405,7 @@ function adminApp() {
         scope: rule.scope,
         target: rule.target,
         rpm: rule.rpm, burst: rule.burst, maxConcurrentStreams: rule.maxConcurrentStreams,
+        enabled: rule.enabled !== false,
         schedule: this.rlClone(rule.schedule || [])
       };
       this.rlRuleError = '';
@@ -3430,19 +3437,49 @@ function adminApp() {
         this.rlRuleError = 'A tenant rule with rpm 0 keeps the plan rate; set burst to 0 as well.';
         return;
       }
-      Object.assign(rule, tier, { schedule: this.rlClone(this.rlRule.schedule) });
+      Object.assign(rule, tier, {
+        enabled: this.rlRule.enabled !== false,
+        schedule: this.rlClone(this.rlRule.schedule)
+      });
       this.rlRuleDrawerOpen = false;
       this.rlWindowOpen = false;
       this.queueRateLimitScheduleRefresh();
     },
 
+    /**
+     * Switch one rule on or off in the draft. Deliberately not a confirm: it is reversible, staged
+     * like every other edit, named in the save bar, and the whole reason it exists is to be the fast
+     * thing to reach for in an incident — a dialog in front of it would push an operator back to
+     * Delete, which is the irreversible one.
+     */
+    setRateLimitRuleEnabled(identity, enabled) {
+      const rule = this.rlFindDraftRule(identity);
+      if (!rule) return;
+      rule.enabled = !!enabled;
+      if (this.rlRule.identity === identity) this.rlRule.enabled = !!enabled;
+      this.queueRateLimitScheduleRefresh();
+    },
+
+    toggleRateLimitRuleEnabled(identity) {
+      const rule = this.rlFindDraftRule(identity);
+      if (!rule) return;
+      this.setRateLimitRuleEnabled(identity, rule.enabled === false);
+    },
+
     confirmDeleteRateLimitRule() {
       const identity = this.rlRule.identity;
       const info = this.rlScopeInfo(this.rlRule.scope);
+      const windows = (this.rlRule.schedule || []).length;
+      // Names the reversible alternative, because the two actions are one click apart and only one
+      // of them can be undone after a save.
+      const cost = windows
+        ? ' ' + this.formatNum(windows) + ' schedule window' + (windows === 1 ? '' : 's') + ' go with it.'
+        : '';
       this.openConfirm({
-        title: 'Delete this rule?',
-        message: info.short + ' “' + this.rlRule.target + '” stops being limited by this rule once you save. Windows on it are deleted with it.',
-        confirmLabel: 'Delete rule',
+        title: 'Delete this rule permanently?',
+        message: info.short + ' “' + this.rlRule.target + '” stops being limited by this rule once you save.' + cost
+          + ' To stop enforcing it without losing the tier or the windows, switch it off instead.',
+        confirmLabel: 'Delete permanently',
         danger: true,
         onConfirm: () => {
           this.rlDraft.rules = this.rlDraft.rules.filter(r => this.rlIdentity(r.scope, r.target) !== identity);
@@ -3790,7 +3827,7 @@ function adminApp() {
         this.rlNewRuleError = 'A tenant rule with rpm 0 keeps the plan rate; set burst to 0 as well.';
         return;
       }
-      this.rlDraft.rules.push({ scope: n.scope, target, ...tier, schedule: [] });
+      this.rlDraft.rules.push({ scope: n.scope, target, ...tier, enabled: true, schedule: [] });
       this.rlNewRuleOpen = false;
       this.queueRateLimitScheduleRefresh();
       if (andSchedule) {
@@ -4464,7 +4501,10 @@ function adminApp() {
         rlZone: b('rlZone'),
         rlRangeDays: b('rlRangeDays'),
         rlPreviewAt: b('rlPreviewAt'),
-        rlRule: { rpm: b('rlRule.rpm'), burst: b('rlRule.burst'), maxConcurrentStreams: b('rlRule.maxConcurrentStreams') },
+        rlRule: {
+          rpm: b('rlRule.rpm'), burst: b('rlRule.burst'), maxConcurrentStreams: b('rlRule.maxConcurrentStreams'),
+          enabled: b('rlRule.enabled')
+        },
         rlTier: { slug: b('rlTier.slug'), rpm: b('rlTier.rpm'), burst: b('rlTier.burst'), maxConcurrentStreams: b('rlTier.maxConcurrentStreams') },
         rlWindow: {
           name: b('rlWindow.name'), rpm: b('rlWindow.rpm'), burst: b('rlWindow.burst'), maxConcurrentStreams: b('rlWindow.maxConcurrentStreams'),
@@ -6807,7 +6847,13 @@ function adminApp() {
         if (JSON.stringify(b[id]) === JSON.stringify(a[id])) continue;
         const r = a[id] || b[id];
         const label = this.rlScopeInfo(r.scope).short + ' ' + (r.target === '*' ? '' : r.target);
-        items.push((!b[id] ? 'new rule ' : !a[id] ? 'deleted rule ' : '') + label.trim());
+        // Switching a rule off is the one edit whose effect is invisible in the numbers, so the
+        // change list names it rather than reporting a bare "rule X".
+        const prefix = !b[id] ? 'new rule '
+          : !a[id] ? 'deleted rule '
+          : b[id].enabled !== a[id].enabled ? (a[id].enabled ? 'switched on rule ' : 'switched off rule ')
+          : '';
+        items.push(prefix + label.trim());
       }
       const count = items.length;
       return {
@@ -6958,7 +7004,14 @@ function adminApp() {
           const changed = !saved || JSON.stringify(this.buildRateLimitsPayload({ rules: [saved], plans: {}, default: {} }).rules[0]) !==
             JSON.stringify(this.buildRateLimitsPayload({ rules: [rule], plans: {}, default: {} }).rules[0]);
           const windows = (rule.schedule || []).length;
-          const force = changed ? { dot: '', text: this.rlTierText(rule), sub: 'unsaved · in force once saved', title: '' } : this.rlForceFor(rule);
+          const off = rule.enabled === false;
+          // A switched-off rule enforces nothing, so it reports that rather than a tier it is not
+          // applying — and it says the tier is kept, which is the whole difference from deleting it.
+          const force = off
+            ? { dot: 'warn', text: 'off', sub: this.rlTierText(rule) + ' kept', title: 'This rule is switched off and enforces nothing' }
+            : changed
+              ? { dot: '', text: this.rlTierText(rule), sub: 'unsaved · in force once saved', title: '' }
+              : this.rlForceFor(rule);
           const target = info.singleton ? info.name : String(rule.target || '').replace('|', ' · ');
           return {
             key: identity + ':' + index,
@@ -6971,8 +7024,12 @@ function adminApp() {
             forceText: force.text,
             forceSub: force.sub,
             forceTitle: force.title,
+            enabled: !off,
+            enabledAria: off ? 'false' : 'true',
+            enabledLabel: (off ? 'Switch on rule ' : 'Switch off rule ') + target,
+            toggle: () => this.toggleRateLimitRuleEnabled(identity),
             ariaLabel: 'Open rule ' + target + (info.singleton ? '' : ' (' + info.name + ')') + ', ' + force.text,
-            rowCls: 'rl-row' + (changed ? ' changed' : ''),
+            rowCls: 'rl-row' + (changed ? ' changed' : '') + (off ? ' off' : ''),
             open: () => this.openRateLimitRule(identity)
           };
         });
@@ -7145,7 +7202,12 @@ function adminApp() {
       const r = this.rlRule;
       const info = this.rlScopeInfo(r.scope);
       const status = this.rlStatusFor(r.scope, r.target);
-      const force = status ? this.rlForceFor({ ...r, schedule: r.schedule }) : { dot: '', text: this.rlTierText(r), sub: 'not saved yet', title: '' };
+      const off = r.enabled === false;
+      const force = off
+        ? { dot: 'warn', text: 'off', sub: this.rlTierText(r) + ' kept, enforcing nothing', title: '' }
+        : status
+          ? this.rlForceFor({ ...r, schedule: r.schedule })
+          : { dot: '', text: this.rlTierText(r), sub: 'not saved yet', title: '' };
       const windows = (r.schedule || []).map((w, i) => {
         const ws = (status?.windows || []).find(x => String(x.name).toLowerCase() === String(w.name).toLowerCase());
         const state = ws?.state || 'unsaved';
@@ -7201,6 +7263,9 @@ function adminApp() {
         forceDot: 'rl-dot ' + force.dot,
         forceBig: force.text,
         forceSub: force.dot === 'on' ? 'Enforcing ' + force.sub : force.sub,
+        enabled: !off,
+        enabledAria: off ? 'false' : 'true',
+        enabledText: off ? 'Switched off — the tier and windows below are kept' : 'Enforced',
         windows,
         noWindows: windows.length === 0,
         bands,

@@ -27,6 +27,10 @@ internal sealed class RateLimitRuleEntityConfiguration : IEntityTypeConfiguratio
         builder.Property(r => r.ScheduleJson)
             .HasColumnType("TEXT");
 
+        // Rows that predate the column are enforced, which is what they were.
+        builder.Property(r => r.Enabled)
+            .HasDefaultValue(true);
+
         builder.HasIndex(r => new { r.Scope, r.TargetKey }).IsUnique();
     }
 }

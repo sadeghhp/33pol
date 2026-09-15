@@ -157,6 +157,112 @@ public sealed class RateLimitConfigAdminServiceTests
         service.GetCurrent().Rules.Should().NotContain(r => r.Scope == RateLimitScopeNames.Anonymous);
     }
 
+    /// <summary>
+    /// A switched-off rule is absent from the scope maps — presence there is what enforcement means —
+    /// so the admin list is rebuilt from the side-car that kept its tier. Without that it could not be
+    /// listed, edited or switched back on.
+    /// </summary>
+    [Fact]
+    public void GetCurrent_ListsASwitchedOffRuleFromTheSideCar()
+    {
+        var service = CreateService(new StubServiceProvider(null, null), new GatewayConfigSnapshot
+        {
+            RateLimits = new RateLimitsConfigSection
+            {
+                Models = new Dictionary<string, RateLimitPolicy>(StringComparer.OrdinalIgnoreCase) { ["still-on"] = new(600, 60, 0) },
+                DisabledRules = new Dictionary<string, RateLimitPolicy>(StringComparer.OrdinalIgnoreCase) { ["model:switched-off"] = new(50, 5, 0) },
+                Schedules = new Dictionary<string, IReadOnlyList<RateLimitWindowDefinition>>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["model:switched-off"] = [StoredWindow],
+                },
+            },
+        });
+
+        var rules = service.GetCurrent().Rules;
+
+        var off = rules.Single(r => r.TargetKey == "switched-off");
+        off.Enabled.Should().BeFalse();
+        off.Rpm.Should().Be(50, "the tier it would enforce if switched back on is kept");
+        off.Schedule.Should().ContainSingle("its windows survive being switched off");
+
+        rules.Single(r => r.TargetKey == "still-on").Enabled.Should().BeTrue();
+    }
+
+    /// <summary>
+    /// Enabled and disabled rules are ordered together, so switching one off does not move it in the
+    /// list — a diff of two GETs should show a changed field, not a reordering.
+    /// </summary>
+    [Fact]
+    public void GetCurrent_OrdersSwitchedOffRulesAmongTheRest()
+    {
+        var service = CreateService(new StubServiceProvider(null, null), new GatewayConfigSnapshot
+        {
+            RateLimits = new RateLimitsConfigSection
+            {
+                Models = new Dictionary<string, RateLimitPolicy>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["aaa"] = new(10, 0, 0),
+                    ["zzz"] = new(30, 0, 0),
+                },
+                DisabledRules = new Dictionary<string, RateLimitPolicy>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["model:mmm"] = new(20, 0, 0),
+                },
+            },
+        });
+
+        service.GetCurrent().Rules
+            .Where(r => r.Scope == RateLimitScopeNames.Model)
+            .Select(r => r.TargetKey)
+            .Should().Equal("aaa", "mmm", "zzz");
+    }
+
+    /// <summary>
+    /// The identity prefix is "scope:", and a target may itself contain a colon — an Ollama-style
+    /// model id. Splitting on the first colon would have truncated it.
+    /// </summary>
+    [Fact]
+    public void GetCurrent_KeepsAColonInsideASwitchedOffTarget()
+    {
+        var service = CreateService(new StubServiceProvider(null, null), new GatewayConfigSnapshot
+        {
+            RateLimits = new RateLimitsConfigSection
+            {
+                DisabledRules = new Dictionary<string, RateLimitPolicy>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["model:llama3:8b"] = new(50, 5, 0),
+                },
+            },
+        });
+
+        var rule = service.GetCurrent().Rules.Single();
+        rule.Scope.Should().Be(RateLimitScopeNames.Model);
+        rule.TargetKey.Should().Be("llama3:8b");
+    }
+
+    /// <summary>
+    /// "tenant" must not also match "tenant_model": the colon in the identity prefix is what keeps
+    /// the two scopes apart.
+    /// </summary>
+    [Fact]
+    public void GetCurrent_DoesNotMistakeAPairScopeForItsPrefix()
+    {
+        var service = CreateService(new StubServiceProvider(null, null), new GatewayConfigSnapshot
+        {
+            RateLimits = new RateLimitsConfigSection
+            {
+                DisabledRules = new Dictionary<string, RateLimitPolicy>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["tenant_model:acme|gpt-4"] = new(50, 5, 0),
+                },
+            },
+        });
+
+        var rule = service.GetCurrent().Rules.Single();
+        rule.Scope.Should().Be(RateLimitScopeNames.TenantModel);
+        rule.TargetKey.Should().Be("acme|gpt-4");
+    }
+
     private static readonly RateLimitWindowDefinition StoredWindow = new(
         "off-peak", RateLimitWindowKinds.Weekly, 1200, 200, 80,
         Days: ["mon", "tue", "wed", "thu", "fri"], Start: "19:00", End: "07:00", TimeZone: "Europe/Berlin");

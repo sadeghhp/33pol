@@ -127,6 +127,20 @@ public sealed record RateLimitsConfigSection
     public IReadOnlyDictionary<string, IReadOnlyList<RateLimitWindowDefinition>> Schedules { get; init; } = EmptySchedules;
 
     /// <summary>
+    /// Rules an operator has switched off, keyed by the same <c>scope:target</c> identity as
+    /// <see cref="Schedules"/>, holding the tier each would enforce if switched back on.
+    /// </summary>
+    /// <remarks>
+    /// A side-car rather than a flag inside the maps above, because those maps <em>are</em> what the
+    /// request path reads: anything present in them is enforced, and a rule that must enforce nothing
+    /// therefore has to be absent from them. It cannot simply be dropped either — the admin surface
+    /// rebuilds its rule list from these maps, so a rule that existed nowhere could not be listed,
+    /// edited or switched back on. Keeping the tier here is what lets a disabled rule come back
+    /// exactly as it was. Its windows stay in <see cref="Schedules"/> under the same key.
+    /// </remarks>
+    public IReadOnlyDictionary<string, RateLimitPolicy> DisabledRules { get; init; } = EmptyMap;
+
+    /// <summary>
     /// On a projected section, the stored section it was projected from; null on a stored section.
     /// The admin surface reads base tiers from here so an active window never shows up as the
     /// configured number.

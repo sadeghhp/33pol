@@ -74,6 +74,16 @@ public sealed record AdminRateLimitRuleDto(
     /// </summary>
     public List<AdminRateLimitWindowDto>? Schedule { get; init; }
 
+    /// <summary>
+    /// Whether the rule is enforced. A disabled rule keeps its tier and windows and is still returned
+    /// by the GET; it simply enforces nothing.
+    /// </summary>
+    /// <remarks>
+    /// Defaults to true, so a client that predates the field keeps writing enforced rules rather than
+    /// silently switching off everything it round-trips.
+    /// </remarks>
+    public bool Enabled { get; init; } = true;
+
     /// <remarks>
     /// The scope is canonicalised rather than merely trimmed. It is persisted verbatim and compared
     /// against the canonical constants everywhere else, so a spelling like <c>"Anonymous"</c> used to
@@ -83,12 +93,14 @@ public sealed record AdminRateLimitRuleDto(
         new(RateLimitScopeNames.Canonical(Scope), Target ?? string.Empty, Rpm, Burst, MaxConcurrentStreams)
         {
             Schedule = Schedule?.Select(static w => w.ToDefinition()).ToArray(),
+            Enabled = Enabled,
         };
 
     public static AdminRateLimitRuleDto FromDefinition(RateLimitRuleDefinition rule) =>
         new(rule.Scope, rule.TargetKey, rule.Rpm, rule.Burst, rule.MaxConcurrentStreams)
         {
             Schedule = rule.Windows.Select(AdminRateLimitWindowDto.FromDefinition).ToList(),
+            Enabled = rule.Enabled,
         };
 }
 

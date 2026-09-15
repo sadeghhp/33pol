@@ -96,6 +96,40 @@ public sealed class AdminRateLimitsDtoTests
         roundTrip.Rules[1].ToDefinition().Schedule.Should().BeNull("an absent schedule means keep what is stored");
     }
 
+    /// <summary>
+    /// The enabled flag crosses the wire, and an absent one means enforced — the important half.
+    /// Were the default false, a client that predates the field would appear to switch off every rule
+    /// it round-tripped.
+    /// </summary>
+    [Fact]
+    public void RoundTrip_CarriesEnabled_AndTreatsAnAbsentFlagAsEnforced()
+    {
+        var dto = new AdminRateLimitsDto
+        {
+            Rules =
+            [
+                new AdminRateLimitRuleDto("model", "switched-off", 600, 60, 40) { Enabled = false },
+                new AdminRateLimitRuleDto("model", "still-on", 600, 60, 40),
+            ],
+        };
+
+        var json = JsonSerializer.Serialize(dto, JsonOptions);
+        json.Should().Contain("\"enabled\"");
+
+        var roundTrip = JsonSerializer.Deserialize<AdminRateLimitsDto>(json, JsonOptions)!;
+        roundTrip.Rules![0].ToDefinition().Enabled.Should().BeFalse();
+        roundTrip.Rules[1].ToDefinition().Enabled.Should().BeTrue();
+
+        // A payload from a client that has never heard of the field.
+        var legacy = JsonSerializer.Deserialize<AdminRateLimitsDto>(
+            """
+            { "rules": [ { "scope": "model", "target": "gpt-4", "rpm": 600, "burst": 60, "maxConcurrentStreams": 0 } ] }
+            """,
+            JsonOptions)!;
+        legacy.Rules![0].Enabled.Should().BeTrue();
+        legacy.Rules[0].ToDefinition().Enabled.Should().BeTrue();
+    }
+
     /// <summary>The singleton scopes travel as ordinary rules with target <c>*</c>.</summary>
     [Fact]
     public void RoundTrip_CarriesSingletonRules()

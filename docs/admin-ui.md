@@ -376,6 +376,13 @@ When the gateway runs in Docker, upstream URLs must use `http://host.docker.inte
       calendar never describe different configurations
 - [ ] **Rate limits:** open a rule with a staged change → the drawer's week strip reads
       **as drafted**, and **as saved** once there is no draft
+- [ ] **Rate limits:** switch a rule off in the **On** column → the row dims and reads **off · &lt;tier&gt;
+      kept**, the save bar says "switched off rule …", and clicking the switch does not open the drawer
+- [ ] **Rate limits:** save it, then send traffic that rule would have refused → it is admitted; the
+      rule is still listed with its tier and windows, and the calendar no longer draws them
+- [ ] **Rate limits:** switch it back on and save → enforced again, with the tier and windows it had
+- [ ] **Rate limits:** **Delete permanently** names how many windows go with the rule and points at
+      switching it off instead
 - [ ] **Rate limits (keyboard):** in **New rule**, Tab reaches the scope group once, then the arrow
       keys move and select between the eight cards
 - [ ] **Rate limits (screen reader):** the scope filter chips, the **Every week / One time** toggle

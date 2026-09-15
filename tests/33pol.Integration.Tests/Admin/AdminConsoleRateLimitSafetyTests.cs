@@ -219,6 +219,87 @@ public sealed class AdminConsoleRateLimitSafetyTests
     }
 
     /// <summary>
+    /// The rule lifecycle was create / edit / delete, so stopping enforcement during an incident meant
+    /// authoring a suspend window with concrete times — and the reachable action was Delete, which
+    /// takes the schedule with it. The switch is the fast, reversible one, in the row and the drawer.
+    /// </summary>
+    [Fact]
+    public async Task EachRule_CanBeSwitchedOffWithoutDeletingIt()
+    {
+        var html = await GetAssetAsync("/admin/index.html");
+        var js = await GetAssetAsync("/admin/admin-app.js");
+
+        // In the row, where an incident reaches for it; the cell stops the click opening the drawer.
+        html.Should().Contain("<th class=\"rl-col-on\">On</th>");
+        html.Should().Contain("<td class=\"rl-col-on\" @click.stop>");
+        html.Should().Contain("@change=\"r.toggle\"");
+
+        // And in the drawer, next to what the rule is currently enforcing.
+        html.Should().Contain("x-model=\"mdl.rlRule.enabled\"");
+        js.Should().Contain("setRateLimitRuleEnabled(identity, enabled)");
+        js.Should().Contain("toggleRateLimitRuleEnabled(identity)");
+    }
+
+    /// <summary>
+    /// Switching off and deleting sit one click apart and only one can be undone after a save, so the
+    /// destructive one says what it costs and names the reversible alternative.
+    /// </summary>
+    [Fact]
+    public async Task Delete_IsDistinguishedFromSwitchingOff()
+    {
+        var html = await GetAssetAsync("/admin/index.html");
+        var js = await GetAssetAsync("/admin/admin-app.js");
+
+        html.Should().Contain(">Delete permanently</button>");
+        js.Should().Contain("title: 'Delete this rule permanently?'");
+        js.Should().Contain("switch it off instead.");
+        js.Should().Contain("' schedule window'");
+    }
+
+    /// <summary>
+    /// Switching a rule off changes no number, so the save bar would otherwise report a bare
+    /// "rule X" for the one edit whose effect is invisible in the numbers.
+    /// </summary>
+    [Fact]
+    public async Task TheChangeList_NamesASwitchedRule()
+    {
+        var js = await GetAssetAsync("/admin/admin-app.js");
+
+        js.Should().Contain("'switched on rule '");
+        js.Should().Contain("'switched off rule '");
+    }
+
+    /// <summary>
+    /// A disabled rule reports that it enforces nothing rather than a tier it is not applying, and
+    /// says the tier is kept — which is the whole difference from having deleted it.
+    /// </summary>
+    [Fact]
+    public async Task ASwitchedOffRule_ReadsAsOffRatherThanAsItsTier()
+    {
+        var css = await GetAssetAsync("/admin/admin.css");
+        var js = await GetAssetAsync("/admin/admin-app.js");
+
+        js.Should().Contain("text: 'off', sub: this.rlTierText(rule) + ' kept'");
+        js.Should().Contain("enabledText: off ? 'Switched off — the tier and windows below are kept' : 'Enforced'");
+
+        // Dimmed, not struck through: it is a rule an operator is coming back to.
+        css.Should().Contain(".rl-row.off td { opacity: 0.62; }");
+    }
+
+    /// <summary>
+    /// An absent `enabled` means enforced. Were it read as false, a gateway that predates the flag
+    /// would appear to have every rule switched off the moment the console loaded it.
+    /// </summary>
+    [Fact]
+    public async Task AnAbsentEnabledField_ReadsAsEnforced()
+    {
+        var js = await GetAssetAsync("/admin/admin-app.js");
+
+        js.Should().Contain("enabled: (r.enabled ?? r.Enabled) !== false,");
+        js.Should().Contain("enabled: row.enabled !== false,");
+    }
+
+    /// <summary>
     /// Ticking "Pause this rule instead" hid the three tier inputs but left their heading behind,
     /// which reads as a rendering fault at the moment the operator is choosing a mode.
     /// </summary>
