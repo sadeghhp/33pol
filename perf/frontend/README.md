@@ -46,17 +46,36 @@ npx playwright install chromium     # once per machine
 The harness needs a gateway with **representative data** — an empty gateway renders empty tables and
 measures nothing useful.
 
+> **The gateway needs a database.** The control plane refuses anonymous callers in every
+> configuration, and a gateway without a connection string has no key store, so nothing can
+> authenticate against it and `/admin/api/*` answers 401 to every request — the console will sign in
+> and then show nothing. Point `ConnectionStrings__GatewayDb` at a scratch SQLite file and let the
+> bootstrap seed an admin key, as below. `Gateway__Bootstrap__KeyPepper` and
+> `Gateway__Security__KeyPepper` must match, or the seeded key will not validate against itself.
+
 ```bash
 # 1. Build and start the gateway (Release: Debug distorts CPU numbers)
 dotnet build src/33pol.App/33pol.App.csproj -c Release
-GATEWAY_ADMIN_API_KEY=sk-33pol-dev-local-unsafe \
+DB=$(mktemp -d)/gw.db
+PEPPER=local-harness-pepper-not-a-secret-1234
+ASPNETCORE_ENVIRONMENT=Development \
 ASPNETCORE_URLS=http://127.0.0.1:5080 \
+ConnectionStrings__GatewayDb="Data Source=$DB" \
+Gateway__Bootstrap__Enabled=true \
+Gateway__Bootstrap__AdminApiKey=sk-33pol-dev-local-unsafe \
+Gateway__Bootstrap__KeyPepper=$PEPPER \
+Gateway__Security__KeyPepper=$PEPPER \
   dotnet run --project src/33pol.App/33pol.App.csproj -c Release --no-build
 
 # 2. Seed the request feed, log ring and error store.
 #    These POSTs are expected to fail with 502 — there is no upstream. The failures are what
 #    populate all three surfaces, which is exactly what the console needs to render.
-K=sk-33pol-dev-local-unsafe
+# The bootstrap key is Admin-only and is refused on the inference path, so mint one that can
+# actually send traffic; without it the feed, the log ring and the error store all stay empty.
+A=sk-33pol-dev-local-unsafe
+K=$(curl -s -X POST http://127.0.0.1:5080/admin/api/keys -H "X-API-Key: $A" \
+      -H 'Content-Type: application/json' -d '{"role":"Both","label":"perf-seed"}' \
+    | python3 -c 'import sys,json; print(json.load(sys.stdin)["secret"])')
 for i in $(seq 1 60); do
   curl -s -o /dev/null -X POST http://127.0.0.1:5080/v1/chat/completions \
     -H "X-API-Key: $K" -H 'Content-Type: application/json' \

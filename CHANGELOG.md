@@ -4,6 +4,64 @@ All notable changes to this project are documented here. Version tags follow [Se
 
 ## [Unreleased]
 
+### Operability (breaking) — readiness means "proven reachable", and the demo registry no longer ships
+
+Three related defects let a gateway that could serve nothing look perfectly healthy.
+
+- **`/health/ready` no longer counts a backend it has never probed.** It asked
+  `IsBackendHealthy`, which answers `!Gateway:HealthCheckStrictMode` — `true` by default — for a
+  model the sweep has not reached a verdict on. A pod therefore passed its readiness gate and took
+  traffic on every rolling restart before a single upstream had been contacted. Readiness now reads
+  the stored probe result, so an unprobed backend is not ready. **Deployment note:** a pod is
+  unready from boot until its first successful probe. The sweep runs immediately at startup, so that
+  is about a second for a reachable upstream — but a pod whose upstreams are unreachable now stays
+  out of its Service, which is the point. The Helm chart exposes `probes.readiness.*` to tune it.
+  Routing is unchanged: `HealthCheckStrictMode` still governs whether the router will *use* an
+  unprobed backend, which is a deliberately separate and more optimistic question.
+- **The response gained `configuredBackends` and `probedBackends`** alongside `healthyBackends`, so
+  a cold start is distinguishable from an outage. An empty registry deliberately stays *ready*: it
+  is an install state, not an outage, and failing readiness there would pull a single-replica pod
+  from its Service exactly when an operator needs the console to add the first route.
+- **`config/models.json` is no longer published.** Its two routes point at the gateway's own listen
+  address, answer their own health probe, and so reported healthy forever — a fresh install came up
+  with two fictional working backends. It remains in the build output for local runs and tests, and
+  is absent from every `dotnet publish`, so the container image and release tarball both ship
+  without it. **A fresh install now starts with an empty registry**; seed it with
+  `Gateway:ModelsConfigPath` or add routes through the admin API.
+- **`gateway_models_configured` is a new gauge, and `GatewayNoHealthyBackends` gained
+  `or absent(gateway_backend_health)`.** `max()` over an empty series returns no samples rather than
+  0, so the outage alert silently never fired for a gateway with no routes at all. The new
+  `GatewayNoModelsConfigured` alert distinguishes "no backends" from "backends are down".
+- **A route pointing at the gateway's own listen address is now unhealthy** with an explanatory
+  error instead of certifying itself, and it skips the failure grace period — it is a configuration
+  fault, not a flap.
+
+### Security (breaking) — a gateway with no database no longer serves its control plane
+
+`appsettings.json` ships an empty `ConnectionStrings:GatewayDb`, and a container leaves
+`ASPNETCORE_ENVIRONMENT` unset, which means Production. That combination started cleanly and served
+the entire admin API — rate limits, CORS, the captured error stream, the traffic profile, config
+reload — to anyone who could reach the port. The fail-closed guard that was meant to prevent it
+existed, but lived inside a hosted service registered only on the branch taken when a connection
+string *was* configured, so it could never run in the one configuration it was written for.
+
+Two changes, both of which may affect an existing deployment:
+
+- **A gateway with no connection string refuses to start outside Development.** It happens during
+  service registration, before Kestrel binds a port. To run without a database deliberately, set
+  `Gateway:Security:AllowAnonymous=true` (env `Gateway__Security__AllowAnonymous`). The security
+  options — including the key-pepper strength check — are now validated in this configuration too,
+  so a host that relied on the published `dev-pepper-change-me` default outside Development will
+  also refuse to start.
+- **Disabling authentication no longer authorizes the control plane.** It grants anonymous
+  *inference*, which is what the mode is for. `Admin` and `Operator` are refused to an anonymous
+  caller in every configuration, so on a gateway with no key store the admin console and admin API
+  are unavailable rather than open, and `/stats` and `/metrics` answer `401` — set
+  `Gateway:Metrics:AllowAnonymous=true` or configure a scrape token to keep scraping such a host.
+
+Health and readiness probes, anonymous inference and `publicAccess` models are unchanged. See
+[docs/security.md](docs/security.md#running-without-authentication).
+
 ### Scheduled rate-limit windows and a redesigned Rate limits page
 
 - Scoped rules can carry **schedule windows**: `once` (from an instant, optionally until another; open-ended is a step change) and `weekly` (days, local start and end, IANA zone). The base tier applies whenever no window is active or a window cannot be evaluated; a `once` window outranks a `weekly` one unless a `priority` says otherwise; same-kind overlaps are refused at save time. Windows are projected into the live configuration lazily, with daylight-saving handled by the zone, and every plan cache misses when a window begins or ends.

@@ -127,7 +127,11 @@ public sealed class ApiKeyAuthenticationHandler : AuthenticationHandler<Authenti
 
     protected override async Task HandleChallengeAsync(AuthenticationProperties properties)
     {
-        if (!_authState.IsAuthenticationRequired || PublicGatewayPaths.IsAnonymous(Request.Path))
+        // Anonymous paths challenge nothing. "Authentication disabled" is no longer a reason to skip
+        // the body: in that mode the Inference policy succeeds without a credential, so the only
+        // challenges left are Admin and Operator — control-plane denials, which must carry the same
+        // OpenAI-shaped error body as every other 401 rather than an empty response.
+        if (PublicGatewayPaths.IsAnonymous(Request.Path))
         {
             return;
         }
@@ -138,7 +142,7 @@ public sealed class ApiKeyAuthenticationHandler : AuthenticationHandler<Authenti
             : GatewayErrorCode.InvalidApiKey;
 
         // The one signal the auth-failure limiter charges on. Set here, where the 401 is actually
-        // written, so a challenge that returns early above (auth off, anonymous path) charges nothing.
+        // written, so a challenge that returns early above (an anonymous path) charges nothing.
         Context.Items[GatewayAuthContextItems.CredentialRejected] = true;
 
         await Context.WriteGatewayErrorAsync(

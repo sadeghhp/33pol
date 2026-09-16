@@ -14,7 +14,9 @@ The exposition carries a `model` label on request, error, latency, stream and to
 | Operator API key | `X-API-Key: <key>` or `Authorization: Bearer <key>` | Any key satisfying the Operator policy (admin role in the operator tenant) |
 | Nothing | — | `Gateway:Metrics:AllowAnonymous=true` (explicit opt-in; only when the port is reachable solely from the scraper's network) |
 
-Anything else is answered `401` with the standard `invalid_api_key` error body. With no token configured and `AllowAnonymous=false` (the shipped default) only an Operator key works, and the gateway logs a startup warning saying so. A gateway with authentication disabled (no keys issued / no database) serves the scrape as it serves everything else.
+Anything else is answered `401` with the standard `invalid_api_key` error body. With no token configured and `AllowAnonymous=false` (the shipped default) only an Operator key works, and the gateway logs a startup warning saying so.
+
+A gateway running **without authentication** (no database, `Gateway:Security:AllowAnonymous=true`) is no exception, and this changed: disabling authentication used to satisfy the Operator check and hand the scrape to anyone. It no longer does — there is no key store, so no caller can satisfy an Operator check, and `/metrics` answers `401`. To scrape such a gateway set `Gateway:Metrics:AllowAnonymous=true` or configure a scrape token. See [security.md](security.md#running-without-authentication).
 
 Prometheus side (`deploy/docker/config/prometheus.yml`):
 
@@ -27,6 +29,15 @@ Prometheus side (`deploy/docker/config/prometheus.yml`):
     static_configs:
       - targets: ["gateway:8080"]
 ```
+
+`/health/ready` means **a backend has been proven reachable**, not "nothing has said otherwise yet".
+A route the health sweep has not yet reached a verdict on does not count as healthy, so a pod is
+unready from boot until its first successful probe — the sweep runs immediately at startup, so that
+is about a second for a reachable upstream. The response carries `configuredBackends` and
+`probedBackends` alongside `healthyBackends` so warm-up is distinguishable from an outage. An empty
+registry stays *ready*: it is an install state, not an outage, and a gateway that failed readiness
+here would be dropped from its Service exactly when an operator needs the admin console to add the
+first route. `gateway_models_configured` is what reports it.
 
 `/health`, `/health/live` and `/health/ready` stay anonymous for probes. Anonymous callers of `/health` get the summary shape (status, counts, per-backend up/down); the per-backend upstream `url` and probe `error` text are included only when the request carries an Operator key.
 
@@ -75,6 +86,7 @@ The error record says which deadline ran out without needing the outcome name: `
 | `gateway_rate_limit_rejections_total` | Counter | `reason` |
 | `gateway_quota_rejections_total` | Counter | — |
 | `gateway_backend_health` | ObservableGauge | `model` |
+| `gateway_models_configured` | ObservableGauge | — (serving routes; 0 when nothing is configured) |
 | `gateway_circuit_breaker_state` | ObservableGauge | `model` (0=closed, 1=half_open, 2=open) |
 | `gateway_circuit_breaker_transitions_total` | Counter | `model`, `to_state` |
 | `gateway_bulkhead_rejections_total` | Counter | `model` |

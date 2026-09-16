@@ -3,6 +3,9 @@
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>
   <ItemGroup>
+    <InternalsVisibleTo Include="33pol.Api.Tests" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\33pol.Core\33pol.Core.csproj" />
     <ProjectReference Include="..\33pol.Security\33pol.Security.csproj" />
   </ItemGroup>

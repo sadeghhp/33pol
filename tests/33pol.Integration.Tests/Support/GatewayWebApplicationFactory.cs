@@ -1,3 +1,5 @@
+using System.Net.Http.Json;
+using System.Text.Json;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Data.Sqlite;
@@ -79,12 +81,13 @@ internal static class GatewayWebApplicationFactory
         string adminApiKey = "sk-33pol-integration-admin-key",
         HttpMessageHandler? upstreamHandler = null,
         IBackendHealthStore? healthStore = null,
-        Action<IDictionary<string, string?>>? configureSettings = null)
+        Action<IDictionary<string, string?>>? configureSettings = null,
+        string? environmentName = null)
     {
         var databaseName = Guid.NewGuid().ToString("N");
         return new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
         {
-            builder.UseSetting(WebHostDefaults.EnvironmentKey, Environments.Development);
+            builder.UseSetting(WebHostDefaults.EnvironmentKey, environmentName ?? Environments.Development);
             builder.UseSetting($"ConnectionStrings:{PersistenceServiceCollectionExtensions.ConnectionStringName}", $"InMemory:{databaseName}");
             builder.UseSetting("Gateway:Bootstrap:Enabled", "true");
             builder.UseSetting("Gateway:Bootstrap:AdminApiKey", adminApiKey);
@@ -181,6 +184,69 @@ internal static class GatewayWebApplicationFactory
                 }
             });
         });
+    }
+
+    /// <summary>Opts a factory into anonymous <c>/metrics</c>.</summary>
+    /// <remarks>
+    /// The scrape is Operator-gated, and "authentication is globally disabled" no longer satisfies
+    /// an Operator check, so a database-less gateway answers 401 there unless the operator says
+    /// otherwise. That is the same contract a scraper-only network uses in production; tests that
+    /// assert on exposition content opt in here rather than being served by an oversight.
+    /// </remarks>
+    public static void AllowAnonymousMetrics(IDictionary<string, string?> settings) =>
+        settings["Gateway:Metrics:AllowAnonymous"] = "true";
+
+    /// <summary>The key the database-backed factories above bootstrap unless told otherwise.</summary>
+    public const string DefaultAdminApiKey = "sk-33pol-integration-admin-key";
+
+    /// <summary>
+    /// A client carrying the bootstrap admin key.
+    /// </summary>
+    /// <remarks>
+    /// The control plane refuses anonymous callers in every configuration, a gateway with
+    /// authentication globally disabled included, so an admin surface has to be reached with a real
+    /// credential. Tests that used to read <c>/admin/api/...</c> off a database-less gateway were
+    /// only ever passing because that gateway was not checking.
+    /// </remarks>
+    public static HttpClient CreateAdminClient(
+        this WebApplicationFactory<Program> factory,
+        string adminApiKey = DefaultAdminApiKey)
+    {
+        var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Add("X-API-Key", adminApiKey);
+        return client;
+    }
+
+    /// <summary>
+    /// Issues an Inference key through the admin API and returns a client carrying it. The
+    /// bootstrap key is Admin-only, so anything that both drives traffic and then inspects it needs
+    /// two credentials — which is also how a real deployment is used.
+    /// </summary>
+    /// <param name="grantedModelIds">
+    /// Models the key may reach. A key with no grants of its own is allowed nothing, so anything
+    /// that actually sends inference has to name what it will ask for.
+    /// </param>
+    public static async Task<HttpClient> CreateInferenceClientAsync(
+        this WebApplicationFactory<Program> factory,
+        HttpClient adminClient,
+        params string[] grantedModelIds)
+    {
+        var created = await adminClient.PostAsJsonAsync("/admin/api/keys", new { role = "Inference" });
+        created.EnsureSuccessStatusCode();
+        using var body = JsonDocument.Parse(await created.Content.ReadAsStringAsync());
+        var secret = body.RootElement.GetProperty("secret").GetString()!;
+
+        if (grantedModelIds.Length > 0)
+        {
+            await ModelGrantTestHelpers.GrantApiKeyModelsAsync(
+                adminClient,
+                Guid.Parse(body.RootElement.GetProperty("id").GetString()!),
+                grantedModelIds);
+        }
+
+        var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Add("X-API-Key", secret);
+        return client;
     }
 
     public static async Task EnsureAuthReadyAsync(WebApplicationFactory<Program> factory)

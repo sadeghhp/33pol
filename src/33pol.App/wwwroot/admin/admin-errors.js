@@ -5,15 +5,69 @@
     try { return JSON.parse(text); } catch { return null; }
   }
 
+  /**
+   * Error codes the gateway sends on an actual credential rejection, in the X-33pol-Error-Code
+   * header (ApiKeyAuthenticationHandler.HandleChallengeAsync). Their presence is the only positive
+   * proof the console has that the key itself is the problem, rather than this one request.
+   */
+  const CREDENTIAL_REJECTION_CODES = new Set(['invalid_api_key', 'expired_api_key']);
+
   function classifyError(status, statusText, text, context) {
     const editModelUrl = context?.editModelUrl || '';
+    const gatewayErrorCode = (context?.gatewayErrorCode || '').trim().toLowerCase();
     const json = parseJsonBody(text);
 
     if (status === 401) {
+      // `credentialRejected` gates a global teardown of the session, so it asserts only what the
+      // gateway actually said. Without that proof the caller re-verifies the key instead of
+      // assuming the worst — a 401 from one endpoint used to stop polling and drop the live stream
+      // for the whole console, including the panels that were working.
+      const rejected = CREDENTIAL_REJECTION_CODES.has(gatewayErrorCode)
+        || json?.error?.type === 'authentication_error';
       return {
         title: 'Authentication failed',
         message: 'Invalid or missing admin API key.',
         detail: json?.detail || null,
+        credentialRejected: rejected,
+        global: true
+      };
+    }
+
+    // Authenticated, but not for this. Never a credential problem, so it must not touch the
+    // session: the request the operator made failed, and nothing else has.
+    if (status === 403) {
+      const message = json?.message
+        || json?.error?.message
+        || json?.detail
+        || 'This admin key is not permitted to perform that action.';
+      return {
+        title: json?.code === 'tenant_context_required' ? 'No tenant for this key' : 'Not permitted',
+        message,
+        detail: null,
+        credentialRejected: false,
+        // Section-level: shown where the operator was working rather than as a page-wide banner,
+        // because the rest of the console is unaffected and still live.
+        global: false,
+        section: json?.code || 'forbidden'
+      };
+    }
+
+    // A 2xx whose body is not JSON. Only reachable from apiJson's parse guard, and almost always
+    // something between the browser and the gateway answering instead of it — an SSO or captive
+    // portal page, a proxy error page — so say that rather than blame the gateway for a body it
+    // never sent.
+    if (status >= 200 && status < 300) {
+      const body = (text || '').trim();
+      const looksLikeAPage = body.startsWith('<') || /<!DOCTYPE/i.test(body);
+      return {
+        title: 'Unexpected response',
+        message: looksLikeAPage
+          ? 'The gateway returned a web page instead of data. Something between this browser and '
+            + 'the gateway answered the request — a proxy, or a sign-in page. Check the connection, '
+            + 'and sign in again if a portal is involved.'
+          : 'The gateway returned a response this console could not read.',
+        detail: body.slice(0, 2000) || null,
+        credentialRejected: false,
         global: true
       };
     }

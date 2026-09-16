@@ -19,7 +19,18 @@
     <InternalsVisibleTo Include="33pol.Integration.Tests" />
   </ItemGroup>
   <ItemGroup>
-    <None Include="..\..\config\models.json" Link="config\models.json" CopyToOutputDirectory="PreserveNewest" />
+    <!--
+      CopyToPublishDirectory="Never" is the point of this line. models.json is a development
+      fixture: two routes pointing at the gateway's own listen address, which answer their own
+      health probe and so certify themselves healthy forever. Publishing it made that fixture a
+      build artefact of the release image, so a fresh install came up with two fictional backends
+      and "nothing is configured" was indistinguishable from "configured and working".
+      It stays in the build output, where local runs and the test suite use it, and it is absent
+      from every `dotnet publish` — the container image and the release tarball both. A release
+      starts with an empty registry and says so.
+    -->
+    <None Include="..\..\config\models.json" Link="config\models.json"
+          CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="Never" />
     <None Include="..\..\config\models.ci.json" Link="config/models.ci.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
   <ItemGroup>

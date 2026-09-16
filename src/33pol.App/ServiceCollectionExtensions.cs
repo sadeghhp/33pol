@@ -4,6 +4,8 @@ using Pol33.App.DependencyInjection.Overview;
 using Pol33.Registry.Health;
 using Pol33.App.Metrics;
 using Pol33.Api.DependencyInjection;
+using Pol33.App.Hosting;
+using Pol33.Core.Abstractions;
 using Pol33.Core.Configuration;
 using Pol33.Core.Http;
 using Pol33.Billing.DependencyInjection;
@@ -39,13 +41,18 @@ public static class ServiceCollectionExtensions
         services.AddGatewayOpenTelemetry();
         services.AddGatewayObservability();
         services.AddGatewayPersistence(configuration);
-        services.AddGatewaySecurity(configuration);
+        // The environment is passed explicitly: without a database the gateway has no key store and
+        // runs open, and this is what lets AddGatewaySecurity refuse that outside Development.
+        services.AddGatewaySecurity(configuration, environment);
         services.AddGatewayPolicy(configuration);
         services.AddGatewayBilling(configuration);
         services.AddGatewayBillingPersistence(configuration);
         services.AddGatewayStatsPersistence(configuration);
         services.AddGatewayErrorTracking(configuration);
         services.AddGatewayConfigSnapshot(configuration);
+        // Lets the health sweep recognise a route pointing back at this gateway. It lives here
+        // because only the host knows what Kestrel bound, and the registry may not reference ASP.NET.
+        services.AddSingleton<IGatewaySelfAddressProvider, GatewayServerAddressProvider>();
         services.AddGatewayRegistry();
         services.AddGatewayApi();
         services.AddGatewayProxy();

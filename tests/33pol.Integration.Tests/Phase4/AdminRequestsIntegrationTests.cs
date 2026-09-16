@@ -51,9 +51,11 @@ public sealed class AdminRequestsIntegrationTests
     public async Task PostInference_ForwardFailure_IncludesErrorCodeInRecentRequests()
     {
         var handler = new ThrowingUpstreamHandler();
-        await using var factory = GatewayWebApplicationFactory.Create(upstreamHandler: handler);
-
-        var client = factory.CreateClient();
+        await using var factory = GatewayWebApplicationFactory.CreateWithInMemoryDatabase(
+            upstreamHandler: handler);
+        await GatewayWebApplicationFactory.EnsureAuthReadyAsync(factory);
+        using var admin = factory.CreateAdminClient();
+        using var client = await factory.CreateInferenceClientAsync(admin, "local-mock");
         using var content = new StringContent(
             """{"model":"local-mock","stream":false}""",
             Encoding.UTF8,
@@ -61,7 +63,7 @@ public sealed class AdminRequestsIntegrationTests
         var inferenceResponse = await client.PostAsync("/v1/chat/completions", content);
         inferenceResponse.StatusCode.Should().Be(HttpStatusCode.BadGateway);
 
-        var adminResponse = await client.GetAsync("/admin/api/requests?limit=10");
+        var adminResponse = await admin.GetAsync("/admin/api/requests?limit=10");
         adminResponse.StatusCode.Should().Be(HttpStatusCode.OK);
 
         var json = await adminResponse.Content.ReadFromJsonAsync<JsonElement>();

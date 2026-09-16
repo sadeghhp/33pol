@@ -16,8 +16,11 @@ public sealed class AdminErrorCapturePipelineTests
     public async Task FailedInference_AppearsInTheErrorsGridWithinTheDefaultWindow()
     {
         var handler = new ThrowingUpstreamHandler();
-        await using var factory = GatewayWebApplicationFactory.Create(upstreamHandler: handler);
-        var client = factory.CreateClient();
+        await using var factory = GatewayWebApplicationFactory.CreateWithInMemoryDatabase(
+            upstreamHandler: handler);
+        await GatewayWebApplicationFactory.EnsureAuthReadyAsync(factory);
+        using var admin = factory.CreateAdminClient();
+        using var client = await factory.CreateInferenceClientAsync(admin, "local-mock");
 
         using var content = new StringContent(
             """{"model":"local-mock","stream":false}""",
@@ -27,7 +30,7 @@ public sealed class AdminErrorCapturePipelineTests
         inference.StatusCode.Should().Be(HttpStatusCode.BadGateway);
 
         var from = Uri.EscapeDataString(DateTimeOffset.UtcNow.AddHours(-24).ToString("O"));
-        var response = await client.GetAsync($"/admin/api/errors/groups?from={from}&limit=50&offset=0");
+        var response = await admin.GetAsync($"/admin/api/errors/groups?from={from}&limit=50&offset=0");
         response.StatusCode.Should().Be(HttpStatusCode.OK);
 
         var body = await response.Content.ReadFromJsonAsync<JsonElement>();
@@ -45,8 +48,11 @@ public sealed class AdminErrorCapturePipelineTests
     public async Task GetGroups_ReportsTheStoredTotalIndependentlyOfTheTimeWindow()
     {
         var handler = new ThrowingUpstreamHandler();
-        await using var factory = GatewayWebApplicationFactory.Create(upstreamHandler: handler);
-        var client = factory.CreateClient();
+        await using var factory = GatewayWebApplicationFactory.CreateWithInMemoryDatabase(
+            upstreamHandler: handler);
+        await GatewayWebApplicationFactory.EnsureAuthReadyAsync(factory);
+        using var admin = factory.CreateAdminClient();
+        using var client = await factory.CreateInferenceClientAsync(admin, "local-mock");
 
         using var content = new StringContent(
             """{"model":"local-mock","stream":false}""",
@@ -58,7 +64,7 @@ public sealed class AdminErrorCapturePipelineTests
         // A window that deliberately excludes the failure just recorded.
         var from = Uri.EscapeDataString(DateTimeOffset.UtcNow.AddDays(-30).ToString("O"));
         var to = Uri.EscapeDataString(DateTimeOffset.UtcNow.AddDays(-29).ToString("O"));
-        var response = await client.GetAsync($"/admin/api/errors/groups?from={from}&to={to}");
+        var response = await admin.GetAsync($"/admin/api/errors/groups?from={from}&to={to}");
 
         var body = await response.Content.ReadFromJsonAsync<JsonElement>();
         body.GetProperty("total").GetInt64().Should().Be(0);

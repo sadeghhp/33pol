@@ -82,8 +82,11 @@ public sealed class AdminConsoleKeyLifecycleActionsTests
     {
         var js = await GetAssetAsync("/admin/admin-app.js");
 
-        js.Should().Contain("'/admin/api/keys/' + id + '/archive'");
-        js.Should().Contain("'/admin/api/keys/' + id + '/unarchive'");
+        // The id is encoded, like every other path segment the console builds. Asserted rather than
+        // merely tolerated: a raw concatenation is the shape that breaks the moment a key id stops
+        // being a GUID, and pinning the endpoint without pinning the encoding invites it back.
+        js.Should().Contain("'/admin/api/keys/' + encodeURIComponent(id) + '/archive'");
+        js.Should().Contain("'/admin/api/keys/' + encodeURIComponent(id) + '/unarchive'");
         js.Should().Contain("method: 'DELETE'");
         js.Should().Contain("confirmKeyPrefix");
         // Archived keys come down with the rest, so the Archived filter needs no second round trip.

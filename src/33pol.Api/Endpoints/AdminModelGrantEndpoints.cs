@@ -3,7 +3,6 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 using Pol33.Core.Abstractions;
-using Pol33.Core.Identity;
 using Pol33.Core.Models;
 using Pol33.Core.Security;
 
@@ -30,9 +29,9 @@ public static class AdminModelGrantEndpoints
         IModelGrantAdminService grants,
         CancellationToken cancellationToken)
     {
-        if (!TryGetTenantId(httpContext, out var tenantId))
+        if (!AdminTenantScope.TryResolve(httpContext, out var tenantId))
         {
-            return Results.Unauthorized();
+            return AdminTenantScope.Denied();
         }
 
         var response = await grants.GetTenantGrantsAsync(tenantId, cancellationToken).ConfigureAwait(false);
@@ -46,9 +45,9 @@ public static class AdminModelGrantEndpoints
         [FromBody] ReplaceModelGrantsRequest? request,
         CancellationToken cancellationToken)
     {
-        if (!TryGetTenantId(httpContext, out var tenantId))
+        if (!AdminTenantScope.TryResolve(httpContext, out var tenantId))
         {
-            return Results.Unauthorized();
+            return AdminTenantScope.Denied();
         }
 
         try
@@ -77,9 +76,9 @@ public static class AdminModelGrantEndpoints
         IModelGrantAdminService grants,
         CancellationToken cancellationToken)
     {
-        if (!TryGetTenantId(httpContext, out var tenantId))
+        if (!AdminTenantScope.TryResolve(httpContext, out var tenantId))
         {
-            return Results.Unauthorized();
+            return AdminTenantScope.Denied();
         }
 
         try
@@ -109,9 +108,9 @@ public static class AdminModelGrantEndpoints
         [FromBody] ReplaceModelGrantsRequest? request,
         CancellationToken cancellationToken)
     {
-        if (!TryGetTenantId(httpContext, out var tenantId))
+        if (!AdminTenantScope.TryResolve(httpContext, out var tenantId))
         {
-            return Results.Unauthorized();
+            return AdminTenantScope.Denied();
         }
 
         try
@@ -144,17 +143,5 @@ public static class AdminModelGrantEndpoints
         {
             return Results.BadRequest(new { message = ex.Message });
         }
-    }
-
-    private static bool TryGetTenantId(HttpContext context, out Guid tenantId)
-    {
-        tenantId = default;
-        if (!context.Items.TryGetValue(TenantContextKeys.HttpContextItemKey, out var value) ||
-            value is not TenantContext tenant)
-        {
-            return false;
-        }
-
-        return Guid.TryParse(tenant.TenantId, out tenantId);
     }
 }

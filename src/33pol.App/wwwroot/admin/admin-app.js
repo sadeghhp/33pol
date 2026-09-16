@@ -83,6 +83,11 @@ function adminApp() {
   return {
     modelTypeCatalog: BOOTSTRAP_MODEL_TYPES,
     tab: 'dashboard',
+    /**
+     * Tabs whose panel has been built. A panel enters on first visit and never leaves: unmounting
+     * on every switch would only move the cost from load to navigation.
+     */
+    mountedTabs: ['dashboard'],
     routingSubTab: 'models',
     showApiKey: false,
     showModelApiKey: false,
@@ -295,7 +300,13 @@ function adminApp() {
     healthLive: null,
     healthReady: null,
     confirmDialog: null,
-    _confirmReturnFocus: null,
+    /** The element focus returns to when the open modal surface closes. */
+    _modalReturnFocus: null,
+    /** Set by openConfirm when the caller knows better than document.activeElement. */
+    _modalReturnFocusOverride: null,
+    /** The surface currently holding focus, and what was made inert behind it. */
+    _modalSurface: null,
+    _modalInerted: [],
     revokeConfirmId: null,
     /** The key awaiting permanent deletion, plus the prefix the operator has to type back. */
     deleteConfirmKey: null,
@@ -329,6 +340,16 @@ function adminApp() {
       if (legacy === 'false') return 'light';
       return 'system';
     })(),
+
+    // One getter per panel: Alpine's CSP build resolves a directive to a property path and nothing
+    // else, so `mountedTabs.includes('logs')` cannot be written in the markup.
+    get mountDashboard() { return this.mountedTabs.includes('dashboard'); },
+    get mountUsage() { return this.mountedTabs.includes('usage'); },
+    get mountRouting() { return this.mountedTabs.includes('routing'); },
+    get mountKeys() { return this.mountedTabs.includes('keys'); },
+    get mountLogs() { return this.mountedTabs.includes('logs'); },
+    get mountErrors() { return this.mountedTabs.includes('errors'); },
+    get mountSettings() { return this.mountedTabs.includes('settings'); },
 
     get store() { return Alpine.store('admin'); },
     // Read-only on purpose. The live key changes only through store.persistApiKey, so no template
@@ -367,12 +388,26 @@ function adminApp() {
           if (!e._reported) this.handleCatch(e);
         }
       });
-      window.addEventListener('beforeunload', () => this.stopLive());
+      window.addEventListener('beforeunload', (e) => this.onBeforeUnload(e));
+      // One effect for every modal surface. It reads the flags (which is what subscribes it) and
+      // then inspects the DOM on the next tick, once x-show has been applied.
+      Alpine.effect(() => {
+        const open = this.anyModalOpen;
+        this.$nextTick(() => this.syncModalFocus(open));
+      });
       this._tickTimer = setInterval(() => {
         if (document.hidden) return;
         // Only the Overview reads the clock; ticking it elsewhere would re-render for nothing.
         if (this.tab === 'dashboard' && this.apiKey) {
-          this._nowTick = Date.now();
+          const now = Date.now();
+          // Written at ~1Hz, not on every 500ms tick. _nowTick is read by a getter on every visible
+          // row and every age line, so each write invalidates all of them; none of those render
+          // finer than a second, so half of that work produced no visible change.
+          if (now - this._nowTick >= 950) this._nowTick = now;
+          // A session the watchdog has declared dead must stop receiving as well as stop asking:
+          // the poll already suspends itself, and without this the push stream could keep filling
+          // the vitals underneath a line that says they are no longer updating.
+          if (this.connectionStatus === 'fail' && this.liveMode) this.syncLive();
           this.checkLiveStale();
           // The wallboard's staleness and severity switches live on <html>, out of reach of any
           // binding inside the panel, so the clock is what keeps them honest.
@@ -414,7 +449,9 @@ function adminApp() {
       if (savedWindow && OVERVIEW_WINDOWS.some(([id]) => id === savedWindow)) this.overviewWindow = savedWindow;
       const resolved = this.resolveHash(location.hash);
       if (resolved) {
-        this.applyErrorHashParams(resolved.params);
+        // Only the Errors tab's own link may set the Errors filters. Applied unconditionally, a
+        // `#/keys?model=gpt-4o` deep link quietly pre-filtered a panel the operator had not opened.
+        if (resolved.tab === 'errors') this.applyErrorHashParams(resolved.params);
         if (resolved.tab === 'dashboard') this.applyDashboardHashParams(resolved.params);
         this.applyTab(resolved.tab, resolved.routingSubTab, false);
         return;
@@ -432,7 +469,7 @@ function adminApp() {
       // Same-tab parameter changes (back/forward between windows) never reach the branch below.
       if (resolved.tab === 'dashboard') this.applyDashboardHashParams(resolved.params);
       if (resolved.tab !== this.tab || (resolved.routingSubTab && resolved.routingSubTab !== this.routingSubTab)) {
-        this.applyErrorHashParams(resolved.params);
+        if (resolved.tab === 'errors') this.applyErrorHashParams(resolved.params);
         this.applyTab(resolved.tab, resolved.routingSubTab, false);
       }
     },
@@ -730,6 +767,8 @@ function adminApp() {
 
     applyTab(name, routingSubTab, updateHash) {
       if (!TABS.includes(name)) return;
+      // Before `tab` changes, so the panel exists by the time x-show reveals it.
+      if (!this.mountedTabs.includes(name)) this.mountedTabs = [...this.mountedTabs, name];
       this.tab = name;
       if (name === 'routing' && routingSubTab) {
         this.routingSubTab = routingSubTab === 'backends' ? 'backends' : 'models';
@@ -805,19 +844,62 @@ function adminApp() {
       }
     },
 
+    /**
+     * Leaving the page. The live stream is always torn down; the prompt is raised only while
+     * rate-limit edits are staged, because that is the one thing on the console that lives solely in
+     * memory — everything else is either already saved or re-fetched on the next load.
+     *
+     * Dirtiness is the same semantic comparison the save bar uses (rateLimitsDirty), not a flag set
+     * by an input event, so typing a value and typing it back leaves the page pristine and silent.
+     *
+     * Browsers ignore any text supplied here and show their own wording; preventDefault plus a
+     * returnValue is simply the shape the event contract requires, and returning the string keeps
+     * engines that predate preventDefault working.
+     */
+    onBeforeUnload(event) {
+      this.stopLive();
+      if (!this.rateLimitsDirty) return undefined;
+      if (event) {
+        event.preventDefault();
+        event.returnValue = '';
+      }
+      return '';
+    },
+
     icon(name) {
       return window.AdminIcons ? window.AdminIcons(name) : '';
     },
 
+    /**
+     * The one place a failed request becomes something the operator can see.
+     *
+     * Every error now reaches them by one route or another. There used to be two independent ways
+     * to reach silence — a `section` that no panel ever rendered, and `global: false`, which simply
+     * fell through the `if` below — and between them a 400 or 409 whose body said exactly what was
+     * wrong ("this key has been used", "label must be 64 characters or fewer") disappeared
+     * completely: the drawer stayed open, nothing appeared, and the click looked like it had done
+     * nothing. Only `localOnly` means "shown elsewhere", because only there has a caller actually
+     * taken responsibility for it.
+     */
     handleCatch(e, options) {
-      if (options?.localOnly || (e.section && !e.global)) return;
+      if (options?.localOnly) return;
+
+      // One rejected key produces one notice, not one per request in flight when it was rejected.
+      const isAuth =
+        e.credentialRejected === true ||
+        e.title === 'Authentication failed' ||
+        /admin API key/i.test(e.message || '');
+      if (isAuth && this.connectionStatus === 'fail') return;
+
+      const message = e.message || String(e);
       if (e.global !== false) {
-        const isAuth =
-          e.title === 'Authentication failed' ||
-          /admin API key/i.test(e.message || '');
-        if (isAuth && this.connectionStatus === 'fail') return;
-        this.store.setGlobalError(e.title || 'Error', e.message || String(e), e.detail);
+        this.store.setGlobalError(e.title || 'Error', message, e.detail);
+        return;
       }
+
+      // Not page-wide — a rejected edit is not a broken console — but not nothing either. A toast
+      // keeps the drawer and its inputs in place while still saying why the save did not happen.
+      this.toast(e.title ? e.title + ' — ' + message : message, 'error');
     },
 
     async runApi(scope, label, fn, options) {
@@ -1059,7 +1141,13 @@ function adminApp() {
         // A rejected key does not recover by being retried: the connection watchdog re-checks it on
         // its own schedule, and polling on regardless meant a stale tab sent a 401 every 2s forever,
         // filling the gateway's admin audit trail.
-        if (this.connectionStatus === 'fail') return;
+        if (this.connectionStatus === 'fail') {
+          // Suspended, and the figures on screen stop moving with it. Marking them stale here is
+          // what keeps the Overview honest: this branch returns before any request can fail, so
+          // pollFailCount never rises and nothing else would ever set it.
+          this.overviewStale = true;
+          return;
+        }
         // While the push stream is delivering frames it owns the summary and the feed; polling on
         // top of it would only double the load for data that is already fresher than 2s.
         const streaming = this.liveMode === 'stream' && this.tab === 'dashboard';
@@ -2241,7 +2329,7 @@ function adminApp() {
     get hasRequestFilters() {
       return !!(this.requestsErrorsOnly || this.requestsModelFilter || this.requestsTenantFilter || this.requestsStatusClass || this.requestsSlowOnly);
     },
-    _optionsFrom(values, emptyLabel) {
+    _optionsFrom(values) {
       const set = new Set(values.filter(Boolean));
       return Array.from(set).sort().map(v => ({ key: v, value: v, label: v }));
     },
@@ -2260,12 +2348,133 @@ function adminApp() {
     },
 
     openConfirm(dialog, returnFocusEl) {
-      this._confirmReturnFocus = returnFocusEl || document.activeElement;
+      // Only the override is recorded here; opening the dialog is what the focus manager reacts to,
+      // and it captures the current element by itself when no override is given.
+      this._modalReturnFocusOverride = returnFocusEl || null;
       this.confirmDialog = dialog;
-      this.$nextTick(() => {
-        const btn = this.$refs.confirmPrimary;
-        if (btn) btn.focus();
-      });
+    },
+
+    /**
+     * Keyboard and screen-reader behaviour for every modal surface in the console.
+     *
+     * The confirm dialog used to be the only one that moved focus, and no surface trapped it or
+     * took the page behind out of reach: with the model drawer open there were 118 focusable
+     * elements still behind it, focus stayed on <body>, and Tab walked straight out of the dialog
+     * into the page it was covering. The delete-key dialog asks the operator to type a prefix into
+     * an input they had to Tab across the whole console to reach.
+     *
+     * Driven by an Alpine effect rather than by edits in a dozen open/close methods: the flags are
+     * read here, so every surface — the ones that exist and the ones added later — is covered by
+     * the same code, and a new drawer cannot forget to opt in.
+     */
+    get anyModalOpen() {
+      return !!(this.confirmDialog || this.rlWindowOpen || this.rlNewRuleOpen
+        || this.rlTierDrawerOpen || this.rlRuleDrawerOpen || this.deleteConfirmKey
+        || this.revokeConfirmId || this.modelTestDialog || this.modelDrawerOpen
+        || this.keyAccessDrawerOpen || this.keysEditDrawerOpen || this.keysDrawerOpen);
+    },
+
+    /**
+     * The surface actually on screen. Read from the DOM rather than mapped from each flag, so the
+     * two cannot drift: x-show sets display:none, which is exactly what offsetParent reports.
+     */
+    _visibleModalSurface() {
+      for (const el of document.querySelectorAll('[role="dialog"], [role="alertdialog"]')) {
+        if (el.offsetParent !== null) return el;
+      }
+      return null;
+    },
+
+    _focusableWithin(root) {
+      const selector = 'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), '
+        + 'select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+      return [...root.querySelectorAll(selector)].filter(el => el.offsetParent !== null);
+    },
+
+    /**
+     * Where the caret should land. A field first, because every drawer here opens on one the
+     * operator is meant to fill in; `data-autofocus` overrides that for the dialogs whose primary
+     * action is the point.
+     */
+    _initialModalFocus(surface) {
+      return surface.querySelector('[data-autofocus]:not([disabled])')
+        || surface.querySelector('input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled])')
+        || this._focusableWithin(surface)[0]
+        || null;
+    },
+
+    /**
+     * @param open the reactive answer to "should a surface be active", which is the authority here.
+     *
+     * The DOM is only consulted for *which* surface, never for whether one is open. x-transition
+     * keeps a closing backdrop displayed until its opacity animation ends, so a surface that has
+     * just been dismissed still looks visible on the tick this runs — reading that as "unchanged"
+     * left the page behind it inert for the rest of the session, with focus stranded in a drawer
+     * that was no longer on screen.
+     */
+    syncModalFocus(open) {
+      if (!open) {
+        this._releaseModalSurface();
+        return;
+      }
+      const surface = this._visibleModalSurface();
+      if (!surface || surface === this._modalSurface) return;
+      if (this._modalSurface) this._releaseModalSurface();
+
+      this._modalReturnFocus = this._modalReturnFocusOverride
+        || (document.activeElement === document.body ? null : document.activeElement);
+      this._modalReturnFocusOverride = null;
+      this._modalSurface = surface;
+
+      // Everything that is not this surface stops being reachable — by pointer, by Tab, and to a
+      // screen reader. aria-hidden goes on beside inert for browsers that do not support it; the
+      // Tab trap below is what makes that safe rather than a way to hide focusable content.
+      this._modalInerted = [];
+      for (const el of document.body.children) {
+        if (el.contains(surface) || el.hasAttribute('inert')) continue;
+        el.inert = true;
+        el.setAttribute('aria-hidden', 'true');
+        this._modalInerted.push(el);
+      }
+
+      const target = this._initialModalFocus(surface);
+      if (target) target.focus();
+    },
+
+    _releaseModalSurface() {
+      for (const el of this._modalInerted || []) {
+        el.inert = false;
+        el.removeAttribute('aria-hidden');
+      }
+      this._modalInerted = [];
+      this._modalSurface = null;
+
+      const el = this._modalReturnFocus;
+      this._modalReturnFocus = null;
+      // Only back to something still on the page: a row action whose row has since been re-rendered
+      // is gone, and focusing a detached node silently drops focus to <body>.
+      if (el && el.isConnected && el.focus) el.focus();
+    },
+
+    /** Keeps Tab inside the open surface, in both directions. */
+    _trapModalTab(e) {
+      const surface = this._modalSurface;
+      if (!surface) return;
+      const items = this._focusableWithin(surface);
+      if (items.length === 0) return;
+
+      const first = items[0];
+      const last = items[items.length - 1];
+      const active = document.activeElement;
+      const outside = !surface.contains(active);
+
+      if (e.shiftKey && (outside || active === first)) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && (outside || active === last)) {
+        e.preventDefault();
+        first.focus();
+      }
     },
 
     /**
@@ -2278,21 +2487,19 @@ function adminApp() {
       const d = this.confirmDialog;
       this.confirmDialog = null;
       if (d?.onCancel) await d.onCancel();
-      const el = this._confirmReturnFocus;
-      this._confirmReturnFocus = null;
-      if (el && el.focus) el.focus();
     },
 
     async confirmOk() {
       const d = this.confirmDialog;
       this.confirmDialog = null;
       if (d?.onConfirm) await d.onConfirm();
-      const el = this._confirmReturnFocus;
-      this._confirmReturnFocus = null;
-      if (el && el.focus) el.focus();
     },
 
     onModalKeydown(e) {
+      if (e.key === 'Tab') {
+        this._trapModalTab(e);
+        return;
+      }
       if (e.key === 'Escape') {
         if (this.confirmDialog) this.cancelConfirm();
         else if (this.rlWindowOpen) this.closeRateLimitWindow();
@@ -2455,7 +2662,7 @@ function adminApp() {
       const key = this.keyEdit;
       if (!key?.id) return;
       await this.runApi('keys', 'Saving key…', async () => {
-        await this.apiJson('/admin/api/keys/' + key.id, {
+        await this.apiJson('/admin/api/keys/' + encodeURIComponent(key.id), {
           method: 'PATCH',
           body: JSON.stringify({
             label: key.label || null,
@@ -2500,7 +2707,7 @@ function adminApp() {
       this.keyAccessSelected = [];
       if (!this.models?.length) await this.fetchModels();
       await this.runApi('keys', 'Loading model access…', async () => {
-        const body = await this.apiJson('/admin/api/keys/' + key.id + '/model-grants');
+        const body = await this.apiJson('/admin/api/keys/' + encodeURIComponent(key.id) + '/model-grants');
         this.keyAccessSelected = [...(body?.modelIds ?? [])];
       });
     },
@@ -2521,7 +2728,7 @@ function adminApp() {
       const key = this.keyAccessEdit;
       if (!key?.id) return;
       await this.runApi('keys', 'Saving model access…', async () => {
-        await this.apiJson('/admin/api/keys/' + key.id + '/model-grants', {
+        await this.apiJson('/admin/api/keys/' + encodeURIComponent(key.id) + '/model-grants', {
           method: 'PUT',
           body: JSON.stringify({ modelIds: this.keyAccessSelected })
         });
@@ -4310,7 +4517,7 @@ function adminApp() {
 
     async archiveKey(id) {
       await this.runApi('keys', 'Archiving…', async () => {
-        await this.store.apiFetch('/admin/api/keys/' + id + '/archive', { method: 'POST' }, this.editModelUrl());
+        await this.store.apiFetch('/admin/api/keys/' + encodeURIComponent(id) + '/archive', { method: 'POST' }, this.editModelUrl());
         this.toast('API key archived.');
         await this.fetchKeys();
       });
@@ -4318,7 +4525,7 @@ function adminApp() {
 
     async unarchiveKey(id) {
       await this.runApi('keys', 'Restoring…', async () => {
-        await this.store.apiFetch('/admin/api/keys/' + id + '/unarchive', { method: 'POST' }, this.editModelUrl());
+        await this.store.apiFetch('/admin/api/keys/' + encodeURIComponent(id) + '/unarchive', { method: 'POST' }, this.editModelUrl());
         this.toast('API key restored to the keys list.');
         await this.fetchKeys();
       });
@@ -4347,7 +4554,7 @@ function adminApp() {
       // leave an error toast over an empty page with the prefix to type again.
       await this.runApi('keys', 'Deleting…', async () => {
         await this.store.apiFetch(
-          '/admin/api/keys/' + key.id,
+          '/admin/api/keys/' + encodeURIComponent(key.id),
           { method: 'DELETE', body: JSON.stringify({ confirmKeyPrefix: prefix }) },
           this.editModelUrl());
         this.cancelDeleteKey();
@@ -4362,7 +4569,7 @@ function adminApp() {
       if (!id) return;
       this.revokeConfirmId = null;
       await this.runApi('keys', 'Revoking…', async () => {
-        await this.store.apiFetch('/admin/api/keys/' + id + '/revoke', { method: 'POST' }, this.editModelUrl());
+        await this.store.apiFetch('/admin/api/keys/' + encodeURIComponent(id) + '/revoke', { method: 'POST' }, this.editModelUrl());
         this.selectedKeyIds = this.selectedKeyIds.filter(existingId => existingId !== id);
         this.toast('API key revoked.');
         await this.fetchKeys();
@@ -4641,6 +4848,16 @@ function adminApp() {
       }));
     },
 
+    /**
+     * How many staged rate-limit changes are waiting to be saved. The sticky save bar that reports
+     * them lives inside the Rate limits sub-tab, so stepping over to CORS or Model access used to
+     * hide every trace of a draft that was still there; the count rides on the sub-tab instead, which
+     * is visible from all of them.
+     */
+    get rateLimitsUnsavedCount() {
+      return this.rlDirtyView.count;
+    },
+
     get settingsTabs() {
       const defs = [
         ['runtime', 'Runtime'],
@@ -4649,10 +4866,16 @@ function adminApp() {
         ['access', 'Model access'],
         ['observability', 'Observability']
       ];
+      const unsaved = this.rateLimitsUnsavedCount;
       return defs.map(([id, label]) => ({
         key: id,
         label,
         cls: this.settingsSubTab === id ? 'active' : '',
+        // Precomputed strings: the CSP evaluator resolves property paths and nothing else.
+        badge: id === 'limits' && unsaved > 0 ? String(unsaved) : '',
+        badgeLabel: id === 'limits' && unsaved > 0
+          ? unsaved + ' unsaved rate-limit change' + (unsaved === 1 ? '' : 's')
+          : '',
         select: () => this.setSettingsSubTab(id)
       }));
     },
@@ -6078,9 +6301,18 @@ function adminApp() {
     },
     get liveBadgeStreaming() { return this.liveMode === 'stream'; },
     get liveBadgeDotClass() { return this.liveMode === 'stream' ? 'live' : ''; },
+    /**
+     * What the figures above it are, and whether they are still moving.
+     *
+     * The second clause is the load-bearing one. While the key is rejected both the poll and the
+     * stream are suspended, so "refreshing every 2s" sat over numbers that had stopped — the
+     * clearest possible way to present stale data as healthy.
+     */
     get updatedLineText() {
       const age = this.summaryAgeText();
       if (!age) return '';
+      if (this.connectionFailed) return 'Updated ' + age + ' · not refreshing — the admin key was rejected';
+      if (this.overviewStale) return 'Updated ' + age + ' · the last refresh failed, showing the previous result';
       if (this.liveMode === 'stream') return 'Updated ' + age + ' · streamed from the gateway as activity changes';
       return 'Updated ' + age + ' · refreshing every 2s';
     },

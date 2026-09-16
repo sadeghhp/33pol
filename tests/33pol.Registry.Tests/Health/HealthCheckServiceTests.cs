@@ -420,13 +420,108 @@ public sealed class HealthCheckServiceTests
     /// default unless a test is specifically isolating behaviour that predates the hysteresis, in
     /// which case 1 keeps that test about the one thing it is checking.
     /// </param>
+    /// <summary>
+    /// The GW-02 self-probe guard. A route whose URL is the gateway's own listener certifies itself:
+    /// the probe asks this process for <c>/v1/models</c>, that path is anonymous, the gateway answers
+    /// 200, and the backend is scored healthy forever on the strength of its own reply. It is never
+    /// probed and never healthy.
+    /// </summary>
+    [Fact]
+    public async Task CheckAllBackendsAsync_SelfReferentialRoute_IsUnhealthyAndNeverProbed()
+    {
+        var handler = new SequenceHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK));
+        var healthStore = new BackendHealthStore(Options.Create(new GatewayOptions()));
+        var registry = Substitute.For<IModelRegistry>();
+        registry.GetAllModels().Returns([new ModelConfig { Id = "self", Url = "http://localhost:8080" }]);
+        var service = CreateService(
+            handler,
+            healthStore,
+            registry,
+            selfAddress: new StubSelfAddressProvider("http://localhost:8080"));
+
+        await service.CheckAllBackendsAsync();
+
+        handler.RequestedPaths.Should().BeEmpty("probing ourselves measures nothing");
+        var health = healthStore.GetHealth("self");
+        health.Should().NotBeNull();
+        health!.IsHealthy.Should().BeFalse();
+        health.Error.Should().Contain("own listen address");
+    }
+
+    /// <summary>
+    /// Condemned on the first sweep, not after the failure threshold. The threshold exists to ride
+    /// out a busy model server answering slowly; a route pointing at the gateway is a configuration
+    /// fault that no number of retries resolves.
+    /// </summary>
+    [Fact]
+    public async Task CheckAllBackendsAsync_SelfReferentialRoute_SkipsTheFailureGracePeriod()
+    {
+        var handler = new SequenceHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK));
+        var healthStore = new BackendHealthStore(Options.Create(new GatewayOptions()));
+        var registry = Substitute.For<IModelRegistry>();
+        registry.GetAllModels().Returns([new ModelConfig { Id = "self", Url = "http://localhost:8080" }]);
+        var service = CreateService(
+            handler,
+            healthStore,
+            registry,
+            unhealthyThreshold: 5,
+            selfAddress: new StubSelfAddressProvider("http://localhost:8080"));
+
+        await service.CheckAllBackendsAsync();
+
+        healthStore.GetHealth("self")!.IsHealthy.Should().BeFalse();
+    }
+
+    /// <summary>
+    /// A real upstream is unaffected. The guard must not condemn a backend merely for living on the
+    /// same machine — a different port is a normal deployment.
+    /// </summary>
+    [Fact]
+    public async Task CheckAllBackendsAsync_NonSelfRoute_IsProbedNormally()
+    {
+        var handler = new SequenceHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK));
+        var healthStore = new BackendHealthStore(Options.Create(new GatewayOptions()));
+        var registry = Substitute.For<IModelRegistry>();
+        registry.GetAllModels().Returns([new ModelConfig { Id = "real", Url = "http://localhost:11434" }]);
+        var service = CreateService(
+            handler,
+            healthStore,
+            registry,
+            selfAddress: new StubSelfAddressProvider("http://localhost:8080"));
+
+        await service.CheckAllBackendsAsync();
+
+        handler.RequestedPaths.Should().NotBeEmpty();
+        healthStore.GetHealth("real")!.IsHealthy.Should().BeTrue();
+    }
+
+    /// <summary>
+    /// With no provider registered the sweep behaves exactly as before. The guard is additive, and a
+    /// host that cannot say what it bound must not start condemning backends.
+    /// </summary>
+    [Fact]
+    public async Task CheckAllBackendsAsync_WithoutASelfAddressProvider_ProbesAsBefore()
+    {
+        var handler = new SequenceHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK));
+        var healthStore = new BackendHealthStore(Options.Create(new GatewayOptions()));
+        var registry = Substitute.For<IModelRegistry>();
+        registry.GetAllModels().Returns([new ModelConfig { Id = "self", Url = "http://localhost:8080" }]);
+        var service = CreateService(handler, healthStore, registry);
+
+        await service.CheckAllBackendsAsync();
+
+        handler.RequestedPaths.Should().NotBeEmpty();
+        healthStore.GetHealth("self")!.IsHealthy.Should().BeTrue();
+    }
+
     private static HealthCheckService CreateService(
         HttpMessageHandler handler,
         IBackendHealthStore? healthStore = null,
         IModelRegistry? registry = null,
         IUpstreamBearerTokenResolver? bearerTokenResolver = null,
         IGatewayErrorRecorder? errorRecorder = null,
-        int? unhealthyThreshold = null)
+        int? unhealthyThreshold = null,
+        IGatewaySelfAddressProvider? selfAddress = null)
     {
         var modelRegistry = registry ?? Substitute.For<IModelRegistry>();
         var store = healthStore ?? new BackendHealthStore(Options.Create(new GatewayOptions()));
@@ -443,7 +538,15 @@ public sealed class HealthCheckServiceTests
             Options.Create(options),
             NullLogger<HealthCheckService>.Instance,
             new HttpClient(handler),
-            errorRecorder);
+            errorRecorder,
+            selfAddress);
+    }
+
+    /// <summary>Says yes to exactly the URLs it is given, so the guard is tested and not the parser.</summary>
+    private sealed class StubSelfAddressProvider(params string[] selfUrls) : IGatewaySelfAddressProvider
+    {
+        public bool IsSelf(string? url) =>
+            url is not null && selfUrls.Contains(url, StringComparer.OrdinalIgnoreCase);
     }
 
     private sealed class SequenceHttpMessageHandler : HttpMessageHandler

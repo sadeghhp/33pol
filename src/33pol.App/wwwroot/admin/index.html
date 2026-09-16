@@ -24,11 +24,11 @@
   <link rel="preload" as="font" type="font/woff2" href="vendor/fonts/IBMPlexSans-400.woff2" crossorigin />
   <link rel="preload" as="font" type="font/woff2" href="vendor/fonts/IBMPlexSans-500.woff2" crossorigin />
   <link rel="stylesheet" href="vendor/fonts.css?v=1" />
-  <link rel="stylesheet" href="admin.css?v=25" />
+  <link rel="stylesheet" href="admin.css?v=26" />
   <script defer src="admin-icons.js?v=11"></script>
-  <script defer src="admin-errors.js?v=7"></script>
-  <script defer src="admin-store.js?v=11"></script>
-  <script defer src="admin-app.js?v=41"></script>
+  <script defer src="admin-errors.js?v=8"></script>
+  <script defer src="admin-store.js?v=12"></script>
+  <script defer src="admin-app.js?v=43"></script>
   <script defer src="vendor/alpine-csp-3.14.9.min.js"></script>
 </head>
 <body x-data="adminApp" x-cloak @keydown.window="onModalKeydown">
@@ -171,6 +171,12 @@
       <main class="page-content" role="main">
 
         <!-- ============================ OVERVIEW ============================ -->
+        <!-- Mounted the first time the tab is opened, and kept from then on (mountedTabs in
+             admin-app.js). All seven panels used to be built on load and merely hidden, so more than
+             half the document was panels the operator had never looked at, carrying their bindings
+             and their share of every reactive pass. Keeping them once mounted is the other half of
+             the trade: x-show still does the showing, so returning to a tab costs nothing. -->
+        <template x-if="mountDashboard">
         <section x-show="isDashboard" role="tabpanel" aria-labelledby="tab-dashboard" id="panel-dashboard">
 
           <!-- Wallboard header. It replaces the whole page header on a NOC screen: the eyebrow, the
@@ -254,7 +260,10 @@
           </div>
 
           <p class="notice warn wb-hide" x-show="showStaleNotice" role="status">Live data may be stale — the last refresh failed. Check your connection.</p>
-          <p class="notice error wb-hide" x-show="connectionFailed" role="status">Your admin API key was rejected. Use <strong>Change key</strong> in the top bar to sign in again.</p>
+          <!-- Shown only once the connection watchdog has confirmed the key itself was refused,
+               not because one request came back 401: a single endpoint's refusal used to land here
+               and tell the operator to replace a key that was working. -->
+          <p class="notice error wb-hide" x-show="connectionFailed" role="status">Your admin API key was rejected, so these figures have stopped updating. Use <strong>Change key</strong> in the top bar to sign in again.</p>
 
           <!-- Attention: what the gateway itself thinks needs an operator, ranked critical first.
                The conditions mirror the shipped Prometheus rules so the console is useful without
@@ -875,7 +884,12 @@
                     <td class="num" x-text="r.tokPerSecText" title="Completion tokens per second"></td>
                     <td class="num" x-text="r.durationText"></td>
                   </tr>
-                  <tr x-show="r.expanded" class="request-detail-row">
+                  <!-- x-if, not x-show: a collapsed detail row that is only hidden is still built, bound and
+                       kept in the document. Across a page of rows that was ~2,000 nodes and several hundred
+                       bindings standing behind a table nobody had expanded. Indentation inside is left as it
+                       was so this change reads as four lines rather than a hundred. -->
+                  <template x-if="r.expanded">
+                  <tr class="request-detail-row">
                     <td colspan="12">
                       <dl class="request-detail-list">
                         <div><dt>Request ID</dt><dd><code x-text="r.requestId"></code></dd></div>
@@ -900,6 +914,7 @@
                       </dl>
                     </td>
                   </tr>
+                  </template>
                 </tbody>
               </template>
             </table>
@@ -912,8 +927,15 @@
             <p x-text="requestsEmptyText"></p>
           </div>
         </section>
+        </template>
 
         <!-- ============================ USAGE ============================ -->
+        <!-- Mounted the first time the tab is opened, and kept from then on (mountedTabs in
+             admin-app.js). All seven panels used to be built on load and merely hidden, so more than
+             half the document was panels the operator had never looked at, carrying their bindings
+             and their share of every reactive pass. Keeping them once mounted is the other half of
+             the trade: x-show still does the showing, so returning to a tab costs nothing. -->
+        <template x-if="mountUsage">
         <section x-show="isUsage" role="tabpanel" aria-labelledby="tab-usage" id="panel-usage">
           <div class="page-header">
             <div class="titles">
@@ -1111,8 +1133,15 @@
             <p>No billing events in this range.</p>
           </div>
         </section>
+        </template>
 
         <!-- ============================ ROUTING ============================ -->
+        <!-- Mounted the first time the tab is opened, and kept from then on (mountedTabs in
+             admin-app.js). All seven panels used to be built on load and merely hidden, so more than
+             half the document was panels the operator had never looked at, carrying their bindings
+             and their share of every reactive pass. Keeping them once mounted is the other half of
+             the trade: x-show still does the showing, so returning to a tab costs nothing. -->
+        <template x-if="mountRouting">
         <section x-show="isRouting" role="tabpanel" aria-labelledby="tab-routing" id="panel-routing">
           <div class="page-header">
             <div class="titles"><span class="eyebrow">Registry</span><h2>Routing</h2></div>
@@ -1253,8 +1282,15 @@
             </div>
           </div>
         </section>
+        </template>
 
         <!-- ============================ API KEYS ============================ -->
+        <!-- Mounted the first time the tab is opened, and kept from then on (mountedTabs in
+             admin-app.js). All seven panels used to be built on load and merely hidden, so more than
+             half the document was panels the operator had never looked at, carrying their bindings
+             and their share of every reactive pass. Keeping them once mounted is the other half of
+             the trade: x-show still does the showing, so returning to a tab costs nothing. -->
+        <template x-if="mountKeys">
         <section x-show="isKeys" role="tabpanel" aria-labelledby="tab-keys" id="panel-keys">
           <div class="page-header">
             <div class="titles"><span class="eyebrow">Access</span><h2>API keys</h2></div>
@@ -1354,8 +1390,15 @@
             <p>No API keys match the filter.</p>
           </div>
         </section>
+        </template>
 
         <!-- ============================ LOGS ============================ -->
+        <!-- Mounted the first time the tab is opened, and kept from then on (mountedTabs in
+             admin-app.js). All seven panels used to be built on load and merely hidden, so more than
+             half the document was panels the operator had never looked at, carrying their bindings
+             and their share of every reactive pass. Keeping them once mounted is the other half of
+             the trade: x-show still does the showing, so returning to a tab costs nothing. -->
+        <template x-if="mountLogs">
         <section x-show="isLogs" role="tabpanel" aria-labelledby="tab-logs" id="panel-logs">
           <div class="page-header">
             <div class="titles">
@@ -1428,7 +1471,12 @@
                     <td class="col-truncate" x-text="l.message" :title="l.message"></td>
                     <td class="col-truncate" x-text="l.modelId" :title="l.modelId"></td>
                   </tr>
-                  <tr x-show="l.expanded" class="request-detail-row">
+                  <!-- x-if, not x-show: a collapsed detail row that is only hidden is still built, bound and
+                       kept in the document. Across a page of rows that was ~2,000 nodes and several hundred
+                       bindings standing behind a table nobody had expanded. Indentation inside is left as it
+                       was so this change reads as four lines rather than a hundred. -->
+                  <template x-if="l.expanded">
+                  <tr class="request-detail-row">
                     <td colspan="5">
                       <p class="log-hint" x-show="l.hasHint">
                         <span class="icon" x-html="icons.lightbulb"></span>
@@ -1449,6 +1497,7 @@
                       </div>
                     </td>
                   </tr>
+                  </template>
                 </tbody>
               </template>
             </table>
@@ -1461,8 +1510,15 @@
             <p x-text="logsEmptyText"></p>
           </div>
         </section>
+        </template>
 
         <!-- ============================ ERRORS ============================ -->
+        <!-- Mounted the first time the tab is opened, and kept from then on (mountedTabs in
+             admin-app.js). All seven panels used to be built on load and merely hidden, so more than
+             half the document was panels the operator had never looked at, carrying their bindings
+             and their share of every reactive pass. Keeping them once mounted is the other half of
+             the trade: x-show still does the showing, so returning to a tab costs nothing. -->
+        <template x-if="mountErrors">
         <section x-show="isErrors" role="tabpanel" aria-labelledby="tab-errors" id="panel-errors">
           <div class="page-header">
             <div class="titles">
@@ -1570,7 +1626,12 @@
                     <td class="col-truncate" x-text="r.errorCode" :title="r.errorCode"></td>
                     <td class="col-truncate" x-text="r.endpointText" :title="r.endpointText"></td>
                   </tr>
-                  <tr x-show="r.expanded" class="request-detail-row">
+                  <!-- x-if, not x-show: a collapsed detail row that is only hidden is still built, bound and
+                       kept in the document. Across a page of rows that was ~2,000 nodes and several hundred
+                       bindings standing behind a table nobody had expanded. Indentation inside is left as it
+                       was so this change reads as four lines rather than a hundred. -->
+                  <template x-if="r.expanded">
+                  <tr class="request-detail-row">
                     <td colspan="8">
                       <!-- The Message column truncates, and for a startup or configuration failure
                            the message is the whole finding — including how to fix it. Render it in
@@ -1661,6 +1722,7 @@
                       </table>
                     </td>
                   </tr>
+                  </template>
                 </tbody>
               </template>
             </table>
@@ -1687,8 +1749,15 @@
             </button>
           </div>
         </section>
+        </template>
 
         <!-- ============================ SETTINGS ============================ -->
+        <!-- Mounted the first time the tab is opened, and kept from then on (mountedTabs in
+             admin-app.js). All seven panels used to be built on load and merely hidden, so more than
+             half the document was panels the operator had never looked at, carrying their bindings
+             and their share of every reactive pass. Keeping them once mounted is the other half of
+             the trade: x-show still does the showing, so returning to a tab costs nothing. -->
+        <template x-if="mountSettings">
         <section x-show="isSettings" role="tabpanel" aria-labelledby="tab-settings" id="panel-settings">
           <div class="page-header">
             <div class="titles"><span class="eyebrow">Configuration</span><h2>Settings</h2></div>
@@ -1699,7 +1768,7 @@
 
           <nav class="sub-nav" aria-label="Settings sections">
             <template x-for="t in settingsTabs" :key="t.key">
-              <button type="button" :class="t.cls" @click="t.select" x-text="t.label"></button>
+              <button type="button" :class="t.cls" @click="t.select"><span x-text="t.label"></span><span class="sub-nav-badge" x-show="t.badge" x-text="t.badge" :aria-label="t.badgeLabel"></span></button>
             </template>
           </nav>
 
@@ -2080,6 +2149,7 @@
             </div>
           </div>
         </section>
+        </template>
       </main>
 
       <!-- A real element rather than the old body::after: the hint has to report something no fixed
@@ -2551,20 +2621,22 @@
 
   <!-- Confirm dialog -->
   <div class="modal-backdrop" x-show="confirmView.open" @click.self="cancelConfirm" x-transition.opacity role="presentation">
-    <div class="modal" role="alertdialog" :aria-labelledby="confirmView.labelledBy">
+    <div class="modal" role="alertdialog" aria-modal="true" :aria-labelledby="confirmView.labelledBy">
       <h3 id="confirm-title" x-text="confirmView.title"></h3>
       <p class="muted" x-text="confirmView.message"></p>
       <div class="modal-actions">
         <button type="button" class="action secondary" @click="cancelConfirm">Cancel</button>
+        <!-- data-autofocus keeps this dialog's long-standing behaviour of landing on the primary
+             action; every other surface opens on its first field instead. -->
         <button type="button" class="action" :class="confirmView.confirmClass" x-ref="confirmPrimary"
-          @click="confirmOk" x-text="confirmView.confirmLabel"></button>
+          data-autofocus @click="confirmOk" x-text="confirmView.confirmLabel"></button>
       </div>
     </div>
   </div>
 
   <!-- Revoke dialog -->
   <div class="modal-backdrop" x-show="revokeConfirmId" @click.self="cancelRevoke" x-transition.opacity role="presentation">
-    <div class="modal" role="alertdialog" aria-labelledby="revoke-title">
+    <div class="modal" role="alertdialog" aria-modal="true" aria-labelledby="revoke-title">
       <h3 id="revoke-title">Revoke API key?</h3>
       <p class="muted">This cannot be undone. Clients using this key will be rejected immediately. The key keeps its usage history, and you can archive it afterwards to file it out of this list.</p>
       <div class="modal-actions">
@@ -2577,7 +2649,7 @@
   <!-- Permanent-delete dialog. Its own dialog rather than the shared confirm, because it asks the
        operator to type the key prefix back — the same confirmation the endpoint requires. -->
   <div class="modal-backdrop" x-show="deleteConfirmOpen" @click.self="cancelDeleteKey" x-transition.opacity role="presentation">
-    <div class="modal" role="alertdialog" aria-labelledby="delete-key-title">
+    <div class="modal" role="alertdialog" aria-modal="true" aria-labelledby="delete-key-title">
       <h3 id="delete-key-title">Delete this API key permanently?</h3>
       <p class="muted">
         <strong x-text="deleteConfirmName"></strong> has never been used, so it can be removed

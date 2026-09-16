@@ -247,21 +247,45 @@ public sealed class ApiKeyAuthenticationHandlerTests
         context.Items[GatewayAuthContextItems.CredentialRejected].Should().Be(true);
     }
 
-    /// <summary>A challenge that writes nothing (auth off, anonymous path) charges nothing either.</summary>
+    /// <summary>A challenge that writes nothing — an anonymous path — charges nothing either.</summary>
     [Fact]
-    public async Task HandleChallengeAsync_WhenAuthenticationIsNotRequired_DoesNotMark()
+    public async Task HandleChallengeAsync_OnAnAnonymousPath_DoesNotMark()
     {
         var handler = CreateHandler(out var authState, out _);
         authState.IsAuthenticationRequired = false;
 
         var context = new DefaultHttpContext();
-        context.Request.Path = "/v1/chat/completions";
+        context.Request.Path = "/health/ready";
         context.Response.Body = new MemoryStream();
 
         await handler.InitializeAsync(new AuthenticationScheme(GatewayAuthSchemes.ApiKey, null, typeof(ApiKeyAuthenticationHandler)), context);
         await handler.ChallengeAsync(null);
 
         context.Items.ContainsKey(GatewayAuthContextItems.CredentialRejected).Should().BeFalse();
+    }
+
+    /// <summary>
+    /// "Authentication is disabled" used to skip the error body as well, which was harmless only
+    /// while the disabled mode authorized everything. Now that it refuses the control plane, a
+    /// denial there is a real 401 and must carry the same body as any other — an empty response
+    /// would leave a caller with a bare status and no error code.
+    /// </summary>
+    [Fact]
+    public async Task HandleChallengeAsync_AuthDisabled_OnTheControlPlane_WritesTheErrorBody()
+    {
+        var handler = CreateHandler(out var authState, out _);
+        authState.IsAuthenticationRequired = false;
+
+        var context = new DefaultHttpContext();
+        context.Request.Path = "/admin/api/rate-limits";
+        context.Response.Body = new MemoryStream();
+
+        await handler.InitializeAsync(new AuthenticationScheme(GatewayAuthSchemes.ApiKey, null, typeof(ApiKeyAuthenticationHandler)), context);
+        await handler.ChallengeAsync(null);
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status401Unauthorized);
+        context.Response.Headers[GatewayHeaders.ErrorCode].ToString().Should().Be("invalid_api_key");
+        context.Items[GatewayAuthContextItems.CredentialRejected].Should().Be(true);
     }
 
     /// <summary>

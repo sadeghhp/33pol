@@ -19,11 +19,14 @@ public sealed class AdminInFlightRequestsIntegrationTests
     public async Task NonStreamingInference_WhileStillRunning_IsVisibleOnTheDashboard()
     {
         using var upstream = new BlockingUpstreamHandler();
-        await using var factory = GatewayWebApplicationFactory.Create(upstreamHandler: upstream);
-        var client = factory.CreateClient();
+        await using var factory = GatewayWebApplicationFactory.CreateWithInMemoryDatabase(
+            upstreamHandler: upstream);
+        await GatewayWebApplicationFactory.EnsureAuthReadyAsync(factory);
+        using var admin = factory.CreateAdminClient();
+        using var client = await factory.CreateInferenceClientAsync(admin, "local-mock");
 
         // Nothing running yet.
-        var idle = await ReadSummaryAsync(client);
+        var idle = await ReadSummaryAsync(admin);
         idle.GetProperty("activeRequests").GetInt32().Should().Be(0);
 
         using var content = new StringContent(
@@ -33,13 +36,13 @@ public sealed class AdminInFlightRequestsIntegrationTests
         await upstream.WaitUntilRequestArrivedAsync();
 
         // ---- the assertions that would all have failed before the fix ----
-        var live = await ReadSummaryAsync(client);
+        var live = await ReadSummaryAsync(admin);
         live.GetProperty("activeRequests").GetInt32().Should().Be(1, "the inference is running now");
         live.GetProperty("activeStreams").GetInt32().Should().Be(0, "it is not a streaming request");
         live.GetProperty("activeRequestsPerModel").GetProperty("local-mock").GetInt32().Should().Be(1);
         live.GetProperty("totalInferenceRequests").GetInt64().Should().Be(0, "it has not completed");
 
-        var feed = await ReadRequestsAsync(client);
+        var feed = await ReadRequestsAsync(admin);
         var running = feed.EnumerateArray()
             .Single(e => e.GetProperty("modelId").GetString() == "local-mock");
         running.GetProperty("isInFlight").GetBoolean().Should().BeTrue();
@@ -48,7 +51,7 @@ public sealed class AdminInFlightRequestsIntegrationTests
         // The duration has to advance between polls, otherwise the row is a frozen placeholder.
         var firstDuration = running.GetProperty("durationMs").GetDouble();
         await Task.Delay(60);
-        var secondDuration = (await ReadRequestsAsync(client)).EnumerateArray()
+        var secondDuration = (await ReadRequestsAsync(admin)).EnumerateArray()
             .Single(e => e.GetProperty("modelId").GetString() == "local-mock")
             .GetProperty("durationMs").GetDouble();
         secondDuration.Should().BeGreaterThan(firstDuration);
@@ -57,12 +60,12 @@ public sealed class AdminInFlightRequestsIntegrationTests
         (await inference).StatusCode.Should().Be(HttpStatusCode.OK);
 
         // ---- and it settles cleanly ----
-        var settled = await ReadSummaryAsync(client);
+        var settled = await ReadSummaryAsync(admin);
         settled.GetProperty("activeRequests").GetInt32().Should().Be(0);
         settled.GetProperty("totalInferenceRequests").GetInt64().Should().Be(1);
         settled.GetProperty("activeRequestsPerModel").EnumerateObject().Should().BeEmpty();
 
-        var settledFeed = await ReadRequestsAsync(client);
+        var settledFeed = await ReadRequestsAsync(admin);
         var completed = settledFeed.EnumerateArray()
             .Where(e => e.GetProperty("modelId").GetString() == "local-mock")
             .ToList();

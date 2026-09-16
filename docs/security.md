@@ -12,6 +12,46 @@
 
 Keys are stored **hashed** (HMAC + pepper). Plaintext secrets are shown only once at creation.
 
+## Running without authentication
+
+A gateway with no `ConnectionStrings:GatewayDb` has no API key store. It cannot issue keys, and it
+cannot validate one — every request is anonymous, whatever credential it carries.
+
+**Outside Development this configuration refuses to start.** Booting anyway is how a deploy that
+shipped the default empty connection string — or a mistyped secret — ended up serving its whole
+admin API to anyone who could reach the port. The refusal happens while services are being
+registered, before Kestrel binds, and names what to change:
+
+```
+Gateway requires a configured database connection string ('ConnectionStrings:GatewayDb')
+outside Development: without one there is no API key store, so authentication is disabled and
+every endpoint — including the admin control plane — would be reachable anonymously.
+To intentionally run without authentication, set 'Gateway:Security:AllowAnonymous=true'.
+```
+
+Two ways to say you meant it: run in Development, or set `Gateway:Security:AllowAnonymous=true`.
+
+### What the anonymous mode is, and is not
+
+It is an **inference** mode. What it grants is the inference surface; it is not a way to reach the
+control plane without a credential.
+
+| Surface | Without authentication |
+|---|---|
+| `/v1/*` inference and model listing | Served anonymously — the point of the mode |
+| `/health`, `/health/live`, `/health/ready` | Served anonymously, as always (`/health` gives the summary shape only; backend URLs and probe errors need an Operator key) |
+| `/metrics` | **401** unless `Gateway:Metrics:AllowAnonymous=true` or a scrape token is configured |
+| `/admin/api/*`, `/stats` | **401.** The `Admin` and `Operator` policies are never satisfied by an anonymous caller |
+
+Because there is no key store, nothing can satisfy `Admin` or `Operator` on such a gateway, so the
+admin console and every administrative API are unavailable in this mode — permanently, not until you
+sign in. That is the intended trade: it is a deliberately limited mode, not a full deployment
+missing a database. **An administrative gateway needs a database.**
+
+This also applies to a Development gateway that has a database but no keys in it yet: authentication
+is off, so the control plane is closed until the first key exists. `Gateway:Bootstrap:AdminApiKey`
+seeds one on first boot.
+
 ## API key lifecycle
 
 A key is in one of four stored states, derived from two nullable timestamps on `api_keys` plus the

@@ -257,7 +257,8 @@ public sealed class InferenceProxyEndpointTests
     public async Task GetMetrics_IsPassthrough_DoesNotInvokeUpstream()
     {
         var handler = new MockUpstreamHandler();
-        using var factory = GatewayWebApplicationFactory.Create(handler);
+        using var factory = GatewayWebApplicationFactory.Create(
+            handler, configureSettings: GatewayWebApplicationFactory.AllowAnonymousMetrics);
         using var client = factory.CreateClient();
 
         var response = await client.GetAsync("/metrics");

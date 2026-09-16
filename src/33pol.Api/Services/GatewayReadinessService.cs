@@ -20,18 +20,39 @@ public sealed class GatewayReadinessService(
         // left empty by a failed load must never report ready.
         var registryLoaded = registry.IsLoaded && !configReload.IsReloadInProgress;
 
-        var healthyCount = models.Count(model => healthStore.IsBackendHealthy(model.Id));
+        // Stopped routes are excluded: an operator who took a model out of service did not thereby
+        // make the gateway unready, and the health sweep does not probe them either.
+        var enabled = models.Where(model => model.IsServing()).ToList();
+
+        // GetHealth, not IsBackendHealthy. The store answers two different questions and only looks
+        // like one: IsBackendHealthy is deliberately optimistic for an unprobed model (it returns
+        // !HealthCheckStrictMode, true by default) so warm-up traffic is not refused mid-rollout.
+        // Readiness is the other question — has this backend been *proven* usable — and must never
+        // be optimistic, or a pod passes its readiness gate and takes traffic before a single
+        // upstream has been reached. A null verdict means "not probed yet", which is not ready.
+        var probed = enabled
+            .Select(model => healthStore.GetHealth(model.Id))
+            .Where(health => health is not null)
+            .ToList();
+        var healthyCount = probed.Count(health => health!.IsHealthy);
         var draining = drainState.IsDraining;
 
+        // An empty registry stays ready on purpose. It is an install state, not an outage, and a
+        // single-replica gateway that failed its readiness probe here would be dropped from its
+        // Service endpoints exactly when an operator needs the admin console to add the first
+        // route. The blindness that used to hide it is fixed where it belongs: gateway_models_configured
+        // is exported unconditionally, so "nothing configured" alerts instead of passing silently.
         var ready = registryLoaded &&
                     !draining &&
-                    (modelCount == 0 || healthyCount > 0);
+                    (enabled.Count == 0 || healthyCount > 0);
 
         return (new GatewayReadinessResponse
         {
             Status = ready ? "ready" : "not_ready",
             RegistryLoaded = registryLoaded,
             ModelCount = modelCount,
+            ConfiguredBackends = enabled.Count,
+            ProbedBackends = probed.Count,
             HealthyBackends = healthyCount,
             IsDraining = draining,
         }, ready ? StatusCodes.Status200OK : StatusCodes.Status503ServiceUnavailable);

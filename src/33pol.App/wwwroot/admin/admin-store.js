@@ -35,6 +35,10 @@ document.addEventListener('alpine:init', () => {
     _toastId: 0,
     _connectionTimer: null,
     _focusHandler: null,
+    /** Single-flight guard for the recheck a bare 401 triggers. See requestConnectionRecheck. */
+    _recheckInFlight: false,
+    /** Bound by startConnectionWatch so a recheck can reach verifyConnection with its arguments. */
+    _verifyConnection: null,
     _loadingDepth: {},
 
     clearMessages() {
@@ -104,17 +108,34 @@ document.addEventListener('alpine:init', () => {
       }
     },
 
+    /**
+     * The credential header, omitted entirely when there is none.
+     *
+     * An empty `X-API-Key` is not the same as no header: it presents a credential and gets it
+     * refused, which is a rejected sign-in as far as the gateway's auth-failure budget and its
+     * audit trail are concerned. A signed-out console should be anonymous, not wrong.
+     */
     headers() {
-      const h = { 'X-API-Key': this.apiKey };
-      return h;
+      return this.apiKey ? { 'X-API-Key': this.apiKey } : {};
     },
 
     jsonHeaders() {
       return { ...this.headers(), 'Content-Type': 'application/json' };
     },
 
-    classifyAndThrow(status, statusText, text, editModelUrl) {
-      const err = window.AdminErrors.classifyError(status, statusText, text, { editModelUrl });
+    /**
+     * Turns a failed response into the console's normalised error, and decides what it means for
+     * the session as a whole.
+     *
+     * Only a definite credential rejection may declare the session dead. Any 401 used to do that,
+     * which meant one endpoint refusing a request stopped the 2s poll, tore down the live stream,
+     * froze the Overview on figures it kept presenting as current, and told the operator to sign in
+     * again with a key that was never the problem. An unproven 401 now asks the connection watchdog
+     * to check the key — one authoritative request — and leaves everything running meanwhile.
+     */
+    classifyAndThrow(status, statusText, text, editModelUrl, gatewayErrorCode) {
+      const err = window.AdminErrors.classifyError(
+        status, statusText, text, { editModelUrl, gatewayErrorCode });
       const e = new Error(err.message);
       // The HTTP status, so a caller that needs to branch on one can test it instead of matching the
       // number inside the rendered message — which is how a wording change becomes a silent bug.
@@ -123,11 +144,35 @@ document.addEventListener('alpine:init', () => {
       e.detail = err.detail;
       e.global = err.global;
       e.section = err.section;
-      if (status === 401) {
+      // True only when the gateway said the credential itself was refused. Gates the one transition
+      // that stops polling and drops the live stream, so it must never be inferred.
+      e.credentialRejected = err.credentialRejected === true;
+
+      if (e.credentialRejected) {
         this.connectionStatus = 'fail';
         this.connectionDegraded = true;
+      } else if (status === 401) {
+        // Degraded, not dead: the badge says the session could not be confirmed while the recheck
+        // settles it, and polling carries on in the meantime.
+        this.connectionDegraded = true;
+        this.requestConnectionRecheck();
       }
       throw e;
+    },
+
+    /**
+     * Asks the watchdog to settle the question a bare 401 could not.
+     *
+     * Single-flight and deterministic: concurrent 401s produce one probe, and the probe's own
+     * answer — not the request that raised the doubt — is what may set the session to failed.
+     */
+    requestConnectionRecheck() {
+      if (this._recheckInFlight || !this.apiKey || !this._verifyConnection) return;
+      this._recheckInFlight = true;
+      Promise.resolve()
+        .then(() => this._verifyConnection())
+        .catch(() => { /* verifyConnection records its own outcome */ })
+        .finally(() => { this._recheckInFlight = false; });
     },
 
     _sleep(ms) {
@@ -177,7 +222,9 @@ document.addEventListener('alpine:init', () => {
               continue;
             }
             const text = asText ? await res.text() : '';
-            this.classifyAndThrow(res.status, res.statusText, text, editModelUrl);
+            this.classifyAndThrow(
+              res.status, res.statusText, text, editModelUrl,
+              res.headers?.get?.('X-33pol-Error-Code'));
           }
           if (asText) {
             const text = await res.text();
@@ -201,17 +248,43 @@ document.addEventListener('alpine:init', () => {
     async apiFetch(url, options = {}, editModelUrl) {
       const method = (options.method || 'GET').toUpperCase();
       const retry = method === 'GET' ? 1 : 0;
+      // Content-Type describes a body. A GET, or a DELETE that carries none, has nothing to
+      // describe, and declaring a type there is how a same-origin request picks up a preflight and
+      // a content negotiation it never needed.
+      const hasBody = options.body !== undefined && options.body !== null;
       return this.fetchWithRetry(url, {
         ...options,
-        headers: { ...this.jsonHeaders(), ...(options.headers || {}) }
+        headers: { ...(hasBody ? this.jsonHeaders() : this.headers()), ...(options.headers || {}) }
       }, editModelUrl, retry);
     },
 
+    /**
+     * A JSON read that cannot throw an unclassified error.
+     *
+     * The parse used to be bare, so a 200 carrying something other than JSON — an SSO or captive
+     * portal interception page, a proxy error page, a truncated body — produced a raw SyntaxError.
+     * That error carries none of the console's own fields, so it slipped past both the classifier
+     * and the unhandledrejection net in init(), and surfaced (if at all) as
+     * "Unexpected token < in JSON at position 0". Routed through classifyAndThrow it becomes the
+     * same normalised error as any other failure, and admin-errors.js already recognises an HTML
+     * body and says what it means.
+     */
     async apiJson(url, options = {}, editModelUrl) {
       const res = await this.apiFetch(url, options, editModelUrl);
       const text = res._bodyText ?? '';
       if (!text) return null;
-      return JSON.parse(text);
+      try {
+        return JSON.parse(text);
+      } catch {
+        // Reported against the response that actually arrived: a 200 whose body is not JSON is a
+        // gateway that did not answer, whoever ended up answering instead.
+        this.classifyAndThrow(
+          res.status,
+          res.status === 200 ? 'Unexpected response' : res.statusText,
+          text,
+          editModelUrl,
+          res.headers?.get?.('X-33pol-Error-Code'));
+      }
     },
 
     /** Saves the response body; the server's Content-Disposition filename wins over the fallback. */
@@ -286,7 +359,11 @@ document.addEventListener('alpine:init', () => {
           this.connectionDegraded = prevDegraded;
           throw e;
         }
-        if (e && e.title === 'Authentication failed') {
+        // This probe is the authority on the key: it asks the one endpoint every admin credential
+        // can reach, so a 401 here is about the credential and nothing else. Keyed on the status
+        // rather than the rendered title, and deliberately not on `credentialRejected` — a gateway
+        // or proxy that omits the error-code header must still be able to say the key is dead.
+        if (e && (e.status === 401 || e.credentialRejected === true)) {
           this.connectionStatus = 'fail';
           this.connectionDegraded = true;
           // The dedicated "key rejected" banner takes over from the generic error alert.
@@ -301,6 +378,9 @@ document.addEventListener('alpine:init', () => {
 
     startConnectionWatch(editModelUrl) {
       this.stopConnectionWatch();
+      // Captured so an unproven 401 anywhere in the console can ask for the same authoritative
+      // check the timer and the focus listener run, rather than deciding on its own.
+      this._verifyConnection = () => this.verifyConnection(editModelUrl);
       this._connectionTimer = setInterval(() => {
         if (document.hidden || !this.apiKey) return;
         this.verifyConnection(editModelUrl).catch(() => {});
@@ -314,6 +394,7 @@ document.addEventListener('alpine:init', () => {
     },
 
     stopConnectionWatch() {
+      this._verifyConnection = null;
       if (this._connectionTimer) {
         clearInterval(this._connectionTimer);
         this._connectionTimer = null;

@@ -11,6 +11,10 @@ namespace Pol33.Security.Tests.Authorization;
 
 public sealed class GatewayAuthorizationHandlerTests
 {
+    /// <summary>
+    /// Anonymous inference is what the disabled mode is for, and it stays granted without a
+    /// credential. Only the control-plane policies are refused.
+    /// </summary>
     [Fact]
     public async Task HandleAsync_AuthDisabled_SucceedsWithoutUser()
     {
@@ -91,14 +95,43 @@ public sealed class GatewayAuthorizationHandlerTests
         context.HasSucceeded.Should().BeFalse();
     }
 
-    [Fact]
-    public async Task HandleAsync_OperatorPolicy_AuthDisabled_Succeeds()
+    /// <summary>
+    /// The GW-01 regression, at the level that decides it. Disabling authentication used to succeed
+    /// every policy, so a gateway with no key store handed its control plane to anyone who could
+    /// reach the port. Admin and Operator are now refused in that mode — and because nothing can
+    /// authenticate without a key store, refused for good. That is the accepted cost: the DB-less
+    /// anonymous mode is an inference mode, not an administrative one.
+    /// </summary>
+    [Theory]
+    [InlineData(GatewayAuthPolicies.Admin)]
+    [InlineData(GatewayAuthPolicies.Operator)]
+    public async Task HandleAsync_ControlPlanePolicy_AuthDisabled_IsDenied(string policyName)
     {
         var handler = CreateHandler(new GatewayAuthenticationState());
-        var requirement = new GatewayAuthorizationRequirement(GatewayAuthPolicies.Operator);
+        var requirement = new GatewayAuthorizationRequirement(policyName);
         var context = new AuthorizationHandlerContext(
             [requirement],
             new ClaimsPrincipal(new ClaimsIdentity()),
+            null);
+
+        await handler.HandleAsync(context);
+
+        context.HasSucceeded.Should().BeFalse();
+    }
+
+    /// <summary>
+    /// A real Admin key still authorizes the control plane while authentication is globally
+    /// disabled — the mode denies anonymity, not credentials. Unreachable with the null validator in
+    /// place, and pinned so the fix reads as "anonymous is refused", never "the policy is dead".
+    /// </summary>
+    [Fact]
+    public async Task HandleAsync_AdminPolicy_AuthDisabled_StillAcceptsAnAdminKey()
+    {
+        var handler = CreateHandler(new GatewayAuthenticationState());
+        var requirement = new GatewayAuthorizationRequirement(GatewayAuthPolicies.Admin);
+        var context = new AuthorizationHandlerContext(
+            [requirement],
+            CreatePrincipal(ApiKeyRole.Admin),
             null);
 
         await handler.HandleAsync(context);

@@ -82,6 +82,11 @@ gateway:
     scrapeTokenSecret: ""
     scrapeTokenSecretKey: metricsScrapeToken
   # -------------------------------------------------------------------------------------------
+  # Seeds the route table on first boot, and is the source of routes when no database is configured.
+  # This path does not exist in the image: the demo registry is no longer published into it, so a
+  # fresh install starts with an empty registry and says so (gateway_models_configured = 0) instead
+  # of coming up with fictional backends. Mount your own file here to seed routes, or leave it and
+  # add them through the admin API.
   modelsConfigPath: /app/config/models.json
   operatorConsole:
     enabled: false
@@ -138,6 +143,15 @@ probes:
     enabled: true
     failureThreshold: 30
     periodSeconds: 5
+  # A pod is unready until at least one backend has answered a health probe — readiness means "can
+  # serve", not "has not failed yet", so it is withheld through the first sweep rather than assumed.
+  # That sweep runs immediately at startup, so a reachable backend is ready in about a second; an
+  # unreachable one keeps the pod out of the Service, which is the point. Give it room if your
+  # upstreams are slow to accept connections after a node restart.
+  readiness:
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    failureThreshold: 3
 
 terminationGracePeriodSeconds: 60
 

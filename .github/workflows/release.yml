@@ -65,6 +65,17 @@ jobs:
             -p:Version="$ASSEMBLY" \
             -p:InformationalVersion="$VERSION" \
             -p:UseAppHost=false
+
+          # The demo registry must never reach a release artefact. Its two routes point at the
+          # gateway's own listen address, answer their own health probe, and so report healthy
+          # forever — a fresh install would come up with two fictional working backends. The
+          # csproj keeps it out of publish; this is the check that the csproj still does.
+          if [ -e artifacts/gateway/config/models.json ]; then
+            echo "::error::config/models.json is present in the publish output; the development" \
+                 "registry must not ship in a release artefact"
+            exit 1
+          fi
+
           tar -czf "33pol-gateway-${VERSION}-linux-x64.tar.gz" -C artifacts gateway
 
       - name: Upload publish artifact

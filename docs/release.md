@@ -47,7 +47,14 @@ Tag format must match `vMAJOR.MINOR.PATCH` (optional prerelease suffix, e.g. `v2
 ```bash
 # Container
 docker pull ghcr.io/<owner>/33pol:2.0.0
-docker run --rm -p 8080:8080 ghcr.io/<owner>/33pol:2.0.0
+# A release image is Production, and a Production gateway refuses to start without a database:
+# with no key store it can authenticate nobody. For a throwaway version check, say so explicitly —
+# this serves inference anonymously and keeps the control plane closed. Never do this for a real
+# deployment; mount a database instead (see deploy/docker/README.md).
+docker run --rm -p 8080:8080 \
+  -e Gateway__Security__AllowAnonymous=true \
+  -e Gateway__Security__KeyPepper=release-verification-pepper \
+  ghcr.io/<owner>/33pol:2.0.0
 curl -s http://localhost:8080/ | jq .version
 
 # Tarball (from GitHub Releases; install ASP.NET 10 runtime on host first)
@@ -55,6 +62,9 @@ tar -xzf 33pol-gateway-2.0.0-linux-x64.tar.gz
 cd gateway
 export ASPNETCORE_URLS=http://+:8080
 export Gateway__ModelsConfigPath=/path/to/models.json
+# Same rule as above: a version check opts in, a deployment configures a database instead.
+export Gateway__Security__AllowAnonymous=true
+export Gateway__Security__KeyPepper=release-verification-pepper
 dotnet 33pol.App.dll
 ```
 

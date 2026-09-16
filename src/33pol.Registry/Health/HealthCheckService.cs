@@ -35,6 +35,7 @@ public sealed class HealthCheckService : BackgroundService
     private readonly HttpClient _httpClient;
     private readonly bool _ownsHttpClient;
     private readonly IGatewayErrorRecorder? _errorRecorder;
+    private readonly IGatewaySelfAddressProvider? _selfAddress;
 
     // This service's own memory of each backend's last verdict. Transition detection cannot lean
     // on the store: a stub store (or one that was just pruned) answers "unknown" every sweep, which
@@ -69,7 +70,8 @@ public sealed class HealthCheckService : BackgroundService
         IOptions<GatewayOptions> options,
         ILogger<HealthCheckService> logger,
         HttpClient? httpClient = null,
-        IGatewayErrorRecorder? errorRecorder = null)
+        IGatewayErrorRecorder? errorRecorder = null,
+        IGatewaySelfAddressProvider? selfAddress = null)
     {
         _registry = registry;
         _healthStore = healthStore;
@@ -77,6 +79,7 @@ public sealed class HealthCheckService : BackgroundService
         _options = options.Value;
         _logger = logger;
         _errorRecorder = errorRecorder;
+        _selfAddress = selfAddress;
         _httpClient = httpClient ?? new HttpClient(new SocketsHttpHandler { AllowAutoRedirect = false })
         {
             Timeout = TimeSpan.FromSeconds(Math.Max(1, _options.HealthCheckTimeoutSeconds)),
@@ -167,18 +170,39 @@ public sealed class HealthCheckService : BackgroundService
 
     public async Task CheckBackendAsync(ModelConfig model, CancellationToken cancellationToken = default)
     {
-        // Probes carry the model's own upstream credential. Without it an authenticated upstream
-        // answers 401 to every probe path, so the backend was permanently marked unhealthy and every
-        // inference request to it returned 502 — a total outage for any cloud provider.
-        var bearerToken = ResolveBearerTokenSafely(model);
+        bool probeHealthy;
+        int? statusCode;
+        string? error;
+        string? succeededPath = null;
 
-        _lastGoodProbePath.TryGetValue(model.Id, out var preferredPath);
-        var (probeHealthy, statusCode, error, succeededPath) = await ProbeBackendAsync(
-                model.Url,
-                bearerToken,
-                preferredPath,
-                cancellationToken)
-            .ConfigureAwait(false);
+        // A route whose upstream is this gateway certifies itself. The probe asks us for
+        // /v1/models, that path is anonymous, we answer 200, and the backend is scored healthy
+        // forever on the strength of our own reply — which is how two demo routes pointing at
+        // http://localhost:8080 could look like a working fleet. Never probed, never healthy.
+        var isSelfRoute = _selfAddress?.IsSelf(model.Url) == true;
+        if (isSelfRoute)
+        {
+            probeHealthy = false;
+            statusCode = null;
+            error = $"Backend URL '{model.Url}' is this gateway's own listen address, so probing it "
+                    + "would only measure the gateway answering itself. Point this model's url at "
+                    + "the upstream model server.";
+        }
+        else
+        {
+            // Probes carry the model's own upstream credential. Without it an authenticated upstream
+            // answers 401 to every probe path, so the backend was permanently marked unhealthy and every
+            // inference request to it returned 502 — a total outage for any cloud provider.
+            var bearerToken = ResolveBearerTokenSafely(model);
+
+            _lastGoodProbePath.TryGetValue(model.Id, out var preferredPath);
+            (probeHealthy, statusCode, error, succeededPath) = await ProbeBackendAsync(
+                    model.Url,
+                    bearerToken,
+                    preferredPath,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
 
         int consecutiveFailures;
         if (probeHealthy)
@@ -198,7 +222,11 @@ public sealed class HealthCheckService : BackgroundService
         }
 
         var threshold = Math.Max(1, _options.HealthCheckUnhealthyThreshold);
-        var isHealthy = probeHealthy || consecutiveFailures < threshold;
+
+        // The failure threshold exists to ride out a busy model server answering its probe slowly.
+        // A self-referential URL is not a flap — it is a configuration fault that no number of
+        // retries will resolve — so it skips the grace period entirely.
+        var isHealthy = !isSelfRoute && (probeHealthy || consecutiveFailures < threshold);
 
         // The observed status and error are stored even while the backend is still being served, so
         // the Backends card shows a degradation building rather than flipping from clean to down.

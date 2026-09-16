@@ -36,9 +36,9 @@ public static class AdminKeyEndpoints
         IAuditLogger audit,
         CancellationToken cancellationToken)
     {
-        if (!TryGetTenantId(httpContext, out var tenantId))
+        if (!AdminTenantScope.TryResolve(httpContext, out var tenantId))
         {
-            return Results.Unauthorized();
+            return AdminTenantScope.Denied();
         }
 
         AdminApiKeyCreatedResponse created;
@@ -70,9 +70,9 @@ public static class AdminKeyEndpoints
         bool? includeArchived,
         CancellationToken cancellationToken)
     {
-        if (!TryGetTenantId(httpContext, out var tenantId))
+        if (!AdminTenantScope.TryResolve(httpContext, out var tenantId))
         {
-            return Results.Unauthorized();
+            return AdminTenantScope.Denied();
         }
 
         var keys = await adminKeys
@@ -94,9 +94,9 @@ public static class AdminKeyEndpoints
         IAuditLogger audit,
         CancellationToken cancellationToken)
     {
-        if (!TryGetTenantId(httpContext, out var tenantId))
+        if (!AdminTenantScope.TryResolve(httpContext, out var tenantId))
         {
-            return Results.Unauthorized();
+            return AdminTenantScope.Denied();
         }
 
         try
@@ -144,9 +144,9 @@ public static class AdminKeyEndpoints
         DateOnly? to,
         CancellationToken cancellationToken)
     {
-        if (!TryGetTenantId(httpContext, out var tenantId))
+        if (!AdminTenantScope.TryResolve(httpContext, out var tenantId))
         {
-            return Results.Unauthorized();
+            return AdminTenantScope.Denied();
         }
 
         try
@@ -173,9 +173,9 @@ public static class AdminKeyEndpoints
         IAuditLogger audit,
         CancellationToken cancellationToken)
     {
-        if (!TryGetTenantId(httpContext, out var tenantId))
+        if (!AdminTenantScope.TryResolve(httpContext, out var tenantId))
         {
-            return Results.Unauthorized();
+            return AdminTenantScope.Denied();
         }
 
         try
@@ -212,9 +212,9 @@ public static class AdminKeyEndpoints
         IAuditLogger audit,
         CancellationToken cancellationToken)
     {
-        if (!TryGetTenantId(httpContext, out var tenantId))
+        if (!AdminTenantScope.TryResolve(httpContext, out var tenantId))
         {
-            return Results.Unauthorized();
+            return AdminTenantScope.Denied();
         }
 
         try
@@ -251,9 +251,9 @@ public static class AdminKeyEndpoints
         IAuditLogger audit,
         CancellationToken cancellationToken)
     {
-        if (!TryGetTenantId(httpContext, out var tenantId))
+        if (!AdminTenantScope.TryResolve(httpContext, out var tenantId))
         {
-            return Results.Unauthorized();
+            return AdminTenantScope.Denied();
         }
 
         try
@@ -293,9 +293,9 @@ public static class AdminKeyEndpoints
         IAuditLogger audit,
         CancellationToken cancellationToken)
     {
-        if (!TryGetTenantId(httpContext, out var tenantId))
+        if (!AdminTenantScope.TryResolve(httpContext, out var tenantId))
         {
-            return Results.Unauthorized();
+            return AdminTenantScope.Denied();
         }
 
         try
@@ -350,9 +350,9 @@ public static class AdminKeyEndpoints
         IAdminKeyService adminKeys,
         CancellationToken cancellationToken)
     {
-        if (!TryGetTenantId(httpContext, out var tenantId))
+        if (!AdminTenantScope.TryResolve(httpContext, out var tenantId))
         {
-            return Results.Unauthorized();
+            return AdminTenantScope.Denied();
         }
 
         try
@@ -377,9 +377,9 @@ public static class AdminKeyEndpoints
         IAuditLogger audit,
         CancellationToken cancellationToken)
     {
-        if (!TryGetTenantId(httpContext, out var tenantId))
+        if (!AdminTenantScope.TryResolve(httpContext, out var tenantId))
         {
-            return Results.Unauthorized();
+            return AdminTenantScope.Denied();
         }
 
         var keyIds = request.KeyIds
@@ -426,16 +426,4 @@ public static class AdminKeyEndpoints
                 LastUsedAt = ex.LastUsedAt,
             },
             statusCode: StatusCodes.Status409Conflict);
-
-    private static bool TryGetTenantId(HttpContext context, out Guid tenantId)
-    {
-        tenantId = default;
-        if (!context.Items.TryGetValue(TenantContextKeys.HttpContextItemKey, out var value) ||
-            value is not TenantContext tenant)
-        {
-            return false;
-        }
-
-        return Guid.TryParse(tenant.TenantId, out tenantId);
-    }
 }

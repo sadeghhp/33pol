@@ -19,9 +19,17 @@ namespace Pol33.Security.DependencyInjection;
 
 public static class SecurityServiceCollectionExtensions
 {
+    /// <param name="environment">
+    /// The host environment, used to decide whether running without a database — and therefore
+    /// without authentication — is acceptable. Optional so existing callers keep compiling; when it
+    /// is not supplied the environment is read from configuration and, failing that, assumed to be
+    /// Production. Assuming Production is the point: an unknown environment must not be the reason a
+    /// gateway starts with its control plane open.
+    /// </param>
     public static IServiceCollection AddGatewaySecurity(
         this IServiceCollection services,
-        IConfiguration configuration)
+        IConfiguration configuration,
+        IHostEnvironment? environment = null)
     {
         var connectionString = configuration.GetConnectionString(PersistenceServiceCollectionExtensions.ConnectionStringName);
         services.AddSingleton<GatewayAuthenticationState>();
@@ -75,18 +83,36 @@ public static class SecurityServiceCollectionExtensions
         services.AddSingleton<IAuditLogger>(sp => sp.GetRequiredService<FileAuditLogger>());
         services.AddSingleton<IAuditLogReader, FileAuditLogReader>();
 
+        // Registered for both branches. The key pepper encrypts the upstream provider secrets file,
+        // which a gateway without a database still reads and writes, so "no database" is not a
+        // reason to stop checking it — and CacheTtlMinutes is validated in every environment.
+        services.AddSingleton<IValidateOptions<GatewaySecurityOptions>, GatewaySecurityOptionsValidator>();
+        services.AddOptions<GatewaySecurityOptions>().ValidateOnStart();
+
         if (string.IsNullOrWhiteSpace(connectionString))
         {
+            // Decided here, at the point the missing connection string is detected, and eagerly.
+            // This used to live in GatewayAuthenticationInitializer.StartAsync — which is registered
+            // below, inside the branch this one returns before reaching, so the guard could never
+            // run in the one configuration it was written for: a Production deploy shipping the
+            // default (empty) connection string started with IsAuthenticationRequired left at its
+            // `false` default and served the whole control plane anonymously, without even the
+            // warning. Throwing from registration also means the decision lands before Kestrel
+            // binds a port, so there is no window in which an unauthenticated gateway is listening.
+            GuardAnonymousFallback(configuration, ResolveIsDevelopment(configuration, environment));
+
             services.AddSingleton<IApiKeyValidator, NullApiKeyValidator>();
             services.AddSingleton<IModelGrantService, NullModelGrantService>();
             services.AddSingleton<IModelGrantAdminService, NullModelGrantAdminService>();
             services.AddSingleton<IAdminKeyService, NullAdminKeyService>();
+            // Still registered without a database: it is what sets IsAuthenticationRequired
+            // explicitly rather than leaving it at a default, and what logs the warning saying the
+            // gateway is running open. Its own copy of the guard above is kept as defence in depth.
+            services.AddHostedService<GatewayAuthenticationInitializer>();
             return services;
         }
 
         services.AddMemoryCache();
-        services.AddSingleton<IValidateOptions<GatewaySecurityOptions>, GatewaySecurityOptionsValidator>();
-        services.AddOptions<GatewaySecurityOptions>().ValidateOnStart();
 
         services.AddSingleton<ApiKeyNegativeCache>();
         services.AddScoped<IApiKeyValidator, ApiKeyValidator>();
@@ -102,17 +128,75 @@ public static class SecurityServiceCollectionExtensions
 
     public static IApplicationBuilder UseGatewaySecurity(this IApplicationBuilder app, IConfiguration configuration)
     {
-        // Required for endpoint RequireAuthorization even when the database is disabled (handler allows all).
+        // Required for endpoint RequireAuthorization in every configuration.
         app.UseAuthentication();
         app.UseAuthorization();
 
-        var connectionString = configuration.GetConnectionString(PersistenceServiceCollectionExtensions.ConnectionStringName);
-        if (!string.IsNullOrWhiteSpace(connectionString))
-        {
-            app.UseMiddleware<Middleware.GatewayAuthorizationMiddleware>();
-        }
+        // Unconditional. Registering it only when a database was configured left the control plane
+        // of a DB-less host with no path-based authorization at all, which is precisely the host
+        // that has no key store to fall back on. The middleware lets anonymous paths and anonymous
+        // inference through on their own merits, so there is nothing for the connection string to
+        // decide here.
+        app.UseMiddleware<Middleware.GatewayAuthorizationMiddleware>();
 
         return app;
+    }
+
+    /// <summary>
+    /// Refuses to configure a gateway that would run without authentication unless that is plainly
+    /// what the operator meant.
+    /// </summary>
+    /// <remarks>
+    /// Without a database there is no key store, so every request is anonymous and every endpoint —
+    /// the admin control plane included — is open. That is a reasonable local-development default
+    /// and a legitimate deliberate choice; it is never an acceptable accident. Two ways to say you
+    /// meant it: run in Development, or set
+    /// <c>Gateway:Security:AllowAnonymous=true</c>.
+    /// </remarks>
+    /// <exception cref="InvalidOperationException">
+    /// The gateway has no connection string, is not in Development, and has not opted in.
+    /// </exception>
+    internal static void GuardAnonymousFallback(IConfiguration configuration, bool isDevelopment)
+    {
+        if (isDevelopment)
+        {
+            return;
+        }
+
+        var allowAnonymous = bool.TryParse(
+            configuration[$"{GatewaySecurityOptions.SectionName}:AllowAnonymous"],
+            out var anonymousOptIn) && anonymousOptIn;
+        if (allowAnonymous)
+        {
+            return;
+        }
+
+        throw new InvalidOperationException(
+            "Gateway requires a configured database connection string "
+            + $"('ConnectionStrings:{PersistenceServiceCollectionExtensions.ConnectionStringName}') "
+            + "outside Development: without one there is no API key store, so authentication is "
+            + "disabled and every endpoint — including the admin control plane — would be reachable "
+            + "anonymously. To intentionally run without authentication, set "
+            + $"'{GatewaySecurityOptions.SectionName}:AllowAnonymous=true'.");
+    }
+
+    /// <summary>
+    /// The host environment at registration time, falling back to configuration and finally to
+    /// Production — matching <see cref="IHostEnvironment"/>, which also treats an unset
+    /// environment name as Production.
+    /// </summary>
+    private static bool ResolveIsDevelopment(IConfiguration configuration, IHostEnvironment? environment)
+    {
+        if (environment is not null)
+        {
+            return environment.IsDevelopment();
+        }
+
+        var name = configuration[HostDefaults.EnvironmentKey]
+            ?? configuration["ASPNETCORE_ENVIRONMENT"]
+            ?? configuration["DOTNET_ENVIRONMENT"];
+
+        return string.Equals(name, Environments.Development, StringComparison.OrdinalIgnoreCase);
     }
 }
 

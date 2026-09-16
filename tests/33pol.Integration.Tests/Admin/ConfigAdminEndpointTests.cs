@@ -1,23 +1,25 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
-using Microsoft.AspNetCore.Mvc.Testing;
+using Pol33.Integration.Tests.Support;
 
 namespace Pol33.Integration.Tests.Admin;
 
-public sealed class ConfigAdminEndpointTests : IClassFixture<WebApplicationFactory<Program>>
+/// <summary>
+/// These run against a gateway with a key store and call the control plane with a credential. The
+/// shared no-database fixture they used to share served them anonymously, which is no longer true
+/// of any configuration.
+/// </summary>
+public sealed class ConfigAdminEndpointTests
 {
-    private readonly HttpClient _client;
-
-    public ConfigAdminEndpointTests(WebApplicationFactory<Program> factory)
-    {
-        _client = factory.CreateClient();
-    }
-
     [Fact]
     public async Task GetConfigStatus_ReturnsHotReloadShape()
     {
-        var response = await _client.GetAsync("/admin/api/config/status");
+        await using var factory = GatewayWebApplicationFactory.CreateWithInMemoryDatabase();
+        await GatewayWebApplicationFactory.EnsureAuthReadyAsync(factory);
+        using var client = factory.CreateAdminClient();
+
+        var response = await client.GetAsync("/admin/api/config/status");
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
@@ -29,7 +31,11 @@ public sealed class ConfigAdminEndpointTests : IClassFixture<WebApplicationFacto
     [Fact]
     public async Task PostConfigReload_WithValidConfig_ReturnsSuccess()
     {
-        var response = await _client.PostAsync("/admin/api/config/reload", content: null);
+        await using var factory = GatewayWebApplicationFactory.CreateWithInMemoryDatabase();
+        await GatewayWebApplicationFactory.EnsureAuthReadyAsync(factory);
+        using var client = factory.CreateAdminClient();
+
+        var response = await client.PostAsync("/admin/api/config/reload", content: null);
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());

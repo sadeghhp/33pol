@@ -4,7 +4,6 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Pol33.Core.Abstractions;
 using Pol33.Core.Billing;
-using Pol33.Core.Identity;
 using Pol33.Core.Models;
 using Pol33.Core.Security;
 
@@ -101,9 +100,9 @@ public static class AdminUsageEndpoints
         Guid? apiKeyId,
         bool? includeAnonymous)
     {
-        if (!TryGetTenantId(httpContext, out var tenantId))
+        if (!AdminTenantScope.TryResolve(httpContext, out var tenantId))
         {
-            return (null, Results.Unauthorized());
+            return (null, AdminTenantScope.Denied());
         }
 
         var anonymousAllowed = false;
@@ -289,16 +288,4 @@ public static class AdminUsageEndpoints
 
     private static IResult BadRequest(string code, string message) =>
         Results.Json(new { code, message }, statusCode: StatusCodes.Status400BadRequest);
-
-    private static bool TryGetTenantId(HttpContext context, out Guid tenantId)
-    {
-        tenantId = default;
-        if (!context.Items.TryGetValue(TenantContextKeys.HttpContextItemKey, out var value) ||
-            value is not TenantContext tenant)
-        {
-            return false;
-        }
-
-        return Guid.TryParse(tenant.TenantId, out tenantId);
-    }
 }

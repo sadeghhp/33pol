@@ -300,6 +300,47 @@ public sealed class AdminConsoleRateLimitSafetyTests
     }
 
     /// <summary>
+    /// Staged rate-limit edits live only in memory, and a reload discarded them with no prompt. The
+    /// listener that already tore down the live stream now also asks — but only while something is
+    /// actually staged, so a pristine page still leaves in silence.
+    /// </summary>
+    /// <remarks>
+    /// The behaviour is exercised in <c>tests/admin-console/rate-limit-unsaved-guard.test.js</c>
+    /// (<c>node --test tests/admin-console/</c>); what is pinned here is that the console still wires
+    /// it up, which no JavaScript test can see.
+    /// </remarks>
+    [Fact]
+    public async Task ReloadingWithStagedEdits_IsGuarded()
+    {
+        var js = await GetAssetAsync("/admin/admin-app.js");
+
+        js.Should().Contain("window.addEventListener('beforeunload', (e) => this.onBeforeUnload(e));");
+        js.Should().Contain("onBeforeUnload(event)");
+        js.Should().Contain("if (!this.rateLimitsDirty) return undefined;");
+
+        // The stream teardown the listener already did must not become conditional on the draft.
+        js.Should().Contain("this.stopLive();\n      if (!this.rateLimitsDirty)");
+    }
+
+    /// <summary>
+    /// The sticky save bar that reports staged edits sits inside the Rate limits sub-tab, so stepping
+    /// over to CORS or Model access hid every trace of a draft that was still there. The count rides
+    /// on the sub-tab instead, which is visible from all of them.
+    /// </summary>
+    [Fact]
+    public async Task StagedEdits_AreVisibleFromTheOtherSettingsSubTabs()
+    {
+        var html = await GetAssetAsync("/admin/index.html");
+        var css = await GetAssetAsync("/admin/admin.css");
+        var js = await GetAssetAsync("/admin/admin-app.js");
+
+        html.Should().Contain("<span class=\"sub-nav-badge\" x-show=\"t.badge\" x-text=\"t.badge\" :aria-label=\"t.badgeLabel\">");
+        css.Should().Contain(".sub-nav-badge {");
+        js.Should().Contain("get rateLimitsUnsavedCount()");
+        js.Should().Contain("badge: id === 'limits' && unsaved > 0 ? String(unsaved) : '',");
+    }
+
+    /// <summary>
     /// Ticking "Pause this rule instead" hid the three tier inputs but left their heading behind,
     /// which reads as a rendering fault at the moment the operator is choosing a mode.
     /// </summary>

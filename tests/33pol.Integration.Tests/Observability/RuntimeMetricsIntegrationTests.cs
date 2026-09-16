@@ -36,7 +36,8 @@ public sealed class RuntimeMetricsIntegrationTests
     [InlineData("dotnet_monitor_lock_contentions_total")]
     public async Task MetricsEndpoint_ExposesRuntimeSeries(string metricName)
     {
-        using var factory = GatewayWebApplicationFactory.Create();
+        using var factory = GatewayWebApplicationFactory.Create(
+            configureSettings: GatewayWebApplicationFactory.AllowAnonymousMetrics);
         using var client = factory.CreateClient();
 
         var metrics = await client.GetStringAsync("/metrics");
@@ -51,7 +52,8 @@ public sealed class RuntimeMetricsIntegrationTests
     [Fact]
     public async Task MetricsEndpoint_ExposesLargeObjectHeapDimension()
     {
-        using var factory = GatewayWebApplicationFactory.Create();
+        using var factory = GatewayWebApplicationFactory.Create(
+            configureSettings: GatewayWebApplicationFactory.AllowAnonymousMetrics);
         using var client = factory.CreateClient();
 
         var metrics = await client.GetStringAsync("/metrics");

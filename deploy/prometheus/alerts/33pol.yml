@@ -11,14 +11,31 @@ groups:
         annotations:
           summary: Gateway inference error rate above 5%
           description: See runbook docs/runbooks/high-error-rate.md
+      # `absent()` is the half that was missing. max() over an empty series returns nothing rather
+      # than 0, so a gateway whose registry is empty — or whose routes were all stopped or lost —
+      # evaluated to no samples and never alerted, which is precisely the outage that matters most.
       - alert: GatewayNoHealthyBackends
-        expr: max(gateway_backend_health) == 0
+        expr: max(gateway_backend_health) == 0 or absent(gateway_backend_health)
         for: 2m
         labels:
           severity: critical
         annotations:
           summary: No healthy backends registered
           description: See runbook docs/runbooks/all-backends-down.md
+      # Distinguishes "the backends are down" from "there are no backends". A fresh install sits
+      # here until an operator adds a route; anything else means the registry was emptied or failed
+      # to load, and the gateway is answering readiness probes while able to serve nothing.
+      - alert: GatewayNoModelsConfigured
+        expr: gateway_models_configured == 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: Gateway has no models configured
+          description: >-
+            The registry holds no route the gateway will serve. Expected on a fresh install before
+            the first model is added; otherwise the registry was emptied, every route was stopped,
+            or the models file failed to load. See docs/runbooks/all-backends-down.md
       - alert: GatewayUsageParseFailures
         expr: sum(rate(gateway_usage_parse_failures_total[5m])) > 0.1
         for: 5m

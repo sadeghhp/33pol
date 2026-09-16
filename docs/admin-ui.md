@@ -383,6 +383,12 @@ When the gateway runs in Docker, upstream URLs must use `http://host.docker.inte
 - [ ] **Rate limits:** switch it back on and save → enforced again, with the tier and windows it had
 - [ ] **Rate limits:** **Delete permanently** names how many windows go with the rule and points at
       switching it off instead
+- [ ] **Rate limits:** stage an edit, then switch to **CORS** → the **Rate limits** sub-tab carries an
+      unsaved count; discard or save it and the badge clears
+- [ ] **Rate limits:** stage an edit and press reload → the browser asks before discarding it; with
+      nothing staged, reload is silent
+- [ ] **Rate limits:** type a value, then type the saved value back → the badge clears and reload is
+      silent again (dirtiness is a comparison, not a record that a key was pressed)
 - [ ] **Rate limits (keyboard):** in **New rule**, Tab reaches the scope group once, then the arrow
       keys move and select between the eight cards
 - [ ] **Rate limits (screen reader):** the scope filter chips, the **Every week / One time** toggle

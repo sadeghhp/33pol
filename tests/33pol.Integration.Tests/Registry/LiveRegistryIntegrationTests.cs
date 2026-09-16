@@ -58,43 +58,13 @@ public sealed class LiveRegistryIntegrationTests
         }
     }
 
-    [Fact]
-    public async Task PostConfigReload_InvalidJson_ReturnsErrorAndKeepsModels()
-    {
-        var path = await WriteTempModelsFileAsync("""
-            { "models": [ { "id": "keep-me", "url": "http://localhost:8080", "aliases": [] } ] }
-            """);
-
-        try
-        {
-            using var factory = GatewayWebApplicationFactory.Create(
-                configureConfiguration: config =>
-                {
-                    config.AddInMemoryCollection(new Dictionary<string, string?>
-                    {
-                        ["Gateway:ModelsConfigPath"] = path,
-                    });
-                });
-
-            using var client = factory.CreateClient();
-            await WaitForRegistryCountAsync(client, 1);
-
-            await File.WriteAllTextAsync(path, "{ not-json");
-            var reload = await client.PostAsync("/admin/api/config/reload", content: null);
-
-            reload.StatusCode.Should().Be(HttpStatusCode.InternalServerError);
-            using var json = JsonDocument.Parse(await reload.Content.ReadAsStringAsync());
-            json.RootElement.GetProperty("status").GetString().Should().Be("error");
-
-            var models = await client.GetAsync("/v1/models");
-            using var list = JsonDocument.Parse(await models.Content.ReadAsStringAsync());
-            list.RootElement.GetProperty("data").GetArrayLength().Should().Be(1);
-        }
-        finally
-        {
-            CleanupModelsFile(path);
-        }
-    }
+    // PostConfigReload_InvalidJson_ReturnsErrorAndKeepsModels used to live here. It drove
+    // POST /admin/api/config/reload against a database-less gateway, which is the only mode where
+    // models.json is still the source of truth — with a database the loader re-reads routes from it
+    // and a corrupt file is not a failure path at all. That endpoint is now unreachable in that mode
+    // (the control plane refuses anonymous callers everywhere, and a database-less gateway has no
+    // key store to authenticate against), so the behavior is pinned where it actually lives:
+    // Pol33.Registry.Tests.Services.ModelRegistryConfigReloadTests.
 
     private static async Task WaitForRegistryCountAsync(
         HttpClient client,

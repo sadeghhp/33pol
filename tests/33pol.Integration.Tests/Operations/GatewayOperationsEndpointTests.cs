@@ -64,14 +64,19 @@ public sealed class GatewayOperationsEndpointTests : IClassFixture<WebApplicatio
     }
 
     /// <summary>
-    /// This fixture runs with authentication off, which is the only reason an unauthenticated call
-    /// gets the payload. The authorization contract is covered by
+    /// The shape of the snapshot on a gateway that has served nothing yet. It needs an Operator
+    /// credential: the shared fixture runs with authentication disabled, and that is no longer a
+    /// reason for an Operator-gated route to answer. The authorization contract itself is covered by
     /// <see cref="GetStats_WithAuthenticationEnabled_RequiresAdminKey"/>.
     /// </summary>
     [Fact]
     public async Task GetStats_ReturnsMinimalCounters()
     {
-        var response = await _client.GetAsync("/stats");
+        await using var factory = GatewayWebApplicationFactory.CreateWithInMemoryDatabase();
+        await GatewayWebApplicationFactory.EnsureAuthReadyAsync(factory);
+        using var client = factory.CreateAdminClient();
+
+        var response = await client.GetAsync("/stats");
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
@@ -178,13 +183,18 @@ public sealed class GatewayOperationsEndpointTests : IClassFixture<WebApplicatio
     }
 
     /// <summary>
-    /// This fixture runs with authentication off, so the scrape is served like everything else. The
-    /// gated contract is covered by the metrics tests below.
+    /// The exposition's shape, scraped the way a scraper-only network is configured to scrape it.
+    /// Authentication being disabled no longer serves the scrape on its own — the Operator check the
+    /// gate performs is not satisfied by an anonymous caller. The gated contract is covered below.
     /// </summary>
     [Fact]
     public async Task GetMetrics_ReturnsPrometheusExposition()
     {
-        var response = await _client.GetAsync("/metrics");
+        await using var factory = GatewayWebApplicationFactory.Create(
+            configureSettings: GatewayWebApplicationFactory.AllowAnonymousMetrics);
+        using var client = factory.CreateClient();
+
+        var response = await client.GetAsync("/metrics");
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var body = await response.Content.ReadAsStringAsync();

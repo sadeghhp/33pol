@@ -30,7 +30,15 @@ public sealed class GatewayAuthorizationHandler : AuthorizationHandler<GatewayAu
         AuthorizationHandlerContext context,
         GatewayAuthorizationRequirement requirement)
     {
-        if (!_authState.IsAuthenticationRequired)
+        // Authentication disabled is an *inference* mode, not an administrative one. It exists so a
+        // gateway with no key store can still serve models; the control plane is not part of that
+        // bargain. Succeeding every policy here is what made a DB-less host serve /admin/api to
+        // anyone who could reach the port. Admin and Operator therefore fall through to the
+        // enforcing path below, where an anonymous caller is denied — and in this mode nothing can
+        // authenticate (NullApiKeyValidator fails every credential), so they are denied outright.
+        // That is deliberate: DB-less anonymous mode is an intentionally limited mode, not a
+        // fully functional administrative one.
+        if (!_authState.IsAuthenticationRequired && requirement.PolicyName == GatewayAuthPolicies.Inference)
         {
             context.Succeed(requirement);
             return Task.CompletedTask;

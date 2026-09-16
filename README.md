@@ -224,7 +224,8 @@ dotnet test 33pol.sln -c Release
 # Terminal 1 — mock upstream
 python3 perf/scripts/mock-upstream.py
 
-# Terminal 2 — gateway (no DB → auth relaxed for local smoke)
+# Terminal 2 — gateway (no DB → anonymous inference; the admin API stays closed, and Development
+#              is required: outside it a gateway with no database refuses to start)
 export ASPNETCORE_ENVIRONMENT=Development
 export Gateway__ModelsConfigPath=config/models.ci.json
 export Gateway__OperatorConsole__Enabled=false

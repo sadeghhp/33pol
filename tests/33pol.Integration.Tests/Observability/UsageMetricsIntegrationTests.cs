@@ -13,7 +13,8 @@ public sealed class UsageMetricsIntegrationTests
     public async Task PostChatCompletions_WithUpstreamUsage_IncrementsTokenMetrics()
     {
         var handler = new MockUpstreamHandler();
-        using var factory = GatewayWebApplicationFactory.Create(handler);
+        using var factory = GatewayWebApplicationFactory.Create(
+            handler, configureSettings: GatewayWebApplicationFactory.AllowAnonymousMetrics);
         using var client = factory.CreateClient();
 
         var response = await client.PostAsync(
@@ -38,7 +39,8 @@ public sealed class UsageMetricsIntegrationTests
     public async Task PostChatCompletions_ExposesRoutingAndPolicyMetrics()
     {
         var handler = new MockUpstreamHandler();
-        using var factory = GatewayWebApplicationFactory.Create(handler);
+        using var factory = GatewayWebApplicationFactory.Create(
+            handler, configureSettings: GatewayWebApplicationFactory.AllowAnonymousMetrics);
         using var client = factory.CreateClient();
 
         var response = await client.PostAsync(

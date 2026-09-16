@@ -27,6 +27,42 @@ public sealed class GatewayBackendHealthMetricsExporterTests
         measurements.Should().Contain(m => m.Value == 0);
     }
 
+    /// <summary>
+    /// The GW-02c regression. The per-model gauge emits nothing for an empty registry, so
+    /// <c>max(gateway_backend_health) == 0</c> — the outage alert — had no samples to evaluate and
+    /// silently never fired for the one state that most needs it: a gateway able to serve nothing.
+    /// The count is always present.
+    /// </summary>
+    [Fact]
+    public void ObserveConfiguredModels_EmptyRegistry_StillEmitsASeries()
+    {
+        var registry = new FakeModelRegistry([]);
+
+        GatewayBackendHealthMetricsExporter.ObserveMeasurements(registry, new FakeBackendHealthStore())
+            .Should().BeEmpty("the per-model gauge has nothing to say, which is the blindness");
+
+        var configured = GatewayBackendHealthMetricsExporter.ObserveConfiguredModels(registry).ToList();
+
+        configured.Should().ContainSingle();
+        configured[0].Value.Should().Be(0);
+    }
+
+    [Fact]
+    public void ObserveConfiguredModels_CountsServingRoutesOnly()
+    {
+        var registry = new FakeModelRegistry(
+        [
+            new ModelConfig { Id = "serving", Url = "http://localhost:1" },
+            new ModelConfig { Id = "also-serving", Url = "http://localhost:2" },
+            new ModelConfig { Id = "stopped", Url = "http://localhost:3", State = ModelRouteStates.Stopped },
+        ]);
+
+        var configured = GatewayBackendHealthMetricsExporter.ObserveConfiguredModels(registry).ToList();
+
+        configured.Should().ContainSingle();
+        configured[0].Value.Should().Be(2, "a stopped route is not one the gateway will serve");
+    }
+
     [Fact]
     public async Task StartAndStopAsync_CompleteSuccessfully()
     {

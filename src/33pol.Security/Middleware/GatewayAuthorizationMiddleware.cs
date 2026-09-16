@@ -11,25 +11,30 @@ namespace Pol33.Security.Middleware;
 public sealed class GatewayAuthorizationMiddleware
 {
     private readonly RequestDelegate _next;
-    private readonly IGatewayAuthenticationState _authState;
     private readonly IAuthorizationService _authorization;
     private readonly IErrorResponseWriter _errors;
 
+    // No IGatewayAuthenticationState. It used to be read for one thing only — skipping the whole
+    // check when authentication was globally disabled — and a security middleware holding an
+    // auth-state it never consults is an invitation to put that bypass back.
     public GatewayAuthorizationMiddleware(
         RequestDelegate next,
-        IGatewayAuthenticationState authState,
         IAuthorizationService authorization,
         IErrorResponseWriter errors)
     {
         _next = next;
-        _authState = authState;
         _authorization = authorization;
         _errors = errors;
     }
 
     public async Task InvokeAsync(HttpContext context)
     {
-        if (!_authState.IsAuthenticationRequired || PublicGatewayPaths.IsAnonymous(context.Request.Path))
+        // Only genuinely anonymous paths skip the check. "Authentication is globally disabled" used
+        // to skip it too, which meant the one mode with no key store was also the one mode where
+        // /admin/api was never authorized at all. The Inference policy still succeeds anonymously in
+        // that mode — the handler grants it — so public inference is unaffected; the difference is
+        // that the control plane now goes through authorization like everything else.
+        if (PublicGatewayPaths.IsAnonymous(context.Request.Path))
         {
             await _next(context).ConfigureAwait(false);
             return;
