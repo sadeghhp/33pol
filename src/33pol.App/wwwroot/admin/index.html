@@ -24,11 +24,12 @@
   <link rel="preload" as="font" type="font/woff2" href="vendor/fonts/IBMPlexSans-400.woff2" crossorigin />
   <link rel="preload" as="font" type="font/woff2" href="vendor/fonts/IBMPlexSans-500.woff2" crossorigin />
   <link rel="stylesheet" href="vendor/fonts.css?v=1" />
-  <link rel="stylesheet" href="admin.css?v=27" />
-  <script defer src="admin-icons.js?v=11"></script>
+  <link rel="stylesheet" href="admin.css?v=28" />
+  <script defer src="admin-icons.js?v=12"></script>
   <script defer src="admin-errors.js?v=8"></script>
   <script defer src="admin-store.js?v=12"></script>
-  <script defer src="admin-app.js?v=44"></script>
+  <script defer src="admin-rate-limit-help.js?v=1"></script>
+  <script defer src="admin-app.js?v=45"></script>
   <script defer src="vendor/alpine-csp-3.14.9.min.js"></script>
 </head>
 <body x-data="adminApp" x-cloak @keydown.window="onModalKeydown">
@@ -1830,12 +1831,58 @@
                 <p class="notice error" x-show="rateLimitsDisabled">Rate limiting is disabled — clients can send unlimited requests. Quotas and budgets still apply. Schedules are paused, not deleted.</p>
                 <p class="hint">Over a limit, a request is refused with <code>429</code> and a <code>Retry-After</code> telling the client when to come back. Nothing is queued or slowed &mdash; a refused request is a failed one. Adaptive load shedding, when on, may lower model limits below the numbers set here while the gateway is saturated.</p>
 
+                <!-- Help: the guide (English / Persian) and the inline explainers that follow read
+                     window.RateLimitHelp in the selected language; the switch is remembered. -->
+                <div class="rl-help-bar" :dir="rlHelpView.dir" :lang="rlHelpView.lang">
+                  <span class="icon" x-html="icons.book-open"></span>
+                  <span class="t" x-text="rlHelpView.ui.guideSub"></span>
+                  <button type="button" class="action secondary sm" @click="rlHelpView.open.overview"><span class="icon" x-html="icons.help-circle"></span> <span x-text="rlHelpView.ui.guide"></span></button>
+                  <div class="rl-seg rl-lang" role="group" :aria-label="rlHelpView.ui.language">
+                    <template x-for="l in rlHelpView.langRows" :key="l.key"><button type="button" :class="l.cls" :aria-pressed="l.pressed" :lang="l.key" :title="l.name" @click="l.select" x-text="l.label"></button></template>
+                  </div>
+                </div>
+<div class="rl-help-row">
+<details class="rl-help" :dir="rlHelpView.dir" :lang="rlHelpView.lang">
+  <summary><span class="icon" x-html="icons.help-circle"></span><span x-text="rlHelpView.f.master.title"></span></summary>
+  <div class="rl-help-body">
+    <p x-text="rlHelpView.f.master.text"></p>
+    <p class="rl-help-ex" x-show="rlHelpView.f.master.hasExample"><span class="rl-help-ex-label" x-text="rlHelpView.f.master.exampleLabel"></span> <span x-text="rlHelpView.f.master.example"></span></p>
+    <div class="rl-help-links">
+      <button type="button" class="rl-link" @click="rlHelpView.f.master.open" x-text="rlHelpView.f.master.more"></button>
+      <button type="button" class="rl-link" @click="toggleRateLimitHelpLang" :lang="rlHelpView.otherLangCode" x-text="rlHelpView.ui.otherLang"></button>
+    </div>
+  </div>
+</details>
+<details class="rl-help" :dir="rlHelpView.dir" :lang="rlHelpView.lang">
+  <summary><span class="icon" x-html="icons.help-circle"></span><span x-text="rlHelpView.f.adaptive.title"></span></summary>
+  <div class="rl-help-body">
+    <p x-text="rlHelpView.f.adaptive.text"></p>
+    <p class="rl-help-ex" x-show="rlHelpView.f.adaptive.hasExample"><span class="rl-help-ex-label" x-text="rlHelpView.f.adaptive.exampleLabel"></span> <span x-text="rlHelpView.f.adaptive.example"></span></p>
+    <div class="rl-help-links">
+      <button type="button" class="rl-link" @click="rlHelpView.f.adaptive.open" x-text="rlHelpView.f.adaptive.more"></button>
+      <button type="button" class="rl-link" @click="toggleRateLimitHelpLang" :lang="rlHelpView.otherLangCode" x-text="rlHelpView.ui.otherLang"></button>
+    </div>
+  </div>
+</details>
+</div>
+
                 <!-- Tiers -->
                 <div class="rl-section">
                   <div class="rl-section-head">
                     <div><h3>Tiers</h3><p class="sub">What a tenant gets by plan. Every key a tenant holds shares its tier; a tenant rule below overrides it.</p></div>
                     <button type="button" class="action secondary" @click="openRateLimitNewPlan" x-show="rateLimitsEditable"><span class="icon" x-html="icons.plus"></span> Add plan</button>
                   </div>
+<details class="rl-help" :dir="rlHelpView.dir" :lang="rlHelpView.lang">
+  <summary><span class="icon" x-html="icons.help-circle"></span><span x-text="rlHelpView.f.tiers.title"></span></summary>
+  <div class="rl-help-body">
+    <p x-text="rlHelpView.f.tiers.text"></p>
+    <p class="rl-help-ex" x-show="rlHelpView.f.tiers.hasExample"><span class="rl-help-ex-label" x-text="rlHelpView.f.tiers.exampleLabel"></span> <span x-text="rlHelpView.f.tiers.example"></span></p>
+    <div class="rl-help-links">
+      <button type="button" class="rl-link" @click="rlHelpView.f.tiers.open" x-text="rlHelpView.f.tiers.more"></button>
+      <button type="button" class="rl-link" @click="toggleRateLimitHelpLang" :lang="rlHelpView.otherLangCode" x-text="rlHelpView.ui.otherLang"></button>
+    </div>
+  </div>
+</details>
                   <div class="rl-tiers">
                     <template x-for="t in rlTierCards" :key="t.key">
                       <button type="button" class="rl-tier" @click="t.edit" :disabled="rateLimitsLocked">
@@ -1856,6 +1903,17 @@
                     <div><h3>Rules</h3><p class="sub">Limits on one model, key or tenant. Every rule that applies must admit a request, so a rule only ever tightens. Open a rule to change it or add windows.</p></div>
                     <button type="button" class="action" @click="openRateLimitNewRule" x-show="rateLimitsEditable"><span class="icon" x-html="icons.plus"></span> New rule</button>
                   </div>
+<details class="rl-help" :dir="rlHelpView.dir" :lang="rlHelpView.lang">
+  <summary><span class="icon" x-html="icons.help-circle"></span><span x-text="rlHelpView.f.rules.title"></span></summary>
+  <div class="rl-help-body">
+    <p x-text="rlHelpView.f.rules.text"></p>
+    <p class="rl-help-ex" x-show="rlHelpView.f.rules.hasExample"><span class="rl-help-ex-label" x-text="rlHelpView.f.rules.exampleLabel"></span> <span x-text="rlHelpView.f.rules.example"></span></p>
+    <div class="rl-help-links">
+      <button type="button" class="rl-link" @click="rlHelpView.f.rules.open" x-text="rlHelpView.f.rules.more"></button>
+      <button type="button" class="rl-link" @click="toggleRateLimitHelpLang" :lang="rlHelpView.otherLangCode" x-text="rlHelpView.ui.otherLang"></button>
+    </div>
+  </div>
+</details>
                   <div class="toolbar rl-toolbar" x-show="rlHasRules">
                     <div class="filter-field rl-filter">
                       <span class="icon" x-html="icons.search"></span>
@@ -1895,10 +1953,17 @@
                       </tbody>
                     </table>
                   </div>
-                  <details class="rl-disclose">
-                    <summary>How rules, tiers and windows combine</summary>
-                    <p class="hint">A request needs room in <em>every</em> rule that applies to it: the gateway ceiling, the caller&rsquo;s tenant tier, its key rule, the model rule, and the tenant-on-model and key-on-model rules. Nothing overrides anything else, so adding a rule can only tighten what a caller may do. The one exception is inside the tenant tier, where a tenant rule beats the plan tier, which beats the default. A window changes a rule&rsquo;s numbers for a span of time; a one-time window outranks a weekly one, and when no window is active the base tier applies. Tightening bites on the next request; a raised limit refills at the new rate rather than jumping to full.</p>
-                  </details>
+<details class="rl-help" :dir="rlHelpView.dir" :lang="rlHelpView.lang">
+  <summary><span class="icon" x-html="icons.help-circle"></span><span x-text="rlHelpView.f.combine.title"></span></summary>
+  <div class="rl-help-body">
+    <p x-text="rlHelpView.f.combine.text"></p>
+    <p class="rl-help-ex" x-show="rlHelpView.f.combine.hasExample"><span class="rl-help-ex-label" x-text="rlHelpView.f.combine.exampleLabel"></span> <span x-text="rlHelpView.f.combine.example"></span></p>
+    <div class="rl-help-links">
+      <button type="button" class="rl-link" @click="rlHelpView.f.combine.open" x-text="rlHelpView.f.combine.more"></button>
+      <button type="button" class="rl-link" @click="toggleRateLimitHelpLang" :lang="rlHelpView.otherLangCode" x-text="rlHelpView.ui.otherLang"></button>
+    </div>
+  </div>
+</details>
                 </div>
 
                 <!-- Calendar -->
@@ -1917,6 +1982,30 @@
                       </select>
                     </div>
                   </div>
+<div class="rl-help-row">
+<details class="rl-help" :dir="rlHelpView.dir" :lang="rlHelpView.lang">
+  <summary><span class="icon" x-html="icons.help-circle"></span><span x-text="rlHelpView.f.windows.title"></span></summary>
+  <div class="rl-help-body">
+    <p x-text="rlHelpView.f.windows.text"></p>
+    <p class="rl-help-ex" x-show="rlHelpView.f.windows.hasExample"><span class="rl-help-ex-label" x-text="rlHelpView.f.windows.exampleLabel"></span> <span x-text="rlHelpView.f.windows.example"></span></p>
+    <div class="rl-help-links">
+      <button type="button" class="rl-link" @click="rlHelpView.f.windows.open" x-text="rlHelpView.f.windows.more"></button>
+      <button type="button" class="rl-link" @click="toggleRateLimitHelpLang" :lang="rlHelpView.otherLangCode" x-text="rlHelpView.ui.otherLang"></button>
+    </div>
+  </div>
+</details>
+<details class="rl-help" :dir="rlHelpView.dir" :lang="rlHelpView.lang">
+  <summary><span class="icon" x-html="icons.help-circle"></span><span x-text="rlHelpView.f.calendar.title"></span></summary>
+  <div class="rl-help-body">
+    <p x-text="rlHelpView.f.calendar.text"></p>
+    <p class="rl-help-ex" x-show="rlHelpView.f.calendar.hasExample"><span class="rl-help-ex-label" x-text="rlHelpView.f.calendar.exampleLabel"></span> <span x-text="rlHelpView.f.calendar.example"></span></p>
+    <div class="rl-help-links">
+      <button type="button" class="rl-link" @click="rlHelpView.f.calendar.open" x-text="rlHelpView.f.calendar.more"></button>
+      <button type="button" class="rl-link" @click="toggleRateLimitHelpLang" :lang="rlHelpView.otherLangCode" x-text="rlHelpView.ui.otherLang"></button>
+    </div>
+  </div>
+</details>
+</div>
                   <p class="notice error" x-show="rlScheduleError" x-text="rlScheduleError"></p>
                   <div class="rl-cal">
                     <div class="card rl-cal-main">
@@ -1990,6 +2079,17 @@
                     <template x-for="i in rlDirtyView.items" :key="i.key"><li x-text="i.text"></li></template>
                   </ul>
                 </div>
+<details class="rl-help" :dir="rlHelpView.dir" :lang="rlHelpView.lang">
+  <summary><span class="icon" x-html="icons.help-circle"></span><span x-text="rlHelpView.f.save.title"></span></summary>
+  <div class="rl-help-body">
+    <p x-text="rlHelpView.f.save.text"></p>
+    <p class="rl-help-ex" x-show="rlHelpView.f.save.hasExample"><span class="rl-help-ex-label" x-text="rlHelpView.f.save.exampleLabel"></span> <span x-text="rlHelpView.f.save.example"></span></p>
+    <div class="rl-help-links">
+      <button type="button" class="rl-link" @click="rlHelpView.f.save.open" x-text="rlHelpView.f.save.more"></button>
+      <button type="button" class="rl-link" @click="toggleRateLimitHelpLang" :lang="rlHelpView.otherLangCode" x-text="rlHelpView.ui.otherLang"></button>
+    </div>
+  </div>
+</details>
                 <p class="field-error" x-show="rateLimitFieldError" x-text="rateLimitFieldError"></p>
                 <button type="button" class="rl-link" x-show="rlSaveErrorView.show" @click="rlSaveErrorView.open" x-text="rlSaveErrorView.label"></button>
               </div>
@@ -2369,6 +2469,43 @@
     </div>
   </div>
 
+  <!-- Rate limits: the guide (English / Persian). It may open on top of the rule, tier or new-rule
+       drawer from their "?" buttons, so it comes first in the DOM (the focus trap takes the first
+       visible dialog) and paints one z-index above them (.rl-help-backdrop). Content is in
+       admin-rate-limit-help.js; rlHelpView shapes it. -->
+  <div class="drawer-backdrop rl-help-backdrop" x-show="rlHelpOpen" x-transition.opacity @click.self="closeRateLimitHelp" role="presentation">
+    <div class="drawer rl-drawer rl-help-drawer" role="dialog" aria-modal="true" aria-labelledby="rl-help-title" :dir="rlHelpView.dir" :lang="rlHelpView.lang" @click.stop>
+      <div class="drawer-header">
+        <div><span class="eyebrow" x-text="rlHelpView.ui.eyebrow"></span><h3 id="rl-help-title" x-text="rlHelpView.ui.guide"></h3><p class="hint" x-text="rlHelpView.ui.guideSub"></p></div>
+        <div class="rl-drawer-head-actions">
+          <div class="rl-seg rl-lang" role="group" :aria-label="rlHelpView.ui.language">
+            <template x-for="l in rlHelpView.langRows" :key="l.key"><button type="button" :class="l.cls" :aria-pressed="l.pressed" :lang="l.key" :title="l.name" @click="l.select" x-text="l.label"></button></template>
+          </div>
+          <button type="button" class="icon-btn" @click="closeRateLimitHelp" :aria-label="rlHelpView.ui.close"><span class="icon" x-html="icons.x"></span></button>
+        </div>
+      </div>
+
+      <nav class="rl-help-toc" :aria-label="rlHelpView.ui.contents">
+        <template x-for="s in rlHelpView.sections" :key="s.key"><button type="button" :class="s.tocCls" @click="s.jump" x-text="s.title"></button></template>
+      </nav>
+
+      <template x-for="s in rlHelpView.sections" :key="s.key">
+        <section :class="s.cls" :id="s.domId">
+          <h4 x-text="s.title"></h4>
+          <p class="rl-help-intro" x-show="s.hasIntro" x-text="s.intro"></p>
+          <template x-for="i in s.items" :key="i.key">
+            <div class="rl-help-item">
+              <b x-show="i.hasTerm" x-text="i.term"></b>
+              <p x-text="i.text"></p>
+              <p class="rl-help-ex" x-show="i.hasExample"><span class="rl-help-ex-label" x-text="i.exampleLabel"></span> <span x-text="i.example"></span></p>
+            </div>
+          </template>
+          <div class="rl-help-tip" x-show="s.hasTip"><b x-text="s.tipLabel"></b> <span x-text="s.tip"></span></div>
+        </section>
+      </template>
+    </div>
+  </div>
+
   <!-- Rate limits: rule drawer (with the window form as a sub-panel) -->
   <div class="drawer-backdrop" x-show="rlRuleDrawerOpen" x-transition.opacity @click.self="dismissRateLimitRule" role="presentation">
     <div class="drawer rl-drawer" role="dialog" aria-modal="true" :aria-labelledby="rlRuleDrawerLabel" @click.stop>
@@ -2376,7 +2513,10 @@
         <div>
           <div class="drawer-header">
             <div><span class="eyebrow" x-text="rlRuleDrawerView.eyebrow"></span><h3 id="rl-rule-title" x-text="rlRuleDrawerView.title"></h3><p class="hint" x-text="rlRuleDrawerView.subtitle"></p></div>
-            <button type="button" class="icon-btn" @click="closeRateLimitRule" aria-label="Close"><span class="icon" x-html="icons.x"></span></button>
+            <div class="rl-drawer-head-actions">
+              <button type="button" class="icon-btn" @click="rlHelpView.open.windows" :title="rlHelpView.ui.helpTitle" :aria-label="rlHelpView.ui.help"><span class="icon" x-html="icons.help-circle"></span></button>
+              <button type="button" class="icon-btn" @click="closeRateLimitRule" aria-label="Close"><span class="icon" x-html="icons.x"></span></button>
+            </div>
           </div>
 
           <div :class="rlRuleDrawerView.forceCls">
@@ -2393,18 +2533,64 @@
           <div class="drawer-section">
             <h4 class="rl-h4">Base tier</h4>
             <p class="hint">Applies whenever no window is active, and whenever a window cannot be evaluated.</p>
+<details class="rl-help" :dir="rlHelpView.dir" :lang="rlHelpView.lang">
+  <summary><span class="icon" x-html="icons.help-circle"></span><span x-text="rlHelpView.f.baseTier.title"></span></summary>
+  <div class="rl-help-body">
+    <p x-text="rlHelpView.f.baseTier.text"></p>
+    <p class="rl-help-ex" x-show="rlHelpView.f.baseTier.hasExample"><span class="rl-help-ex-label" x-text="rlHelpView.f.baseTier.exampleLabel"></span> <span x-text="rlHelpView.f.baseTier.example"></span></p>
+    <div class="rl-help-links">
+      <button type="button" class="rl-link" @click="rlHelpView.f.baseTier.open" x-text="rlHelpView.f.baseTier.more"></button>
+      <button type="button" class="rl-link" @click="toggleRateLimitHelpLang" :lang="rlHelpView.otherLangCode" x-text="rlHelpView.ui.otherLang"></button>
+    </div>
+  </div>
+</details>
             <div class="rl-bignums">
               <label class="rl-bignum">RPM<input type="number" min="0" max="1000000" x-model.number="mdl.rlRule.rpm" :disabled="rateLimitsLocked" title="Sustained requests per minute. 0 = this rule does not limit the rate." /></label>
               <label class="rl-bignum">Burst<input type="number" min="0" max="1000000" x-model.number="mdl.rlRule.burst" :disabled="rateLimitsLocked" title="Extra requests allowed at once after a quiet spell, on top of RPM." /></label>
               <label class="rl-bignum">Streams<input type="number" min="0" max="10000" x-model.number="mdl.rlRule.maxConcurrentStreams" :disabled="rateLimitsLocked" title="Concurrent streaming responses. 0 = unlimited." /></label>
             </div>
             <p class="hint">Sustained requests a minute, the extra allowed at once after a quiet spell, and how many streaming responses may be open together. 0 streams means unlimited.</p>
+<div class="rl-help-row">
+<details class="rl-help" :dir="rlHelpView.dir" :lang="rlHelpView.lang">
+  <summary><span class="icon" x-html="icons.help-circle"></span><span x-text="rlHelpView.f.numbers.title"></span></summary>
+  <div class="rl-help-body">
+    <p x-text="rlHelpView.f.numbers.text"></p>
+    <p class="rl-help-ex" x-show="rlHelpView.f.numbers.hasExample"><span class="rl-help-ex-label" x-text="rlHelpView.f.numbers.exampleLabel"></span> <span x-text="rlHelpView.f.numbers.example"></span></p>
+    <div class="rl-help-links">
+      <button type="button" class="rl-link" @click="rlHelpView.f.numbers.open" x-text="rlHelpView.f.numbers.more"></button>
+      <button type="button" class="rl-link" @click="toggleRateLimitHelpLang" :lang="rlHelpView.otherLangCode" x-text="rlHelpView.ui.otherLang"></button>
+    </div>
+  </div>
+</details>
+<details class="rl-help" :dir="rlHelpView.dir" :lang="rlHelpView.lang">
+  <summary><span class="icon" x-html="icons.help-circle"></span><span x-text="rlHelpView.f.ruleNumbers.title"></span></summary>
+  <div class="rl-help-body">
+    <p x-text="rlHelpView.f.ruleNumbers.text"></p>
+    <p class="rl-help-ex" x-show="rlHelpView.f.ruleNumbers.hasExample"><span class="rl-help-ex-label" x-text="rlHelpView.f.ruleNumbers.exampleLabel"></span> <span x-text="rlHelpView.f.ruleNumbers.example"></span></p>
+    <div class="rl-help-links">
+      <button type="button" class="rl-link" @click="rlHelpView.f.ruleNumbers.open" x-text="rlHelpView.f.ruleNumbers.more"></button>
+      <button type="button" class="rl-link" @click="toggleRateLimitHelpLang" :lang="rlHelpView.otherLangCode" x-text="rlHelpView.ui.otherLang"></button>
+    </div>
+  </div>
+</details>
+</div>
             <p class="field-error" x-show="rlRuleDrawerView.error" x-text="rlRuleDrawerView.error"></p>
           </div>
 
           <div class="drawer-section">
             <h4 class="rl-h4">Windows <button type="button" class="action secondary sm" @click="openRateLimitNewWindow" x-show="rateLimitsEditable"><span class="icon" x-html="icons.plus"></span> Add window</button></h4>
             <p class="hint">A different tier for a span of time. A one-time window outranks a weekly one; same-kind windows may not overlap.</p>
+<details class="rl-help" :dir="rlHelpView.dir" :lang="rlHelpView.lang">
+  <summary><span class="icon" x-html="icons.help-circle"></span><span x-text="rlHelpView.f.windows.title"></span></summary>
+  <div class="rl-help-body">
+    <p x-text="rlHelpView.f.windows.text"></p>
+    <p class="rl-help-ex" x-show="rlHelpView.f.windows.hasExample"><span class="rl-help-ex-label" x-text="rlHelpView.f.windows.exampleLabel"></span> <span x-text="rlHelpView.f.windows.example"></span></p>
+    <div class="rl-help-links">
+      <button type="button" class="rl-link" @click="rlHelpView.f.windows.open" x-text="rlHelpView.f.windows.more"></button>
+      <button type="button" class="rl-link" @click="toggleRateLimitHelpLang" :lang="rlHelpView.otherLangCode" x-text="rlHelpView.ui.otherLang"></button>
+    </div>
+  </div>
+</details>
             <p class="hint" x-show="rlRuleDrawerView.noWindows">No windows. The base tier applies around the clock.</p>
             <div class="rl-wins">
               <template x-for="w in rlRuleDrawerView.windows" :key="w.key">
@@ -2451,12 +2637,26 @@
         <div>
           <div class="drawer-header">
             <div><span class="eyebrow" x-text="rlWindowView.eyebrow"></span><h3 id="rl-window-title" x-text="rlWindowView.title"></h3></div>
-            <button type="button" class="icon-btn" @click="closeRateLimitWindow" aria-label="Back"><span class="icon" x-html="icons.arrow-left"></span></button>
+            <div class="rl-drawer-head-actions">
+              <button type="button" class="icon-btn" @click="rlHelpView.open.windows" :title="rlHelpView.ui.helpTitle" :aria-label="rlHelpView.ui.help"><span class="icon" x-html="icons.help-circle"></span></button>
+              <button type="button" class="icon-btn" @click="closeRateLimitWindow" aria-label="Back"><span class="icon" x-html="icons.arrow-left"></span></button>
+            </div>
           </div>
 
           <div class="rl-seg full" role="group" aria-label="Window kind">
             <template x-for="k in rlWindowView.kindRows" :key="k.key"><button type="button" :class="k.cls" :aria-pressed="k.pressed" @click="k.select" x-text="k.label"></button></template>
           </div>
+<details class="rl-help" :dir="rlHelpView.dir" :lang="rlHelpView.lang">
+  <summary><span class="icon" x-html="icons.help-circle"></span><span x-text="rlHelpView.f.windowKind.title"></span></summary>
+  <div class="rl-help-body">
+    <p x-text="rlHelpView.f.windowKind.text"></p>
+    <p class="rl-help-ex" x-show="rlHelpView.f.windowKind.hasExample"><span class="rl-help-ex-label" x-text="rlHelpView.f.windowKind.exampleLabel"></span> <span x-text="rlHelpView.f.windowKind.example"></span></p>
+    <div class="rl-help-links">
+      <button type="button" class="rl-link" @click="rlHelpView.f.windowKind.open" x-text="rlHelpView.f.windowKind.more"></button>
+      <button type="button" class="rl-link" @click="toggleRateLimitHelpLang" :lang="rlHelpView.otherLangCode" x-text="rlHelpView.ui.otherLang"></button>
+    </div>
+  </div>
+</details>
 
           <label>Name <input type="text" x-model="mdl.rlWindow.name" @input="queueRateLimitWindowPreview" placeholder="off-peak" maxlength="64" /></label>
 
@@ -2474,6 +2674,17 @@
                 </select>
               </label>
             </div>
+<details class="rl-help" :dir="rlHelpView.dir" :lang="rlHelpView.lang">
+  <summary><span class="icon" x-html="icons.help-circle"></span><span x-text="rlHelpView.f.timeZone.title"></span></summary>
+  <div class="rl-help-body">
+    <p x-text="rlHelpView.f.timeZone.text"></p>
+    <p class="rl-help-ex" x-show="rlHelpView.f.timeZone.hasExample"><span class="rl-help-ex-label" x-text="rlHelpView.f.timeZone.exampleLabel"></span> <span x-text="rlHelpView.f.timeZone.example"></span></p>
+    <div class="rl-help-links">
+      <button type="button" class="rl-link" @click="rlHelpView.f.timeZone.open" x-text="rlHelpView.f.timeZone.more"></button>
+      <button type="button" class="rl-link" @click="toggleRateLimitHelpLang" :lang="rlHelpView.otherLangCode" x-text="rlHelpView.ui.otherLang"></button>
+    </div>
+  </div>
+</details>
           </div>
 
           <div x-show="rlWindowView.isOnce">
@@ -2498,6 +2709,17 @@
             </div>
           </div>
           <label class="checkbox"><input type="checkbox" x-model="mdl.rlWindow.suspend" @change="queueRateLimitWindowPreview" /> Pause this rule instead <span class="muted">· nothing is enforced by it while the window runs</span></label>
+<details class="rl-help" :dir="rlHelpView.dir" :lang="rlHelpView.lang">
+  <summary><span class="icon" x-html="icons.help-circle"></span><span x-text="rlHelpView.f.suspend.title"></span></summary>
+  <div class="rl-help-body">
+    <p x-text="rlHelpView.f.suspend.text"></p>
+    <p class="rl-help-ex" x-show="rlHelpView.f.suspend.hasExample"><span class="rl-help-ex-label" x-text="rlHelpView.f.suspend.exampleLabel"></span> <span x-text="rlHelpView.f.suspend.example"></span></p>
+    <div class="rl-help-links">
+      <button type="button" class="rl-link" @click="rlHelpView.f.suspend.open" x-text="rlHelpView.f.suspend.more"></button>
+      <button type="button" class="rl-link" @click="toggleRateLimitHelpLang" :lang="rlHelpView.otherLangCode" x-text="rlHelpView.ui.otherLang"></button>
+    </div>
+  </div>
+</details>
 
           <div class="rl-summary">
             <span x-text="rlWindowView.summary"></span>
@@ -2515,6 +2737,17 @@
             <label>Valid from <input type="datetime-local" x-model="mdl.rlWindow.validFromLocal" @change="queueRateLimitWindowPreview" /></label>
             <label>Valid until <input type="datetime-local" x-model="mdl.rlWindow.validUntilLocal" @change="queueRateLimitWindowPreview" /></label>
           </div>
+<details class="rl-help" :dir="rlHelpView.dir" :lang="rlHelpView.lang" x-show="rlWindowView.showAdvanced">
+  <summary><span class="icon" x-html="icons.help-circle"></span><span x-text="rlHelpView.f.priority.title"></span></summary>
+  <div class="rl-help-body">
+    <p x-text="rlHelpView.f.priority.text"></p>
+    <p class="rl-help-ex" x-show="rlHelpView.f.priority.hasExample"><span class="rl-help-ex-label" x-text="rlHelpView.f.priority.exampleLabel"></span> <span x-text="rlHelpView.f.priority.example"></span></p>
+    <div class="rl-help-links">
+      <button type="button" class="rl-link" @click="rlHelpView.f.priority.open" x-text="rlHelpView.f.priority.more"></button>
+      <button type="button" class="rl-link" @click="toggleRateLimitHelpLang" :lang="rlHelpView.otherLangCode" x-text="rlHelpView.ui.otherLang"></button>
+    </div>
+  </div>
+</details>
 
           <div class="drawer-footer">
             <div class="modal-actions rl-drawer-actions">
@@ -2534,16 +2767,52 @@
     <div class="drawer" role="dialog" aria-modal="true" aria-labelledby="rl-tier-title" @click.stop>
       <div class="drawer-header">
         <div><span class="eyebrow">Tier</span><h3 id="rl-tier-title" x-text="rlTierView.title"></h3></div>
-        <button type="button" class="icon-btn" @click="closeRateLimitTier" aria-label="Close"><span class="icon" x-html="icons.x"></span></button>
+        <div class="rl-drawer-head-actions">
+          <button type="button" class="icon-btn" @click="rlHelpView.open.tiers" :title="rlHelpView.ui.helpTitle" :aria-label="rlHelpView.ui.help"><span class="icon" x-html="icons.help-circle"></span></button>
+          <button type="button" class="icon-btn" @click="closeRateLimitTier" aria-label="Close"><span class="icon" x-html="icons.x"></span></button>
+        </div>
       </div>
       <p class="hint" x-text="rlTierView.hint"></p>
+<details class="rl-help" :dir="rlHelpView.dir" :lang="rlHelpView.lang">
+  <summary><span class="icon" x-html="icons.help-circle"></span><span x-text="rlHelpView.f.tiers.title"></span></summary>
+  <div class="rl-help-body">
+    <p x-text="rlHelpView.f.tiers.text"></p>
+    <p class="rl-help-ex" x-show="rlHelpView.f.tiers.hasExample"><span class="rl-help-ex-label" x-text="rlHelpView.f.tiers.exampleLabel"></span> <span x-text="rlHelpView.f.tiers.example"></span></p>
+    <div class="rl-help-links">
+      <button type="button" class="rl-link" @click="rlHelpView.f.tiers.open" x-text="rlHelpView.f.tiers.more"></button>
+      <button type="button" class="rl-link" @click="toggleRateLimitHelpLang" :lang="rlHelpView.otherLangCode" x-text="rlHelpView.ui.otherLang"></button>
+    </div>
+  </div>
+</details>
       <label x-show="rlTierView.isPlan">Plan slug <input type="text" x-model="mdl.rlTier.slug" placeholder="standard" title="Tenants whose plan is this slug use this tier instead of the default." /></label>
+<details class="rl-help" :dir="rlHelpView.dir" :lang="rlHelpView.lang" x-show="rlTierView.isPlan">
+  <summary><span class="icon" x-html="icons.help-circle"></span><span x-text="rlHelpView.f.planSlug.title"></span></summary>
+  <div class="rl-help-body">
+    <p x-text="rlHelpView.f.planSlug.text"></p>
+    <p class="rl-help-ex" x-show="rlHelpView.f.planSlug.hasExample"><span class="rl-help-ex-label" x-text="rlHelpView.f.planSlug.exampleLabel"></span> <span x-text="rlHelpView.f.planSlug.example"></span></p>
+    <div class="rl-help-links">
+      <button type="button" class="rl-link" @click="rlHelpView.f.planSlug.open" x-text="rlHelpView.f.planSlug.more"></button>
+      <button type="button" class="rl-link" @click="toggleRateLimitHelpLang" :lang="rlHelpView.otherLangCode" x-text="rlHelpView.ui.otherLang"></button>
+    </div>
+  </div>
+</details>
       <div class="rl-bignums">
         <label class="rl-bignum">RPM<input type="number" min="1" max="1000000" x-model.number="mdl.rlTier.rpm" title="Sustained requests per minute. Minimum 1; there is no unlimited value." /></label>
         <label class="rl-bignum">Burst<input type="number" min="0" max="1000000" x-model.number="mdl.rlTier.burst" title="Extra requests allowed at once after a quiet spell, on top of RPM." /></label>
         <label class="rl-bignum">Streams<input type="number" min="0" max="10000" x-model.number="mdl.rlTier.maxConcurrentStreams" title="Concurrent streaming responses per tenant. 0 = unlimited." /></label>
       </div>
       <p class="hint">Sustained requests a minute, the extra allowed at once after a quiet spell, and how many streaming responses one tenant may hold open. 0 streams means unlimited.</p>
+<details class="rl-help" :dir="rlHelpView.dir" :lang="rlHelpView.lang">
+  <summary><span class="icon" x-html="icons.help-circle"></span><span x-text="rlHelpView.f.numbers.title"></span></summary>
+  <div class="rl-help-body">
+    <p x-text="rlHelpView.f.numbers.text"></p>
+    <p class="rl-help-ex" x-show="rlHelpView.f.numbers.hasExample"><span class="rl-help-ex-label" x-text="rlHelpView.f.numbers.exampleLabel"></span> <span x-text="rlHelpView.f.numbers.example"></span></p>
+    <div class="rl-help-links">
+      <button type="button" class="rl-link" @click="rlHelpView.f.numbers.open" x-text="rlHelpView.f.numbers.more"></button>
+      <button type="button" class="rl-link" @click="toggleRateLimitHelpLang" :lang="rlHelpView.otherLangCode" x-text="rlHelpView.ui.otherLang"></button>
+    </div>
+  </div>
+</details>
       <div class="rl-summary" x-text="rlTierView.summary"></div>
       <p class="field-error" x-show="rlTierError" x-text="rlTierError"></p>
       <div class="drawer-footer">
@@ -2565,13 +2834,42 @@
           <span class="eyebrow">New rule</span><h3 id="rl-new-title" x-text="rlNewRuleView.title"></h3>
           <div class="rl-steps"><template x-for="s in rlNewRuleView.steps" :key="s.key"><span :class="s.cls" x-text="s.label"></span></template></div>
         </div>
-        <button type="button" class="icon-btn" @click="closeRateLimitNewRule" aria-label="Close"><span class="icon" x-html="icons.x"></span></button>
+        <div class="rl-drawer-head-actions">
+          <button type="button" class="icon-btn" @click="rlHelpView.open.scopes" :title="rlHelpView.ui.helpTitle" :aria-label="rlHelpView.ui.help"><span class="icon" x-html="icons.help-circle"></span></button>
+          <button type="button" class="icon-btn" @click="closeRateLimitNewRule" aria-label="Close"><span class="icon" x-html="icons.x"></span></button>
+        </div>
       </div>
 
       <div x-show="rlNewRuleView.isStep1" class="rl-scopes" role="radiogroup" aria-label="Scope">
         <template x-for="s in rlNewRuleView.scopeCards" :key="s.key">
           <button type="button" :id="s.id" :class="s.cls" @click="s.select" @keydown="s.onKey" role="radio" :aria-checked="s.ariaChecked" :tabindex="s.tabIndex"><b x-text="s.name"></b><span x-text="s.desc"></span></button>
         </template>
+      </div>
+      <!-- What the highlighted scope means, in the help language, so the choice is explained
+           before the operator commits to it. -->
+      <div x-show="rlNewRuleView.isStep1">
+        <div class="rl-help-scope" :dir="rlHelpView.dir" :lang="rlHelpView.lang" aria-live="polite">
+          <span class="eyebrow" x-text="rlHelpView.scope.title"></span>
+          <b x-text="rlHelpView.scope.name"></b>
+          <p x-text="rlHelpView.scope.what"></p>
+          <p x-text="rlHelpView.scope.when"></p>
+          <p class="rl-help-ex" x-show="rlHelpView.scope.hasExample"><span class="rl-help-ex-label" x-text="rlHelpView.scope.exampleLabel"></span> <span x-text="rlHelpView.scope.example"></span></p>
+          <div class="rl-help-links">
+            <button type="button" class="rl-link" @click="rlHelpView.scope.open" x-text="rlHelpView.ui.more"></button>
+            <button type="button" class="rl-link" @click="toggleRateLimitHelpLang" :lang="rlHelpView.otherLangCode" x-text="rlHelpView.ui.otherLang"></button>
+          </div>
+        </div>
+<details class="rl-help" :dir="rlHelpView.dir" :lang="rlHelpView.lang">
+  <summary><span class="icon" x-html="icons.help-circle"></span><span x-text="rlHelpView.f.scope.title"></span></summary>
+  <div class="rl-help-body">
+    <p x-text="rlHelpView.f.scope.text"></p>
+    <p class="rl-help-ex" x-show="rlHelpView.f.scope.hasExample"><span class="rl-help-ex-label" x-text="rlHelpView.f.scope.exampleLabel"></span> <span x-text="rlHelpView.f.scope.example"></span></p>
+    <div class="rl-help-links">
+      <button type="button" class="rl-link" @click="rlHelpView.f.scope.open" x-text="rlHelpView.f.scope.more"></button>
+      <button type="button" class="rl-link" @click="toggleRateLimitHelpLang" :lang="rlHelpView.otherLangCode" x-text="rlHelpView.ui.otherLang"></button>
+    </div>
+  </div>
+</details>
       </div>
 
       <div x-show="rlNewRuleView.isStep2">
@@ -2590,6 +2888,17 @@
           </template>
         </div>
         <p class="hint" x-show="rlNewRuleView.unknownNote" x-text="rlNewRuleView.unknownNote"></p>
+<details class="rl-help" :dir="rlHelpView.dir" :lang="rlHelpView.lang">
+  <summary><span class="icon" x-html="icons.help-circle"></span><span x-text="rlHelpView.f.target.title"></span></summary>
+  <div class="rl-help-body">
+    <p x-text="rlHelpView.f.target.text"></p>
+    <p class="rl-help-ex" x-show="rlHelpView.f.target.hasExample"><span class="rl-help-ex-label" x-text="rlHelpView.f.target.exampleLabel"></span> <span x-text="rlHelpView.f.target.example"></span></p>
+    <div class="rl-help-links">
+      <button type="button" class="rl-link" @click="rlHelpView.f.target.open" x-text="rlHelpView.f.target.more"></button>
+      <button type="button" class="rl-link" @click="toggleRateLimitHelpLang" :lang="rlHelpView.otherLangCode" x-text="rlHelpView.ui.otherLang"></button>
+    </div>
+  </div>
+</details>
       </div>
 
       <div x-show="rlNewRuleView.isStep3">
@@ -2602,6 +2911,30 @@
         <p class="hint" x-show="rlNewRuleView.isTenant">A tenant rule with RPM 0 keeps the plan&rsquo;s rate and only caps streams.</p>
         <p class="notice warn" x-show="rlNewRuleView.looserWarning" x-text="rlNewRuleView.looserWarning"></p>
         <div class="rl-summary"><b x-text="rlNewRuleView.summaryTitle"></b><span class="next" x-text="rlNewRuleView.summary"></span><span class="next">Tenant and key limits still apply on top.</span></div>
+<div class="rl-help-row">
+<details class="rl-help" :dir="rlHelpView.dir" :lang="rlHelpView.lang">
+  <summary><span class="icon" x-html="icons.help-circle"></span><span x-text="rlHelpView.f.limit.title"></span></summary>
+  <div class="rl-help-body">
+    <p x-text="rlHelpView.f.limit.text"></p>
+    <p class="rl-help-ex" x-show="rlHelpView.f.limit.hasExample"><span class="rl-help-ex-label" x-text="rlHelpView.f.limit.exampleLabel"></span> <span x-text="rlHelpView.f.limit.example"></span></p>
+    <div class="rl-help-links">
+      <button type="button" class="rl-link" @click="rlHelpView.f.limit.open" x-text="rlHelpView.f.limit.more"></button>
+      <button type="button" class="rl-link" @click="toggleRateLimitHelpLang" :lang="rlHelpView.otherLangCode" x-text="rlHelpView.ui.otherLang"></button>
+    </div>
+  </div>
+</details>
+<details class="rl-help" :dir="rlHelpView.dir" :lang="rlHelpView.lang">
+  <summary><span class="icon" x-html="icons.help-circle"></span><span x-text="rlHelpView.f.ruleNumbers.title"></span></summary>
+  <div class="rl-help-body">
+    <p x-text="rlHelpView.f.ruleNumbers.text"></p>
+    <p class="rl-help-ex" x-show="rlHelpView.f.ruleNumbers.hasExample"><span class="rl-help-ex-label" x-text="rlHelpView.f.ruleNumbers.exampleLabel"></span> <span x-text="rlHelpView.f.ruleNumbers.example"></span></p>
+    <div class="rl-help-links">
+      <button type="button" class="rl-link" @click="rlHelpView.f.ruleNumbers.open" x-text="rlHelpView.f.ruleNumbers.more"></button>
+      <button type="button" class="rl-link" @click="toggleRateLimitHelpLang" :lang="rlHelpView.otherLangCode" x-text="rlHelpView.ui.otherLang"></button>
+    </div>
+  </div>
+</details>
+</div>
       </div>
 
       <p class="field-error" x-show="rlNewRuleView.error" x-text="rlNewRuleView.error"></p>

@@ -4,6 +4,21 @@ All notable changes to this project are documented here. Version tags follow [Se
 
 ## [Unreleased]
 
+### Admin console — rate limits explained, in English and Persian
+
+- **The Rate limits page now carries its own help.** A guide drawer (ten sections: what rate
+  limiting does here, the three numbers, tiers, the eight rule scopes, how rules combine, schedule
+  windows, the calendar, saving, worked examples, troubleshooting) opens from the status card or
+  from a `?` in the rule, tier, window and new-rule drawers, scrolled to the matching section. Every
+  concept on the page and every field group in the forms has a collapsible explainer with a worked
+  example, and the new-rule wizard explains the highlighted scope before the operator commits to it.
+- **English or Persian**, switchable from the guide header, the status card and the foot of every
+  explainer; the choice is remembered per browser. Persian renders right-to-left with a
+  script-appropriate font fallback; the rest of the console is unchanged.
+- Content lives in one module, `admin-rate-limit-help.js`; `scripts/check-rate-limit-help.mjs`
+  asserts both languages carry the same keys and every scope, and
+  `scripts/render-rate-limit-help.mjs` renders the guide to `docs/rate-limit-guide.{en,fa}.md`.
+
 ### Operability (breaking) — readiness means "proven reachable", and the demo registry no longer ships
 
 Three related defects let a gateway that could serve nothing look perfectly healthy.

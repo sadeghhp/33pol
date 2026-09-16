@@ -222,6 +222,8 @@ Both list responses report `total` as the count matched **before** paging, plus 
 
 Rate limit changes are written to the gateway database and applied without a restart; the page stages edits in drawers and saves them from a sticky bar (see [rate-limit-admin.md](./runbooks/rate-limit-admin.md)).
 
+The Rate limits page carries its own **help**, in English and Persian: a guide drawer (the **Rate limits, explained** button in the status card, or the `?` in any rate-limit drawer, which opens the guide at the matching section) and collapsible explainers under every concept and next to every field in the tier, rule, window and new-rule forms, each with a worked example. The **EN / فا** switch appears in the guide header, the status card and at the foot of every explainer; the choice is remembered in `localStorage['33pol-admin-help-lang']`. Persian blocks render right-to-left. The words live in `wwwroot/admin/admin-rate-limit-help.js`; `node scripts/check-rate-limit-help.mjs` asserts the two languages carry the same keys, and `node scripts/render-rate-limit-help.mjs` renders the guide to [rate-limit-guide.en.md](./rate-limit-guide.en.md) and [rate-limit-guide.fa.md](./rate-limit-guide.fa.md).
+
 After adding or editing a model, verify **`GET /v1/models`** (link on Routing → Models).
 
 ## Quick-add model (name + URL + API key)
@@ -367,6 +369,12 @@ When the gateway runs in Docker, upstream URLs must use `http://host.docker.inte
       tier the message names
 - [ ] **Rate limits:** the status card states that an exceeded limit returns `429` with
       `Retry-After` and that nothing is queued
+- [ ] **Rate limits:** **Rate limits, explained** opens the guide; **فا** switches every help block
+      and the guide to Persian, right-to-left, and the choice survives a reload; the `?` in the rule
+      drawer opens the guide scrolled to *Schedule windows*, and Esc closes the guide but leaves the
+      rule drawer open
+- [ ] **Rate limits:** New rule → step 1 → picking a scope card changes the explanation under the
+      cards; every explainer on the page and in the drawers opens to a text and an example
 - [ ] **Rate limits:** window form → tick **Pause this rule instead** → the tier heading disappears
       with its inputs, not just the inputs
 - [ ] **Rate limits:** add a window to a rule but do not save → the **Calendar** heading shows a

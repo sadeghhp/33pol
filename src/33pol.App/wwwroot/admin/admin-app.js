@@ -295,6 +295,11 @@ function adminApp() {
     // seed, so changing scope afterwards does not overwrite their numbers.
     rlNewRule: { step: 1, scope: 'model', subject: '', model: '', target: '', rpm: 0, burst: 0, maxConcurrentStreams: 0, touched: false },
     rlNewRuleError: '',
+    // Bilingual help: the guide drawer and the inline explainers read window.RateLimitHelp in this
+    // language. Persisted like the theme, so an operator who reads Persian is not asked twice.
+    rlHelpOpen: false,
+    rlHelpTopic: 'overview',
+    rlHelpLang: localStorage.getItem('33pol-admin-help-lang') || 'en',
     corsOrigins: null,
     corsFieldError: '',
     corsLoadError: '',
@@ -2382,7 +2387,7 @@ function adminApp() {
      * the same code, and a new drawer cannot forget to opt in.
      */
     get anyModalOpen() {
-      return !!(this.confirmDialog || this.rlWindowOpen || this.rlNewRuleOpen
+      return !!(this.confirmDialog || this.rlHelpOpen || this.rlWindowOpen || this.rlNewRuleOpen
         || this.rlTierDrawerOpen || this.rlRuleDrawerOpen || this.deleteConfirmKey
         || this.revokeConfirmId || this.modelTestDialog || this.modelDrawerOpen
         || this.keyAccessDrawerOpen || this.keysEditDrawerOpen || this.keysDrawerOpen);
@@ -2394,7 +2399,13 @@ function adminApp() {
      */
     _visibleModalSurface() {
       for (const el of document.querySelectorAll('[role="dialog"], [role="alertdialog"]')) {
-        if (el.offsetParent !== null) return el;
+        if (el.offsetParent === null) continue;
+        // The help guide is the one surface that closes while another may stay open underneath.
+        // x-transition keeps its backdrop displayed until the fade ends, so on the tick this runs it
+        // still looks visible; its flag, not the DOM, says whether it is gone — otherwise the
+        // drawer below would keep its inert attribute and be dead to the pointer.
+        if (el.classList.contains('rl-help-drawer') && !this.rlHelpOpen) continue;
+        return el;
       }
       return null;
     },
@@ -2516,6 +2527,9 @@ function adminApp() {
       }
       if (e.key === 'Escape') {
         if (this.confirmDialog) this.cancelConfirm();
+        // The help drawer paints above the rate-limit drawers, so one Esc closes it and leaves the
+        // form underneath where it was.
+        else if (this.rlHelpOpen) this.closeRateLimitHelp();
         else if (this.rlWindowOpen) this.dismissRateLimitWindow();
         else if (this.rlNewRuleOpen) this.dismissRateLimitNewRule();
         else if (this.rlTierDrawerOpen) this.dismissRateLimitTier();
@@ -3053,6 +3067,53 @@ function adminApp() {
       this.rlTierDrawerOpen = false;
       this.rlWindowOpen = false;
       this.rlNewRuleOpen = false;
+    },
+
+    // ---- rate limits: help (English / Persian) ----
+    //
+    // The words live in admin-rate-limit-help.js; nothing here knows what they say. The guide is a
+    // drawer that may open on top of the rule, tier or new-rule drawer (its "?" buttons do that), so
+    // it is first in the DOM for the focus trap and one z-index above the others for paint order.
+
+    rlHelpTopics() {
+      return ['overview', 'numbers', 'tiers', 'scopes', 'combine', 'windows', 'calendar', 'saving', 'recipes', 'faq'];
+    },
+
+    openRateLimitHelp(topic) {
+      const id = this.rlHelpTopics().includes(topic) ? topic : 'overview';
+      this.rlHelpTopic = id;
+      // Focus should come back to the "?" that opened the guide, even when that button sits inside
+      // another drawer that the focus trap is about to hand over.
+      this._modalReturnFocusOverride = document.activeElement === document.body ? null : document.activeElement;
+      this.rlHelpOpen = true;
+      this.rlHelpScrollTo(id, true);
+    },
+
+    closeRateLimitHelp() {
+      this.rlHelpOpen = false;
+    },
+
+    rlHelpJump(id) {
+      this.rlHelpTopic = id;
+      this.rlHelpScrollTo(id, false);
+    },
+
+    rlHelpScrollTo(id, instant) {
+      // The drawer is display:none until x-show runs on the next tick; the timer covers the
+      // opening transition so the section is in place before we ask the browser to scroll to it.
+      const go = () => document.getElementById('rl-help-' + id)?.scrollIntoView({ block: 'start', behavior: instant ? 'auto' : 'smooth' });
+      this.$nextTick(() => { go(); setTimeout(go, 60); });
+    },
+
+    setRateLimitHelpLang(id) {
+      const all = window.RateLimitHelp;
+      if (!all || !all[id]) return;
+      this.rlHelpLang = id;
+      localStorage.setItem('33pol-admin-help-lang', id);
+    },
+
+    toggleRateLimitHelpLang() {
+      this.setRateLimitHelpLang(this.rlHelpLang === 'fa' ? 'en' : 'fa');
     },
 
     rlTierPayload(t) {
@@ -7824,6 +7885,100 @@ function adminApp() {
     },
 
     get rlWindowClosed() { return !this.rlWindowOpen; },
+
+    /**
+     * Everything the help markup binds, in the selected language. Built flat and complete on purpose:
+     * the CSP Alpine build throws on a bound key that is missing, so every field, scope and section
+     * row carries every key the template reads, and a language missing an entry falls back to
+     * English rather than to a blank element. `f.<key>` are the inline explainers, `open.<topic>`
+     * the closures the "?" buttons call, `sections` the guide itself.
+     */
+    get rlHelpView() {
+      const all = window.RateLimitHelp || null;
+      const base = all?.en || { ui: {}, fields: {}, scopes: {}, sections: [] };
+      const lang = all && all[this.rlHelpLang] ? this.rlHelpLang : 'en';
+      const tree = all ? all[lang] : base;
+      const meta = (all?.langs || []).find(l => l.id === lang) || { id: 'en', dir: 'ltr' };
+      const other = (all?.langs || []).find(l => l.id !== lang) || { id: 'fa', dir: 'rtl' };
+      const ui = Object.assign({}, base.ui, tree.ui);
+      const exampleLabel = ui.example || 'Example:';
+
+      const open = {};
+      for (const id of this.rlHelpTopics()) open[id] = () => this.openRateLimitHelp(id);
+
+      const f = {};
+      for (const key of Object.keys(base.fields || {})) {
+        const src = (tree.fields && tree.fields[key]) || base.fields[key];
+        const topic = src.topic || 'overview';
+        f[key] = {
+          title: src.title || '',
+          text: src.text || '',
+          example: src.example || '',
+          hasExample: !!src.example,
+          exampleLabel,
+          more: ui.more || '',
+          open: open[topic] || open.overview
+        };
+      }
+
+      const scopeId = this.rlNewRule?.scope || 'model';
+      const sc = (tree.scopes && tree.scopes[scopeId]) || (base.scopes && base.scopes[scopeId]) || {};
+      const scope = {
+        title: ui.scopeHelpTitle || '',
+        name: sc.name || '',
+        what: sc.what || '',
+        when: sc.when || '',
+        example: sc.example || '',
+        hasExample: !!sc.example,
+        exampleLabel,
+        open: open.scopes
+      };
+
+      const current = this.rlHelpTopic;
+      const sections = (tree.sections || []).map((s, i) => ({
+        key: s.id,
+        domId: 'rl-help-' + s.id,
+        title: s.title || '',
+        intro: s.intro || '',
+        hasIntro: !!s.intro,
+        cls: 'rl-help-section' + (s.id === current ? ' current' : ''),
+        tocCls: 'preset' + (s.id === current ? ' active' : ''),
+        jump: () => this.rlHelpJump(s.id),
+        items: (s.items || []).map((it, j) => ({
+          key: s.id + ':' + j,
+          term: it.term || '',
+          hasTerm: !!it.term,
+          text: it.text || '',
+          example: it.example || '',
+          hasExample: !!it.example,
+          exampleLabel
+        })),
+        tip: s.tip || '',
+        hasTip: !!s.tip,
+        tipLabel: ui.tip || 'Tip:',
+        index: i
+      }));
+
+      return {
+        lang,
+        dir: meta.dir || 'ltr',
+        isFa: lang === 'fa',
+        otherLangCode: other.id,
+        ui,
+        f,
+        scope,
+        open,
+        sections,
+        langRows: (all?.langs || []).map(l => ({
+          key: l.id,
+          label: l.label,
+          name: l.name,
+          cls: l.id === lang ? 'active' : '',
+          pressed: l.id === lang ? 'true' : 'false',
+          select: () => this.setRateLimitHelpLang(l.id)
+        }))
+      };
+    },
 
     get rlTierView() {
       const t = this.rlTier;

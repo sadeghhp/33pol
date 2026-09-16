@@ -2119,3 +2119,61 @@ html.wallboard .page-content { animation: wallboard-shift 900s steps(1) infinite
   .rl-rules-table tr td:last-child { display: none; }
   .rl-rules-table tr td:nth-child(4) { padding-bottom: 0.75rem; border-bottom: 1px solid var(--border); grid-column: 1 / -1; }
 }
+
+/* ---- Rate limits: help (English / Persian) --------------------------------------------------
+   Inline explainers (.rl-help) sit under the concept they explain and open on demand; the guide is a
+   drawer that may paint above the rule/tier/new-rule drawers. Persian is right-to-left: the `dir`
+   attribute on each block flips it, and :lang(fa) swaps in a font with Arabic-script glyphs, since
+   the vendored IBM Plex Sans is latin-only and would otherwise fall back per glyph. */
+.rl-help-bar { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; padding: var(--space-3) var(--space-4); margin: var(--space-3) 0 var(--space-2); border: 1px solid var(--accent-border); border-radius: var(--r-md); background: var(--accent-softer); font-size: var(--text-xs); color: var(--text-secondary); }
+.rl-help-bar > .icon { color: var(--accent-text); flex: none; }
+.rl-help-bar .t { flex: 1 1 14rem; min-width: 0; }
+.rl-help-bar .action.sm { flex: none; }
+.rl-help-row { display: flex; gap: var(--space-3); flex-wrap: wrap; align-items: flex-start; }
+.rl-help-row > .rl-help { flex: 1 1 18rem; min-width: 0; }
+.rl-help { margin: var(--space-2) 0 var(--space-3); font-size: var(--text-xs); border: 1px dashed var(--border-strong); border-radius: var(--r-md); background: var(--bg-sunken); max-width: var(--measure); }
+.rl-help > summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 0.45rem; padding: 0.45rem 0.7rem; color: var(--text-secondary); font-weight: var(--fw-medium); line-height: 1.4; }
+.rl-help > summary::-webkit-details-marker { display: none; }
+.rl-help > summary:hover { color: var(--text-primary); }
+.rl-help > summary:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--bg-base), 0 0 0 4px var(--accent); border-radius: var(--r-md); }
+.rl-help > summary .icon { color: var(--accent-text); flex: none; }
+.rl-help[open] > summary { border-bottom: 1px dashed var(--border); color: var(--text-primary); }
+.rl-help-body { padding: 0.55rem 0.7rem 0.7rem; color: var(--text-secondary); line-height: 1.65; }
+.rl-help-body p { margin: 0 0 0.45rem; }
+.rl-help-ex { padding: 0.45rem 0.65rem; border-radius: var(--r-sm); background: var(--accent-softer); border: 1px solid var(--accent-border); color: var(--text-primary); }
+.rl-help-ex-label { font-weight: var(--fw-semi); color: var(--accent-text); }
+.rl-help-links { display: flex; gap: var(--space-3); flex-wrap: wrap; margin-top: 0.35rem; }
+.rl-help-scope { padding: var(--space-3) var(--space-4); margin-bottom: var(--space-3); border-radius: var(--r-md); border: 1px solid var(--accent-border); background: var(--accent-softer); font-size: var(--text-xs); color: var(--text-secondary); line-height: 1.6; }
+.rl-help-scope .eyebrow { display: block; margin-bottom: 0.15rem; }
+.rl-help-scope > b { display: block; color: var(--text-primary); font-size: var(--text-sm); font-weight: var(--fw-semi); margin-bottom: 0.25rem; }
+.rl-help-scope p { margin: 0 0 0.4rem; }
+.rl-help-scope .rl-help-ex { background: var(--bg-surface); }
+.rl-drawer-head-actions { display: flex; align-items: center; gap: var(--space-2); flex: none; }
+.rl-lang { margin-bottom: 0; }
+.rl-lang button { padding: 0.3rem 0.6rem; font-size: var(--text-xs); min-width: 2.4rem; }
+.rl-help-backdrop { z-index: 101; }
+.rl-help-drawer { width: min(38rem, 100vw); }
+.rl-help-toc { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-bottom: var(--space-5); }
+.rl-help-toc .preset { font-size: var(--text-2xs); }
+.rl-help-section { margin-bottom: var(--space-6); padding-bottom: var(--space-5); border-bottom: 1px solid var(--border); font-size: var(--text-sm); line-height: 1.7; color: var(--text-secondary); scroll-margin-top: var(--space-4); }
+.rl-help-section:last-of-type { border-bottom: none; }
+.rl-help-section h4 { margin: 0 0 0.45rem; font-size: var(--text-md); font-weight: var(--fw-semi); color: var(--text-primary); }
+.rl-help-section.current h4 { color: var(--accent-text); }
+.rl-help-intro { margin: 0 0 var(--space-3); color: var(--text-primary); }
+.rl-help-item { margin: 0 0 var(--space-3); }
+.rl-help-item > b { display: block; color: var(--text-primary); font-weight: var(--fw-semi); }
+.rl-help-item p { margin: 0.15rem 0 0.35rem; }
+.rl-help-item .rl-help-ex { font-size: var(--text-xs); }
+.rl-help-tip { padding: 0.55rem 0.75rem; border-inline-start: 3px solid var(--warn-strong); background: var(--warn-soft); border-radius: var(--r-sm); color: var(--text-primary); font-size: var(--text-xs); line-height: 1.6; }
+.rl-help-tip b { color: var(--warn); }
+
+/* Right-to-left blocks: logical properties do the mirroring; the two places with a physical side
+   (the drawer edge, the scope card's left-aligned text) are flipped by hand. */
+[dir="rtl"].rl-help, [dir="rtl"].rl-help-scope, [dir="rtl"].rl-help-bar, [dir="rtl"].rl-help-drawer { text-align: start; }
+[dir="rtl"].rl-help-drawer { border-left: none; border-right: 1px solid var(--border); }
+[dir="rtl"].rl-help-drawer .drawer-header { flex-direction: row; }
+:lang(fa) { font-family: 'Vazirmatn', 'Vazir', 'IRANSansX', 'IRANSans', 'Segoe UI', Tahoma, 'Noto Sans Arabic', 'Noto Naskh Arabic', var(--font-sans); letter-spacing: 0; }
+:lang(fa) h3, :lang(fa) h4, :lang(fa) .eyebrow { font-family: inherit; }
+:lang(fa) .rl-help-body, :lang(fa) .rl-help-section, :lang(fa) .rl-help-scope { line-height: 1.9; }
+/* The language toggle keeps its own script per button, whichever way the block around it runs. */
+.rl-lang button[lang="en"] { font-family: var(--font-sans); }
