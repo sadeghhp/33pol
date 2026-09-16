@@ -389,6 +389,15 @@ When the gateway runs in Docker, upstream URLs must use `http://host.docker.inte
       nothing staged, reload is silent
 - [ ] **Rate limits:** type a value, then type the saved value back → the badge clears and reload is
       silent again (dirtiness is a comparison, not a record that a key was pressed)
+- [ ] **Rate limits:** open a rule, change a number, and press reload *without* pressing **Done** →
+      the browser still asks; the same for the plan tier drawer, a half-filled window form and the
+      **New rule** wizard, none of which have reached the draft yet
+- [ ] **Rate limits:** stage an edit, press reload and choose **Stay on page** → the Overview's live
+      indicator is still live (teardown happens on pagehide, not on the question)
+- [ ] **Rate limits:** open a rule, change a number, then press Escape or click the backdrop → the
+      console asks before discarding; **Cancel** and the close button discard straight away
+- [ ] **Rate limits (screen reader):** with an edit staged, the **Rate limits** sub-tab announces
+      "Rate limits 2 unsaved rate-limit changes", not a bare "Rate limits 2"
 - [ ] **Rate limits (keyboard):** in **New rule**, Tab reaches the scope group once, then the arrow
       keys move and select between the eight cards
 - [ ] **Rate limits (screen reader):** the scope filter chips, the **Every week / One time** toggle

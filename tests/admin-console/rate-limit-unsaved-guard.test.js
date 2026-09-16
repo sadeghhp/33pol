@@ -79,12 +79,21 @@ test('the unload guard fires only while edits are staged', async t => {
     app.rlDraft.rules[0].rpm = 300;
     const event = unloadEvent();
 
-    assert.equal(app.onBeforeUnload(event), '');
-    assert.equal(event.defaultPrevented, true, 'preventDefault is what modern engines honour');
-    assert.equal(event.returnValue, '', 'returnValue is what older ones honour');
+    const returned = app.onBeforeUnload(event);
+    assert.equal(event.defaultPrevented, true, 'preventDefault is what current engines honour');
+    // The legacy paths arm the dialog only on a non-empty string, so an empty one is no fallback
+    // at all — which is what this asserted before, and it asserted nothing.
+    assert.ok(returned, 'the returned string must be non-empty to mean anything');
+    assert.equal(event.returnValue, returned);
   });
 
-  await t.test('the live stream is torn down either way', () => {
+  /**
+   * The prompt makes "Stay on page" reachable, and the page has to be intact afterwards. Tearing
+   * the push stream down here would leave the Overview on its 2s poll with nothing to restart it:
+   * syncLive only runs on a tab change, a visibility change or the stream's own lifecycle, never on
+   * a timer. Teardown belongs on pagehide, which fires only when the page really goes.
+   */
+  await t.test('the guard does not tear down the live stream', () => {
     for (const dirty of [false, true]) {
       const app = pristineApp();
       let stopped = 0;
@@ -92,7 +101,7 @@ test('the unload guard fires only while edits are staged', async t => {
       if (dirty) app.rlDraft.rules[0].rpm = 300;
 
       app.onBeforeUnload(unloadEvent());
-      assert.equal(stopped, 1, `stopLive must run when dirty=${dirty}`);
+      assert.equal(stopped, 0, `stopLive must not run from beforeunload when dirty=${dirty}`);
     }
   });
 
@@ -139,7 +148,7 @@ test('dirtiness is a comparison of state, not a record that something was typed'
       const app = pristineApp();
       edit(app);
       assert.equal(app.rateLimitsDirty, true, `${what} must count as unsaved work`);
-      assert.equal(app.onBeforeUnload(unloadEvent()), '', `${what} must arm the unload guard`);
+      assert.ok(app.onBeforeUnload(unloadEvent()), `${what} must arm the unload guard`);
     }
   });
 
@@ -251,7 +260,7 @@ test('the guard follows the draft through save, discard and failure', async t =>
     app.rateLimitFieldError = 'Rate limits were changed by someone else since this page was loaded.';
 
     assert.equal(app.rateLimitsDirty, true, 'a refused save has saved nothing');
-    assert.equal(app.onBeforeUnload(unloadEvent()), '');
+    assert.ok(app.onBeforeUnload(unloadEvent()));
     assert.equal(app.settingsTabs.find(t => t.key === 'limits').badge, '1');
   });
 
@@ -261,6 +270,203 @@ test('the guard follows the draft through save, discard and failure', async t =>
 
     // fetchRateLimits returns early rather than overwriting a dirty draft; the guard must agree.
     assert.equal(app.rateLimitsDirty, true);
-    assert.equal(app.onBeforeUnload(unloadEvent()), '');
+    assert.ok(app.onBeforeUnload(unloadEvent()));
+  });
+});
+
+/**
+ * The four editors — plan tier, rule, window, new-rule wizard — each work on a copy that reaches
+ * the draft only on Done. While one is open with edits in it, `rateLimitsDirty` is still false, so
+ * a reload would have taken the whole editor with no prompt: the exact loss the guard exists to
+ * prevent, one level in.
+ */
+test('an open editor counts as unsaved work even when the draft is clean', async t => {
+  /** A component with the rule drawer open on the saved rule, and nothing typed into it yet. */
+  const withRuleDrawer = () => {
+    const app = pristineApp();
+    app.rateLimitUsage = {};
+    app.openRateLimitRule('model:gpt-4');
+    return app;
+  };
+
+  await t.test('an untouched editor is not unsaved work', () => {
+    const cases = {
+      'the tier drawer': app => app.openRateLimitTier('default', ''),
+      'the rule drawer': app => { app.rateLimitUsage = {}; app.openRateLimitRule('model:gpt-4'); },
+      'the new-rule wizard': app => app.openRateLimitNewRule(),
+    };
+
+    for (const [what, open] of Object.entries(cases)) {
+      const app = pristineApp();
+      open(app);
+      assert.equal(app.rateLimitsWorkInProgress, false, `${what} must be quiet until something is entered`);
+      assert.equal(app.onBeforeUnload(unloadEvent()), undefined, `${what} must not prompt`);
+    }
+  });
+
+  await t.test('an untouched window form is not unsaved work', () => {
+    const app = withRuleDrawer();
+    app.openRateLimitWindow(-1);
+
+    assert.equal(app.rlWindowOpen, true);
+    assert.equal(app.rlWindowDirty, false, 'the blank template is not yet an answer');
+    assert.equal(app.onBeforeUnload(unloadEvent()), undefined);
+  });
+
+  await t.test('each editor arms the guard once something is entered', () => {
+    const cases = {
+      'a tier number': app => {
+        app.openRateLimitTier('default', '');
+        app.rlTier.rpm = 999;
+      },
+      'a renamed plan': app => {
+        app.rlDraft.plans.standard = { rpm: 120, burst: 10, maxConcurrentStreams: 0 };
+        app.rateLimits.plans.standard = { rpm: 120, burst: 10, maxConcurrentStreams: 0 };
+        app.openRateLimitTier('plan', 'standard');
+        app.rlTier.slug = 'premium';
+      },
+      'a new plan': app => app.openRateLimitTier('plan', ''),
+      'a rule number': app => {
+        app.rateLimitUsage = {};
+        app.openRateLimitRule('model:gpt-4');
+        app.rlRule.rpm = 900;
+      },
+      'a rule switched off in the drawer': app => {
+        app.rateLimitUsage = {};
+        app.openRateLimitRule('model:gpt-4');
+        app.rlRule.enabled = false;
+      },
+      'a window name': app => {
+        app.rateLimitUsage = {};
+        app.openRateLimitRule('model:gpt-4');
+        app.openRateLimitWindow(-1);
+        app.rlWindow.name = 'off-peak';
+      },
+      'a wizard step': app => {
+        app.openRateLimitNewRule();
+        app.rlNewRule.step = 2;
+      },
+      'a wizard subject': app => {
+        app.openRateLimitNewRule();
+        app.rlNewRule.subject = 'acme';
+      },
+      'a wizard tier the operator typed': app => {
+        app.openRateLimitNewRule();
+        app.setRateLimitNewRuleTier('rpm', 25);
+      },
+    };
+
+    for (const [what, edit] of Object.entries(cases)) {
+      const app = pristineApp();
+      edit(app);
+      assert.equal(app.rateLimitsDirty, false, `${what} must not have reached the draft yet`);
+      assert.equal(app.rateLimitsWorkInProgress, true, `${what} must count as unsaved work`);
+      assert.ok(app.onBeforeUnload(unloadEvent()), `${what} must arm the unload guard`);
+    }
+  });
+
+  await t.test('typing a value back leaves the editor quiet', () => {
+    const app = withRuleDrawer();
+
+    app.rlRule.rpm = 900;
+    assert.equal(app.rlRuleDirty, true);
+
+    app.rlRule.rpm = 600;
+    assert.equal(app.rlRuleDirty, false, 'reverting in the drawer is not a pending change');
+    assert.equal(app.onBeforeUnload(unloadEvent()), undefined);
+  });
+
+  await t.test('applying the editor moves the work to the draft, and it stays guarded', () => {
+    const app = withRuleDrawer();
+    app.rlRule.rpm = 900;
+    app.applyRateLimitRule();
+
+    assert.equal(app.rlRuleDrawerOpen, false);
+    assert.equal(app.rlRuleDirty, false, 'the drawer is closed, so it holds nothing');
+    assert.equal(app.rateLimitsDirty, true, 'the edit is staged now');
+    assert.ok(app.onBeforeUnload(unloadEvent()));
+  });
+
+  await t.test('closing an editor with nothing staged disarms the guard', () => {
+    const app = withRuleDrawer();
+    app.rlRule.rpm = 900;
+    assert.equal(app.rateLimitsWorkInProgress, true);
+
+    app.closeRateLimitRule();
+    assert.equal(app.rateLimitsWorkInProgress, false);
+    assert.equal(app.onBeforeUnload(unloadEvent()), undefined);
+  });
+
+  /**
+   * The badge counts staged changes only. An open editor is on screen by definition and needs no
+   * badge to announce it, so the guard is deliberately wider than the count — but the count must
+   * never be the wider of the two.
+   */
+  await t.test('anything the badge counts also arms the guard', () => {
+    const app = pristineApp();
+    app.rlDraft.rules[0].rpm = 300;
+
+    assert.ok(app.rateLimitsUnsavedCount > 0);
+    assert.equal(app.rateLimitsWorkInProgress, true);
+  });
+});
+
+test('an accidental dismissal asks before discarding a working copy', async t => {
+  await t.test('Escape on an edited drawer asks instead of closing', () => {
+    const app = pristineApp();
+    app.rateLimitUsage = {};
+    app.openRateLimitRule('model:gpt-4');
+    app.rlRule.rpm = 900;
+
+    app.dismissRateLimitRule();
+
+    assert.equal(app.rlRuleDrawerOpen, true, 'the drawer stays open behind the question');
+    assert.ok(app.confirmDialog, 'the operator is asked');
+    assert.equal(app.confirmDialog.confirmLabel, 'Discard');
+  });
+
+  await t.test('confirming discards, and the edits are gone', async () => {
+    const app = pristineApp();
+    app.rateLimitUsage = {};
+    app.openRateLimitRule('model:gpt-4');
+    app.rlRule.rpm = 900;
+    app.dismissRateLimitRule();
+
+    await app.confirmDialog.onConfirm();
+
+    assert.equal(app.rlRuleDrawerOpen, false);
+    assert.equal(app.rlDraft.rules[0].rpm, 600, 'the draft never saw the edit');
+  });
+
+  await t.test('an untouched editor closes without a question', () => {
+    const cases = {
+      'the rule drawer': [app => { app.rateLimitUsage = {}; app.openRateLimitRule('model:gpt-4'); },
+        app => app.dismissRateLimitRule(), app => app.rlRuleDrawerOpen],
+      'the tier drawer': [app => app.openRateLimitTier('default', ''),
+        app => app.dismissRateLimitTier(), app => app.rlTierDrawerOpen],
+      'the wizard': [app => app.openRateLimitNewRule(),
+        app => app.dismissRateLimitNewRule(), app => app.rlNewRuleOpen],
+    };
+
+    for (const [what, [open, dismiss, isOpen]] of Object.entries(cases)) {
+      const app = pristineApp();
+      open(app);
+      dismiss(app);
+
+      assert.equal(isOpen(app), false, `${what} must close straight away`);
+      assert.equal(app.confirmDialog, null, `${what} must not ask when there is nothing to lose`);
+    }
+  });
+
+  await t.test('Cancel and Done stay immediate — they say what they do', () => {
+    const app = pristineApp();
+    app.rateLimitUsage = {};
+    app.openRateLimitRule('model:gpt-4');
+    app.rlRule.rpm = 900;
+
+    app.closeRateLimitRule();
+
+    assert.equal(app.rlRuleDrawerOpen, false);
+    assert.equal(app.confirmDialog, null);
   });
 });

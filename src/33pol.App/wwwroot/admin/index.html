@@ -24,11 +24,11 @@
   <link rel="preload" as="font" type="font/woff2" href="vendor/fonts/IBMPlexSans-400.woff2" crossorigin />
   <link rel="preload" as="font" type="font/woff2" href="vendor/fonts/IBMPlexSans-500.woff2" crossorigin />
   <link rel="stylesheet" href="vendor/fonts.css?v=1" />
-  <link rel="stylesheet" href="admin.css?v=26" />
+  <link rel="stylesheet" href="admin.css?v=27" />
   <script defer src="admin-icons.js?v=11"></script>
   <script defer src="admin-errors.js?v=8"></script>
   <script defer src="admin-store.js?v=12"></script>
-  <script defer src="admin-app.js?v=43"></script>
+  <script defer src="admin-app.js?v=44"></script>
   <script defer src="vendor/alpine-csp-3.14.9.min.js"></script>
 </head>
 <body x-data="adminApp" x-cloak @keydown.window="onModalKeydown">
@@ -1768,7 +1768,7 @@
 
           <nav class="sub-nav" aria-label="Settings sections">
             <template x-for="t in settingsTabs" :key="t.key">
-              <button type="button" :class="t.cls" @click="t.select"><span x-text="t.label"></span><span class="sub-nav-badge" x-show="t.badge" x-text="t.badge" :aria-label="t.badgeLabel"></span></button>
+              <button type="button" :class="t.cls" @click="t.select"><span x-text="t.label"></span><span class="sub-nav-badge" x-show="t.badge" x-text="t.badge" aria-hidden="true"></span><span class="sr-only" x-text="t.badgeLabel"></span></button>
             </template>
           </nav>
 
@@ -2370,7 +2370,7 @@
   </div>
 
   <!-- Rate limits: rule drawer (with the window form as a sub-panel) -->
-  <div class="drawer-backdrop" x-show="rlRuleDrawerOpen" x-transition.opacity @click.self="closeRateLimitRule" role="presentation">
+  <div class="drawer-backdrop" x-show="rlRuleDrawerOpen" x-transition.opacity @click.self="dismissRateLimitRule" role="presentation">
     <div class="drawer rl-drawer" role="dialog" aria-modal="true" :aria-labelledby="rlRuleDrawerLabel" @click.stop>
       <template x-if="rlWindowClosed">
         <div>
@@ -2530,7 +2530,7 @@
   </div>
 
   <!-- Rate limits: tier drawer -->
-  <div class="drawer-backdrop" x-show="rlTierDrawerOpen" x-transition.opacity @click.self="closeRateLimitTier" role="presentation">
+  <div class="drawer-backdrop" x-show="rlTierDrawerOpen" x-transition.opacity @click.self="dismissRateLimitTier" role="presentation">
     <div class="drawer" role="dialog" aria-modal="true" aria-labelledby="rl-tier-title" @click.stop>
       <div class="drawer-header">
         <div><span class="eyebrow">Tier</span><h3 id="rl-tier-title" x-text="rlTierView.title"></h3></div>
@@ -2558,7 +2558,7 @@
   </div>
 
   <!-- Rate limits: new rule flow -->
-  <div class="drawer-backdrop" x-show="rlNewRuleOpen" x-transition.opacity @click.self="closeRateLimitNewRule" role="presentation">
+  <div class="drawer-backdrop" x-show="rlNewRuleOpen" x-transition.opacity @click.self="dismissRateLimitNewRule" role="presentation">
     <div class="drawer rl-drawer" role="dialog" aria-modal="true" aria-labelledby="rl-new-title" @click.stop>
       <div class="drawer-header">
         <div>

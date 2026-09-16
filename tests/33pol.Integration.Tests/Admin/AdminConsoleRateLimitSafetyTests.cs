@@ -316,10 +316,45 @@ public sealed class AdminConsoleRateLimitSafetyTests
 
         js.Should().Contain("window.addEventListener('beforeunload', (e) => this.onBeforeUnload(e));");
         js.Should().Contain("onBeforeUnload(event)");
-        js.Should().Contain("if (!this.rateLimitsDirty) return undefined;");
 
-        // The stream teardown the listener already did must not become conditional on the draft.
-        js.Should().Contain("this.stopLive();\n      if (!this.rateLimitsDirty)");
+        // Every editor holds a working copy that never reached the draft, so the guard asks about
+        // those too, not only about staged changes.
+        js.Should().Contain("if (!this.rateLimitsWorkInProgress) return undefined;");
+
+        // The prompt makes "Stay on page" reachable. Tearing the push stream down here would leave
+        // the Overview on its 2s poll with nothing to restart it, so teardown moved to pagehide,
+        // which fires only when the page really goes; pageshow brings it back out of bfcache.
+        js.Should().NotContain("onBeforeUnload(event) {\n      this.stopLive();");
+        js.Should().Contain("window.addEventListener('pagehide', () => this.stopLive());");
+        js.Should().Contain("window.addEventListener('pageshow', (e) => { if (e && e.persisted) this.syncLive(); });");
+    }
+
+    /// <summary>
+    /// Escape and a backdrop click are the two ways to leave an editor by accident, and each of the
+    /// four rate-limit editors holds a copy that closing throws away. Those two exits ask; Cancel,
+    /// Back, Done and the close button say what they do and stay immediate.
+    /// </summary>
+    [Fact]
+    public async Task DismissingAnEditedEditorByAccident_AsksFirst()
+    {
+        var html = await GetAssetAsync("/admin/index.html");
+        var js = await GetAssetAsync("/admin/admin-app.js");
+
+        foreach (var surface in new[] { "Rule", "Tier", "NewRule" })
+        {
+            html.Should().Contain($"@click.self=\"dismissRateLimit{surface}\"",
+                $"a backdrop click on the {surface} editor must ask before discarding");
+        }
+
+        foreach (var surface in new[] { "Window", "NewRule", "Tier", "Rule" })
+        {
+            js.Should().Contain($"this.dismissRateLimit{surface}();",
+                $"Escape must route through the {surface} editor's asking variant");
+        }
+
+        // The deliberate exits keep calling the immediate close.
+        html.Should().Contain("@click=\"closeRateLimitRule\">Cancel</button>");
+        html.Should().Contain("@click=\"closeRateLimitWindow\">Back</button>");
     }
 
     /// <summary>
@@ -334,8 +369,14 @@ public sealed class AdminConsoleRateLimitSafetyTests
         var css = await GetAssetAsync("/admin/admin.css");
         var js = await GetAssetAsync("/admin/admin-app.js");
 
-        html.Should().Contain("<span class=\"sub-nav-badge\" x-show=\"t.badge\" x-text=\"t.badge\" :aria-label=\"t.badgeLabel\">");
+        // aria-label is prohibited on a bare span (role=generic takes no name), so the announcement
+        // rides in the button's own accessible name through the console's existing sr-only class —
+        // otherwise the tab reads as "Rate limits 2" with nothing saying what the 2 counts.
+        html.Should().Contain("<span class=\"sub-nav-badge\" x-show=\"t.badge\" x-text=\"t.badge\" aria-hidden=\"true\">"
+            + "</span><span class=\"sr-only\" x-text=\"t.badgeLabel\">");
+        html.Should().NotContain(":aria-label=\"t.badgeLabel\"");
         css.Should().Contain(".sub-nav-badge {");
+        css.Should().Contain(".sr-only {");
         js.Should().Contain("get rateLimitsUnsavedCount()");
         js.Should().Contain("badge: id === 'limits' && unsaved > 0 ? String(unsaved) : '',");
     }

@@ -266,6 +266,7 @@ function adminApp() {
     rlScheduleLoadedAt: 0,
     _rlScheduleTimer: null,
     _rlPreviewTimer: null,
+    _rlWindowBaseline: '',
     _rlPreviewSeq: 0,
     _rlTick: Date.now(),
     _rlZoneCache: null,
@@ -389,6 +390,11 @@ function adminApp() {
         }
       });
       window.addEventListener('beforeunload', (e) => this.onBeforeUnload(e));
+      // Teardown belongs on pagehide, not beforeunload: beforeunload can now be cancelled ("Stay on
+      // page") and the stream has to survive that. pagehide fires only when the page really goes,
+      // bfcache included — and pageshow brings the stream back if it comes out of bfcache.
+      window.addEventListener('pagehide', () => this.stopLive());
+      window.addEventListener('pageshow', (e) => { if (e && e.persisted) this.syncLive(); });
       // One effect for every modal surface. It reads the flags (which is what subscribes it) and
       // then inspects the DOM on the next tick, once x-show has been applied.
       Alpine.effect(() => {
@@ -845,25 +851,33 @@ function adminApp() {
     },
 
     /**
-     * Leaving the page. The live stream is always torn down; the prompt is raised only while
-     * rate-limit edits are staged, because that is the one thing on the console that lives solely in
-     * memory — everything else is either already saved or re-fetched on the next load.
+     * Leaving the page. Rate-limit work is the one thing on the console that lives solely in memory
+     * — everything else is either already saved or re-fetched on the next load — so it is the one
+     * thing worth stopping an operator over: the staged draft, and the four editors whose working
+     * copies have not reached it yet (see rateLimitsWorkInProgress).
      *
-     * Dirtiness is the same semantic comparison the save bar uses (rateLimitsDirty), not a flag set
-     * by an input event, so typing a value and typing it back leaves the page pristine and silent.
+     * Dirtiness is a comparison of state, not a flag set by an input event, so typing a value and
+     * typing it back leaves the page pristine and silent.
      *
-     * Browsers ignore any text supplied here and show their own wording; preventDefault plus a
-     * returnValue is simply the shape the event contract requires, and returning the string keeps
-     * engines that predate preventDefault working.
+     * This handler does not tear the live stream down. Raising the prompt makes "Stay on page" a
+     * real outcome, and the stream has to survive it; teardown sits on pagehide instead, which
+     * fires only when the page really goes.
+     *
+     * Browsers show their own wording and ignore the text, but the text still has to be non-empty:
+     * preventDefault is what current engines honour, and the two legacy paths (returnValue and the
+     * returned value) arm the dialog only when the string is not empty.
      */
     onBeforeUnload(event) {
-      this.stopLive();
-      if (!this.rateLimitsDirty) return undefined;
+      if (!this.rateLimitsWorkInProgress) return undefined;
+      // preventDefault is what current engines honour. returnValue and the return value are the
+      // legacy paths, and both arm the dialog only when the string is non-empty, so this text has
+      // to be real even though no browser has displayed it for years.
+      const message = 'Rate-limit changes have not been saved yet.';
       if (event) {
         event.preventDefault();
-        event.returnValue = '';
+        event.returnValue = message;
       }
-      return '';
+      return message;
     },
 
     icon(name) {
@@ -2502,10 +2516,10 @@ function adminApp() {
       }
       if (e.key === 'Escape') {
         if (this.confirmDialog) this.cancelConfirm();
-        else if (this.rlWindowOpen) this.closeRateLimitWindow();
-        else if (this.rlNewRuleOpen) this.closeRateLimitNewRule();
-        else if (this.rlTierDrawerOpen) this.closeRateLimitTier();
-        else if (this.rlRuleDrawerOpen) this.closeRateLimitRule();
+        else if (this.rlWindowOpen) this.dismissRateLimitWindow();
+        else if (this.rlNewRuleOpen) this.dismissRateLimitNewRule();
+        else if (this.rlTierDrawerOpen) this.dismissRateLimitTier();
+        else if (this.rlRuleDrawerOpen) this.dismissRateLimitRule();
         else if (this.deleteConfirmKey) this.cancelDeleteKey();
         else if (this.revokeConfirmId) this.cancelRevoke();
         else if (this.modelTestDialog) this.closeModelTestDialog();
@@ -3520,6 +3534,42 @@ function adminApp() {
 
     // ---- tiers ----
 
+    /**
+     * Escape and a click on the backdrop are the two ways to leave an editor by accident, and every
+     * one of these editors holds a working copy that closing throws away. Cancel, Back, Done and the
+     * close button say what they do, so they stay immediate; only the ambiguous exits ask, and only
+     * when there is something to lose.
+     */
+    rlConfirmDismiss(dirty, message, discard) {
+      if (!dirty) {
+        discard();
+        return;
+      }
+      this.openConfirm({
+        title: 'Discard these changes?',
+        message,
+        confirmLabel: 'Discard',
+        danger: true,
+        onConfirm: discard
+      });
+    },
+
+    dismissRateLimitTier() {
+      this.rlConfirmDismiss(this.rlTierDirty, 'This tier has edits that have not been applied to the draft yet.', () => this.closeRateLimitTier());
+    },
+
+    dismissRateLimitRule() {
+      this.rlConfirmDismiss(this.rlRuleDirty, 'This rule has edits that have not been applied to the draft yet.', () => this.closeRateLimitRule());
+    },
+
+    dismissRateLimitWindow() {
+      this.rlConfirmDismiss(this.rlWindowDirty, 'This window has not been added to the rule yet.', () => this.closeRateLimitWindow());
+    },
+
+    dismissRateLimitNewRule() {
+      this.rlConfirmDismiss(this.rlNewRuleDirty, 'This rule has not been created yet.', () => this.closeRateLimitNewRule());
+    },
+
     openRateLimitTier(kind, slug) {
       if (!this.rlDraft || !this.rateLimitsEditable) return;
       const tier = kind === 'default' ? this.rlDraft.default : (this.rlDraft.plans[slug] || { rpm: 60, burst: 10, maxConcurrentStreams: 5 });
@@ -3734,6 +3784,7 @@ function adminApp() {
         });
       }
       this.rlWindow = form;
+      this._rlWindowBaseline = JSON.stringify(form);
       this.rlWindowError = '';
       this.rlWindowPreview = null;
       this.rlWindowOpen = true;
@@ -4866,7 +4917,9 @@ function adminApp() {
         ['access', 'Model access'],
         ['observability', 'Observability']
       ];
-      const unsaved = this.rateLimitsUnsavedCount;
+      // The itemised diff costs roughly half again what the plain dirty check does, and the
+      // pristine case is the common one on the four sub-tabs that only render the badge.
+      const unsaved = this.rateLimitsDirty ? this.rateLimitsUnsavedCount : 0;
       return defs.map(([id, label]) => ({
         key: id,
         label,
@@ -7055,6 +7108,66 @@ function adminApp() {
       if (!this.rateLimits || !this.rlDraft) return false;
       return JSON.stringify(this.buildRateLimitsPayload(this.rlDraft)) !==
         JSON.stringify(this.buildRateLimitsPayload(this.rateLimits));
+    },
+
+    /**
+     * The tier, rule, window and new-rule editors all work on a copy that reaches the draft only
+     * when the operator presses Done, so "nothing staged" is not the same as "nothing to lose":
+     * a reload with a half-filled editor open would take it with no prompt at all. Each getter
+     * below answers for one editor, and every one of them compares state rather than watching for
+     * keystrokes, so typing a value back to what it was leaves the page quiet.
+     */
+    get rateLimitsWorkInProgress() {
+      return this.rateLimitsDirty || this.rlTierDirty || this.rlRuleDirty
+        || this.rlWindowDirty || this.rlNewRuleDirty;
+    },
+
+    get rlTierDirty() {
+      const t = this.rlTier;
+      if (!this.rlTierDrawerOpen || !t) return false;
+      // A plan being created exists nowhere but the drawer, so there is nothing to compare against.
+      if (t.isNew) return true;
+      const source = t.kind === 'default' ? this.rlDraft?.default : this.rlDraft?.plans?.[t.originalSlug];
+      if (!source) return true;
+      if (String(t.slug || '') !== String(t.originalSlug || '')) return true;
+      return JSON.stringify(this.rlTierPayload(t)) !== JSON.stringify(this.rlTierPayload(source));
+    },
+
+    /** The drawer's copy against the draft rule it was opened from, in the shape Done would write. */
+    rlRuleFormSnapshot(source) {
+      return JSON.stringify([
+        this.rlTierPayload(source),
+        source.enabled !== false,
+        source.schedule || []
+      ]);
+    },
+
+    get rlRuleDirty() {
+      if (!this.rlRuleDrawerOpen || !this.rlRule) return false;
+      const rule = this.rlFindDraftRule(this.rlRule.identity);
+      if (!rule) return false;
+      return this.rlRuleFormSnapshot(this.rlRule) !== this.rlRuleFormSnapshot(rule);
+    },
+
+    /**
+     * The window form has no counterpart in the draft until it is applied, so it is compared with
+     * the snapshot taken when it was opened — blank template included, which makes a brand-new
+     * window count as work only once something has been entered into it.
+     */
+    get rlWindowDirty() {
+      if (!this.rlWindowOpen || !this.rlWindow) return false;
+      return JSON.stringify(this.rlWindow) !== this._rlWindowBaseline;
+    },
+
+    /**
+     * The wizard seeds its own numbers, so "touched" (already maintained so a scope change leaves
+     * the operator's numbers alone) plus a step past the first plus a typed subject is the whole
+     * of what an operator can have invested in it.
+     */
+    get rlNewRuleDirty() {
+      const n = this.rlNewRule;
+      if (!this.rlNewRuleOpen || !n) return false;
+      return n.step > 1 || !!n.touched || !!n.subject || !!n.model || !!n.target;
     },
 
     /** What the sticky bar says has changed, so an operator can tell a stray edit from an intended one. */
