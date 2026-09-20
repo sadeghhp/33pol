@@ -24,12 +24,12 @@
   <link rel="preload" as="font" type="font/woff2" href="vendor/fonts/IBMPlexSans-400.woff2" crossorigin />
   <link rel="preload" as="font" type="font/woff2" href="vendor/fonts/IBMPlexSans-500.woff2" crossorigin />
   <link rel="stylesheet" href="vendor/fonts.css?v=1" />
-  <link rel="stylesheet" href="admin.css?v=28" />
+  <link rel="stylesheet" href="admin.css?v=29" />
   <script defer src="admin-icons.js?v=12"></script>
   <script defer src="admin-errors.js?v=8"></script>
   <script defer src="admin-store.js?v=12"></script>
   <script defer src="admin-rate-limit-help.js?v=1"></script>
-  <script defer src="admin-app.js?v=45"></script>
+  <script defer src="admin-app.js?v=46"></script>
   <script defer src="vendor/alpine-csp-3.14.9.min.js"></script>
 </head>
 <body x-data="adminApp" x-cloak @keydown.window="onModalKeydown">
@@ -1943,7 +1943,7 @@
                                 <span class="rl-switch-track"></span>
                               </label>
                             </td>
-                            <td><span class="rl-target" x-text="r.target"></span><span class="rl-scope" x-text="r.scope"></span></td>
+                            <td><span class="rl-target" x-text="r.target" :title="r.targetTitle"></span><span class="rl-scope" x-text="r.scope"></span></td>
                             <td><span class="rl-nums" x-text="r.tier"></span></td>
                             <td><span :class="r.windowsCls" x-text="r.windowsText"></span></td>
                             <td><div class="rl-force" :title="r.forceTitle"><span :class="r.forceDot"></span><div><b x-text="r.forceText"></b><span class="rl-until" x-text="r.forceSub"></span></div></div></td>
@@ -2875,18 +2875,38 @@
       <div x-show="rlNewRuleView.isStep2">
         <template x-if="rlNewRuleView.isPair">
           <div>
-            <label><span x-text="rlNewRuleView.subjectLabel"></span> <input type="text" x-model="mdl.rlNewRule.subject" placeholder="acme" /></label>
-            <label>Model id <input type="text" x-model="mdl.rlNewRule.model" placeholder="gpt-4" /></label>
+            <label><span x-text="rlNewRuleView.subjectLabel"></span> <input type="text" x-model="mdl.rlNewRule.subject" :placeholder="rlNewRuleView.firstPlaceholder" autocomplete="off" /></label>
+            <div class="rl-suggest" x-show="rlNewRuleView.hasFirstSuggestions" role="group" :aria-label="rlNewRuleView.subjectLabel">
+              <template x-for="s in rlNewRuleView.firstSuggestions" :key="s.key">
+                <button type="button" @click="s.pick"><span x-text="s.text"></span><small x-text="s.sub"></small></button>
+              </template>
+              <p class="rl-suggest-more" x-show="rlNewRuleView.firstMore" x-text="rlNewRuleView.firstMore"></p>
+            </div>
+            <p class="hint" x-show="rlNewRuleView.keyNote" x-text="rlNewRuleView.keyNote"></p>
+            <label>Model id <input type="text" x-model="mdl.rlNewRule.model" placeholder="gpt-4" autocomplete="off" /></label>
+            <div class="rl-suggest" x-show="rlNewRuleView.hasModelSuggestions" role="group" aria-label="Model id">
+              <template x-for="s in rlNewRuleView.modelSuggestions" :key="s.key">
+                <button type="button" @click="s.pick"><span x-text="s.text"></span><small x-text="s.sub"></small></button>
+              </template>
+              <p class="rl-suggest-more" x-show="rlNewRuleView.modelMore" x-text="rlNewRuleView.modelMore"></p>
+            </div>
           </div>
         </template>
         <template x-if="rlNewRuleView.isSingle">
-          <label><span x-text="rlNewRuleView.targetLabel"></span> <input type="text" x-model="mdl.rlNewRule.target" placeholder="gpt-4" /></label>
+          <div>
+            <label><span x-text="rlNewRuleView.targetLabel"></span> <input type="text" x-model="mdl.rlNewRule.target" :placeholder="rlNewRuleView.firstPlaceholder" autocomplete="off" /></label>
+            <div class="rl-suggest" x-show="rlNewRuleView.hasFirstSuggestions" role="group" :aria-label="rlNewRuleView.targetLabel">
+              <template x-for="s in rlNewRuleView.firstSuggestions" :key="s.key">
+                <button type="button" @click="s.pick"><span x-text="s.text"></span><small x-text="s.sub"></small></button>
+              </template>
+              <p class="rl-suggest-more" x-show="rlNewRuleView.firstMore" x-text="rlNewRuleView.firstMore"></p>
+            </div>
+            <p class="hint" x-show="rlNewRuleView.keyNote" x-text="rlNewRuleView.keyNote"></p>
+          </div>
         </template>
-        <div class="rl-suggest" x-show="rlNewRuleView.hasSuggestions">
-          <template x-for="s in rlNewRuleView.suggestions" :key="s.key">
-            <button type="button" @click="s.pick"><span x-text="s.text"></span><small x-text="s.sub"></small></button>
-          </template>
-        </div>
+        <p class="hint" x-show="rlNewRuleView.keysLoading" role="status">Loading API keys…</p>
+        <p class="hint" x-show="rlNewRuleView.keysEmpty">No active API keys yet. Create one on the Keys page first.</p>
+        <p class="notice warn" x-show="rlNewRuleView.keysFailed" role="alert">The API keys could not be loaded, so none can be suggested or found by name. <button type="button" class="rl-link" @click="retryRateLimitKeys">Try again</button> or paste the key&rsquo;s id.</p>
         <p class="hint" x-show="rlNewRuleView.unknownNote" x-text="rlNewRuleView.unknownNote"></p>
 <details class="rl-help" :dir="rlHelpView.dir" :lang="rlHelpView.lang">
   <summary><span class="icon" x-html="icons.help-circle"></span><span x-text="rlHelpView.f.target.title"></span></summary>

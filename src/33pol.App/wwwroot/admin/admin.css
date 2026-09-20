@@ -2100,7 +2100,8 @@ html.wallboard .page-content { animation: wallboard-shift 900s steps(1) infinite
 .rl-scope-card.sel { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .rl-scope-card b { font-size: var(--text-sm); font-weight: var(--fw-semi); }
 .rl-scope-card span { font-size: var(--text-2xs); color: var(--text-secondary); line-height: 1.4; }
-.rl-suggest { margin: -0.4rem 0 var(--space-3); border: 1px solid var(--border-strong); border-radius: var(--r-md); background: var(--bg-elevated); box-shadow: var(--shadow-sm); overflow: hidden; }
+.rl-suggest { margin: -0.4rem 0 var(--space-3); border: 1px solid var(--border-strong); border-radius: var(--r-md); background: var(--bg-elevated); box-shadow: var(--shadow-sm); max-height: 15rem; overflow-y: auto; overscroll-behavior: contain; }
+.rl-suggest-more { margin: 0; padding: 0.45rem 0.8rem; border-top: 1px solid var(--border); font-size: var(--text-2xs); color: var(--text-tertiary); }
 .rl-suggest button { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); width: 100%; padding: 0.5rem 0.8rem; border: none; background: transparent; font-family: var(--font-mono); font-size: var(--text-sm); color: var(--text-primary); cursor: pointer; text-align: left; }
 .rl-suggest button:hover { background: var(--accent-soft); color: var(--accent-text); }
 .rl-suggest small { font-family: var(--font-sans); font-size: var(--text-2xs); color: var(--text-tertiary); }

@@ -293,8 +293,14 @@ function adminApp() {
     rlNewRuleOpen: false,
     // Seeded per scope by rlSeedNewRuleTier(); `touched` records that the operator typed over the
     // seed, so changing scope afterwards does not overwrite their numbers.
-    rlNewRule: { step: 1, scope: 'model', subject: '', model: '', target: '', rpm: 0, burst: 0, maxConcurrentStreams: 0, touched: false },
+    // `picked` remembers, per field, the suggestion the operator chose: the field shows a key's
+    // name while the rule is stored against its id, and the two are tied only while the text is
+    // still what the pick wrote there.
+    rlNewRule: { step: 1, scope: 'model', subject: '', model: '', target: '', rpm: 0, burst: 0, maxConcurrentStreams: 0, touched: false, picked: {} },
     rlNewRuleError: '',
+    // The key list as the rate-limit page needs it: 'idle' | 'loading' | 'ready' | 'failed'. Its own
+    // state because Settings can be the first tab opened, and a failure here must not fail the page.
+    rlKeysState: 'idle',
     // Bilingual help: the guide drawer and the inline explainers read window.RateLimitHelp in this
     // language. Persisted like the theme, so an operator who reads Persian is not asked twice.
     rlHelpOpen: false,
@@ -1441,6 +1447,9 @@ function adminApp() {
       this.backends = [];
       this.models = [];
       this.keys = [];
+      // Also strands any key request still in flight, so it cannot refill the list after sign-out.
+      this._keysSeq = (this._keysSeq || 0) + 1;
+      this.rlKeysState = 'idle';
       this.selectedKeyIds = [];
       this.requests = [];
       this.logs = [];
@@ -1926,7 +1935,9 @@ function adminApp() {
           this.fetchTenantGrants(),
           this.fetchConfigStatus(),
           this.loadRateLimits(),
-          this.loadCors()
+          this.loadCors(),
+          // Rule targets are key ids; without the key list they can be neither picked nor named.
+          this.loadRateLimitKeys()
         ];
         if (!this.models?.length) tasks.unshift(this.fetchModels());
         await Promise.all(tasks);
@@ -4040,10 +4051,13 @@ function adminApp() {
 
     openRateLimitNewRule() {
       if (!this.rlDraft || !this.rateLimitsEditable) return;
-      this.rlNewRule = { step: 1, scope: 'model', subject: '', model: '', target: '', rpm: 0, burst: 0, maxConcurrentStreams: 0, touched: false };
+      this.rlNewRule = { step: 1, scope: 'model', subject: '', model: '', target: '', rpm: 0, burst: 0, maxConcurrentStreams: 0, touched: false, picked: {} };
       this.rlSeedNewRuleTier();
       this.rlNewRuleError = '';
       this.rlNewRuleOpen = true;
+      // Refreshed each time: a key target must be a key the list knows, so a key created since the
+      // list was loaded has to be in it.
+      this.loadRateLimitKeys(true);
     },
 
     closeRateLimitNewRule() {
@@ -4051,6 +4065,14 @@ function adminApp() {
     },
 
     setRateLimitNewRuleScope(id) {
+      // The first field is shared between scopes. Text entered for one kind of thing — a picked
+      // key's name above all — must not be carried into a field that takes another kind.
+      const before = this.rlScopeInfo(this.rlNewRule.scope).suggest || '';
+      const after = this.rlScopeInfo(id).suggest || '';
+      if (before !== after) {
+        const { model } = this.rlNewRule.picked || {};
+        Object.assign(this.rlNewRule, { subject: '', target: '', picked: model ? { model } : {} });
+      }
       this.rlNewRule.scope = id;
       this.rlSeedNewRuleTier();
       this.rlNewRuleError = '';
@@ -4081,8 +4103,16 @@ function adminApp() {
     rlNewRuleTarget() {
       const info = this.rlScopeInfo(this.rlNewRule.scope);
       if (info.singleton) return '*';
-      if (info.pair) return String(this.rlNewRule.subject || '').trim() + '|' + String(this.rlNewRule.model || '').trim();
-      return String(this.rlNewRule.target || '').trim();
+      // What is stored, not what is shown: a key field holds a name and resolves to the key's id,
+      // and a model field may hold an alias and resolves to the canonical id.
+      const part = (field, kind) => {
+        const key = kind === 'keys' ? this.rlNewRuleKey() : null;
+        if (key) return String(key.id);
+        if (kind === 'models') return this.rlCanonicalModel(this.rlNewRule[field]).id;
+        return String(this.rlNewRule[field] || '').trim();
+      };
+      if (info.pair) return part('subject', info.suggest) + '|' + part('model', 'models');
+      return part('target', info.suggest);
     },
 
     rateLimitNewRuleBack() {
@@ -4104,6 +4134,11 @@ function adminApp() {
           this.rlNewRuleError = info.pair ? 'Both halves are needed.' : 'Name the ' + info.hint.toLowerCase() + '.';
           return;
         }
+        const keyError = this.rlNewRuleKeyError();
+        if (keyError) {
+          this.rlNewRuleError = keyError;
+          return;
+        }
         if (this.rlFindDraftRule(this.rlIdentity(n.scope, target))) {
           this.rlNewRuleError = 'A rule for this ' + info.short.toLowerCase() + ' already exists; open it from the list instead.';
           return;
@@ -4113,8 +4148,10 @@ function adminApp() {
       }
     },
 
-    pickRateLimitSuggestion(field, value) {
-      this.rlNewRule[field] = value;
+    pickRateLimitSuggestion(field, value, fill) {
+      const text = fill || value;
+      this.rlNewRule[field] = text;
+      this.rlNewRule.picked = { ...(this.rlNewRule.picked || {}), [field]: { value, text } };
     },
 
     /** Creates the rule in the draft; with `andSchedule` the rule drawer opens straight onto Add window. */
@@ -4125,6 +4162,11 @@ function adminApp() {
       const tier = this.rlTierPayload(n);
       if (!info.singleton && (info.pair ? (!n.subject.trim() || !n.model.trim()) : !target)) {
         this.rlNewRuleError = 'The rule needs a target.';
+        return;
+      }
+      const keyError = this.rlNewRuleKeyError();
+      if (keyError) {
+        this.rlNewRuleError = keyError;
         return;
       }
       if (this.rlFindDraftRule(this.rlIdentity(n.scope, target))) {
@@ -4561,7 +4603,11 @@ function adminApp() {
     async fetchKeys() {
       // Archived keys come down with the rest so the Archived filter needs no second round trip;
       // filteredKeys() keeps them out of every other view.
+      // Several callers load this list (Keys, Usage, the rate-limit page); the one that started last
+      // wins, so a slow early response cannot put back a list that a later one has replaced.
+      const seq = this._keysSeq = (this._keysSeq || 0) + 1;
       const list = (await this.apiJson('/admin/api/keys?includeUsageSummary=true&includeArchived=true')) ?? [];
+      if (seq !== this._keysSeq) return;
       this.keys = this.normalizeApiKeyList(list);
       const existingIds = new Set(this.keys.map(k => k.id));
       this.selectedKeyIds = this.selectedKeyIds.filter(id => existingIds.has(id));
@@ -7349,6 +7395,7 @@ function adminApp() {
       if (!q) return true;
       const info = this.rlScopeInfo(rule.scope);
       return String(rule.target || '').toLowerCase().includes(q) ||
+        this.rlTargetDisplay(rule.scope, rule.target).toLowerCase().includes(q) ||
         info.short.toLowerCase().includes(q) || info.name.toLowerCase().includes(q) ||
         (rule.schedule || []).some(w => String(w.name || '').toLowerCase().includes(q));
     },
@@ -7418,10 +7465,12 @@ function adminApp() {
             : changed
               ? { dot: '', text: this.rlTierText(rule), sub: 'unsaved · in force once saved', title: '' }
               : this.rlForceFor(rule);
-          const target = info.singleton ? info.name : String(rule.target || '').replace('|', ' · ');
+          const target = info.singleton ? info.name : this.rlTargetDisplay(rule.scope, rule.target);
           return {
             key: identity + ':' + index,
             target,
+            // The stored target, for when the name is not enough to tell two keys apart.
+            targetTitle: info.singleton ? '' : String(rule.target || ''),
             scope: info.singleton ? info.desc : info.name.replace(/^An? /, '').replace(/^./, c => c.toUpperCase()),
             tier: this.rlTierText(rule),
             windowsText: windows ? windows + ' window' + (windows === 1 ? '' : 's') : '—',
@@ -7663,8 +7712,9 @@ function adminApp() {
 
       return {
         eyebrow: 'Rule · ' + info.name,
-        title: info.singleton ? info.name : String(r.target).replace('|', ' · '),
-        subtitle: info.desc,
+        title: info.singleton ? info.name : this.rlTargetDisplay(r.scope, r.target),
+        // The name leads; the id the rule is stored against stays one glance away.
+        subtitle: info.desc + (this.rlRuleKey(r.scope, r.target) ? ' Key id ' + String(r.target).split('|')[0] + '.' : ''),
         forceCls: 'rl-forcebar ' + (force.dot === 'on' ? 'on' : force.dot === 'warn' ? 'warn' : force.dot === 'err' ? 'err' : ''),
         forceDot: 'rl-dot ' + force.dot,
         forceBig: force.text,
@@ -7751,6 +7801,130 @@ function adminApp() {
 
     // ---- new rule flow ----
 
+    /**
+     * The key list for the rate-limit page. The Keys and Usage tabs load it for themselves; Settings
+     * did not, so opened first it offered no keys to pick and showed every key rule as a bare id.
+     * Never rejects: the rules are usable without it, and the new-rule drawer says what happened.
+     */
+    loadRateLimitKeys(refresh) {
+      // One request at a time: entering Settings and opening the drawer can both ask.
+      if (this._rlKeysLoad) return this._rlKeysLoad;
+      const have = (this.keys?.length || 0) > 0;
+      if (have) this.rlKeysState = 'ready';
+      if (have && !refresh) return Promise.resolve();
+      // A refresh of a list that is already there is silent, and a failed one keeps the list.
+      if (!have) this.rlKeysState = 'loading';
+      this._rlKeysLoad = this.fetchKeys()
+        .then(() => { this.rlKeysState = 'ready'; }, () => { if (!have) this.rlKeysState = 'failed'; })
+        .finally(() => { this._rlKeysLoad = null; });
+      return this._rlKeysLoad;
+    },
+
+    retryRateLimitKeys() { this.loadRateLimitKeys(); },
+
+    /** The key with this id, in any casing — ids are compared the way the gateway compares them. */
+    rlFindKey(id) {
+      const q = String(id || '').trim().toLowerCase();
+      if (!q) return null;
+      return (this.keys || []).find(k => String(k.id || '').toLowerCase() === q) || null;
+    },
+
+    /** What an operator calls a key: its label, else its assignee, else its prefix. */
+    rlKeyName(k) {
+      return k.label || k.assignee || (k.keyPrefix ? k.keyPrefix + '…' : String(k.id || ''));
+    },
+
+    /** The text a picked key leaves in the field: the name, with the prefix to tell namesakes apart. */
+    rlKeyPickText(k) {
+      const name = k.label || k.assignee || '';
+      const prefix = k.keyPrefix ? k.keyPrefix + '…' : '';
+      return name && prefix ? name + ' (' + prefix + ')' : (name || prefix || String(k.id || ''));
+    },
+
+    /** The key a stored rule is about, when it is a key rule and the key list knows the id. */
+    rlRuleKey(scope, target) {
+      const isKeyRule = scope === 'api_key' || scope === 'api_key_model';
+      return isKeyRule ? this.rlFindKey(String(target || '').split('|')[0]) : null;
+    },
+
+    /**
+     * A rule target for people: a key id becomes the key's name when the list knows it. The stored
+     * target is untouched — this is only ever what is shown and searched.
+     */
+    rlTargetDisplay(scope, target) {
+      const [first, ...rest] = String(target || '').split('|');
+      const key = this.rlRuleKey(scope, target);
+      return [key ? this.rlKeyName(key) : first, ...rest].join(' · ');
+    },
+
+    /** The new-rule field that takes an API key under the current scope, or '' when none does. */
+    rlNewRuleKeyField() {
+      const info = this.rlScopeInfo(this.rlNewRule.scope);
+      return info.suggest === 'keys' ? (info.pair ? 'subject' : 'target') : '';
+    },
+
+    /** The suggestion picked for a field, for as long as the field still holds the text it wrote. */
+    rlNewRulePick(field) {
+      const picked = this.rlNewRule.picked?.[field];
+      return picked && String(picked.text).trim() === String(this.rlNewRule[field] || '').trim() ? picked : null;
+    },
+
+    /** Active keys called exactly this. More than one is an ambiguity to refuse, never to guess. */
+    rlKeysNamed(text) {
+      const q = String(text || '').trim().toLowerCase();
+      return (this.keys || []).filter(k => !k.isRevoked && !k.isArchived &&
+        (this.rlKeyName(k).toLowerCase() === q || this.rlKeyPickText(k).toLowerCase() === q));
+    },
+
+    /**
+     * The one place a new rule's key is resolved: the picked key, else the key whose id was typed,
+     * else the only active key of that name. The id is the authority; a name is a way to find it.
+     */
+    rlNewRuleKey() {
+      const field = this.rlNewRuleKeyField();
+      const text = field ? String(this.rlNewRule[field] || '').trim() : '';
+      if (!text) return null;
+      const picked = this.rlNewRulePick(field);
+      if (picked) return this.rlFindKey(picked.value);
+      const named = this.rlKeysNamed(text);
+      return this.rlFindKey(text) || (named.length === 1 ? named[0] : null);
+    },
+
+    /**
+     * Why the key field cannot be saved yet, or ''. A key rule is matched on the key's id — the GUID
+     * the gateway issued — and on nothing else, so text that is not the id of a key can never limit
+     * anything; it would only look configured. With the list loaded the text must resolve to a key
+     * in it. Without the list a pasted id cannot be checked, so it is accepted on its shape alone.
+     */
+    rlNewRuleKeyError() {
+      const field = this.rlNewRuleKeyField();
+      const text = field ? String(this.rlNewRule[field] || '').trim() : '';
+      if (!text || this.rlNewRuleKey()) return '';
+      if (this.rlKeysState !== 'ready') {
+        return /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(text) ? ''
+          : 'The API keys are not loaded, so a key cannot be found by name. Paste the key’s id (it looks like 6f1c0a52-…), or load the keys and pick one.';
+      }
+      const namesakes = this.rlKeysNamed(text).length;
+      return namesakes > 1
+        ? namesakes + ' keys are named ‘' + text + '’. Pick the one you mean from the list.'
+        : 'No API key has this name or id. Pick a key from the list; a rule is matched on the key’s id, so anything else would never apply.';
+    },
+
+    /**
+     * A model as enforcement will look it up. Rules are matched on the canonical id only, so an alias
+     * is resolved here; stored as typed it would save cleanly and never limit anything.
+     */
+    rlCanonicalModel(text) {
+      const q = String(text || '').trim().toLowerCase();
+      if (!q) return { id: '', known: false, viaAlias: false };
+      const models = this.models || [];
+      const byId = models.find(m => String(m.id || '').toLowerCase() === q);
+      if (byId) return { id: byId.id, known: true, viaAlias: false };
+      const byAlias = models.find(m => (m.aliases || []).some(a => String(a).toLowerCase() === q));
+      if (byAlias) return { id: byAlias.id, known: true, viaAlias: true };
+      return { id: String(text).trim(), known: false, viaAlias: false };
+    },
+
     rlSuggestionsFor(kind, query) {
       const q = String(query || '').trim().toLowerCase();
       const out = [];
@@ -7768,7 +7942,9 @@ function adminApp() {
           const id = k.id || '';
           const label = [k.label, k.assignee].filter(Boolean).join(' · ');
           if (!q || id.toLowerCase().includes(q) || label.toLowerCase().includes(q) || (k.keyPrefix || '').toLowerCase().includes(q)) {
-            out.push({ value: id, text: k.keyPrefix ? k.keyPrefix + '…' : id, sub: label || id });
+            // `fill` is what a pick leaves in the field; `value` (the id) is what the rule stores.
+            const sub = [k.keyPrefix ? k.keyPrefix + '…' : '', k.label ? k.assignee : ''].filter(Boolean).join(' · ');
+            out.push({ value: id, fill: this.rlKeyPickText(k), text: this.rlKeyName(k), sub: sub || id });
           }
         }
       } else if (kind === 'tenants') {
@@ -7788,7 +7964,28 @@ function adminApp() {
           if (!q || value.toLowerCase().includes(q)) out.push({ value, text: value, sub: 'has a rule' });
         }
       }
-      return out.slice(0, 6);
+      // Every match: the list scrolls. The view bounds what it renders (rlSuggestList).
+      return out;
+    },
+
+    /**
+     * One field's suggestion list. Closed once the field holds a pick, and bounded in what it
+     * renders — with the remainder counted, never silently dropped — so a gateway with thousands of
+     * keys does not put thousands of buttons in the drawer.
+     */
+    rlSuggestList(field, kind) {
+      if (!kind || this.rlNewRulePick(field)) return { items: [], has: false, more: '' };
+      const all = this.rlSuggestionsFor(kind, this.rlNewRule[field]);
+      const max = 200;
+      const items = all.slice(0, max).map((s, i) => ({
+        key: field + ':' + i, text: s.text, sub: s.sub,
+        pick: () => this.pickRateLimitSuggestion(field, s.value, s.fill)
+      }));
+      return {
+        items,
+        has: items.length > 0,
+        more: all.length > max ? 'Showing ' + max + ' of ' + this.formatNum(all.length) + '. Type to narrow the list.' : ''
+      };
     },
 
     /**
@@ -7797,7 +7994,7 @@ function adminApp() {
      * target — creation refuses a duplicate — so for the two protective scopes the honest answer
      * is the default tier they fall back to.
      */
-    rlScopeBaselineFor(scope) {
+    rlScopeBaselineFor(scope, target, tier) {
       const fallback = Number(this.rlDraft?.default?.rpm) || 0;
       if (scope === 'global') {
         return { rpm: 0, text: 'No gateway ceiling is set today. This rule would be the first, and it applies to every inference request.' };
@@ -7808,7 +8005,70 @@ function adminApp() {
       if (scope === 'anonymous') {
         return { rpm: fallback, text: 'Anonymous callers currently fall back to the default tier, ' + this.formatNum(fallback) + ' rpm per client address.' };
       }
-      return { rpm: 0, text: 'Callers are already held to their tenant tier (default ' + this.formatNum(fallback) + ' rpm). A rule here only tightens that further.' };
+      const text = 'Callers are already held to their tenant tier (default ' + this.formatNum(fallback) + ' rpm). A rule here only tightens that further.';
+      // A tenant rule replaces the plan rate rather than stacking under it, so "looser" is its job.
+      if (scope === 'tenant') return { rpm: 0, text };
+      const ceiling = this.rlCeilingFor(scope, target, tier);
+      return { rpm: ceiling.rpm, source: ceiling.source, text };
+    },
+
+    /**
+     * A limit already in the draft that makes a new rule's rate redundant, or `{ rpm: 0 }` when none
+     * certainly does. A false warning talks an operator out of a limit that works and a missing one
+     * costs nothing, so a candidate is used only where the claim is provable for every caller:
+     *
+     *  - Dominance. Bucket B makes bucket A redundant when every request A counts is also counted
+     *    by B, B is acquired first (A is never charged for a request B refused), and B's rate and
+     *    capacity (rpm + burst) are both no larger than A's; A then always holds at least B's
+     *    tokens. Rate alone is not enough: the same rpm with a smaller burst binds on the burst.
+     *    Each candidate below sits earlier in the gateway's scope order than the rule it is
+     *    offered to, and counts a superset of its traffic.
+     *  - Schedules. A rule with windows is never a candidate: a window may loosen or suspend it.
+     *  - Tenant tier. Which tenant a key belongs to is unknown here, and a tenant may be written by
+     *    id in one rule and by slug in another, so the tier is never looked up. It is bounded by
+     *    the loosest rate and the largest capacity any tenant can have: default and plans (floored
+     *    at 1 rpm, as the gateway floors them), enforced tenant rules, and their windows.
+     *  - Adaptive shedding scales rules that name a model and no others, so with it on, only the
+     *    same model's rule can vouch for one — rate and burst each, since each is rounded alone.
+     */
+    rlCeilingFor(scope, target, tier) {
+      const d = this.rlDraft || {};
+      const rpm = Number(tier?.rpm) || 0;
+      const burst = Number(tier?.burst) || 0;
+      const [subject, second] = String(target || '').split('|');
+      const model = scope === 'model' ? subject : (second || '');
+      const scaled = d.adaptiveEnabled === true && (scope === 'model' || scope === 'tenant_model' || scope === 'api_key_model');
+      const enforced = (d.rules || []).filter(r => r.enabled !== false);
+      const candidates = [];
+      const offer = (t, source, scaledAlike) => candidates.push({ rpm: Number(t.rpm) || 0, burst: Number(t.burst) || 0, source, scaledAlike });
+      const steady = (ruleScope, ruleTarget, source, scaledAlike) => {
+        const r = enforced.find(x => x.scope === ruleScope && Number(x.rpm) > 0 && !(x.schedule || []).length &&
+          String(x.target || '').toLowerCase() === String(ruleTarget || '').toLowerCase());
+        if (r) offer(r, source, scaledAlike);
+      };
+
+      steady('global', '*', 'whole-gateway limit');
+      if (scope !== 'model') {
+        // A model rule counts every tenant's traffic, so no tenant tier contains it.
+        const floor = t => ({ rpm: Math.max(1, Number(t.rpm) || 0), burst: Math.max(0, Number(t.burst) || 0) });
+        const tiers = [d.default || {}, ...Object.values(d.plans || {})].map(floor);
+        for (const r of enforced.filter(x => x.scope === 'tenant')) {
+          // rpm 0 (on the rule, or on a window) keeps the plan rate, which is already counted; so
+          // does a suspended window. A window counts even when its rule's own rate is 0.
+          for (const t of [r, ...(r.schedule || []).filter(w => !w.suspend)]) {
+            if (Number(t.rpm) > 0) tiers.push(floor(t));
+          }
+        }
+        const loosest = Math.max(...tiers.map(t => t.rpm));
+        const roomiest = Math.max(...tiers.map(t => t.rpm + t.burst));
+        offer({ rpm: loosest, burst: roomiest - loosest }, 'loosest tenant tier configured');
+      }
+      if (scope === 'api_key_model') steady('api_key', subject, 'limit on this key across all models');
+      if (scope !== 'model' && model) steady('model', model, 'limit on ' + model + ' for every caller', true);
+
+      const redundantUnder = c => rpm > 0 && rpm >= c.rpm && rpm + burst >= c.rpm + c.burst &&
+        (!scaled || (c.scaledAlike === true && burst >= c.burst));
+      return candidates.filter(redundantUnder).sort((a, b) => a.rpm - b.rpm)[0] || { rpm: 0, source: '' };
     },
 
     get rlNewRuleView() {
@@ -7818,21 +8078,37 @@ function adminApp() {
       const target = this.rlNewRuleTarget();
       const tier = this.rlTierPayload(n);
       const kind = info.suggest || '';
-      const suggestions = step === 2 && !info.singleton
-        ? (info.pair
-          ? [
-            ...this.rlSuggestionsFor(kind, n.subject).map((s, i) => ({ key: 'subject:' + i, text: s.text, sub: s.sub, pick: () => this.pickRateLimitSuggestion('subject', s.value) })),
-            ...this.rlSuggestionsFor('models', n.model).map((s, i) => ({ key: 'model:' + i, text: s.text, sub: 'model · ' + s.sub, pick: () => this.pickRateLimitSuggestion('model', s.value) }))
-          ]
-          : this.rlSuggestionsFor(kind, n.target).map((s, i) => ({ key: i, text: s.text, sub: s.sub, pick: () => this.pickRateLimitSuggestion('target', s.value) })))
-        : [];
-      const known = kind === 'models' && !info.pair && n.target
-        ? (this.models || []).some(m => (m.id || '').toLowerCase() === n.target.trim().toLowerCase() || (m.aliases || []).some(a => a.toLowerCase() === n.target.trim().toLowerCase()))
-        : null;
+      // One list per field, each holding only what that field takes: the first field's kind comes
+      // from the scope, and a pair's second field is always a model.
+      const firstField = info.pair ? 'subject' : 'target';
+      const none = { items: [], has: false, more: '' };
+      const listing = step === 2 && !info.singleton;
+      const firstList = listing ? this.rlSuggestList(firstField, kind) : none;
+      const modelList = listing && info.pair ? this.rlSuggestList('model', 'models') : none;
+      // The model half, resolved the way it will be stored.
+      const modelField = info.pair ? 'model' : (kind === 'models' ? 'target' : '');
+      const modelText = modelField ? String(n[modelField] || '').trim() : '';
+      const canon = modelText ? this.rlCanonicalModel(modelText) : null;
+      const modelNote = !canon ? ''
+        : !canon.known ? 'Not a registered model. The rule is stored and applies as soon as a model with this id exists.'
+        : canon.viaAlias ? '‘' + modelText + '’ is an alias of ' + canon.id + '. Limits are matched on the model’s own id, so the rule is saved against ' + canon.id + '.'
+        : '';
+      // The key half: named once resolved, and said plainly when the text names no key at all.
+      const isKeys = this.rlNewRuleKeyField() !== '';
+      const keyText = isKeys ? String(n[firstField] || '').trim() : '';
+      const key = this.rlNewRuleKey();
+      const keysReady = this.rlKeysState === 'ready';
+      const keyNote = !keyText ? ''
+        : key ? 'Key: ' + this.rlKeyName(key) + (key.keyPrefix ? ' · ' + key.keyPrefix + '…' : '') + ' · id ' + key.id + (key.isRevoked || key.isArchived ? ' · revoked — it can no longer send requests, so this rule would limit nothing' : '')
+        : this.rlKeysState === 'loading' ? ''
+        : this.rlNewRuleKeyError();
       const capacity = tier.rpm + tier.burst;
-      const baseline = this.rlScopeBaselineFor(n.scope);
+      const baseline = this.rlScopeBaselineFor(n.scope, target, tier);
       const looser = baseline.rpm > 0 && tier.rpm > 0 && tier.rpm >= baseline.rpm;
-      const subject = info.singleton ? info.name : (info.pair ? (n.subject || '?') + ' on ' + (n.model || '?') : (target || '?'));
+      const modelShown = canon ? canon.id : '';
+      const subject = info.singleton ? info.name
+        : info.pair ? (n.subject.trim() || '?') + ' on ' + (modelShown || '?')
+        : ((kind === 'models' ? modelShown : String(n.target || '').trim()) || '?');
       const summary = tier.rpm > 0
         ? subject + ' may take ' + this.formatNum(tier.rpm) + ' requests a minute' +
           (tier.burst > 0 ? ', up to ' + this.formatNum(capacity) + ' at once after a quiet spell (' + this.formatNum(tier.rpm) + ' + ' + this.formatNum(tier.burst) + ' burst)' : ', with no extra burst') +
@@ -7864,19 +8140,30 @@ function adminApp() {
         isSingle: !info.pair,
         targetLabel: info.hint || 'Target',
         subjectLabel: info.hint || 'Subject',
-        suggestions,
-        hasSuggestions: suggestions.length > 0,
-        unknownNote: known === false ? 'Not a registered model. The rule is stored and applies as soon as a model with this id exists.' : '',
+        firstSuggestions: firstList.items,
+        hasFirstSuggestions: firstList.has,
+        firstMore: firstList.more,
+        modelSuggestions: modelList.items,
+        hasModelSuggestions: modelList.has,
+        modelMore: modelList.more,
+        firstPlaceholder: isKeys ? 'Key name, prefix or id' : kind === 'models' ? 'gpt-4' : 'acme',
+        keysLoading: isKeys && this.rlKeysState === 'loading',
+        keysFailed: isKeys && this.rlKeysState === 'failed',
+        keysEmpty: isKeys && keysReady && !(this.keys || []).some(k => !k.isRevoked && !k.isArchived),
+        keyNote,
+        unknownNote: modelNote,
         summary,
         summaryTitle: info.singleton ? info.name : subject,
         baselineText: baseline.text,
         // A warning, never a block: an operator may have a reason to set a limit that binds no
         // tighter than what is already there, but they should not do it by accident on the two
         // scopes where a loose number is a weakened control rather than a generous one.
-        looserWarning: looser
-          ? 'At ' + this.formatNum(tier.rpm) + ' rpm this rule is no tighter than the '
-            + this.formatNum(baseline.rpm) + ' rpm already in force, so it would not change what this scope allows.'
-          : '',
+        looserWarning: !looser ? ''
+          : baseline.source
+            ? 'At ' + this.formatNum(tier.rpm) + ' rpm this rule’s rate is no tighter than the ' + baseline.source
+              + ' (' + this.formatNum(baseline.rpm) + ' rpm), which these requests must pass as well — so this rate would never be the one that refuses a request.'
+            : 'At ' + this.formatNum(tier.rpm) + ' rpm this rule is no tighter than the '
+              + this.formatNum(baseline.rpm) + ' rpm already in force, so it would not change what this scope allows.',
         error: this.rlNewRuleError || '',
         showBack: step > 1,
         nextLabel: step === 1 ? (info.singleton ? 'Set the limit' : 'Choose the ' + info.short.toLowerCase()) : 'Set the limit',
