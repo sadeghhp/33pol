@@ -24,12 +24,12 @@
   <link rel="preload" as="font" type="font/woff2" href="vendor/fonts/IBMPlexSans-400.woff2" crossorigin />
   <link rel="preload" as="font" type="font/woff2" href="vendor/fonts/IBMPlexSans-500.woff2" crossorigin />
   <link rel="stylesheet" href="vendor/fonts.css?v=1" />
-  <link rel="stylesheet" href="admin.css?v=29" />
+  <link rel="stylesheet" href="admin.css?v=30" />
   <script defer src="admin-icons.js?v=12"></script>
   <script defer src="admin-errors.js?v=8"></script>
   <script defer src="admin-store.js?v=12"></script>
-  <script defer src="admin-rate-limit-help.js?v=1"></script>
-  <script defer src="admin-app.js?v=46"></script>
+  <script defer src="admin-rate-limit-help.js?v=2"></script>
+  <script defer src="admin-app.js?v=48"></script>
   <script defer src="vendor/alpine-csp-3.14.9.min.js"></script>
 </head>
 <body x-data="adminApp" x-cloak @keydown.window="onModalKeydown">
@@ -1371,6 +1371,7 @@
                         <button type="button" class="icon-btn" x-show="k.active" @click="k.edit" title="Edit key" aria-label="Edit key"><span class="icon" x-html="icons.edit"></span></button>
                         <button type="button" class="icon-btn" x-show="k.canGrant" @click="k.access" title="Model access" aria-label="Model access"><span class="icon" x-html="icons.cpu"></span></button>
                         <button type="button" class="icon-btn" @click="k.usage" title="View usage" aria-label="View usage"><span class="icon" x-html="icons.bar-chart"></span></button>
+                        <button type="button" class="icon-btn" x-show="k.active" @click="k.limit" title="Limit this key…" aria-label="Limit this key"><span class="icon" x-html="icons.gauge"></span></button>
                         <!-- Revoke stops the credential; delete removes the row. Distinct icons, because
                              one leaves the key and its history behind and the other does not. -->
                         <button type="button" class="icon-btn danger" x-show="k.active" @click="k.revoke" title="Revoke key" aria-label="Revoke key"><span class="icon" x-html="icons.shield-off"></span></button>
@@ -1901,7 +1902,10 @@
                 <div class="rl-section">
                   <div class="rl-section-head">
                     <div><h3>Rules</h3><p class="sub">Limits on one model, key or tenant. Every rule that applies must admit a request, so a rule only ever tightens. Open a rule to change it or add windows.</p></div>
-                    <button type="button" class="action" @click="openRateLimitNewRule" x-show="rateLimitsEditable"><span class="icon" x-html="icons.plus"></span> New rule</button>
+                    <div class="rl-drawer-head-actions" x-show="rateLimitsEditable">
+                      <button type="button" class="action secondary" @click="openRateLimitProtectiveRule" title="Anonymous callers and failed sign-ins: the two budgets that protect the gateway itself"><span class="icon" x-html="icons.shield"></span> Protective limit</button>
+                      <button type="button" class="action" @click="openRateLimitNewRule"><span class="icon" x-html="icons.plus"></span> New rule</button>
+                    </div>
                   </div>
 <details class="rl-help" :dir="rlHelpView.dir" :lang="rlHelpView.lang">
   <summary><span class="icon" x-html="icons.help-circle"></span><span x-text="rlHelpView.f.rules.title"></span></summary>
@@ -2826,13 +2830,14 @@
     </div>
   </div>
 
-  <!-- Rate limits: new rule flow -->
+  <!-- Rate limits: new rule form. One screen, two questions — who is limited, and on which model —
+       from which the stored scope and target are derived (rlNewRuleBuild). Nothing here names a
+       scope, and nothing here decides what is stored. -->
   <div class="drawer-backdrop" x-show="rlNewRuleOpen" x-transition.opacity @click.self="dismissRateLimitNewRule" role="presentation">
     <div class="drawer rl-drawer" role="dialog" aria-modal="true" aria-labelledby="rl-new-title" @click.stop>
       <div class="drawer-header">
         <div>
-          <span class="eyebrow">New rule</span><h3 id="rl-new-title" x-text="rlNewRuleView.title"></h3>
-          <div class="rl-steps"><template x-for="s in rlNewRuleView.steps" :key="s.key"><span :class="s.cls" x-text="s.label"></span></template></div>
+          <span class="eyebrow" x-text="rlNewRuleView.eyebrow"></span><h3 id="rl-new-title" x-text="rlNewRuleView.title"></h3>
         </div>
         <div class="rl-drawer-head-actions">
           <button type="button" class="icon-btn" @click="rlHelpView.open.scopes" :title="rlHelpView.ui.helpTitle" :aria-label="rlHelpView.ui.help"><span class="icon" x-html="icons.help-circle"></span></button>
@@ -2840,14 +2845,57 @@
         </div>
       </div>
 
-      <div x-show="rlNewRuleView.isStep1" class="rl-scopes" role="radiogroup" aria-label="Scope">
-        <template x-for="s in rlNewRuleView.scopeCards" :key="s.key">
+      <div x-show="rlNewRuleView.notProtective">
+        <h4 class="rl-h4">Who is limited?</h4>
+        <div class="rl-scopes" role="radiogroup" aria-label="Who is limited?">
+          <template x-for="s in rlNewRuleView.whoCards" :key="s.key">
+            <button type="button" :id="s.id" :class="s.cls" @click="s.select" @keydown="s.onKey" role="radio" :aria-checked="s.ariaChecked" :tabindex="s.tabIndex"><b x-text="s.name"></b><span x-text="s.desc"></span></button>
+          </template>
+        </div>
+      </div>
+      <div x-show="rlNewRuleView.isProtective">
+        <h4 class="rl-h4">Which protective limit?</h4>
+        <div class="rl-scopes" role="radiogroup" aria-label="Which protective limit?">
+          <template x-for="s in rlNewRuleView.protectiveCards" :key="s.key">
+            <button type="button" :id="s.id" :class="s.cls" @click="s.select" @keydown="s.onKey" role="radio" :aria-checked="s.ariaChecked" :tabindex="s.tabIndex"><b x-text="s.name"></b><span x-text="s.desc"></span></button>
+          </template>
+        </div>
+      </div>
+      <div x-show="rlNewRuleView.showSubject">
+        <label><span x-text="rlNewRuleView.subjectLabel"></span> <input type="text" id="rl-new-subject" x-model="mdl.rlNewRule.subject" :placeholder="rlNewRuleView.subjectPlaceholder" autocomplete="off" /></label>
+        <div class="rl-suggest" x-show="rlNewRuleView.hasSubjectSuggestions" role="group" aria-label="Matches">
+          <template x-for="s in rlNewRuleView.subjectSuggestions" :key="s.key">
+            <button type="button" @click="s.pick"><span x-text="s.text"></span><small x-text="s.sub"></small></button>
+          </template>
+          <p class="rl-suggest-more" x-show="rlNewRuleView.subjectMore" x-text="rlNewRuleView.subjectMore"></p>
+        </div>
+        <p class="hint" x-show="rlNewRuleView.keyNote" x-text="rlNewRuleView.keyNote"></p>
+        <p class="hint" x-show="rlNewRuleView.keysLoading" role="status">Loading API keys…</p>
+        <p class="hint" x-show="rlNewRuleView.keysEmpty">No active API keys yet. Create one on the Keys page first.</p>
+        <p class="notice warn" x-show="rlNewRuleView.keysFailed" role="alert">The API keys could not be loaded, so none can be suggested or found by name. <button type="button" class="rl-link" @click="retryRateLimitKeys">Try again</button> or paste the key&rsquo;s id.</p>
+      </div>
+
+      <div x-show="rlNewRuleView.showWhere">
+        <h4 class="rl-h4">On which model?</h4>
+      <div class="rl-scopes" role="radiogroup" aria-label="On which model?">
+        <template x-for="s in rlNewRuleView.whereCards" :key="s.key">
           <button type="button" :id="s.id" :class="s.cls" @click="s.select" @keydown="s.onKey" role="radio" :aria-checked="s.ariaChecked" :tabindex="s.tabIndex"><b x-text="s.name"></b><span x-text="s.desc"></span></button>
         </template>
       </div>
-      <!-- What the highlighted scope means, in the help language, so the choice is explained
-           before the operator commits to it. -->
-      <div x-show="rlNewRuleView.isStep1">
+      </div>
+      <div x-show="rlNewRuleView.showModel">
+        <label>Which model? <input type="text" id="rl-new-model" x-model="mdl.rlNewRule.model" placeholder="gpt-4" autocomplete="off" /></label>
+        <div class="rl-suggest" x-show="rlNewRuleView.hasModelSuggestions" role="group" aria-label="Matching models">
+          <template x-for="s in rlNewRuleView.modelSuggestions" :key="s.key">
+            <button type="button" @click="s.pick"><span x-text="s.text"></span><small x-text="s.sub"></small></button>
+          </template>
+          <p class="rl-suggest-more" x-show="rlNewRuleView.modelMore" x-text="rlNewRuleView.modelMore"></p>
+        </div>
+        <p class="hint" x-show="rlNewRuleView.unknownNote" x-text="rlNewRuleView.unknownNote"></p>
+      </div>
+
+      <!-- What the choice above amounts to, in the help language. -->
+      <div>
         <div class="rl-help-scope" :dir="rlHelpView.dir" :lang="rlHelpView.lang" aria-live="polite">
           <span class="eyebrow" x-text="rlHelpView.scope.title"></span>
           <b x-text="rlHelpView.scope.name"></b>
@@ -2859,6 +2907,7 @@
             <button type="button" class="rl-link" @click="toggleRateLimitHelpLang" :lang="rlHelpView.otherLangCode" x-text="rlHelpView.ui.otherLang"></button>
           </div>
         </div>
+<div class="rl-help-row" x-show="rlNewRuleView.notProtective">
 <details class="rl-help" :dir="rlHelpView.dir" :lang="rlHelpView.lang">
   <summary><span class="icon" x-html="icons.help-circle"></span><span x-text="rlHelpView.f.scope.title"></span></summary>
   <div class="rl-help-body">
@@ -2870,44 +2919,6 @@
     </div>
   </div>
 </details>
-      </div>
-
-      <div x-show="rlNewRuleView.isStep2">
-        <template x-if="rlNewRuleView.isPair">
-          <div>
-            <label><span x-text="rlNewRuleView.subjectLabel"></span> <input type="text" x-model="mdl.rlNewRule.subject" :placeholder="rlNewRuleView.firstPlaceholder" autocomplete="off" /></label>
-            <div class="rl-suggest" x-show="rlNewRuleView.hasFirstSuggestions" role="group" :aria-label="rlNewRuleView.subjectLabel">
-              <template x-for="s in rlNewRuleView.firstSuggestions" :key="s.key">
-                <button type="button" @click="s.pick"><span x-text="s.text"></span><small x-text="s.sub"></small></button>
-              </template>
-              <p class="rl-suggest-more" x-show="rlNewRuleView.firstMore" x-text="rlNewRuleView.firstMore"></p>
-            </div>
-            <p class="hint" x-show="rlNewRuleView.keyNote" x-text="rlNewRuleView.keyNote"></p>
-            <label>Model id <input type="text" x-model="mdl.rlNewRule.model" placeholder="gpt-4" autocomplete="off" /></label>
-            <div class="rl-suggest" x-show="rlNewRuleView.hasModelSuggestions" role="group" aria-label="Model id">
-              <template x-for="s in rlNewRuleView.modelSuggestions" :key="s.key">
-                <button type="button" @click="s.pick"><span x-text="s.text"></span><small x-text="s.sub"></small></button>
-              </template>
-              <p class="rl-suggest-more" x-show="rlNewRuleView.modelMore" x-text="rlNewRuleView.modelMore"></p>
-            </div>
-          </div>
-        </template>
-        <template x-if="rlNewRuleView.isSingle">
-          <div>
-            <label><span x-text="rlNewRuleView.targetLabel"></span> <input type="text" x-model="mdl.rlNewRule.target" :placeholder="rlNewRuleView.firstPlaceholder" autocomplete="off" /></label>
-            <div class="rl-suggest" x-show="rlNewRuleView.hasFirstSuggestions" role="group" :aria-label="rlNewRuleView.targetLabel">
-              <template x-for="s in rlNewRuleView.firstSuggestions" :key="s.key">
-                <button type="button" @click="s.pick"><span x-text="s.text"></span><small x-text="s.sub"></small></button>
-              </template>
-              <p class="rl-suggest-more" x-show="rlNewRuleView.firstMore" x-text="rlNewRuleView.firstMore"></p>
-            </div>
-            <p class="hint" x-show="rlNewRuleView.keyNote" x-text="rlNewRuleView.keyNote"></p>
-          </div>
-        </template>
-        <p class="hint" x-show="rlNewRuleView.keysLoading" role="status">Loading API keys…</p>
-        <p class="hint" x-show="rlNewRuleView.keysEmpty">No active API keys yet. Create one on the Keys page first.</p>
-        <p class="notice warn" x-show="rlNewRuleView.keysFailed" role="alert">The API keys could not be loaded, so none can be suggested or found by name. <button type="button" class="rl-link" @click="retryRateLimitKeys">Try again</button> or paste the key&rsquo;s id.</p>
-        <p class="hint" x-show="rlNewRuleView.unknownNote" x-text="rlNewRuleView.unknownNote"></p>
 <details class="rl-help" :dir="rlHelpView.dir" :lang="rlHelpView.lang">
   <summary><span class="icon" x-html="icons.help-circle"></span><span x-text="rlHelpView.f.target.title"></span></summary>
   <div class="rl-help-body">
@@ -2919,10 +2930,12 @@
     </div>
   </div>
 </details>
+</div>
       </div>
 
-      <div x-show="rlNewRuleView.isStep3">
-        <p class="hint" x-text="rlNewRuleView.baselineText"></p>
+      <h4 class="rl-h4">How much?</h4>
+      <div>
+        <p class="hint" x-show="rlNewRuleView.baselineText" x-text="rlNewRuleView.baselineText"></p>
         <div class="rl-bignums">
           <label class="rl-bignum">RPM<input type="number" min="0" max="1000000" x-model.number="mdl.rlNewRule.rpm" title="Sustained requests per minute. 0 = this rule does not limit the rate." /></label>
           <label class="rl-bignum">Burst<input type="number" min="0" max="1000000" x-model.number="mdl.rlNewRule.burst" title="Extra requests allowed at once after a quiet spell, on top of RPM." /></label>
@@ -2930,7 +2943,8 @@
         </div>
         <p class="hint" x-show="rlNewRuleView.isTenant">A tenant rule with RPM 0 keeps the plan&rsquo;s rate and only caps streams.</p>
         <p class="notice warn" x-show="rlNewRuleView.looserWarning" x-text="rlNewRuleView.looserWarning"></p>
-        <div class="rl-summary"><b x-text="rlNewRuleView.summaryTitle"></b><span class="next" x-text="rlNewRuleView.summary"></span><span class="next">Tenant and key limits still apply on top.</span></div>
+        <!-- The rule exactly as Create would store it, in one sentence. -->
+        <div class="rl-summary" aria-live="polite"><span class="eyebrow">This rule</span><span x-text="rlNewRuleView.preview"></span></div>
 <div class="rl-help-row">
 <details class="rl-help" :dir="rlHelpView.dir" :lang="rlHelpView.lang">
   <summary><span class="icon" x-html="icons.help-circle"></span><span x-text="rlHelpView.f.limit.title"></span></summary>
@@ -2957,16 +2971,24 @@
 </div>
       </div>
 
-      <p class="field-error" x-show="rlNewRuleView.error" x-text="rlNewRuleView.error"></p>
+      <div x-show="rlNewRuleView.hasLimitRows">
+        <h4 class="rl-h4">Limits on the same requests</h4>
+        <ul class="rl-limits">
+          <template x-for="l in rlNewRuleView.limitRows" :key="l.key">
+            <li :class="l.cls"><div><b x-text="l.label"></b><span class="rl-limit-note" x-show="l.note" x-text="l.note"></span></div><span class="rl-limit-nums" x-text="l.numbers"></span><span class="tag accent" x-show="l.hasChip" x-text="l.chip"></span></li>
+          </template>
+        </ul>
+        <p class="hint" x-text="rlNewRuleView.limitsNote"></p>
+      </div>
+
+      <p class="field-error" x-show="rlNewRuleView.error" x-text="rlNewRuleView.error" role="alert"></p>
 
       <div class="drawer-footer">
         <div class="modal-actions rl-drawer-actions">
-          <button type="button" class="action ghost" @click="rateLimitNewRuleBack" x-show="rlNewRuleView.showBack">Back</button>
           <span class="spacer"></span>
-          <button type="button" class="action secondary" @click="closeRateLimitNewRule" x-show="rlNewRuleView.notStep3">Cancel</button>
-          <button type="button" class="action" @click="rateLimitNewRuleNext" x-show="rlNewRuleView.notStep3" x-text="rlNewRuleView.nextLabel"></button>
-          <button type="button" class="action secondary" @click="createRateLimitRuleWithSchedule" x-show="rlNewRuleView.isStep3">Add a schedule</button>
-          <button type="button" class="action" @click="createRateLimitRule" x-show="rlNewRuleView.isStep3">Create rule</button>
+          <button type="button" class="action secondary" @click="closeRateLimitNewRule">Cancel</button>
+          <button type="button" class="action secondary" @click="createRateLimitRuleWithSchedule">Add a schedule</button>
+          <button type="button" class="action" @click="createRateLimitRule">Create rule</button>
         </div>
       </div>
     </div>

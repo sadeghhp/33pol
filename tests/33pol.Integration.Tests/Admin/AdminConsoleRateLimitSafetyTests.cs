@@ -151,7 +151,8 @@ public sealed class AdminConsoleRateLimitSafetyTests
 
     /// <summary>
     /// role="radio" promises arrow-key traversal and a single tab stop; without a roving tabindex and
-    /// a key handler the role described a widget the markup did not implement.
+    /// a key handler the role described a widget the markup did not implement. The new-rule form has
+    /// two such groups — who is limited, and on which model — and one handler serves both.
     /// </summary>
     [Fact]
     public async Task ScopeRadiogroup_IsTraversableByKeyboard()
@@ -159,10 +160,12 @@ public sealed class AdminConsoleRateLimitSafetyTests
         var html = await GetAssetAsync("/admin/index.html");
         var js = await GetAssetAsync("/admin/admin-app.js");
 
+        html.Should().Contain("role=\"radiogroup\" aria-label=\"Who is limited?\"");
+        html.Should().Contain("role=\"radiogroup\" aria-label=\"On which model?\"");
         html.Should().Contain("@keydown=\"s.onKey\"");
         html.Should().Contain(":tabindex=\"s.tabIndex\"");
-        js.Should().Contain("rateLimitScopeKeydown(event, id)");
-        js.Should().Contain("tabIndex: n.scope === s.id ? '0' : '-1'");
+        js.Should().Contain("rateLimitChoiceKeydown(event, group, values, value)");
+        js.Should().Contain("tabIndex: n[group] === value ? '0' : '-1'");
     }
 
     /// <summary>

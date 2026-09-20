@@ -235,15 +235,15 @@ The page is a summary; editing happens in drawers. A drawer’s Done stages the 
 
 Common situations and the rule that answers them. Each is one rule or one window; the surrounding tiers keep applying.
 
-**Protect an expensive model** — New rule → A model → its id → 600 rpm, 60 burst, 40 streams. Every caller together may not exceed that on the model.
+**Protect an expensive model** — New rule → Everyone → One model → pick the model → 600 rpm, 60 burst, 40 streams. Every caller together may not exceed that on the model.
 
 > *Example:* The upstream provider allows 10,000 tokens a second; you set the model rule so total request rate stays inside it.
 
-**Give one customer a bigger share of one model** — New rule → A tenant on a model → tenant slug and model id → 200 rpm. The tenant keeps its ordinary tier elsewhere.
+**Give one customer a bigger share of one model** — New rule → A tenant → One model → the tenant slug, then the model → 200 rpm. The tenant keeps its ordinary tier elsewhere.
 
 > *Example:* acme|gpt-4 at 200 rpm while other tenants share what the model rule leaves.
 
-**Cap a noisy integration key** — New rule → An API key → the key id → 30 rpm, 0 burst, 2 streams. Its tenant’s other keys are unaffected.
+**Cap a noisy integration key** — New rule → An API key → All models → pick the key → 30 rpm, 0 burst, 2 streams. Its tenant’s other keys are unaffected.
 
 > *Example:* A partner’s webhook retries in a loop; the key rule holds it to 30 a minute without touching the tenant.
 
@@ -299,12 +299,12 @@ The usual causes, in the order to check them.
 
 | | What it counts | When to use it | Example |
 |---|---|---|---|
-| **A model** (`model`) | Caps one model’s total request rate and open streams across every caller. The bucket is shared: whoever is fastest takes the most. Anonymous callers of a public model count in a bucket of their own so they cannot starve tenants, and a key that is not granted the model is never charged against it. | Use it when the model itself is the scarce thing: an expensive upstream, a single GPU, a provider quota. | Model “gpt-4”: 600 rpm, 60 burst, 40 streams. All tenants together may not exceed 600 a minute on gpt-4. |
-| **A tenant** (`tenant`) | Replaces the tenant’s plan or default tier with these numbers. Every key the tenant holds shares this one bucket. RPM 0 here keeps the plan’s rate and only caps streams. | Use it when one customer needs more, or less, than its plan allows, without moving it to another plan. | Tenant “acme”: 1,200 rpm, 200 burst, 20 streams, while its plan tier is 600 rpm. acme now gets 1,200; other tenants on the plan are unchanged. |
-| **An API key** (`api_key`) | Caps one credential on its own, inside whatever its tenant is allowed. The key still counts against the tenant’s bucket; this bounds how much of that bucket one key may take. | Use it for a noisy integration or a key handed to a partner, so it cannot spend the whole tenant allowance. | Key 6f1c…: 30 rpm, 0 burst, 2 streams. A tenant with 600 rpm can never see this key take more than 30 of them. |
-| **Whole gateway** (`global`) | A ceiling on every inference request whoever sends it. It does not meter the admin API or the model list, which have a separate control-plane budget in appsettings. | Use it to protect the gateway or a shared upstream contract from the sum of all tenants. There is no seeded number: one that fits every deployment does not exist. | Whole gateway: 5,000 rpm, 500 burst. Even with generous tenant tiers, the gateway forwards at most 5,000 requests a minute. |
-| **A tenant on a model** (`tenant_model`) | One tenant’s share of one model. Target is tenant\|model, with the tenant’s id or slug. It stacks with the model rule and the tenant tier; the request needs room in all of them. | Use it to hand out a fair slice of a scarce model, or to keep one customer’s heavy use of one model from affecting its other traffic. | acme\|gpt-4: 60 rpm, 10 burst, 4 streams. acme keeps its 1,200 rpm elsewhere but may only take 60 a minute on gpt-4. |
-| **A key on a model** (`api_key_model`) | The narrowest scope: one credential on one model. Target is keyId\|model. | Use it when a single integration should be limited on a single model only, for instance a demo key on the flagship model. | 6f1c…\|gpt-4: 10 rpm, 0 burst, 1 stream. The key is unrestricted on other models beyond its tenant’s tier. |
+| **Everyone on one model** (`model`) | Caps one model’s total request rate and open streams across every caller. The bucket is shared: whoever is fastest takes the most. Anonymous callers of a public model count in a bucket of their own so they cannot starve tenants, and a key that is not granted the model is never charged against it. | Use it when the model itself is the scarce thing: an expensive upstream, a single GPU, a provider quota. | Model “gpt-4”: 600 rpm, 60 burst, 40 streams. All tenants together may not exceed 600 a minute on gpt-4. |
+| **A tenant, all models** (`tenant`) | Replaces the tenant’s plan or default tier with these numbers. Every key the tenant holds shares this one bucket. RPM 0 here keeps the plan’s rate and only caps streams. | Use it when one customer needs more, or less, than its plan allows, without moving it to another plan. | Tenant “acme”: 1,200 rpm, 200 burst, 20 streams, while its plan tier is 600 rpm. acme now gets 1,200; other tenants on the plan are unchanged. |
+| **An API key, all models** (`api_key`) | Caps one credential on its own, inside whatever its tenant is allowed. The key still counts against the tenant’s bucket; this bounds how much of that bucket one key may take. | Use it for a noisy integration or a key handed to a partner, so it cannot spend the whole tenant allowance. | Key 6f1c…: 30 rpm, 0 burst, 2 streams. A tenant with 600 rpm can never see this key take more than 30 of them. |
+| **Everyone, all models (the whole gateway)** (`global`) | A ceiling on every inference request whoever sends it. It does not meter the admin API or the model list, which have a separate control-plane budget in appsettings. | Use it to protect the gateway or a shared upstream contract from the sum of all tenants. There is no seeded number: one that fits every deployment does not exist. | Whole gateway: 5,000 rpm, 500 burst. Even with generous tenant tiers, the gateway forwards at most 5,000 requests a minute. |
+| **A tenant on one model** (`tenant_model`) | One tenant’s share of one model. It stacks with the model rule and the tenant tier; the request needs room in all of them. | Use it to hand out a fair slice of a scarce model, or to keep one customer’s heavy use of one model from affecting its other traffic. | acme\|gpt-4: 60 rpm, 10 burst, 4 streams. acme keeps its 1,200 rpm elsewhere but may only take 60 a minute on gpt-4. |
+| **An API key on one model** (`api_key_model`) | The narrowest limit: one credential on one model. Only that key’s requests to that model are counted; its other models, and other keys on the same model, are not. | Use it when a single integration should be limited on a single model only, for instance a demo key on the flagship model. | 6f1c…\|gpt-4: 10 rpm, 0 burst, 1 stream. The key is unrestricted on other models beyond its tenant’s tier. |
 | **Anonymous callers** (`anonymous`) | Requests with no API key at all, which are only possible on models marked public. Each client address (an IPv6 /64 block) gets its own bucket of these numbers instead of the default tier. RPM 0 keeps the default rate and only caps streams. | Have exactly one whenever any model is public; without it anonymous callers fall back to the default tier and the gateway logs a warning. A fresh install ships 60 rpm, 20 burst, 2 streams; the wizard seeds a tighter 30/10/2. | Anonymous callers: 30 rpm, 10 burst, 2 streams. One address may make 30 requests a minute to public models and hold 2 streams open. |
 | **Failed sign-ins** (`auth_failure`) | Requests that present a credential and are refused by authentication: an unknown, expired or revoked key. Counted per client address, on inference and admin paths. It is rate-only: RPM must be above 0 and Streams 0. This budget is not switched off by the master switch; it has its own appsettings flag. | Keep it: it is what stops credential guessing. A valid key from the same address still passes, so a stale key on a shared NAT cannot lock out its neighbours. A fresh install ships 60 rpm, 20 burst; the wizard seeds 20/10. | Failed sign-ins: 20 rpm, 10 burst. After 30 rejected credentials in a minute, further bad keys from that address are refused with 429 without a database lookup. |
 
@@ -354,17 +354,17 @@ A rule limits one specific thing: a model, a tenant, a key, a tenant on a model,
 
 > *Example:* A “gpt-4” model rule of 600 rpm and a tenant rule of 1,000 rpm for acme: acme may still only take 600 a minute on gpt-4, shared with every other caller of that model.
 
-### Which scope should I pick?
+### Who, and on which model?
 
-Pick what you want to protect. A model when the model itself is the bottleneck. A tenant or key when one customer or one credential is the concern. A pair (tenant on model, key on model) to hand out a share of one model. Whole gateway for a ceiling on everything. Anonymous and Failed sign-ins for the two protective budgets.
+Say who the limit is for and whether it covers one model or all of them; the console works out the rest. An API key is one credential. A tenant is all of one customer’s keys together. Everyone is every caller sharing one budget. One model counts only requests to that model; All models is one count across everything. Anonymous callers and Failed sign-ins are the two protective budgets, and have neither a subject nor a model.
 
-> *Example:* A customer keeps flooding your most expensive model but is fine elsewhere: pick “A tenant on a model”, not “A tenant”.
+> *Example:* A customer keeps flooding your most expensive model but is fine elsewhere: choose “A tenant” and “One model”, not “All models”.
 
-### What goes in the target?
+### Which key, tenant or model?
 
-The exact id of the thing to limit. Models take their canonical model id. Tenants take the tenant id or its slug; both match the same tenant. Keys take the key id shown on the API keys page, not the secret. Targets are not checked against what exists: a typo is stored and simply never matches.
+Pick from the list. An API key is found by its name, prefix or id and has to exist: the rule is stored against the key’s id, never its name and never the secret. A model alias is stored as the model’s own id, because that is what limits are matched on. A tenant is its id or its slug; both match the same tenant. Tenants are not checked against what exists: a typo is stored and simply never matches.
 
-> *Example:* Tenant “acme” on model “gpt-4” becomes the target acme|gpt-4. Confirm it bites afterwards in the Usage report: a working rule appears under Limits being hit or changes a row’s limit in force.
+> *Example:* Tenant “acme” on model “gpt-4” is stored as the target acme|gpt-4; a key on a model is stored as the key’s id, then |gpt-4. Confirm it bites afterwards in the Usage report: a working rule appears under Limits being hit or changes a row’s limit in force.
 
 ### How much?
 

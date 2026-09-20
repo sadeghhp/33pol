@@ -291,13 +291,15 @@ function adminApp() {
     rlWindowPreview: null,
     rlWindowError: '',
     rlNewRuleOpen: false,
+    // The new-rule form holds what the operator means, never a stored scope: who is limited, on one
+    // model or all, and the two texts. The scope and target are derived (rlScopeFor, rlNewRuleBuild).
     // Seeded per scope by rlSeedNewRuleTier(); `touched` records that the operator typed over the
-    // seed, so changing scope afterwards does not overwrite their numbers.
-    // `picked` remembers, per field, the suggestion the operator chose: the field shows a key's
-    // name while the rule is stored against its id, and the two are tied only while the text is
-    // still what the pick wrote there.
-    rlNewRule: { step: 1, scope: 'model', subject: '', model: '', target: '', rpm: 0, burst: 0, maxConcurrentStreams: 0, touched: false, picked: {} },
-    rlNewRuleError: '',
+    // seed, so changing scope afterwards does not overwrite their numbers. `picked` remembers, per
+    // field, the suggestion the operator chose: the field shows a key's name while the rule is stored
+    // against its id, and the two are tied only while the text is still what the pick wrote there.
+    // `tried` is "Create was pressed", which is when errors start to show; `opened` is what the form
+    // held as it opened, so a form another page prefilled is not unsaved work until it is changed.
+    rlNewRule: { who: 'key', where: 'one', subject: '', model: '', rpm: 0, burst: 0, maxConcurrentStreams: 0, touched: false, picked: {}, tried: false, opened: '' },
     // The key list as the rate-limit page needs it: 'idle' | 'loading' | 'ready' | 'failed'. Its own
     // state because Settings can be the first tab opened, and a failure here must not fail the page.
     rlKeysState: 'idle',
@@ -2888,17 +2890,48 @@ function adminApp() {
     // the two differ, and Save sends the whole draft (the API replaces the set wholesale). The
     // schedule report (`rlSchedule`) is read-only and always from the saved configuration.
 
+    // The stored scopes, as they are named wherever an existing rule is listed or opened. The names
+    // follow the new-rule form's two questions (rlIntents), so a rule reads the way it was made.
     rlScopeCatalog() {
       return [
-        { id: 'model', name: 'A model', short: 'Model', desc: 'Its whole capacity, shared by every caller.', hint: 'Model id', suggest: 'models' },
-        { id: 'tenant', name: 'A tenant', short: 'Tenant', desc: 'Overrides the tenant’s plan tier.', hint: 'Tenant id or slug', suggest: 'tenants' },
-        { id: 'api_key', name: 'An API key', short: 'API key', desc: 'One credential inside its tenant’s allowance.', hint: 'Key id', suggest: 'keys' },
+        { id: 'model', name: 'Everyone on one model', short: 'Model', desc: 'Its whole capacity, shared by every caller.' },
+        { id: 'tenant', name: 'A tenant, all models', short: 'Tenant', desc: 'Overrides the tenant’s plan tier.' },
+        { id: 'api_key', name: 'An API key, all models', short: 'API key', desc: 'One credential inside its tenant’s allowance.' },
         { id: 'global', name: 'Whole gateway', short: 'Gateway', desc: 'Every inference request, whoever sends it.', singleton: true },
-        { id: 'tenant_model', name: 'A tenant on a model', short: 'Tenant & model', desc: 'One customer’s share of one model.', pair: true, hint: 'Tenant id or slug', suggest: 'tenants' },
-        { id: 'api_key_model', name: 'A key on a model', short: 'Key & model', desc: 'The narrowest scope there is.', pair: true, hint: 'Key id', suggest: 'keys' },
+        { id: 'tenant_model', name: 'A tenant on one model', short: 'Tenant & model', desc: 'One customer’s share of one model.' },
+        { id: 'api_key_model', name: 'An API key on one model', short: 'Key & model', desc: 'One credential on one model; nothing else is counted.' },
         { id: 'anonymous', name: 'Anonymous callers', short: 'Anonymous', desc: 'Per client address, on public models.', singleton: true },
         { id: 'auth_failure', name: 'Failed sign-ins', short: 'Failed sign-ins', desc: 'Credential guessing, per address. The failed-auth budget.', singleton: true }
       ];
+    },
+
+    /**
+     * The one mapping between what an operator chooses — who is limited, on one model or all — and
+     * the scope a rule is stored under. Read forwards by rlScopeFor and backwards by rlIntentFor;
+     * nothing else may pair a choice with a scope.
+     */
+    rlIntents() {
+      return [
+        { who: 'key', where: 'one', scope: 'api_key_model' },
+        { who: 'key', where: 'all', scope: 'api_key' },
+        { who: 'tenant', where: 'one', scope: 'tenant_model' },
+        { who: 'tenant', where: 'all', scope: 'tenant' },
+        { who: 'everyone', where: 'one', scope: 'model' },
+        { who: 'everyone', where: 'all', scope: 'global' },
+        // The two protective budgets have no subject to choose and no model to be on.
+        { who: 'anonymous', where: '', scope: 'anonymous' },
+        { who: 'auth_failure', where: '', scope: 'auth_failure' }
+      ];
+    },
+
+    rlScopeFor(who, where) {
+      const hit = this.rlIntents().find(i => i.who === who && (i.where === '' || i.where === where));
+      return hit ? hit.scope : '';
+    },
+
+    rlIntentFor(scope) {
+      const hit = this.rlIntents().find(i => i.scope === String(scope || '').toLowerCase());
+      return hit ? { who: hit.who, where: hit.where } : null;
     },
 
     rlScopeInfo(id) {
@@ -4040,7 +4073,7 @@ function adminApp() {
     /** Applies the scope's seed, unless the operator has already typed over it. */
     rlSeedNewRuleTier() {
       if (this.rlNewRule.touched) return;
-      Object.assign(this.rlNewRule, this.rlDefaultTierFor(this.rlNewRule.scope));
+      Object.assign(this.rlNewRule, this.rlDefaultTierFor(this.rlNewRuleScope()));
     },
 
     /** Marks the tier as the operator's, so a later scope change leaves their numbers alone. */
@@ -4049,103 +4082,158 @@ function adminApp() {
       this.rlNewRule.touched = true;
     },
 
-    openRateLimitNewRule() {
+    // Bound to a click, which hands a handler the event: the prefill has its own entry point so an
+    // event can never be mistaken for one.
+    openRateLimitNewRule() { this.startRateLimitNewRule(); },
+
+    /**
+     * The two protective budgets — anonymous callers, failed sign-ins — are made in the same form
+     * and stored by the same path, but entered from their own button: they have no subject and no
+     * model, so they are not an answer to "who is limited, on which model". Opens on whichever of
+     * the two has no rule yet, since each can have only one.
+     */
+    openRateLimitProtectiveRule() {
+      const free = ['anonymous', 'auth_failure'].find(scope => !this.rlFindDraftRule(this.rlIdentity(scope, '*')));
+      this.startRateLimitNewRule({ who: this.rlIntentFor(free || 'anonymous').who });
+    },
+
+    /**
+     * Opens the form on the common case — an API key on one model. A key another page already knows
+     * goes in through the same pick a click on a suggestion makes, so nothing downstream can tell a
+     * prefilled form from one the operator filled.
+     */
+    startRateLimitNewRule({ key = null, who = 'key' } = {}) {
       if (!this.rlDraft || !this.rateLimitsEditable) return;
-      this.rlNewRule = { step: 1, scope: 'model', subject: '', model: '', target: '', rpm: 0, burst: 0, maxConcurrentStreams: 0, touched: false, picked: {} };
+      this.rlNewRule = { who, where: 'one', subject: '', model: '', rpm: 0, burst: 0, maxConcurrentStreams: 0, touched: false, picked: {}, tried: false, opened: '' };
+      if (key) this.pickRateLimitSuggestion('subject', key.id, this.rlKeyPickText(key));
       this.rlSeedNewRuleTier();
-      this.rlNewRuleError = '';
+      this.rlNewRule.opened = this.rlNewRuleSnapshot();
       this.rlNewRuleOpen = true;
       // Refreshed each time: a key target must be a key the list knows, so a key created since the
       // list was loaded has to be in it.
       this.loadRateLimitKeys(true);
     },
 
+    /** "Limit this key…" on the Keys page: the same form, with the key already chosen. */
+    async limitRateForKey(key) {
+      this.setTab('settings');
+      this.setSettingsSubTab('limits');
+      if (!this.rlDraft) await this.loadRateLimits();
+      if (!this.rateLimitsEditable) {
+        this.toast(this.rateLimitsReadOnlyText || this.rateLimitsLoadError || 'Rate limits cannot be edited right now.', 'error');
+        return;
+      }
+      this.startRateLimitNewRule({ key });
+    },
+
     closeRateLimitNewRule() {
       this.rlNewRuleOpen = false;
     },
 
-    setRateLimitNewRuleScope(id) {
-      // The first field is shared between scopes. Text entered for one kind of thing — a picked
-      // key's name above all — must not be carried into a field that takes another kind.
-      const before = this.rlScopeInfo(this.rlNewRule.scope).suggest || '';
-      const after = this.rlScopeInfo(id).suggest || '';
-      if (before !== after) {
-        const { model } = this.rlNewRule.picked || {};
-        Object.assign(this.rlNewRule, { subject: '', target: '', picked: model ? { model } : {} });
-      }
-      this.rlNewRule.scope = id;
-      this.rlSeedNewRuleTier();
-      this.rlNewRuleError = '';
+    rlNewRuleScope() {
+      return this.rlScopeFor(this.rlNewRule.who, this.rlNewRule.where);
+    },
+
+    /** The choices an operator has made, as one comparable value (see `opened`). */
+    rlNewRuleSnapshot() {
+      const n = this.rlNewRule;
+      return JSON.stringify([n.who, n.where, n.subject, n.model]);
+    },
+
+    rlClearNewRuleField(field) {
+      const picked = { ...(this.rlNewRule.picked || {}) };
+      delete picked[field];
+      Object.assign(this.rlNewRule, { [field]: '', picked });
     },
 
     /**
-     * Arrow-key traversal for the scope radiogroup. The cards carry role="radio", which promises a
-     * keyboard user can move between them with the arrows and reach the group with one Tab; roving
-     * tabindex (see rlNewRuleView.scopeCards) supplies the second half of that promise.
+     * A subject belongs to its kind: a key's name is not a tenant, and "everyone" has none. The
+     * model is kept across key and tenant, where it means the same thing, and dropped with the
+     * protective budgets, which are not on a model at all.
      */
-    rateLimitScopeKeydown(event, id) {
+    setRateLimitNewRuleWho(who) {
+      if (this.rlNewRule.who === who) return;
+      this.rlNewRule.who = who;
+      this.rlClearNewRuleField('subject');
+      if (!this.rlIntentFor(this.rlNewRuleScope())?.where) this.rlClearNewRuleField('model');
+      this.rlSeedNewRuleTier();
+    },
+
+    setRateLimitNewRuleWhere(where) {
+      if (this.rlNewRule.where === where) return;
+      this.rlNewRule.where = where;
+      if (where !== 'one') this.rlClearNewRuleField('model');
+      this.rlSeedNewRuleTier();
+    },
+
+    /**
+     * Arrow-key traversal for the form's two radiogroups. The cards carry role="radio", which
+     * promises a keyboard user can move between them with the arrows and reach the group with one
+     * Tab; roving tabindex (see rlNewRuleView) supplies the second half of that promise.
+     */
+    rateLimitChoiceKeydown(event, group, values, value) {
       const keys = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
       const step = keys[event?.key];
-      if (!step) return;
+      const at = values.indexOf(value);
+      if (!step || at < 0) return;
       event.preventDefault();
-      const scopes = this.rlScopeCatalog();
-      const at = scopes.findIndex(s => s.id === id);
-      if (at < 0) return;
-      const next = scopes[(at + step + scopes.length) % scopes.length];
-      this.setRateLimitNewRuleScope(next.id);
+      const next = values[(at + step + values.length) % values.length];
+      if (group === 'who') this.setRateLimitNewRuleWho(next);
+      else this.setRateLimitNewRuleWhere(next);
       // Selection follows focus in a radiogroup, so focus has to follow it back.
       this.$nextTick(() => {
-        const el = document.getElementById('rl-scope-' + next.id);
+        const el = document.getElementById('rl-' + group + '-' + next);
         if (el && el.focus) el.focus();
       });
     },
 
-    rlNewRuleTarget() {
-      const info = this.rlScopeInfo(this.rlNewRule.scope);
-      if (info.singleton) return '*';
-      // What is stored, not what is shown: a key field holds a name and resolves to the key's id,
-      // and a model field may hold an alias and resolves to the canonical id.
-      const part = (field, kind) => {
-        const key = kind === 'keys' ? this.rlNewRuleKey() : null;
-        if (key) return String(key.id);
-        if (kind === 'models') return this.rlCanonicalModel(this.rlNewRule[field]).id;
-        return String(this.rlNewRule[field] || '').trim();
-      };
-      if (info.pair) return part('subject', info.suggest) + '|' + part('model', 'models');
-      return part('target', info.suggest);
-    },
-
-    rateLimitNewRuleBack() {
-      if (this.rlNewRule.step > 1) this.rlNewRule.step -= 1;
-      this.rlNewRuleError = '';
-    },
-
-    rateLimitNewRuleNext() {
+    /**
+     * The form as the rule it would create. Everything that judges or describes a new rule — the
+     * error, the duplicate check, the preview, the other limits shown, Create — reads this one
+     * object, so none of them can disagree about what is being created. Only fields the chosen
+     * intent shows are read: text left in a hidden field has no way into the rule.
+     */
+    rlNewRuleBuild() {
       const n = this.rlNewRule;
-      const info = this.rlScopeInfo(n.scope);
-      this.rlNewRuleError = '';
-      if (n.step === 1) {
-        n.step = info.singleton ? 3 : 2;
-        return;
+      const scope = this.rlNewRuleScope();
+      const intent = this.rlIntentFor(scope) || { who: '', where: '' };
+      const hasSubject = intent.who === 'key' || intent.who === 'tenant';
+      const hasModel = intent.where === 'one';
+      const key = this.rlNewRuleKey();
+      const subjectText = hasSubject ? String(n.subject || '').trim() : '';
+      const canon = hasModel ? this.rlCanonicalModel(n.model) : null;
+      const parts = [];
+      if (hasSubject) parts.push(key ? String(key.id) : subjectText);
+      if (hasModel) parts.push(canon.id);
+      const tier = this.rlTierPayload(n);
+      const rule = { scope, target: parts.length ? parts.join('|') : '*', ...tier, enabled: true, schedule: [] };
+
+      let error = '';
+      if (hasSubject && parts[0].includes('|')) {
+        error = 'A tenant id or slug cannot contain “|”: it is what separates the tenant from the model in a stored target.';
+      } else if (hasSubject && !subjectText) {
+        error = intent.who === 'key' ? 'Choose the API key this limit applies to.' : 'Name the tenant: its id or its slug.';
+      } else if (intent.who === 'key' && this.rlNewRuleKeyError()) {
+        error = this.rlNewRuleKeyError();
+      } else if (hasModel && !canon.id) {
+        error = 'Choose a model, or switch to “All models”.';
+      } else if (this.rlFindDraftRule(this.rlIdentity(rule.scope, rule.target))) {
+        error = 'A rule for exactly this already exists; open it from the list instead.';
+      } else if (tier.rpm === 0 && tier.maxConcurrentStreams === 0) {
+        error = scope === 'global'
+          ? 'Name the ceiling: set rpm above zero. There is no default that is right for every gateway.'
+          : 'A rule must limit something: set rpm or streams above zero.';
+      } else if (this.rlTierBoundsError(tier, false)) {
+        error = this.rlTierBoundsError(tier, false);
+      } else if (scope === 'tenant' && tier.rpm === 0 && tier.burst !== 0) {
+        error = 'A tenant rule with rpm 0 keeps the plan rate; set burst to 0 as well.';
       }
-      if (n.step === 2) {
-        const target = this.rlNewRuleTarget();
-        if (info.pair ? (!n.subject.trim() || !n.model.trim()) : !target) {
-          this.rlNewRuleError = info.pair ? 'Both halves are needed.' : 'Name the ' + info.hint.toLowerCase() + '.';
-          return;
-        }
-        const keyError = this.rlNewRuleKeyError();
-        if (keyError) {
-          this.rlNewRuleError = keyError;
-          return;
-        }
-        if (this.rlFindDraftRule(this.rlIdentity(n.scope, target))) {
-          this.rlNewRuleError = 'A rule for this ' + info.short.toLowerCase() + ' already exists; open it from the list instead.';
-          return;
-        }
-        n.step = 3;
-        return;
-      }
+      return { rule, intent, hasSubject, hasModel, key, canon, error };
+    },
+
+    /** The target the form would store. */
+    rlNewRuleTarget() {
+      return this.rlNewRuleBuild().rule.target;
     },
 
     pickRateLimitSuggestion(field, value, fill) {
@@ -4156,43 +4244,15 @@ function adminApp() {
 
     /** Creates the rule in the draft; with `andSchedule` the rule drawer opens straight onto Add window. */
     createRateLimitRule(andSchedule) {
-      const n = this.rlNewRule;
-      const info = this.rlScopeInfo(n.scope);
-      const target = this.rlNewRuleTarget();
-      const tier = this.rlTierPayload(n);
-      if (!info.singleton && (info.pair ? (!n.subject.trim() || !n.model.trim()) : !target)) {
-        this.rlNewRuleError = 'The rule needs a target.';
-        return;
-      }
-      const keyError = this.rlNewRuleKeyError();
-      if (keyError) {
-        this.rlNewRuleError = keyError;
-        return;
-      }
-      if (this.rlFindDraftRule(this.rlIdentity(n.scope, target))) {
-        this.rlNewRuleError = 'A rule for this ' + info.short.toLowerCase() + ' already exists.';
-        return;
-      }
-      if (tier.rpm === 0 && tier.maxConcurrentStreams === 0) {
-        this.rlNewRuleError = n.scope === 'global'
-          ? 'Name the ceiling: set rpm above zero. There is no default that is right for every gateway.'
-          : 'A rule must limit something: set rpm or streams above zero.';
-        return;
-      }
-      const bounds = this.rlTierBoundsError(tier, false);
-      if (bounds) {
-        this.rlNewRuleError = bounds;
-        return;
-      }
-      if (n.scope === 'tenant' && tier.rpm === 0 && tier.burst !== 0) {
-        this.rlNewRuleError = 'A tenant rule with rpm 0 keeps the plan rate; set burst to 0 as well.';
-        return;
-      }
-      this.rlDraft.rules.push({ scope: n.scope, target, ...tier, enabled: true, schedule: [] });
+      const built = this.rlNewRuleBuild();
+      this.rlNewRule.tried = true;
+      if (built.error) return;
+      this.rlDraft.rules.push(built.rule);
       this.rlNewRuleOpen = false;
       this.queueRateLimitScheduleRefresh();
-      if (andSchedule) {
-        this.openRateLimitRule(this.rlIdentity(n.scope, target));
+      // Compared to true: as a click handler this receives the event, which is not a request for one.
+      if (andSchedule === true) {
+        this.openRateLimitRule(this.rlIdentity(built.rule.scope, built.rule.target));
         this.openRateLimitWindow(-1);
       }
     },
@@ -4881,7 +4941,7 @@ function adminApp() {
         // The three tier fields record that the operator typed over the scope's seed, so switching
         // scope afterwards keeps their numbers instead of re-seeding over them.
         rlNewRule: {
-          subject: b('rlNewRule.subject'), model: b('rlNewRule.model'), target: b('rlNewRule.target'),
+          subject: b('rlNewRule.subject'), model: b('rlNewRule.model'),
           rpm: {
             get() { return self.rlNewRule.rpm; },
             set(v) { self.setRateLimitNewRuleTier('rpm', v); }
@@ -6827,6 +6887,7 @@ function adminApp() {
           edit: () => this.openKeyEditDrawer(k),
           access: () => this.openKeyAccess(k),
           usage: () => this.viewKeyUsage(k),
+          limit: () => this.limitRateForKey(k),
           revoke: () => this.confirmRevoke(k.id),
           archive: () => this.confirmArchive(k),
           unarchive: () => this.unarchiveKey(k.id),
@@ -7267,14 +7328,14 @@ function adminApp() {
     },
 
     /**
-     * The wizard seeds its own numbers, so "touched" (already maintained so a scope change leaves
-     * the operator's numbers alone) plus a step past the first plus a typed subject is the whole
-     * of what an operator can have invested in it.
+     * The form seeds its own numbers, so "touched" (already maintained so a scope change leaves the
+     * operator's numbers alone) plus any choice or text that differs from what the form opened with
+     * is the whole of what an operator can have invested in it.
      */
     get rlNewRuleDirty() {
       const n = this.rlNewRule;
       if (!this.rlNewRuleOpen || !n) return false;
-      return n.step > 1 || !!n.touched || !!n.subject || !!n.model || !!n.target;
+      return !!n.touched || this.rlNewRuleSnapshot() !== n.opened;
     },
 
     /** What the sticky bar says has changed, so an operator can tell a stray edit from an intended one. */
@@ -7857,10 +7918,9 @@ function adminApp() {
       return [key ? this.rlKeyName(key) : first, ...rest].join(' · ');
     },
 
-    /** The new-rule field that takes an API key under the current scope, or '' when none does. */
+    /** The new-rule field that holds an API key under the current choice, or '' when none does. */
     rlNewRuleKeyField() {
-      const info = this.rlScopeInfo(this.rlNewRule.scope);
-      return info.suggest === 'keys' ? (info.pair ? 'subject' : 'target') : '';
+      return this.rlNewRule.who === 'key' ? 'subject' : '';
     },
 
     /** The suggestion picked for a field, for as long as the field still holds the text it wrote. */
@@ -7989,185 +8049,281 @@ function adminApp() {
     },
 
     /**
-     * What already applies to a scope that has no rule yet, so the numbers in step 3 are typed
-     * against a reference instead of into a blank. Reaching step 3 means no rule exists for this
-     * target — creation refuses a duplicate — so for the two protective scopes the honest answer
-     * is the default tier they fall back to.
+     * What the two protective scopes fall back to while they have no rule, so their numbers are
+     * typed against a reference instead of into a blank. Reaching here means no rule exists for the
+     * scope — creation refuses a duplicate — so the honest answer is the default tier.
      */
-    rlScopeBaselineFor(scope, target, tier) {
+    rlProtectiveBaselineFor(scope) {
       const fallback = Number(this.rlDraft?.default?.rpm) || 0;
-      if (scope === 'global') {
-        return { rpm: 0, text: 'No gateway ceiling is set today. This rule would be the first, and it applies to every inference request.' };
-      }
       if (scope === 'auth_failure') {
         return { rpm: fallback, text: 'Failed sign-ins currently fall back to the default tier, ' + this.formatNum(fallback) + ' rpm per client address.' };
       }
       if (scope === 'anonymous') {
         return { rpm: fallback, text: 'Anonymous callers currently fall back to the default tier, ' + this.formatNum(fallback) + ' rpm per client address.' };
       }
-      const text = 'Callers are already held to their tenant tier (default ' + this.formatNum(fallback) + ' rpm). A rule here only tightens that further.';
-      // A tenant rule replaces the plan rate rather than stacking under it, so "looser" is its job.
-      if (scope === 'tenant') return { rpm: 0, text };
-      const ceiling = this.rlCeilingFor(scope, target, tier);
-      return { rpm: ceiling.rpm, source: ceiling.source, text };
+      return { rpm: 0, text: '' };
     },
 
     /**
-     * A limit already in the draft that makes a new rule's rate redundant, or `{ rpm: 0 }` when none
-     * certainly does. A false warning talks an operator out of a limit that works and a missing one
-     * costs nothing, so a candidate is used only where the claim is provable for every caller:
-     *
-     *  - Dominance. Bucket B makes bucket A redundant when every request A counts is also counted
-     *    by B, B is acquired first (A is never charged for a request B refused), and B's rate and
-     *    capacity (rpm + burst) are both no larger than A's; A then always holds at least B's
-     *    tokens. Rate alone is not enough: the same rpm with a smaller burst binds on the burst.
-     *    Each candidate below sits earlier in the gateway's scope order than the rule it is
-     *    offered to, and counts a superset of its traffic.
-     *  - Schedules. A rule with windows is never a candidate: a window may loosen or suspend it.
-     *  - Tenant tier. Which tenant a key belongs to is unknown here, and a tenant may be written by
-     *    id in one rule and by slug in another, so the tier is never looked up. It is bounded by
-     *    the loosest rate and the largest capacity any tenant can have: default and plans (floored
-     *    at 1 rpm, as the gateway floors them), enforced tenant rules, and their windows.
-     *  - Adaptive shedding scales rules that name a model and no others, so with it on, only the
-     *    same model's rule can vouch for one — rate and burst each, since each is rounded alone.
+     * What a limit's rate can be, as a band: exact for a steady rule, a range where it cannot be
+     * known here. `tiers` are the {rpm, burst} pairs it may run at. `open` marks a limit that is at
+     * times not there at all (a suspended or rate-less window), so nothing can be said about its
+     * loosest state; `scaled` marks one that adaptive shedding shrinks under load.
      */
-    rlCeilingFor(scope, target, tier) {
-      const d = this.rlDraft || {};
-      const rpm = Number(tier?.rpm) || 0;
-      const burst = Number(tier?.burst) || 0;
-      const [subject, second] = String(target || '').split('|');
-      const model = scope === 'model' ? subject : (second || '');
-      const scaled = d.adaptiveEnabled === true && (scope === 'model' || scope === 'tenant_model' || scope === 'api_key_model');
-      const enforced = (d.rules || []).filter(r => r.enabled !== false);
-      const candidates = [];
-      const offer = (t, source, scaledAlike) => candidates.push({ rpm: Number(t.rpm) || 0, burst: Number(t.burst) || 0, source, scaledAlike });
-      const steady = (ruleScope, ruleTarget, source, scaledAlike) => {
-        const r = enforced.find(x => x.scope === ruleScope && Number(x.rpm) > 0 && !(x.schedule || []).length &&
-          String(x.target || '').toLowerCase() === String(ruleTarget || '').toLowerCase());
-        if (r) offer(r, source, scaledAlike);
+    rlLimitBand(tiers, { open = false, scaled = false } = {}) {
+      const rated = tiers.filter(t => Number(t.rpm) > 0)
+        .map(t => ({ rpm: Number(t.rpm), burst: Math.max(0, Number(t.burst) || 0) }));
+      if (!rated.length) return { rated: false };
+      const caps = rated.map(t => t.rpm + t.burst);
+      return {
+        rated: true, scaled,
+        rpmMin: Math.min(...rated.map(t => t.rpm)), rpmMax: open ? Infinity : Math.max(...rated.map(t => t.rpm)),
+        capMin: Math.min(...caps), capMax: open ? Infinity : Math.max(...caps),
+        burstMin: Math.min(...rated.map(t => t.burst)), burstMax: open ? Infinity : Math.max(...rated.map(t => t.burst))
       };
+    },
 
-      steady('global', '*', 'whole-gateway limit');
-      if (scope !== 'model') {
-        // A model rule counts every tenant's traffic, so no tenant tier contains it.
-        const floor = t => ({ rpm: Math.max(1, Number(t.rpm) || 0), burst: Math.max(0, Number(t.burst) || 0) });
+    /**
+     * Whether limit `a` is certainly never looser than limit `b`: at its loosest, a's rate and its
+     * capacity (rpm + burst) are both within b's at its tightest. Rate alone is not enough — the
+     * same rpm with a smaller burst is the tighter limit, on the burst. With adaptive shedding on,
+     * limits that name a model shrink under load and the others do not: a shrinking `b` can drop
+     * below any fixed `a`, and two that shrink together (the same model, so the same factor) keep
+     * their order only when the bursts are ordered too, since rate and burst are rounded apart.
+     */
+    rlAtMost(a, b, adaptive) {
+      if (!a.rated || !b.rated) return false;
+      if (adaptive && b.scaled && (!a.scaled || a.burstMax > b.burstMin)) return false;
+      return a.rpmMax <= b.rpmMin && a.capMax <= b.capMin;
+    },
+
+    /**
+     * The limits already in the draft that every request counted by `rule` must also pass, and what
+     * can honestly be concluded from them. One calculation feeds the list under the form, the
+     * "tightest" mark and the redundancy warning, so the three cannot tell different stories.
+     *
+     * Each row counts a superset of the rule's traffic and sits earlier in the gateway's scope order
+     * (global, tenant, key, model, tenant-on-model, key-on-model), so the rule is never charged for
+     * a request a row refused. That is what lets a row vouch for redundancy: if it is never looser
+     * than the rule (rlAtMost) the rule's bucket always holds at least the row's tokens and cannot
+     * be the one that refuses. A tier change keeps a bucket's tokens, so a band over every tier a
+     * limit may run at is a sound bound; a limit that is at times absent is not (`open`), and
+     * neither is any rule with schedule windows taken at its base rate alone.
+     *
+     *  - Tenant tier. Which tenant a key belongs to is unknown here, and a tenant may be written by
+     *    id in one rule and by slug in another, so the tier is never looked up: it is the band over
+     *    the default and every plan (floored at 1 rpm, as the gateway floors them), every enforced
+     *    tenant rule and every window on one. rpm 0 there keeps the plan rate, already counted.
+     *  - "Dominant" is the only ordering the gateway has, and it is partial. A limit decides the
+     *    outcome alone only if it counts every request the others count (`covers`) and is never
+     *    looser than any of them; the others then can never be the one that refuses. The lowest
+     *    numbers are not enough: a wider limit is shared with other traffic and can refuse first
+     *    however generous it is, and a tenant tier and a model rule do not contain each other at
+     *    all. Where no limit qualifies none is marked, and the form says so.
+     *  - A false "this rule is redundant" talks an operator out of a limit that works, and a missing
+     *    one costs nothing, so the warning needs a steady row. A tenant rule is never warned about:
+     *    it replaces the plan rate, so being looser is its job.
+     */
+    rlApplicableLimits(rule) {
+      const d = this.rlDraft || {};
+      const adaptive = d.adaptiveEnabled === true;
+      const intent = this.rlIntentFor(rule.scope);
+      const none = { rows: [], mine: { rated: false }, mineLowest: false, redundantUnder: null };
+      if (!intent || !intent.where) return none;
+      const parts = String(rule.target || '').split('|');
+      const subject = intent.who === 'everyone' ? '' : parts[0];
+      const model = intent.where === 'one' ? parts[parts.length - 1] : '';
+      const enforced = (d.rules || []).filter(r => r.enabled !== false);
+      const rows = [];
+      // `source` is how the row is named when it vouches for the warning; `covers` is which kinds of
+      // the other rows' traffic it counts as well (every row covers the new rule's).
+      const same = (a, b) => String(a || '').toLowerCase() === String(b || '').toLowerCase();
+      const ruleRow = (r, { id = r.scope, label, source = '', shared = false, covers = [], conditional = false }) => {
+        const windows = r.schedule || [];
+        rows.push({
+          id, kind: r.scope, label, source, shared, covers, conditional, scheduled: windows.length > 0, streams: Number(r.maxConcurrentStreams) || 0,
+          band: this.rlLimitBand([r, ...windows.filter(w => !w.suspend)], { open: windows.length > 0, scaled: r.scope === 'model' || r.scope === 'tenant_model' })
+        });
+      };
+      const find = (scope, target) => enforced.find(x => x.scope === scope && same(x.target, target));
+
+      const gateway = rule.scope === 'global' ? null : find('global', '*');
+      if (gateway) ruleRow(gateway, { label: 'Whole gateway', source: 'whole-gateway limit', shared: true, covers: ['tenant', 'api_key', 'model', 'tenant_model'] });
+      if (intent.who !== 'everyone' && rule.scope !== 'tenant') {
+        const floor = t => ({ rpm: Math.max(1, Number(t.rpm) || 0), burst: t.burst });
         const tiers = [d.default || {}, ...Object.values(d.plans || {})].map(floor);
         for (const r of enforced.filter(x => x.scope === 'tenant')) {
-          // rpm 0 (on the rule, or on a window) keeps the plan rate, which is already counted; so
-          // does a suspended window. A window counts even when its rule's own rate is 0.
-          for (const t of [r, ...(r.schedule || []).filter(w => !w.suspend)]) {
-            if (Number(t.rpm) > 0) tiers.push(floor(t));
-          }
+          tiers.push(r, ...(r.schedule || []).filter(w => !w.suspend));
         }
-        const loosest = Math.max(...tiers.map(t => t.rpm));
-        const roomiest = Math.max(...tiers.map(t => t.rpm + t.burst));
-        offer({ rpm: loosest, burst: roomiest - loosest }, 'loosest tenant tier configured');
+        rows.push({
+          id: 'tenant', kind: 'tenant', source: 'loosest tenant tier configured', covers: ['api_key', 'tenant_model'], shared: false, conditional: false,
+          scheduled: false, streams: 0, band: this.rlLimitBand(tiers),
+          label: intent.who === 'tenant' ? 'Tenant tier of ' + subject : 'Tenant tier of the key’s tenant'
+        });
       }
-      if (scope === 'api_key_model') steady('api_key', subject, 'limit on this key across all models');
-      if (scope !== 'model' && model) steady('model', model, 'limit on ' + model + ' for every caller', true);
+      const ownKey = rule.scope === 'api_key_model' ? find('api_key', subject) : null;
+      if (ownKey) ruleRow(ownKey, { label: this.rlTargetDisplay('api_key', subject) + ' on all models', source: 'limit on this key across all models' });
+      const shared = model && intent.who !== 'everyone' ? find('model', model) : null;
+      if (shared) ruleRow(shared, { label: 'Everyone on ' + model, source: 'limit on ' + model + ' for every caller', shared: true, covers: ['tenant_model'] });
+      if (rule.scope === 'api_key_model') {
+        // A tenant's rule on this model counts the key's requests too — if the key is that tenant's,
+        // which cannot be known here. Listed so that nothing is called dominant over a limit that
+        // may refuse first; never a reason to warn, and never dominant itself.
+        for (const r of enforced.filter(x => x.scope === 'tenant_model' && same(String(x.target || '').split('|')[1], model))) {
+          const tenant = String(r.target).split('|')[0];
+          ruleRow(r, { id: 'tenant_model:' + String(r.target).toLowerCase(), label: 'Tenant ' + tenant + ' on ' + model, conditional: true });
+        }
+      }
 
-      const redundantUnder = c => rpm > 0 && rpm >= c.rpm && rpm + burst >= c.rpm + c.burst &&
-        (!scaled || (c.scaledAlike === true && burst >= c.burst));
-      return candidates.filter(redundantUnder).sort((a, b) => a.rpm - b.rpm)[0] || { rpm: 0, source: '' };
+      const mine = this.rlLimitBand([rule], { scaled: model !== '' });
+      const others = rows.filter(r => r.band.rated);
+      for (const row of others) {
+        row.dominant = mine.rated && !row.scheduled && !row.conditional && this.rlAtMost(row.band, mine, adaptive) &&
+          others.every(o => o === row || (row.covers.includes(o.kind) && this.rlAtMost(row.band, o.band, adaptive)));
+      }
+      const redundantUnder = rule.scope === 'tenant' ? null
+        : others.filter(r => !r.scheduled && !r.conditional && this.rlAtMost(r.band, mine, adaptive)).sort((x, y) => x.band.rpmMax - y.band.rpmMax)[0] || null;
+      const mineLowest = mine.rated && others.length > 0 && others.every(o => this.rlAtMost(mine, o.band, adaptive));
+      return { rows, mine, mineLowest, redundantUnder };
+    },
+
+    /** A rule as one sentence an operator can check: who, how much, where. Reads only the rule. */
+    rlRuleSentence(rule) {
+      const intent = this.rlIntentFor(rule.scope) || { who: '', where: '' };
+      const parts = String(rule.target || '').split('|');
+      const model = intent.where === 'one' ? parts[parts.length - 1] : '';
+      const who = intent.who === 'key' ? 'API key ' + (this.rlTargetDisplay('api_key', parts[0]) || '?')
+        : intent.who === 'tenant' ? 'tenant ' + (parts[0] || '?')
+        : intent.who === 'everyone' ? 'everyone together'
+        : intent.who === 'anonymous' ? 'each anonymous client address'
+        : 'each client address';
+      const where = intent.where === 'one' ? ' on ' + (model || '?') : intent.where === 'all' ? ' across all models' : '';
+      const unit = intent.who === 'auth_failure' ? ' failed sign-ins/minute' : ' requests/minute';
+      const rpm = Number(rule.rpm) || 0;
+      const burst = Number(rule.burst) || 0;
+      const streams = Number(rule.maxConcurrentStreams) || 0;
+      const streamsText = streams > 0 ? ' At most ' + this.formatNum(streams) + ' streams open at once.' : '';
+      if (rpm <= 0) {
+        return 'No request-rate limit for ' + who + where + (rule.scope === 'tenant' ? ': the plan’s rate stays.' : ' from this rule.') + streamsText;
+      }
+      return 'Limit ' + who + ' to ' + this.formatNum(rpm) + unit + where + '.' +
+        (burst > 0 ? ' Up to ' + this.formatNum(rpm + burst) + ' at once after a quiet spell (' + this.formatNum(rpm) + ' + ' + this.formatNum(burst) + ' burst).' : '') +
+        streamsText + (rule.scope === 'tenant' ? ' This replaces the tenant’s plan rate.' : '');
+    },
+
+    rlBandText(band) {
+      if (!band.rated) return 'no rate limit';
+      const span = (lo, hi) => (hi === Infinity || lo === hi ? this.formatNum(lo) : this.formatNum(lo) + '–' + this.formatNum(hi));
+      return span(band.rpmMin, band.rpmMax) + ' rpm · up to ' + span(band.capMin, band.capMax) + ' at once';
     },
 
     get rlNewRuleView() {
       const n = this.rlNewRule;
-      const info = this.rlScopeInfo(n.scope);
-      const step = n.step;
-      const target = this.rlNewRuleTarget();
-      const tier = this.rlTierPayload(n);
-      const kind = info.suggest || '';
-      // One list per field, each holding only what that field takes: the first field's kind comes
-      // from the scope, and a pair's second field is always a model.
-      const firstField = info.pair ? 'subject' : 'target';
+      const built = this.rlNewRuleBuild();
+      const { rule, intent, hasSubject, hasModel, key, canon } = built;
+      const isKeys = intent.who === 'key';
+      const choice = (group, values, value, name, desc) => ({
+        key: value, id: 'rl-' + group + '-' + value, name, desc,
+        cls: 'rl-scope-card' + (n[group] === value ? ' sel' : ''),
+        ariaChecked: n[group] === value ? 'true' : 'false',
+        // Roving tabindex: one stop for the whole group, arrows move within it.
+        tabIndex: n[group] === value ? '0' : '-1',
+        select: () => (group === 'who' ? this.setRateLimitNewRuleWho(value) : this.setRateLimitNewRuleWhere(value)),
+        onKey: (e) => this.rateLimitChoiceKeydown(e, group, values, value)
+      });
+      // Two separate groups: the everyday question has exactly three answers, and the protective
+      // budgets, which answer neither question, are a form of their own with its own entry point.
+      const isProtective = intent.where === '';
+      const whos = ['key', 'tenant', 'everyone'];
+      const budgets = ['anonymous', 'auth_failure'];
+      const wheres = ['one', 'all'];
+
+      // One list per field, each holding only what that field takes.
       const none = { items: [], has: false, more: '' };
-      const listing = step === 2 && !info.singleton;
-      const firstList = listing ? this.rlSuggestList(firstField, kind) : none;
-      const modelList = listing && info.pair ? this.rlSuggestList('model', 'models') : none;
-      // The model half, resolved the way it will be stored.
-      const modelField = info.pair ? 'model' : (kind === 'models' ? 'target' : '');
-      const modelText = modelField ? String(n[modelField] || '').trim() : '';
-      const canon = modelText ? this.rlCanonicalModel(modelText) : null;
-      const modelNote = !canon ? ''
+      const subjectList = hasSubject ? this.rlSuggestList('subject', isKeys ? 'keys' : 'tenants') : none;
+      const modelList = hasModel ? this.rlSuggestList('model', 'models') : none;
+      const modelText = hasModel ? String(n.model || '').trim() : '';
+      const modelNote = !modelText ? ''
         : !canon.known ? 'Not a registered model. The rule is stored and applies as soon as a model with this id exists.'
         : canon.viaAlias ? '‘' + modelText + '’ is an alias of ' + canon.id + '. Limits are matched on the model’s own id, so the rule is saved against ' + canon.id + '.'
         : '';
-      // The key half: named once resolved, and said plainly when the text names no key at all.
-      const isKeys = this.rlNewRuleKeyField() !== '';
-      const keyText = isKeys ? String(n[firstField] || '').trim() : '';
-      const key = this.rlNewRuleKey();
+      // The key: named once resolved, and said plainly when the text names no key at all.
       const keysReady = this.rlKeysState === 'ready';
-      const keyNote = !keyText ? ''
+      const keyNote = !isKeys || !String(n.subject || '').trim() ? ''
         : key ? 'Key: ' + this.rlKeyName(key) + (key.keyPrefix ? ' · ' + key.keyPrefix + '…' : '') + ' · id ' + key.id + (key.isRevoked || key.isArchived ? ' · revoked — it can no longer send requests, so this rule would limit nothing' : '')
         : this.rlKeysState === 'loading' ? ''
         : this.rlNewRuleKeyError();
-      const capacity = tier.rpm + tier.burst;
-      const baseline = this.rlScopeBaselineFor(n.scope, target, tier);
-      const looser = baseline.rpm > 0 && tier.rpm > 0 && tier.rpm >= baseline.rpm;
-      const modelShown = canon ? canon.id : '';
-      const subject = info.singleton ? info.name
-        : info.pair ? (n.subject.trim() || '?') + ' on ' + (modelShown || '?')
-        : ((kind === 'models' ? modelShown : String(n.target || '').trim()) || '?');
-      const summary = tier.rpm > 0
-        ? subject + ' may take ' + this.formatNum(tier.rpm) + ' requests a minute' +
-          (tier.burst > 0 ? ', up to ' + this.formatNum(capacity) + ' at once after a quiet spell (' + this.formatNum(tier.rpm) + ' + ' + this.formatNum(tier.burst) + ' burst)' : ', with no extra burst') +
-          (tier.maxConcurrentStreams > 0 ? ', with at most ' + this.formatNum(tier.maxConcurrentStreams) + ' streams open.' : '.')
-        : subject + ' is not rate-limited by this rule' + (tier.maxConcurrentStreams > 0 ? ', but may hold at most ' + this.formatNum(tier.maxConcurrentStreams) + ' streams open.' : '.');
+
+      const limits = this.rlApplicableLimits(rule);
+      const protective = this.rlProtectiveBaselineFor(rule.scope);
+      const under = limits.redundantUnder;
+      // A warning, never a block: an operator may have a reason to set a limit that binds no
+      // tighter than what is already there, but they should not do it by accident.
+      const looserWarning = under
+        ? 'At ' + this.formatNum(rule.rpm) + ' rpm this rule’s rate is no tighter than the ' + under.source
+          + ' (' + this.formatNum(under.band.rpmMax) + ' rpm), which these requests must pass as well — so this rate would never be the one that refuses a request.'
+        : protective.rpm > 0 && rule.rpm > 0 && rule.rpm >= protective.rpm
+          ? 'At ' + this.formatNum(rule.rpm) + ' rpm this rule is no tighter than the '
+            + this.formatNum(protective.rpm) + ' rpm already in force, so it would not change what this scope allows.'
+          : '';
+      const limitRows = limits.rows.map(r => ({
+        key: r.id, label: r.label,
+        numbers: this.rlBandText(r.band) + (r.streams > 0 ? ' · ' + this.formatNum(r.streams) + ' streams' : ''),
+        note: [r.conditional ? 'only if this key belongs to that tenant' : '', r.shared ? 'shared with every caller' : '', r.scheduled ? 'scheduled: its windows change these numbers' : '',
+          r.id === 'tenant' && r.band.rpmMin !== r.band.rpmMax ? 'depends on the tenant’s plan or its own rule' : ''].filter(Boolean).join(' · '),
+        cls: 'rl-limit', chip: r.dominant ? 'dominant' : '', hasChip: !!r.dominant
+      }));
+      const dominant = limits.rows.find(r => r.dominant);
+      if (limitRows.length) {
+        limitRows.unshift({ key: 'mine', label: 'This rule', numbers: this.rlBandText(limits.mine), note: '', cls: 'rl-limit mine', chip: '', hasChip: false });
+      }
       return {
-        step,
-        steps: [
-          { key: 1, label: '1 Scope', cls: step === 1 ? 'active' : '' },
-          { key: 2, label: '2 Target', cls: step === 2 ? 'active' : (info.singleton ? 'skipped' : '') },
-          { key: 3, label: '3 Limit', cls: step === 3 ? 'active' : '' },
-          { key: 4, label: '4 Schedule · optional', cls: '' }
+        eyebrow: isProtective ? 'New protective limit' : 'New rule',
+        title: isProtective ? 'What should the gateway be protected from?' : 'What should be limited?',
+        isProtective,
+        notProtective: !isProtective,
+        whoCards: [
+          choice('who', whos, 'key', 'An API key', 'One credential.'),
+          choice('who', whos, 'tenant', 'A tenant', 'All of one customer’s keys together.'),
+          choice('who', whos, 'everyone', 'Everyone', 'Every caller together, sharing one budget.')
         ],
-        title: step === 1 ? 'What should it limit?' : step === 2 ? 'Which ' + info.short.toLowerCase() + '?' : 'How much?',
-        scopeCards: this.rlScopeCatalog().map(s => ({
-          key: s.id,
-          id: 'rl-scope-' + s.id,
-          name: s.name,
-          desc: s.desc,
-          cls: 'rl-scope-card' + (n.scope === s.id ? ' sel' : ''),
-          ariaChecked: n.scope === s.id ? 'true' : 'false',
-          // Roving tabindex: one stop for the whole group, arrows move within it.
-          tabIndex: n.scope === s.id ? '0' : '-1',
-          select: () => this.setRateLimitNewRuleScope(s.id),
-          onKey: (e) => this.rateLimitScopeKeydown(e, s.id)
-        })),
-        isStep1: step === 1, isStep2: step === 2, isStep3: step === 3, notStep3: step !== 3,
-        isPair: !!info.pair,
-        isSingle: !info.pair,
-        targetLabel: info.hint || 'Target',
-        subjectLabel: info.hint || 'Subject',
-        firstSuggestions: firstList.items,
-        hasFirstSuggestions: firstList.has,
-        firstMore: firstList.more,
+        protectiveCards: [
+          choice('who', budgets, 'anonymous', 'Anonymous callers', 'Requests with no key, on public models. Counted per client address.'),
+          choice('who', budgets, 'auth_failure', 'Failed sign-ins', 'Credential guessing. Counted per client address; rate only.')
+        ],
+        whereCards: [
+          choice('where', wheres, 'one', 'One model', 'Only requests to that model are counted.'),
+          choice('where', wheres, 'all', 'All models', intent.who === 'tenant' ? 'Replaces the tenant’s plan rate.' : 'One count across every model.')
+        ],
+        showSubject: hasSubject,
+        showWhere: intent.where !== '',
+        showModel: hasModel,
+        subjectLabel: isKeys ? 'Which API key?' : 'Which tenant?',
+        subjectPlaceholder: isKeys ? 'Key name, prefix or id' : 'Tenant id or slug, e.g. acme',
+        subjectSuggestions: subjectList.items,
+        hasSubjectSuggestions: subjectList.has,
+        subjectMore: subjectList.more,
         modelSuggestions: modelList.items,
         hasModelSuggestions: modelList.has,
         modelMore: modelList.more,
-        firstPlaceholder: isKeys ? 'Key name, prefix or id' : kind === 'models' ? 'gpt-4' : 'acme',
         keysLoading: isKeys && this.rlKeysState === 'loading',
         keysFailed: isKeys && this.rlKeysState === 'failed',
         keysEmpty: isKeys && keysReady && !(this.keys || []).some(k => !k.isRevoked && !k.isArchived),
         keyNote,
         unknownNote: modelNote,
-        summary,
-        summaryTitle: info.singleton ? info.name : subject,
-        baselineText: baseline.text,
-        // A warning, never a block: an operator may have a reason to set a limit that binds no
-        // tighter than what is already there, but they should not do it by accident on the two
-        // scopes where a loose number is a weakened control rather than a generous one.
-        looserWarning: !looser ? ''
-          : baseline.source
-            ? 'At ' + this.formatNum(tier.rpm) + ' rpm this rule’s rate is no tighter than the ' + baseline.source
-              + ' (' + this.formatNum(baseline.rpm) + ' rpm), which these requests must pass as well — so this rate would never be the one that refuses a request.'
-            : 'At ' + this.formatNum(tier.rpm) + ' rpm this rule is no tighter than the '
-              + this.formatNum(baseline.rpm) + ' rpm already in force, so it would not change what this scope allows.',
-        error: this.rlNewRuleError || '',
-        showBack: step > 1,
-        nextLabel: step === 1 ? (info.singleton ? 'Set the limit' : 'Choose the ' + info.short.toLowerCase()) : 'Set the limit',
-        isTenant: n.scope === 'tenant'
+        preview: this.rlRuleSentence(rule),
+        baselineText: protective.text,
+        looserWarning,
+        limitRows,
+        hasLimitRows: limitRows.length > 0,
+        limitsNote: dominant
+          ? 'Every limit listed must admit a request. “' + dominant.label + '” counts all of these requests and is never looser than the others, so none of the others can be the one that refuses.'
+          : limits.mineLowest
+            ? 'Every limit listed must admit a request. This rule has the lowest rate and capacity of them, but the wider limits are shared with other traffic and can still refuse a request first.'
+            : 'Every limit listed must admit a request, and no one of them decides the outcome alone: they count different traffic, their rates and bursts point different ways, or one of them varies.',
+        // Once Create has been pressed the error is live, so it goes as soon as it is fixed.
+        error: n.tried ? built.error : '',
+        isTenant: rule.scope === 'tenant'
       };
     },
 
@@ -8208,7 +8364,7 @@ function adminApp() {
         };
       }
 
-      const scopeId = this.rlNewRule?.scope || 'model';
+      const scopeId = this.rlNewRuleScope() || 'model';
       const sc = (tree.scopes && tree.scopes[scopeId]) || (base.scopes && base.scopes[scopeId]) || {};
       const scope = {
         title: ui.scopeHelpTitle || '',

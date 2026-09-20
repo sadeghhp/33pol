@@ -342,9 +342,9 @@ test('an open editor counts as unsaved work even when the draft is clean', async
         app.openRateLimitWindow(-1);
         app.rlWindow.name = 'off-peak';
       },
-      'a wizard step': app => {
+      'a wizard choice': app => {
         app.openRateLimitNewRule();
-        app.rlNewRule.step = 2;
+        app.setRateLimitNewRuleWho('tenant');
       },
       'a wizard subject': app => {
         app.openRateLimitNewRule();

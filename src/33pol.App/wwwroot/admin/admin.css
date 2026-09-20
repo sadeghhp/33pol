@@ -2072,6 +2072,10 @@ html.wallboard .page-content { animation: wallboard-shift 900s steps(1) infinite
 .rl-win .w { font-size: var(--text-xs); color: var(--text-secondary); grid-column: 1; }
 .rl-win .n { font-family: var(--font-mono); font-size: var(--text-sm); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; grid-row: 1; grid-column: 2; }
 .rl-win .s { grid-column: 2; text-align: right; }
+/* The drawer pads its scroll area, so a footer stuck at bottom: 0 leaves that padding's worth of
+   the form showing underneath it. The new-rule form is the first rate-limit drawer tall enough to
+   scroll on a desktop screen. */
+.rl-drawer .drawer-footer { bottom: calc(-1 * var(--space-6)); padding-bottom: var(--space-6); margin-bottom: calc(-1 * var(--space-6)); }
 .rl-drawer-actions { align-items: center; }
 .rl-drawer-actions .action { flex: 0 0 auto; width: auto; }
 .rl-drawer-actions .spacer { flex: 1; }
@@ -2089,17 +2093,23 @@ html.wallboard .page-content { animation: wallboard-shift 900s steps(1) infinite
 .rl-3col label { margin-bottom: var(--space-3); }
 .rl-summary { padding: var(--space-3) var(--space-4); border-radius: var(--r-md); background: var(--accent-softer); border: 1px solid var(--accent-border); font-size: var(--text-sm); line-height: 1.5; margin: var(--space-2) 0 var(--space-3); }
 .rl-summary b { font-family: var(--font-mono); display: block; margin-bottom: 0.2rem; }
+.rl-summary .eyebrow { display: block; margin-bottom: 0.2rem; }
 .rl-summary .next { display: block; margin-top: 0.2rem; font-size: var(--text-xs); color: var(--text-secondary); }
 .rl-checks { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; font-size: var(--text-xs); color: var(--text-secondary); margin-bottom: var(--space-3); }
-.rl-steps { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; margin-top: 0.6rem; font-size: var(--text-2xs); font-family: var(--font-mono); color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.06em; }
-.rl-steps span.active { color: var(--accent-text); font-weight: var(--fw-semi); }
-.rl-steps span.skipped { text-decoration: line-through; }
 .rl-scopes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.5rem; margin-bottom: var(--space-4); }
 .rl-scope-card { display: flex; flex-direction: column; gap: 0.15rem; text-align: left; padding: 0.7rem 0.85rem; border: 1px solid var(--border-strong); border-radius: var(--r-md); background: var(--bg-surface); font: inherit; color: var(--text-primary); cursor: pointer; }
 .rl-scope-card:hover { border-color: var(--accent-border); }
 .rl-scope-card.sel { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .rl-scope-card b { font-size: var(--text-sm); font-weight: var(--fw-semi); }
 .rl-scope-card span { font-size: var(--text-2xs); color: var(--text-secondary); line-height: 1.4; }
+.rl-limits { list-style: none; margin: 0 0 var(--space-2); padding: 0; border: 1px solid var(--border); border-radius: var(--r-md); overflow: hidden; }
+.rl-limit { display: flex; align-items: center; gap: var(--space-3); padding: 0.5rem 0.8rem; border-top: 1px solid var(--border); font-size: var(--text-sm); }
+.rl-limit:first-child { border-top: none; }
+.rl-limit > div { flex: 1; min-width: 0; }
+.rl-limit b { display: block; font-weight: var(--fw-semi); overflow-wrap: anywhere; }
+.rl-limit.mine { background: var(--accent-softer); }
+.rl-limit-note { display: block; font-size: var(--text-2xs); color: var(--text-tertiary); }
+.rl-limit-nums { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-secondary); text-align: right; }
 .rl-suggest { margin: -0.4rem 0 var(--space-3); border: 1px solid var(--border-strong); border-radius: var(--r-md); background: var(--bg-elevated); box-shadow: var(--shadow-sm); max-height: 15rem; overflow-y: auto; overscroll-behavior: contain; }
 .rl-suggest-more { margin: 0; padding: 0.45rem 0.8rem; border-top: 1px solid var(--border); font-size: var(--text-2xs); color: var(--text-tertiary); }
 .rl-suggest button { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); width: 100%; padding: 0.5rem 0.8rem; border: none; background: transparent; font-family: var(--font-mono); font-size: var(--text-sm); color: var(--text-primary); cursor: pointer; text-align: left; }

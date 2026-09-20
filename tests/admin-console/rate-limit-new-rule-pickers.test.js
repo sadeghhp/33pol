@@ -59,7 +59,21 @@ function config(rules = [], plans = {}, adaptiveEnabled = false) {
   return { enabled: true, adaptiveEnabled, default: { rpm: 60, burst: 10, maxConcurrentStreams: 0 }, plans, rules };
 }
 
-/** A component on step 2 of a new rule for `scope`, with keys and models already loaded. */
+/**
+ * The form is driven by intent (who, on which model), not by scope. These tests were written per
+ * stored scope, which is still what they are about, so the scope is turned into its intent through
+ * the console's own reverse mapping, and "the target" is whichever field that intent shows.
+ */
+function chooseScope(app, scope) {
+  const intent = app.rlIntentFor(scope);
+  Object.assign(app.rlNewRule, { who: intent.who, where: intent.where || app.rlNewRule.where });
+}
+
+function setTarget(app, text) {
+  app.rlNewRule[app.rlNewRule.who === 'everyone' ? 'model' : 'subject'] = text;
+}
+
+/** A component with the new-rule form on `scope`, with keys and models already loaded. */
 function appAt(scope, { keyCount = 12, rules = [], plans = {}, adaptive = false } = {}) {
   const app = createApp();
   app.keys = app.normalizeApiKeyList(keys(keyCount));
@@ -67,7 +81,7 @@ function appAt(scope, { keyCount = 12, rules = [], plans = {}, adaptive = false 
   app.rlKeysState = 'ready';
   app.rateLimits = config(rules, plans, adaptive);
   app.rlDraft = config(rules, plans, adaptive);
-  app.rlNewRule = { ...app.rlNewRule, scope, step: 2 };
+  chooseScope(app, scope);
   return app;
 }
 
@@ -87,7 +101,7 @@ test('Settings loads the key list for itself', async t => {
     await assert.doesNotReject(() => app.loadRateLimitKeys());
     assert.equal(app.rlKeysState, 'failed');
     app.rlDraft = config();
-    app.rlNewRule = { ...app.rlNewRule, scope: 'api_key', step: 2 };
+    chooseScope(app, 'api_key');
     assert.equal(app.rlNewRuleView.keysFailed, true);
     assert.equal(app.rlNewRuleView.keysLoading, false);
   });
@@ -128,7 +142,7 @@ test('Settings loads the key list for itself', async t => {
     app.fetchKeys = async () => { app.keys = []; };
     await app.loadRateLimitKeys();
     app.rlDraft = config();
-    app.rlNewRule = { ...app.rlNewRule, scope: 'api_key', step: 2 };
+    chooseScope(app, 'api_key');
     assert.equal(app.rlNewRuleView.keysEmpty, true);
     assert.equal(app.rlNewRuleView.keysFailed, false);
   });
@@ -157,34 +171,34 @@ test('Settings loads the key list for itself', async t => {
 
 test('every matching key is offered, not the first six', () => {
   const app = appAt('api_key', { keyCount: 40 });
-  assert.equal(app.rlNewRuleView.firstSuggestions.length, 40);
-  assert.equal(app.rlNewRuleView.firstMore, '');
+  assert.equal(app.rlNewRuleView.subjectSuggestions.length, 40);
+  assert.equal(app.rlNewRuleView.subjectMore, '');
 });
 
 test('a very long list is bounded and says what it left out', () => {
   const app = appAt('api_key', { keyCount: 450 });
   const view = app.rlNewRuleView;
-  assert.equal(view.firstSuggestions.length, 200);
-  assert.match(view.firstMore, /200 of 450/);
+  assert.equal(view.subjectSuggestions.length, 200);
+  assert.match(view.subjectMore, /200 of 450/);
 });
 
 test('a pair scope keeps keys and models in separate lists', () => {
   const app = appAt('api_key_model');
   const view = app.rlNewRuleView;
-  assert.equal(view.firstSuggestions.length, 12);
-  assert.ok(view.firstSuggestions.every(s => !MODELS.some(m => m.id === s.text)), 'no model among the keys');
+  assert.equal(view.subjectSuggestions.length, 12);
+  assert.ok(view.subjectSuggestions.every(s => !MODELS.some(m => m.id === s.text)), 'no model among the keys');
   assert.deepEqual(view.modelSuggestions.map(s => s.text), ['gpt-4', 'gpt-4-mini']);
 });
 
 test('a picked key stays readable and is stored by id', async t => {
   await t.test('the field shows the name, the rule carries the id', () => {
     const app = appAt('api_key_model');
-    app.rlNewRuleView.firstSuggestions[0].pick();
+    app.rlNewRuleView.subjectSuggestions[0].pick();
     app.rlNewRuleView.modelSuggestions[0].pick();
     assert.equal(app.rlNewRule.subject, 'Checkout service (sk-a1b2…)');
     assert.equal(app.rlNewRuleTarget(), KEY_A + '|gpt-4');
     assert.match(app.rlNewRuleView.keyNote, new RegExp(KEY_A));
-    assert.equal(app.rlNewRuleView.hasFirstSuggestions, false, 'the list closes on a pick');
+    assert.equal(app.rlNewRuleView.hasSubjectSuggestions, false, 'the list closes on a pick');
 
     app.rlNewRule.rpm = 10;
     app.createRateLimitRule();
@@ -195,14 +209,14 @@ test('a picked key stays readable and is stored by id', async t => {
 
   await t.test('typing over a pick lets go of its id', () => {
     const app = appAt('api_key');
-    app.rlNewRuleView.firstSuggestions[0].pick();
-    app.rlNewRule.target = keyId(3);
+    app.rlNewRuleView.subjectSuggestions[0].pick();
+    setTarget(app, keyId(3));
     assert.equal(app.rlNewRuleTarget(), keyId(3));
   });
 
   await t.test('a pasted id in another casing resolves to the key', () => {
     const app = appAt('api_key');
-    app.rlNewRule.target = KEY_A.toLowerCase();
+    setTarget(app, KEY_A.toLowerCase());
     assert.equal(app.rlNewRuleTarget(), KEY_A);
     assert.equal(app.rlNewRuleKeyError(), '');
   });
@@ -215,11 +229,15 @@ test('a picked key stays readable and is stored by id', async t => {
  * substitute for it.
  */
 test('a key target must resolve to a key id', async t => {
+  // There is no Next any more: the one gate is Create. `step` keeps these cases reading as they
+  // did — 3 is "got through", 2 is "held at the target".
   const next = (app, field, text) => {
-    app.rlNewRule[field] = text;
+    const before = app.rlDraft.rules.length;
+    setTarget(app, text);
     app.rlNewRule.model = 'gpt-4';
-    app.rateLimitNewRuleNext();
-    return { step: app.rlNewRule.step, error: app.rlNewRuleError };
+    app.rlNewRule.rpm = 10;
+    app.createRateLimitRule();
+    return { step: app.rlDraft.rules.length > before ? 3 : 2, error: app.rlNewRuleView.error };
   };
 
   await t.test('a unique key name resolves to its id', () => {
@@ -234,9 +252,6 @@ test('a key target must resolve to a key id', async t => {
     assert.equal(result.step, 2);
     assert.match(result.error, /No API key has this name or id/);
 
-    app.rlNewRule.step = 3;
-    app.rlNewRule.rpm = 10;
-    app.createRateLimitRule();
     assert.equal(app.rlDraft.rules.length, 0, 'nothing is stored against unresolved text');
   });
 
@@ -252,7 +267,7 @@ test('a key target must resolve to a key id', async t => {
     assert.equal(result.step, 2);
     assert.match(result.error, /2 keys are named/);
     // The pick text carries the prefix, so either namesake can still be chosen from the list.
-    app.rlNewRule.target = 'Checkout service (sk-zzzz…)';
+    setTarget(app, 'Checkout service (sk-zzzz…)');
     assert.equal(app.rlNewRuleTarget(), keyId(900));
   });
 
@@ -260,14 +275,14 @@ test('a key target must resolve to a key id', async t => {
     const app = appAt('api_key');
     app.keys = app.normalizeApiKeyList([{ id: keyId(7), label: 'Old importer', keyPrefix: 'sk-old1', revokedAt: '2026-01-01T00:00:00Z' }]);
     assert.match(next(app, 'target', 'Old importer').error, /No API key has this name or id/);
-    app.rlNewRule.target = keyId(7);
+    setTarget(app, keyId(7));
     assert.equal(app.rlNewRuleKeyError(), '');
     assert.match(app.rlNewRuleView.keyNote, /revoked/);
   });
 
-  await t.test('an empty field is still the existing "name the target" error', () => {
+  await t.test('an empty field asks for the key', () => {
     const app = appAt('api_key');
-    assert.match(next(app, 'target', '   ').error, /Name the key id/);
+    assert.match(next(app, 'target', '   ').error, /Choose the API key/);
   });
 
   await t.test('with the key list unavailable only something shaped like an id is accepted', () => {
@@ -285,24 +300,19 @@ test('a key target must resolve to a key id', async t => {
 });
 
 test('text for one kind of target is not carried into another', () => {
-  const app = appAt('api_key');
-  app.rlNewRuleView.firstSuggestions[0].pick();
-  app.setRateLimitNewRuleScope('model');
-  assert.equal(app.rlNewRule.target, '', 'a key name must not become a model id');
-  assert.deepEqual(Object.keys(app.rlNewRule.picked), []);
-
-  app.setRateLimitNewRuleScope('api_key_model');
-  app.rlNewRuleView.firstSuggestions[0].pick();
+  const app = appAt('api_key_model');
+  app.rlNewRuleView.subjectSuggestions[0].pick();
   app.rlNewRuleView.modelSuggestions[0].pick();
-  app.setRateLimitNewRuleScope('tenant_model');
-  assert.equal(app.rlNewRule.subject, '');
-  assert.equal(app.rlNewRule.model, 'gpt-4', 'the model half means the same thing in both pair scopes');
+  app.setRateLimitNewRuleWho('tenant');
+  assert.equal(app.rlNewRule.subject, '', 'a key name must not become a tenant');
+  assert.deepEqual(Object.keys(app.rlNewRule.picked), ['model']);
+  assert.equal(app.rlNewRule.model, 'gpt-4', 'the model means the same thing for a key and a tenant');
 });
 
 test('typing reaches keys beyond the rendered 200', () => {
   const app = appAt('api_key', { keyCount: 450 });
-  app.rlNewRule.target = 'Service 431';
-  assert.deepEqual(app.rlNewRuleView.firstSuggestions.map(s => s.text), ['Service 431']);
+  setTarget(app, 'Service 431');
+  assert.deepEqual(app.rlNewRuleView.subjectSuggestions.map(s => s.text), ['Service 431']);
 });
 
 test('existing key rules are listed and found by key name', () => {
@@ -325,7 +335,7 @@ test('existing key rules are listed and found by key name', () => {
 test('a model alias is saved as the canonical id', async t => {
   await t.test('single model scope', () => {
     const app = appAt('model');
-    app.rlNewRule.target = 'Flagship';
+    setTarget(app, 'Flagship');
     assert.equal(app.rlNewRuleTarget(), 'gpt-4');
     assert.match(app.rlNewRuleView.unknownNote, /alias of gpt-4/);
   });
@@ -340,14 +350,16 @@ test('a model alias is saved as the canonical id', async t => {
   await t.test('an alias of a model that already has a rule is a duplicate', () => {
     const rules = [{ scope: 'model', target: 'gpt-4', rpm: 600, burst: 0, maxConcurrentStreams: 0, enabled: true, schedule: [] }];
     const app = appAt('model', { rules });
-    app.rlNewRule.target = 'flagship';
-    app.rateLimitNewRuleNext();
-    assert.match(app.rlNewRuleError, /already exists/);
+    setTarget(app, 'flagship');
+    app.rlNewRule.rpm = 10;
+    app.createRateLimitRule();
+    assert.match(app.rlNewRuleView.error, /already exists/);
+    assert.equal(app.rlDraft.rules.length, 1);
   });
 
   await t.test('an unregistered id is kept as typed and flagged', () => {
     const app = appAt('model');
-    app.rlNewRule.target = 'next-model';
+    setTarget(app, 'next-model');
     assert.equal(app.rlNewRuleTarget(), 'next-model');
     assert.match(app.rlNewRuleView.unknownNote, /Not a registered model/);
   });
@@ -355,9 +367,8 @@ test('a model alias is saved as the canonical id', async t => {
 
 test('the no-tighter warning has a real baseline', async t => {
   const keyRule = (app, rpm) => {
-    app.rlNewRule.target = KEY_A;
+    setTarget(app, KEY_A);
     app.rlNewRule.rpm = rpm;
-    app.rlNewRule.step = 3;
     return app.rlNewRuleView.looserWarning;
   };
 
@@ -386,7 +397,6 @@ test('the no-tighter warning has a real baseline', async t => {
     app.rlNewRule.subject = KEY_A;
     app.rlNewRule.model = 'gpt-4';
     app.rlNewRule.rpm = 50;
-    app.rlNewRule.step = 3;
     assert.match(app.rlNewRuleView.looserWarning, /limit on gpt-4 for every caller \(40 rpm\)/);
   });
 
@@ -398,7 +408,9 @@ test('the no-tighter warning has a real baseline', async t => {
   const window = (rpm, burst, extra = {}) =>
     ({ name: 'w', kind: 'weekly', days: ['mon'], start: '00:00', end: '06:00', rpm, burst, maxConcurrentStreams: 0, suspend: false, ...extra });
   const propose = (app, fields, rpm, burst) => {
-    Object.assign(app.rlNewRule, fields, { rpm, burst, step: 3 });
+    const { target, ...rest } = fields;
+    if (target !== undefined) setTarget(app, target);
+    Object.assign(app.rlNewRule, rest, { rpm, burst });
     return app.rlNewRuleView.looserWarning;
   };
 
@@ -475,9 +487,8 @@ test('the no-tighter warning has a real baseline', async t => {
 
   await t.test('a tenant rule replaces the plan rate, so looser is never a warning', () => {
     const app = appAt('tenant');
-    app.rlNewRule.target = 'acme';
+    setTarget(app, 'acme');
     app.rlNewRule.rpm = 5000;
-    app.rlNewRule.step = 3;
     assert.equal(app.rlNewRuleView.looserWarning, '');
   });
 });

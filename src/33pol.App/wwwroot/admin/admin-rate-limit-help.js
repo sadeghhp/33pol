@@ -35,7 +35,7 @@
       more: 'Read more in the guide',
       close: 'Close',
       about: 'About',
-      scopeHelpTitle: 'About this scope'
+      scopeHelpTitle: 'What this choice means'
     },
 
     fields: {
@@ -82,15 +82,15 @@
         topic: 'scopes'
       },
       scope: {
-        title: 'Which scope should I pick?',
-        text: 'Pick what you want to protect. A model when the model itself is the bottleneck. A tenant or key when one customer or one credential is the concern. A pair (tenant on model, key on model) to hand out a share of one model. Whole gateway for a ceiling on everything. Anonymous and Failed sign-ins for the two protective budgets.',
-        example: 'A customer keeps flooding your most expensive model but is fine elsewhere: pick “A tenant on a model”, not “A tenant”.',
+        title: 'Who, and on which model?',
+        text: 'Say who the limit is for and whether it covers one model or all of them; the console works out the rest. An API key is one credential. A tenant is all of one customer’s keys together. Everyone is every caller sharing one budget. One model counts only requests to that model; All models is one count across everything. Anonymous callers and Failed sign-ins are the two protective budgets, and have neither a subject nor a model.',
+        example: 'A customer keeps flooding your most expensive model but is fine elsewhere: choose “A tenant” and “One model”, not “All models”.',
         topic: 'scopes'
       },
       target: {
-        title: 'What goes in the target?',
-        text: 'The exact id of the thing to limit. Models take their canonical model id. Tenants take the tenant id or its slug; both match the same tenant. Keys take the key id shown on the API keys page, not the secret. Targets are not checked against what exists: a typo is stored and simply never matches.',
-        example: 'Tenant “acme” on model “gpt-4” becomes the target acme|gpt-4. Confirm it bites afterwards in the Usage report: a working rule appears under Limits being hit or changes a row’s limit in force.',
+        title: 'Which key, tenant or model?',
+        text: 'Pick from the list. An API key is found by its name, prefix or id and has to exist: the rule is stored against the key’s id, never its name and never the secret. A model alias is stored as the model’s own id, because that is what limits are matched on. A tenant is its id or its slug; both match the same tenant. Tenants are not checked against what exists: a typo is stored and simply never matches.',
+        example: 'Tenant “acme” on model “gpt-4” is stored as the target acme|gpt-4; a key on a model is stored as the key’s id, then |gpt-4. Confirm it bites afterwards in the Usage report: a working rule appears under Limits being hit or changes a row’s limit in force.',
         topic: 'combine'
       },
       limit: {
@@ -157,38 +157,38 @@
 
     scopes: {
       model: {
-        name: 'A model',
+        name: 'Everyone on one model',
         what: 'Caps one model’s total request rate and open streams across every caller. The bucket is shared: whoever is fastest takes the most. Anonymous callers of a public model count in a bucket of their own so they cannot starve tenants, and a key that is not granted the model is never charged against it.',
         when: 'Use it when the model itself is the scarce thing: an expensive upstream, a single GPU, a provider quota.',
         example: 'Model “gpt-4”: 600 rpm, 60 burst, 40 streams. All tenants together may not exceed 600 a minute on gpt-4.'
       },
       tenant: {
-        name: 'A tenant',
+        name: 'A tenant, all models',
         what: 'Replaces the tenant’s plan or default tier with these numbers. Every key the tenant holds shares this one bucket. RPM 0 here keeps the plan’s rate and only caps streams.',
         when: 'Use it when one customer needs more, or less, than its plan allows, without moving it to another plan.',
         example: 'Tenant “acme”: 1,200 rpm, 200 burst, 20 streams, while its plan tier is 600 rpm. acme now gets 1,200; other tenants on the plan are unchanged.'
       },
       api_key: {
-        name: 'An API key',
+        name: 'An API key, all models',
         what: 'Caps one credential on its own, inside whatever its tenant is allowed. The key still counts against the tenant’s bucket; this bounds how much of that bucket one key may take.',
         when: 'Use it for a noisy integration or a key handed to a partner, so it cannot spend the whole tenant allowance.',
         example: 'Key 6f1c…: 30 rpm, 0 burst, 2 streams. A tenant with 600 rpm can never see this key take more than 30 of them.'
       },
       global: {
-        name: 'Whole gateway',
+        name: 'Everyone, all models (the whole gateway)',
         what: 'A ceiling on every inference request whoever sends it. It does not meter the admin API or the model list, which have a separate control-plane budget in appsettings.',
         when: 'Use it to protect the gateway or a shared upstream contract from the sum of all tenants. There is no seeded number: one that fits every deployment does not exist.',
         example: 'Whole gateway: 5,000 rpm, 500 burst. Even with generous tenant tiers, the gateway forwards at most 5,000 requests a minute.'
       },
       tenant_model: {
-        name: 'A tenant on a model',
-        what: 'One tenant’s share of one model. Target is tenant|model, with the tenant’s id or slug. It stacks with the model rule and the tenant tier; the request needs room in all of them.',
+        name: 'A tenant on one model',
+        what: 'One tenant’s share of one model. It stacks with the model rule and the tenant tier; the request needs room in all of them.',
         when: 'Use it to hand out a fair slice of a scarce model, or to keep one customer’s heavy use of one model from affecting its other traffic.',
         example: 'acme|gpt-4: 60 rpm, 10 burst, 4 streams. acme keeps its 1,200 rpm elsewhere but may only take 60 a minute on gpt-4.'
       },
       api_key_model: {
-        name: 'A key on a model',
-        what: 'The narrowest scope: one credential on one model. Target is keyId|model.',
+        name: 'An API key on one model',
+        what: 'The narrowest limit: one credential on one model. Only that key’s requests to that model are counted; its other models, and other keys on the same model, are not.',
         when: 'Use it when a single integration should be limited on a single model only, for instance a demo key on the flagship model.',
         example: '6f1c…|gpt-4: 10 rpm, 0 burst, 1 stream. The key is unrestricted on other models beyond its tenant’s tier.'
       },
@@ -319,9 +319,9 @@
         title: 'Worked examples',
         intro: 'Common situations and the rule that answers them. Each is one rule or one window; the surrounding tiers keep applying.',
         items: [
-          { term: 'Protect an expensive model', text: 'New rule → A model → its id → 600 rpm, 60 burst, 40 streams. Every caller together may not exceed that on the model.', example: 'The upstream provider allows 10,000 tokens a second; you set the model rule so total request rate stays inside it.' },
-          { term: 'Give one customer a bigger share of one model', text: 'New rule → A tenant on a model → tenant slug and model id → 200 rpm. The tenant keeps its ordinary tier elsewhere.', example: 'acme|gpt-4 at 200 rpm while other tenants share what the model rule leaves.' },
-          { term: 'Cap a noisy integration key', text: 'New rule → An API key → the key id → 30 rpm, 0 burst, 2 streams. Its tenant’s other keys are unaffected.', example: 'A partner’s webhook retries in a loop; the key rule holds it to 30 a minute without touching the tenant.' },
+          { term: 'Protect an expensive model', text: 'New rule → Everyone → One model → pick the model → 600 rpm, 60 burst, 40 streams. Every caller together may not exceed that on the model.', example: 'The upstream provider allows 10,000 tokens a second; you set the model rule so total request rate stays inside it.' },
+          { term: 'Give one customer a bigger share of one model', text: 'New rule → A tenant → One model → the tenant slug, then the model → 200 rpm. The tenant keeps its ordinary tier elsewhere.', example: 'acme|gpt-4 at 200 rpm while other tenants share what the model rule leaves.' },
+          { term: 'Cap a noisy integration key', text: 'New rule → An API key → All models → pick the key → 30 rpm, 0 burst, 2 streams. Its tenant’s other keys are unaffected.', example: 'A partner’s webhook retries in a loop; the key rule holds it to 30 a minute without touching the tenant.' },
           { term: 'Raise a model’s limit at night', text: 'Open the model rule → Add window → Weekly → Mon–Fri, 19:00 to 07:00, your zone → higher numbers. Daytime keeps the base tier.', example: '“off-peak”: 1,200 rpm instead of 600 every weekday night.' },
           { term: 'A launch day', text: 'Open the model rule → Add window → Once → From the launch start, Until two days later → higher numbers. It outranks any weekly window while it runs.', example: '“launch”: 3,000 rpm from 1 Oct to 3 Oct.' },
           { term: 'A planned baseline change', text: 'Add a Once window with a From and no Until. The new numbers take effect on time and stay, without anyone editing at midnight.', example: '“new plan year”: 900 rpm from 1 Jan 00:00, open-ended.' },
@@ -363,7 +363,7 @@
       more: 'بیشتر بخوانید در راهنما',
       close: 'بستن',
       about: 'درباره',
-      scopeHelpTitle: 'درباره این دامنه'
+      scopeHelpTitle: 'این انتخاب یعنی چه'
     },
 
     fields: {
@@ -410,15 +410,15 @@
         topic: 'scopes'
       },
       scope: {
-        title: 'کدام دامنه را انتخاب کنم؟',
-        text: 'چیزی را انتخاب کنید که می‌خواهید از آن محافظت کنید. «مدل» وقتی خودِ مدل گلوگاه است. «تننت» یا «کلید» وقتی یک مشتری یا یک اعتبارنامه مسئله است. جفت‌ها (تننت روی مدل، کلید روی مدل) برای دادن سهمی از یک مدل. «کل گیت‌وی» برای سقف روی همه‌چیز. «ناشناس» و «ورودهای ناموفق» دو بودجهٴ محافظتی هستند.',
-        example: 'یک مشتری مدام گران‌ترین مدل شما را غرق درخواست می‌کند اما جای دیگر مشکلی ندارد: «تننت روی مدل» را انتخاب کنید، نه «تننت».',
+        title: 'برای چه کسی، و روی کدام مدل؟',
+        text: 'بگویید محدودیت برای چه کسی است و یک مدل را می‌پوشاند یا همه را؛ بقیه را کنسول خودش تعیین می‌کند. «کلید API» یک اعتبارنامه است. «تننت» همهٴ کلیدهای یک مشتری با هم است. «همه» یعنی همهٴ درخواست‌دهندگان با یک بودجهٴ مشترک. «یک مدل» فقط درخواست‌های همان مدل را می‌شمارد؛ «همهٴ مدل‌ها» یک شمارش روی همه‌چیز است. «درخواست‌دهندگان ناشناس» و «ورودهای ناموفق» دو بودجهٴ حفاظتی‌اند و نه مخاطب دارند و نه مدل.',
+        example: 'یک مشتری مدام گران‌ترین مدل شما را غرق درخواست می‌کند اما جای دیگر مشکلی ندارد: «تننت» و «یک مدل» را انتخاب کنید، نه «همهٴ مدل‌ها».',
         topic: 'scopes'
       },
       target: {
-        title: 'در «هدف» چه بنویسم؟',
-        text: 'شناسهٴ دقیق چیزی که محدود می‌شود. برای مدل، شناسهٴ استاندارد مدل. برای تننت، شناسهٴ تننت یا اسلاگ آن؛ هر دو به همان تننت می‌رسند. برای کلید، شناسهٴ کلید که در صفحهٴ کلیدهای API دیده می‌شود، نه خودِ رمز. هدف‌ها با چیزهای موجود مقایسه نمی‌شوند: یک اشتباه تایپی ذخیره می‌شود و هیچ‌وقت با چیزی منطبق نمی‌شود.',
-        example: 'تننت «acme» روی مدل «gpt-4» می‌شود هدف acme|gpt-4. بعداً در گزارش مصرف مطمئن شوید که اثر دارد: قاعدهٴ کارآمد در جدول «محدودیت‌های برخوردشده» ظاهر می‌شود یا «محدودیت جاری» یک ردیف را تغییر می‌دهد.',
+        title: 'کدام کلید، تننت یا مدل؟',
+        text: 'از فهرست انتخاب کنید. کلید API با نام، پیشوند یا شناسه‌اش پیدا می‌شود و باید وجود داشته باشد: قاعده روی شناسهٴ کلید ذخیره می‌شود، نه نام آن و نه خودِ رمز. نام مستعار مدل به شناسهٴ اصلی مدل ذخیره می‌شود، چون محدودیت‌ها با همان تطبیق داده می‌شوند. تننت با شناسه یا اسلاگش نوشته می‌شود؛ هر دو به همان تننت می‌رسند. وجود تننت بررسی نمی‌شود: غلط تایپی ذخیره می‌شود و هرگز تطبیق نمی‌کند.',
+        example: 'تننت «acme» روی مدل «gpt-4» به شکل هدف acme|gpt-4 ذخیره می‌شود؛ کلید روی مدل به شکل شناسهٴ کلید و سپس ‎|gpt-4. بعداً در گزارش مصرف مطمئن شوید که اثر دارد: قاعدهٴ کارآمد در جدول «محدودیت‌های برخوردشده» ظاهر می‌شود یا «محدودیت جاری» یک ردیف را تغییر می‌دهد.',
         topic: 'combine'
       },
       limit: {
@@ -485,38 +485,38 @@
 
     scopes: {
       model: {
-        name: 'یک مدل',
+        name: 'همه روی یک مدل',
         what: 'کل نرخ درخواست و استریم‌های باز یک مدل را برای همهٴ درخواست‌دهندگان سقف می‌زند. سطل مشترک است: هر کس سریع‌تر باشد بیشتر می‌گیرد. درخواست‌دهندگان ناشناس یک مدل عمومی در سطل جداگانه‌ای شمرده می‌شوند تا نتوانند تننت‌ها را محروم کنند، و کلیدی که به آن مدل دسترسی ندارد هیچ‌وقت از این سطل کم نمی‌کند.',
         when: 'وقتی خودِ مدل منبع کمیاب است: یک سرویس بالادستی گران، یک GPU تکی، سهمیهٴ یک ارائه‌دهنده.',
         example: 'مدل «gpt-4»: ۶۰۰ RPM، ۶۰ Burst، ۴۰ Streams. همهٴ تننت‌ها با هم نمی‌توانند روی gpt-4 از ۶۰۰ در دقیقه بیشتر بفرستند.'
       },
       tenant: {
-        name: 'یک تننت',
+        name: 'یک تننت، همهٴ مدل‌ها',
         what: 'سطح پلن یا پیش‌فرض تننت را با این اعداد جایگزین می‌کند. همهٴ کلیدهای تننت از همین یک سطل استفاده می‌کنند. RPM صفر در اینجا نرخ پلن را نگه می‌دارد و فقط استریم‌ها را محدود می‌کند.',
         when: 'وقتی یک مشتری بیشتر یا کمتر از پلنش لازم دارد، بی‌آنکه به پلن دیگری منتقل شود.',
         example: 'تننت «acme»: ۱٬۲۰۰ RPM، ۲۰۰ Burst، ۲۰ Streams، در حالی که سطح پلنش ۶۰۰ RPM است. acme حالا ۱٬۲۰۰ می‌گیرد؛ تننت‌های دیگرِ همان پلن تغییری نمی‌کنند.'
       },
       api_key: {
-        name: 'یک کلید API',
+        name: 'یک کلید API، همهٴ مدل‌ها',
         what: 'یک اعتبارنامه را به‌تنهایی محدود می‌کند، درون هر آنچه تننتِ آن مجاز است. کلید همچنان از سطل تننت هم کم می‌کند؛ این قاعده تعیین می‌کند یک کلید حداکثر چقدر از آن سطل می‌تواند بگیرد.',
         when: 'برای یک اتصال پرسروصدا یا کلیدی که به یک شریک داده شده، تا نتواند همهٴ سهمیهٴ تننت را خرج کند.',
         example: 'کلید 6f1c…: ۳۰ RPM، ۰ Burst، ۲ Streams. تننتی با ۶۰۰ RPM هیچ‌وقت نمی‌بیند این کلید بیش از ۳۰ تای آن را بگیرد.'
       },
       global: {
-        name: 'کل گیت‌وی',
+        name: 'همه، همهٴ مدل‌ها (کل گیت‌وی)',
         what: 'سقفی روی هر درخواست استنتاج، فارغ از فرستنده. API مدیریتی و فهرست مدل‌ها را نمی‌سنجد؛ آن‌ها بودجهٴ جداگانه‌ای در appsettings دارند.',
         when: 'برای محافظت از گیت‌وی یا قرارداد مشترک بالادستی در برابر مجموع همهٴ تننت‌ها. عدد پیشنهادی ندارد: عددی که برای همهٴ استقرارها مناسب باشد وجود ندارد.',
         example: 'کل گیت‌وی: ۵٬۰۰۰ RPM، ۵۰۰ Burst. حتی با سطح‌های سخاوتمندانهٴ تننت‌ها، گیت‌وی در هر دقیقه حداکثر ۵٬۰۰۰ درخواست به بالادست می‌فرستد.'
       },
       tenant_model: {
         name: 'یک تننت روی یک مدل',
-        what: 'سهم یک تننت از یک مدل. هدف به شکل tenant|model است، با شناسه یا اسلاگ تننت. روی قاعدهٴ مدل و سطح تننت سوار می‌شود؛ درخواست باید در همهٴ آن‌ها جا داشته باشد.',
+        what: 'سهم یک تننت از یک مدل. روی قاعدهٴ مدل و سطح تننت سوار می‌شود؛ درخواست باید در همهٴ آن‌ها جا داشته باشد.',
         when: 'برای دادن سهم منصفانه از یک مدل کمیاب، یا برای اینکه مصرف سنگین یک مشتری روی یک مدل، به ترافیک دیگرش آسیب نزند.',
         example: 'acme|gpt-4: ۶۰ RPM، ۱۰ Burst، ۴ Streams. acme جای دیگر ۱٬۲۰۰ RPM خود را نگه می‌دارد اما روی gpt-4 فقط ۶۰ در دقیقه می‌گیرد.'
       },
       api_key_model: {
-        name: 'یک کلید روی یک مدل',
-        what: 'باریک‌ترین دامنه: یک اعتبارنامه روی یک مدل. هدف به شکل keyId|model است.',
+        name: 'یک کلید API روی یک مدل',
+        what: 'باریک‌ترین محدودیت: یک اعتبارنامه روی یک مدل. فقط درخواست‌های همان کلید به همان مدل شمرده می‌شود؛ مدل‌های دیگرِ آن کلید و کلیدهای دیگر روی همان مدل شمرده نمی‌شوند.',
         when: 'وقتی یک اتصال فقط روی یک مدل باید محدود شود، مثلاً کلید دمو روی مدل اصلی.',
         example: '6f1c…|gpt-4: ۱۰ RPM، ۰ Burst، ۱ Stream. این کلید روی مدل‌های دیگر فقط به سطح تننت خودش محدود است.'
       },
@@ -647,9 +647,9 @@
         title: 'مثال‌های کاربردی',
         intro: 'موقعیت‌های رایج و قاعده‌ای که جوابشان است. هر یک، یک قاعده یا یک پنجره است؛ سطح‌های اطراف همچنان اعمال می‌شوند.',
         items: [
-          { term: 'محافظت از یک مدل گران', text: 'قاعدهٴ جدید ← یک مدل ← شناسه‌اش ← ۶۰۰ RPM، ۶۰ Burst، ۴۰ Streams. همهٴ درخواست‌دهندگان با هم نمی‌توانند روی مدل از آن بیشتر بفرستند.', example: 'ارائه‌دهندهٴ بالادستی ۱۰٬۰۰۰ توکن در ثانیه اجازه می‌دهد؛ قاعدهٴ مدل را طوری می‌گذارید که نرخ کل درخواست درون آن بماند.' },
-          { term: 'سهم بیشتر از یک مدل به یک مشتری', text: 'قاعدهٴ جدید ← یک تننت روی یک مدل ← اسلاگ تننت و شناسهٴ مدل ← ۲۰۰ RPM. تننت در جای دیگر سطح معمولی‌اش را نگه می‌دارد.', example: 'acme|gpt-4 با ۲۰۰ RPM، در حالی که تننت‌های دیگر آنچه قاعدهٴ مدل باقی می‌گذارد را به اشتراک می‌گذارند.' },
-          { term: 'محدودکردن یک کلید پرسروصدا', text: 'قاعدهٴ جدید ← یک کلید API ← شناسهٴ کلید ← ۳۰ RPM، ۰ Burst، ۲ Streams. کلیدهای دیگر تننت تأثیر نمی‌گیرند.', example: 'وب‌هوک یک شریک در حلقه تلاش مجدد می‌کند؛ قاعدهٴ کلید آن را در ۳۰ در دقیقه نگه می‌دارد بی‌آنکه به تننت دست بزند.' },
+          { term: 'محافظت از یک مدل گران', text: 'قاعدهٴ جدید ← همه ← یک مدل ← انتخاب مدل ← ۶۰۰ RPM، ۶۰ Burst، ۴۰ Streams. همهٴ درخواست‌دهندگان با هم نمی‌توانند روی مدل از آن بیشتر بفرستند.', example: 'ارائه‌دهندهٴ بالادستی ۱۰٬۰۰۰ توکن در ثانیه اجازه می‌دهد؛ قاعدهٴ مدل را طوری می‌گذارید که نرخ کل درخواست درون آن بماند.' },
+          { term: 'سهم بیشتر از یک مدل به یک مشتری', text: 'قاعدهٴ جدید ← تننت ← یک مدل ← اسلاگ تننت، سپس مدل ← ۲۰۰ RPM. تننت در جای دیگر سطح معمولی‌اش را نگه می‌دارد.', example: 'acme|gpt-4 با ۲۰۰ RPM، در حالی که تننت‌های دیگر آنچه قاعدهٴ مدل باقی می‌گذارد را به اشتراک می‌گذارند.' },
+          { term: 'محدودکردن یک کلید پرسروصدا', text: 'قاعدهٴ جدید ← کلید API ← همهٴ مدل‌ها ← انتخاب کلید ← ۳۰ RPM، ۰ Burst، ۲ Streams. کلیدهای دیگر تننت تأثیر نمی‌گیرند.', example: 'وب‌هوک یک شریک در حلقه تلاش مجدد می‌کند؛ قاعدهٴ کلید آن را در ۳۰ در دقیقه نگه می‌دارد بی‌آنکه به تننت دست بزند.' },
           { term: 'بالابردن محدودیت یک مدل در شب', text: 'قاعدهٴ مدل را باز کنید ← اضافه‌کردن پنجره ← هفتگی ← دوشنبه تا جمعه، ۱۹:۰۰ تا ۰۷:۰۰، منطقهٴ شما ← اعداد بالاتر. روز، سطح پایه را نگه می‌دارد.', example: '«خارج از پیک»: ۱٬۲۰۰ RPM به‌جای ۶۰۰ در هر شبِ روز کاری.' },
           { term: 'روز عرضه', text: 'قاعدهٴ مدل را باز کنید ← اضافه‌کردن پنجره ← یک‌باره ← از شروع عرضه، تا دو روز بعد ← اعداد بالاتر. در مدت اجرا بر هر پنجرهٴ هفتگی برتری دارد.', example: '«عرضه»: ۳٬۰۰۰ RPM از ۱ تا ۳ اکتبر.' },
           { term: 'تغییر برنامه‌ریزی‌شدهٴ سطح پایه', text: 'پنجرهٴ یک‌باره با «از» و بدون «تا» اضافه کنید. اعداد جدید سر وقت اعمال می‌شوند و می‌مانند، بدون ویرایش نیمه‌شب.', example: '«سال جدید پلن»: ۹۰۰ RPM از ۱ ژانویه ۰۰:۰۰، بی‌پایان.' },
