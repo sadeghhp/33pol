@@ -167,9 +167,11 @@ test('the protective limits have their own way in, and the same way out', async 
     assert.equal(app.rlDraft.rules.length, 2);
   });
 
-  await t.test('existing protective rules still list by name and map back to their choice', () => {
+  await t.test('existing protective rules list by name in their own section and map back to their choice', () => {
     const app = form({ rules: [rule('anonymous', '*', 30, 10), rule('auth_failure', '*', 20, 10)] });
-    assert.deepEqual(app.rlRuleRows.map(r => r.target), ['Anonymous callers', 'Failed sign-ins']);
+    // Same stored rules; listed apart from the ordinary ones since the list redesign.
+    assert.deepEqual(app.rlRuleRows.map(r => r.target), []);
+    assert.deepEqual(app.rlProtectiveCards.map(c => [c.name, c.configured]), [['Anonymous callers', true], ['Failed sign-ins', true]]);
     assert.deepEqual(app.rlIntentFor('auth_failure'), { who: 'auth_failure', where: '' });
     assert.equal(app.rlRuleSentence(app.rlDraft.rules[1]), 'Limit each client address to 20 failed sign-ins/minute. Up to 30 at once after a quiet spell (20 + 10 burst).');
   });

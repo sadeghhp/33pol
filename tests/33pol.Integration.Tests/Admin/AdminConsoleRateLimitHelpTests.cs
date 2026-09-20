@@ -122,8 +122,14 @@ public sealed class AdminConsoleRateLimitHelpTests
         html.Should().Contain("x-text=\"rlHelpView.scope.what\"");
 
         // Every inline explainer carries an example and a way to switch language on the spot.
+        // Since the page redesign they live where a value is being typed — the drawers, plus one beside
+        // the change review — and the page's own sections reach the guide through a "?" instead, so
+        // the rule list is not buried under a dozen disclosure boxes. The floor keeps every drawer's
+        // explainer; the ceiling is what stops them creeping back onto the page.
         var blocks = Regex.Matches(html, "<details class=\"rl-help\"").Count;
-        blocks.Should().BeGreaterThanOrEqualTo(20);
+        blocks.Should().BeInRange(9, 12);
+        html.Should().Contain("@click=\"rlHelpView.open.combine\"");
+        html.Should().Contain("@click=\"rlHelpView.open.calendar\"");
         Regex.Matches(html, "x-text=\"rlHelpView\\.f\\.[a-zA-Z]+\\.example\"").Count.Should().Be(blocks);
         Regex.Matches(html, "@click=\"toggleRateLimitHelpLang\"").Count.Should().BeGreaterThanOrEqualTo(blocks);
 

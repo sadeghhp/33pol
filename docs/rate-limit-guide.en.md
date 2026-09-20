@@ -39,7 +39,7 @@ Rate limiting bounds how fast callers may send inference requests through the ga
 
 > *Example:* X-33pol-RateLimit-Scope: model with Remaining: 0 tells the client to try another model, not to slow its whole integration.
 
-> **Tip** The Usage report at the bottom of the page shows live counters per tenant and model and which limits are being hit. It is the fastest way to see whether a rule is doing anything.
+> **Tip** The Activity section shows live counters per tenant, key and model for the window you pick, and — counted since the gateway last started — which limits refused requests. The Refused column in the rules list is the same count per rule. It is the fastest way to see whether a rule is doing anything.
 
 <a id="numbers"></a>
 
@@ -147,9 +147,9 @@ A request must find room in every scope that applies to it: the gateway ceiling,
 
 **Targets are not validated** — A rule for a model, tenant or key that does not exist is stored and never matches, which is useful while provisioning and a trap when it is a typo. Tenants match by id or slug; keys only by id.
 
-> *Example:* A rule on “gpt4” while the model is registered as “gpt-4” does nothing. The Usage report shows no hits on it; fix the target.
+> *Example:* A rule on “gpt4” while the model is registered as “gpt-4” does nothing. Its Refused count stays at 0 and it never appears under Refusals by limit; fix the target.
 
-**Which scope refused?** — The X-33pol-RateLimit-Scope response header names it, and the Usage report’s Limits being hit table lists refusals by scope and target.
+**Which scope refused?** — The X-33pol-RateLimit-Scope response header names it, and the Refusals by limit table under Activity lists refusals by limit since the gateway last started. When several limits apply to a request, only the first one to refuse it is counted.
 
 **Windows change a rule, not the rules around it** — A window replaces its own rule’s numbers for a span of time. Other rules and tiers still apply as before, so an off-peak window on a model does not raise the tenants’ tiers.
 
@@ -227,7 +227,7 @@ The page is a summary; editing happens in drawers. A drawer’s Done stages the 
 
 **Read-only** — When the page cannot be edited it says why at the top: the key lacks the admin role, or the server refused the last save. Editing controls are disabled until the reason is gone.
 
-> **Tip** A rule that is dangerous to get wrong (the gateway ceiling, Failed sign-ins) deserves a look at the Usage report a few minutes after saving.
+> **Tip** A rule that is dangerous to get wrong (the gateway ceiling, Failed sign-ins) deserves a look at Activity a few minutes after saving.
 
 <a id="recipes"></a>
 
@@ -271,7 +271,7 @@ Common situations and the rule that answers them. Each is one rule or one window
 
 > *Example:* Anonymous callers 30 rpm, 10 burst, 2 streams.
 
-> **Tip** Add the rule, save, then open the Usage report: a rule that bites shows up under Limits being hit within a few minutes of real traffic.
+> **Tip** Add the rule, save, then look at Activity: a rule that bites gains a Refused count, and a row under Refusals by limit, within a few minutes of real traffic.
 
 <a id="faq"></a>
 
@@ -364,7 +364,7 @@ Say who the limit is for and whether it covers one model or all of them; the con
 
 Pick from the list. An API key is found by its name, prefix or id and has to exist: the rule is stored against the key’s id, never its name and never the secret. A model alias is stored as the model’s own id, because that is what limits are matched on. A tenant is its id or its slug; both match the same tenant. Tenants are not checked against what exists: a typo is stored and simply never matches.
 
-> *Example:* Tenant “acme” on model “gpt-4” is stored as the target acme|gpt-4; a key on a model is stored as the key’s id, then |gpt-4. Confirm it bites afterwards in the Usage report: a working rule appears under Limits being hit or changes a row’s limit in force.
+> *Example:* Tenant “acme” on model “gpt-4” is stored as the target acme|gpt-4; a key on a model is stored as the key’s id, then |gpt-4. Confirm it bites afterwards under Activity: a rule that refuses requests gains a Refused count in the rules list and a row under Refusals by limit, counted since the gateway last started.
 
 ### How much?
 

@@ -726,7 +726,7 @@ code.inp-hint { font-family: var(--font-mono); font-size: 0.95em; padding: 0.05r
   background: var(--accent-soft); color: var(--accent-text);
   border-color: var(--accent-border); font-weight: var(--fw-semi);
 }
-.preset:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--bg-base), 0 0 0 4px var(--accent); }
+.preset:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--bg-app), 0 0 0 4px var(--accent); }
 .preset:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* Overview time-window picker: a preset group that sits inline in the page header. */
@@ -1146,7 +1146,7 @@ tr.request-detail-row td { background: var(--bg-inset); padding-top: 0.75rem; }
 .vital.is-actionable:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--bg-surface), 0 0 0 4px var(--accent); }
 
 .vital-chip.is-actionable { appearance: none; font: inherit; cursor: pointer; }
-.vital-chip.is-actionable:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--bg-base), 0 0 0 4px var(--accent); }
+.vital-chip.is-actionable:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--bg-app), 0 0 0 4px var(--accent); }
 
 /* Skeleton */
 .skeleton-row td {
@@ -1166,6 +1166,9 @@ tr.request-detail-row td { background: var(--bg-inset); padding-top: 0.75rem; }
   padding: 3px; margin-bottom: var(--space-5);
   background: var(--bg-sunken); border: 1px solid var(--border);
   border-radius: var(--r-md); width: fit-content; max-width: 100%; overflow-x: auto;
+  /* The containing block for the tabs' visually-hidden badge labels: without it those absolutely
+     positioned spans escape this scroller's clipping and widen the whole document on a phone. */
+  position: relative;
 }
 .sub-nav button {
   display: inline-flex; align-items: center; gap: 0.4rem;
@@ -1482,7 +1485,7 @@ tr.request-detail-row td { background: var(--bg-inset); padding-top: 0.75rem; }
   transition: background var(--dur-fast), border-color var(--dur-fast);
 }
 .backend-row:hover { background: var(--bg-sunken); border-color: var(--border); }
-.backend-row:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--bg-base), 0 0 0 4px var(--accent); }
+.backend-row:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--bg-app), 0 0 0 4px var(--accent); }
 .backend-model { display: flex; flex-direction: column; min-width: 0; }
 .backend-id { font-family: var(--font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .backend-alias { font-size: var(--text-2xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1909,7 +1912,7 @@ html.wallboard .page-content { animation: wallboard-shift 900s steps(1) infinite
 .rl-h4 { margin: 0 0 0.25rem; font-size: var(--text-sm); font-weight: var(--fw-semi); display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
 .rl-h4 .muted { font-weight: var(--fw-normal); }
 .rl-sep { color: var(--text-tertiary); margin: 0 0.35rem; }
-.rl-link { border: none; background: none; padding: 0; font: inherit; font-size: var(--text-xs); color: var(--accent-text); cursor: pointer; text-decoration: none; }
+.rl-link { border: none; background: none; padding: 0.25rem 0; min-height: 24px; font: inherit; font-size: var(--text-xs); color: var(--accent-text); cursor: pointer; text-decoration: none; }
 .rl-link:hover { text-decoration: underline; }
 .rl-link:disabled { opacity: 0.5; cursor: not-allowed; }
 
@@ -1927,6 +1930,12 @@ html.wallboard .page-content { animation: wallboard-shift 900s steps(1) infinite
 .rl-status-title.off { color: var(--error-text); }
 .rl-status-sub { display: flex; align-items: center; flex-wrap: wrap; font-size: var(--text-xs); color: var(--text-secondary); margin-top: 0.15rem; }
 .rl-stats { display: flex; gap: var(--space-6); margin-left: auto; flex-wrap: wrap; }
+/* Page-level actions sit on their own line under the switch and the stats, so the card reads
+   state first, actions second, and wraps cleanly on a phone. */
+.rl-status-actions { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; flex: 1 1 100%; padding-top: var(--space-3); border-top: 1px solid var(--border); }
+.rl-status-actions .rl-seg { margin-bottom: 0; padding: 2px; }
+.rl-status-actions .rl-seg button { padding: 0.2rem 0.55rem; font-size: var(--text-xs); }
+.rl-lede { margin: var(--space-2) 0 0; }
 .rl-stat { display: flex; flex-direction: column; gap: 0.1rem; min-width: 0; }
 .rl-stat .v { font-family: var(--font-mono); font-size: var(--text-lg); font-weight: var(--fw-semi); font-variant-numeric: tabular-nums; line-height: 1.2; white-space: nowrap; display: inline-flex; align-items: center; gap: 0.4rem; }
 .rl-stat .v.live { color: var(--live-text); }
@@ -1959,33 +1968,75 @@ html.wallboard .page-content { animation: wallboard-shift 900s steps(1) infinite
 .rl-tier-n span { font-size: var(--text-2xs); color: var(--text-tertiary); margin-top: 0.15rem; }
 
 /* Rules */
-.rl-toolbar { margin-bottom: var(--space-3); }
-.rl-filter { max-width: 20rem; }
+.rl-toolbar { margin-bottom: var(--space-3); row-gap: var(--space-2); flex-wrap: wrap; }
+.rl-filter { flex: 1 1 16rem; min-width: 12rem; max-width: 22rem; }
 .rl-filter input { border: none; background: transparent; padding: 0.45rem 0; box-shadow: none; }
 .rl-filter input:focus-visible { box-shadow: none; }
-.rl-chips { display: flex; gap: 0.3rem; flex-wrap: wrap; }
+.rl-chips { display: flex; align-items: center; gap: 0.3rem; flex-wrap: wrap; }
+.rl-chips-label { font-family: var(--font-mono); font-size: var(--text-2xs); text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-tertiary); margin-right: 0.1rem; }
 .rl-chips .preset i { font-style: normal; color: var(--text-tertiary); margin-left: 0.25rem; font-family: var(--font-mono); font-size: var(--text-2xs); }
+.rl-no-match { padding: var(--space-5); }
 .rl-rules { padding: 0; overflow: hidden; }
-.rl-rules-table { table-layout: auto; }
-.rl-rules-table thead th { position: static; background: transparent; padding: 0.55rem 1rem; }
-.rl-rules-table td { padding: 0.75rem 1rem; }
+/* Fixed layout, like every other console table: widths come from the columns, so a long key name
+   or model id ellipsizes in its own cell instead of pushing Limit and Refused off the card. */
+.rl-rules-table { table-layout: fixed; }
+.rl-rules-table thead th { position: static; background: transparent; padding: 0.55rem 0.75rem; vertical-align: bottom; }
+.rl-rules-table td { padding: 0.65rem 0.75rem; vertical-align: middle; cursor: pointer; }
 .rl-col-on { width: 3.25rem; }
-.rl-col-rule { width: 26%; } .rl-col-tier { width: 26%; } .rl-col-sched { width: 12%; } .rl-col-chev { width: 2.5rem; text-align: right; color: var(--text-tertiary); }
-.rl-rules-table td.rl-col-on { cursor: default; padding-right: 0; }
-.rl-row { cursor: pointer; }
-.rl-row:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--accent); }
+.rl-col-who { width: 26%; } .rl-col-model { width: 20%; } .rl-col-limit { width: 13.5rem; } .rl-col-refused { width: 6.5rem; }
+.rl-col-chev { width: 3rem; text-align: right; }
+.rl-rules-table td.rl-col-on, .rl-rules-table td.rl-col-chev { cursor: default; }
+.rl-rules-table td.rl-col-on { padding-right: 0; }
+.rl-row:hover td { background: var(--bg-hover); }
 .rl-row.changed td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
 /* A switched-off rule is still readable — it is a rule an operator is coming back to, not a
-   tombstone — so the row is dimmed rather than struck through, and the target keeps full contrast
-   so the list stays scannable. */
-.rl-row.off td { opacity: 0.62; }
-.rl-row.off td.rl-col-on, .rl-row.off .rl-target { opacity: 1; }
-.rl-target { font-family: var(--font-mono); font-size: var(--text-sm); font-weight: var(--fw-semi); overflow-wrap: anywhere; }
-.rl-scope { display: block; font-size: var(--text-2xs); color: var(--text-tertiary); margin-top: 0.1rem; }
+   tombstone. Its numbers step down to secondary text (never an opacity, which took the small
+   captions below contrast) and the "off" tag says why; the name keeps full contrast. */
+.rl-row.off .rl-limit-nums b, .rl-row.off .rl-model { color: var(--text-secondary); font-weight: var(--fw-normal); }
+.rl-target { display: block; font-family: var(--font-mono); font-size: var(--text-sm); font-weight: var(--fw-semi); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rl-scope { display: block; font-size: var(--text-2xs); color: var(--text-secondary); margin-top: 0.1rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rl-model { display: block; font-family: var(--font-mono); font-size: var(--text-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rl-model.muted { font-family: var(--font-sans); color: var(--text-secondary); }
+/* Three right-aligned columns that line up down the list, so rpm compares with rpm at a glance. */
+.rl-limit-nums, .rl-limit-units { display: grid; grid-template-columns: 4.5rem 3.25rem 3.75rem; justify-items: end; column-gap: 0.25rem; }
+.rl-limit-nums b { font-family: var(--font-mono); font-size: var(--text-sm); font-weight: var(--fw-semi); font-variant-numeric: tabular-nums; }
+.rl-limit-nums i { display: none; font-style: normal; font-size: var(--text-2xs); color: var(--text-secondary); margin-left: 0.2rem; }
+.rl-limit-units { font-size: var(--text-2xs); font-weight: var(--fw-normal); text-transform: none; letter-spacing: 0; color: var(--text-secondary); margin-top: 0.1rem; }
+.rl-th-sub { display: block; font-size: var(--text-2xs); font-weight: var(--fw-normal); text-transform: none; letter-spacing: 0; color: var(--text-secondary); margin-top: 0.1rem; }
+.rl-cell-label { display: none; }
+.rl-rules-foot { margin: var(--space-2) 0 0; }
 .rl-nums { font-family: var(--font-mono); font-size: var(--text-xs); font-variant-numeric: tabular-nums; }
-.rl-force { display: flex; align-items: center; gap: 0.55rem; min-width: 0; }
-.rl-force b { font-family: var(--font-mono); font-size: var(--text-sm); font-weight: var(--fw-semi); font-variant-numeric: tabular-nums; }
-.rl-until { display: block; font-size: var(--text-2xs); color: var(--text-tertiary); font-family: var(--font-mono); overflow-wrap: anywhere; }
+.rl-until { display: block; font-size: var(--text-2xs); color: var(--text-secondary); font-family: var(--font-mono); overflow-wrap: anywhere; margin-top: 0.15rem; }
+/* A sortable header is a button inside the th — focusable and announced — rather than a click
+   handler on the cell. It inherits the header's type so it reads as a header, not as a control. */
+.th-sort { display: inline-flex; align-items: center; gap: 2px; border: none; background: none; padding: 0; margin: 0; font: inherit; letter-spacing: inherit; text-transform: inherit; color: inherit; cursor: pointer; border-radius: var(--r-xs); }
+.th-sort:hover { color: var(--accent-text); }
+.th-sort:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--bg-surface), 0 0 0 4px var(--accent); }
+th[aria-sort="ascending"] .th-sort, th[aria-sort="descending"] .th-sort { color: var(--text-primary); }
+th.num .th-sort { flex-direction: row-reverse; }
+.tag.live { color: var(--live-text); border-color: var(--live-border); background: var(--live-soft); }
+/* Small switches keep their look but not their hit area: the label pads out to 24px, and to a
+   full touch target where the pointer is a finger. */
+.rl-switch.sm { padding: 4px 0; min-height: 24px; }
+.rl-savebar-text { flex: 1 1 12rem; min-width: 0; }
+.rl-savebar .spacer { display: none; }
+@media (pointer: coarse) {
+  .rl-switch.sm { padding: 12px 6px; margin: -8px -6px; }
+  .rl-rules-table .icon-btn, .rl-section-head .icon-btn { width: 40px; height: 40px; }
+  .rl-link { min-height: 32px; }
+  .rl-chips .preset, .rl-seg button { min-height: 36px; }
+}
+/* Protective limits: two fixed cards, never a list. */
+.rl-protect { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr)); gap: var(--space-3); }
+.rl-protect .rl-protect-card { display: flex; flex-direction: column; gap: var(--space-3); padding: var(--space-4); margin: 0; }
+.rl-protect-head { display: flex; align-items: flex-start; gap: var(--space-3); }
+.rl-protect-head > .icon { color: var(--text-tertiary); flex: none; margin-top: 2px; }
+.rl-protect-name { flex: 1; min-width: 0; }
+.rl-protect-name b { display: block; font-size: var(--text-sm); font-weight: var(--fw-semi); }
+.rl-protect-name span { display: block; font-size: var(--text-xs); color: var(--text-secondary); }
+.rl-protect-body { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; }
+.rl-protect-body .hint { margin: 0; }
+.rl-protect-body .spacer { flex: 1; }
 .rl-disclose { margin-top: var(--space-3); font-size: var(--text-xs); color: var(--text-secondary); }
 .rl-disclose summary { cursor: pointer; color: var(--text-secondary); }
 .rl-disclose summary:hover { color: var(--text-primary); }
@@ -1993,7 +2044,7 @@ html.wallboard .page-content { animation: wallboard-shift 900s steps(1) infinite
 .tag.warn { color: var(--warn); border-color: var(--warn-border); background: var(--warn-soft); }
 
 /* Calendar */
-.rl-cal-controls { display: flex; gap: var(--space-2); }
+.rl-cal-controls { display: flex; gap: var(--space-2); flex-wrap: wrap; min-width: 0; }
 .rl-cal-controls select { width: auto; min-width: 9rem; padding-top: 0.35rem; padding-bottom: 0.35rem; }
 .rl-cal { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(16rem, 1fr); gap: var(--space-4); }
 .rl-cal-empty { padding: var(--space-5); }
@@ -2046,7 +2097,7 @@ html.wallboard .page-content { animation: wallboard-shift 900s steps(1) infinite
 .rl-delta.up { color: var(--live-text); } .rl-delta.down { color: var(--warn); }
 
 /* Sticky save bar */
-.rl-savebar { position: sticky; bottom: var(--space-3); z-index: 5; margin-bottom: var(--space-4); display: flex; align-items: center; gap: var(--space-3); margin-top: var(--space-6); padding: var(--space-3) var(--space-5); border: 1px solid var(--accent-border); border-radius: var(--r-lg); background: var(--bg-elevated); box-shadow: var(--shadow-lg); }
+.rl-savebar { flex-wrap: wrap; position: sticky; bottom: var(--space-3); z-index: 5; margin-bottom: var(--space-4); display: flex; align-items: center; gap: var(--space-3); margin-top: var(--space-6); padding: var(--space-3) var(--space-5); border: 1px solid var(--accent-border); border-radius: var(--r-lg); background: var(--bg-elevated); box-shadow: var(--shadow-lg); }
 .rl-savebar-text { font-size: var(--text-sm); }
 .rl-savebar-text small { display: block; font-size: var(--text-2xs); color: var(--text-tertiary); }
 .rl-review { margin-top: var(--space-3); font-size: var(--text-sm); }
@@ -2076,9 +2127,26 @@ html.wallboard .page-content { animation: wallboard-shift 900s steps(1) infinite
    the form showing underneath it. The new-rule form is the first rate-limit drawer tall enough to
    scroll on a desktop screen. */
 .rl-drawer .drawer-footer { bottom: calc(-1 * var(--space-6)); padding-bottom: var(--space-6); margin-bottom: calc(-1 * var(--space-6)); }
-.rl-drawer-actions { align-items: center; }
+.rl-drawer-actions { align-items: center; flex-wrap: wrap; row-gap: var(--space-2); }
 .rl-drawer-actions .action { flex: 0 0 auto; width: auto; }
 .rl-drawer-actions .spacer { flex: 1; }
+/* The one action the drawer exists for: wider than its neighbours, and on a phone it takes its own
+   full-width line first so it is never the button that wraps out of sight. */
+.rl-drawer-actions .action.rl-primary { min-width: 8rem; justify-content: center; }
+@media (max-width: 560px) {
+  .rl-drawer-actions .spacer { display: none; }
+  .rl-drawer-actions .action.rl-primary { order: -1; flex: 1 1 100%; }
+  .rl-drawer-actions .action { flex: 1 1 auto; justify-content: center; }
+}
+/* A picker's label and field are siblings (the field is a combobox with its own list below), so
+   the spacing a wrapping label used to give is restated here. */
+.rl-drawer label[for] { margin-bottom: 0; }
+.rl-drawer label[for] + input { margin-top: 0.3rem; margin-bottom: var(--space-3); }
+.rl-suggest [role="option"].active, .rl-suggest [role="option"][aria-selected="true"] { background: var(--accent-soft); color: var(--accent-text); box-shadow: inset 3px 0 0 var(--accent); }
+.rl-back { display: inline-flex; align-items: center; gap: 0.3rem; margin-bottom: var(--space-2); min-height: 24px; }
+.rl-back .icon svg { width: 13px; height: 13px; }
+.rl-drawer h3[tabindex="-1"]:focus { outline: none; }
+.rl-drawer h3[tabindex="-1"]:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--bg-elevated), 0 0 0 4px var(--accent); border-radius: var(--r-xs); }
 .action.danger-text { color: var(--error-text); }
 .rl-staged { margin: 0.5rem 0 0; }
 .rl-seg { display: inline-flex; gap: 2px; padding: 3px; background: var(--bg-sunken); border: 1px solid var(--border); border-radius: var(--r-md); margin-bottom: var(--space-4); }
@@ -2116,6 +2184,35 @@ html.wallboard .page-content { animation: wallboard-shift 900s steps(1) infinite
 .rl-suggest button:hover { background: var(--accent-soft); color: var(--accent-text); }
 .rl-suggest small { font-family: var(--font-sans); font-size: var(--text-2xs); color: var(--text-tertiary); }
 
+/* Activity: the usage report. Three time bases share the card, so the cumulative block is boxed
+   off from the windowed ones — a number that ignores the window control must not look like it obeys. */
+.rl-activity-controls { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+.rl-activity > .card > div > .rl-subhead:first-child { margin-top: 0; }
+.rl-section-head h3 .tag { vertical-align: middle; font-family: var(--font-sans); letter-spacing: 0; }
+.rl-activity-controls .rl-seg, .rl-activity-head .rl-seg { margin-bottom: 0; }
+.rl-activity .rl-seg button { padding: 0.3rem 0.65rem; font-size: var(--text-xs); }
+.rl-activity-stats { margin: var(--space-2) 0; }
+.rl-activity-head { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--space-3); flex-wrap: wrap; margin-top: var(--space-6); }
+.rl-activity-head .rl-subhead { margin: 0; }
+.rl-subhead .muted, .rl-subhead .tag { font-weight: var(--fw-normal); }
+.rl-asof { font-family: var(--font-mono); color: var(--text-secondary); margin-inline-start: 0.35rem; }
+.rl-cumulative { margin-top: var(--space-6); padding: var(--space-4); border: 1px solid var(--border); border-radius: var(--r-md); background: var(--bg-sunken); }
+.rl-cumulative .rl-subhead { margin-top: 0; }
+.rl-cumulative .table-wrap { box-shadow: none; }
+.rl-activity-foot { margin: var(--space-4) 0 0; }
+.t-rl-usage { min-width: 34rem; }
+.t-rl-refusals { min-width: 24rem; }
+.t-rl-adaptive { min-width: 30rem; }
+.t-rl-usage th:first-child, .t-rl-refusals th:first-child { width: 40%; }
+.rl-subject { font-weight: var(--fw-medium); font-size: var(--text-sm); overflow-wrap: anywhere; text-align: start; }
+.rl-refused-some { color: var(--warn); }
+.rl-usage-defs { margin: var(--space-3) 0 0; }
+.rl-usage-defs dt { font-size: var(--text-xs); font-weight: var(--fw-semi); color: var(--text-primary); }
+.rl-usage-defs dt .muted { font-weight: var(--fw-normal); }
+.rl-usage-defs dd { margin: 0.15rem 0 0; font-size: var(--text-sm); }
+.rl-usage-defs dd b { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.rl-usage-defs dd .hint { display: block; margin: 0.15rem 0 0; }
+
 @media (max-width: 64rem) {
   .rl-cal { grid-template-columns: 1fr; }
   .rl-stats { margin-left: 0; width: 100%; }
@@ -2123,12 +2220,37 @@ html.wallboard .page-content { animation: wallboard-shift 900s steps(1) infinite
 @media (max-width: 48rem) {
   .rl-tl { grid-template-columns: 6rem 1fr; }
   .rl-3col, .rl-bignums, .rl-scopes { grid-template-columns: 1fr; }
-  .rl-rules-table thead { display: none; }
-  .rl-rules-table tr { display: grid; grid-template-columns: 1fr auto; }
-  .rl-rules-table td { border-bottom: none; padding: 0.3rem 1rem; }
-  .rl-rules-table tr td:first-child { padding-top: 0.75rem; grid-column: 1 / -1; }
-  .rl-rules-table tr td:last-child { display: none; }
-  .rl-rules-table tr td:nth-child(4) { padding-bottom: 0.75rem; border-bottom: 1px solid var(--border); grid-column: 1 / -1; }
+  /* Rules become two-line cards: switch · who — model · open, then limit · now · refused. Nothing
+     an operator compares rules by is dropped; the header row goes, so each figure carries its unit. */
+  .rl-rules-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  .rl-rules-table, .rl-rules-table tbody { display: block; }
+  .rl-rules-table tr { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: "on who open" "on model open" "limit limit limit" "now now refused"; column-gap: var(--space-3); row-gap: 0.15rem; padding: 0.7rem var(--space-3); border-bottom: 1px solid var(--border); align-items: center; }
+  .rl-rules-table tr:last-child { border-bottom: none; }
+  .rl-rules-table td { display: block; border-bottom: none; padding: 0; width: auto; min-width: 0; background: transparent; }
+  .rl-row:hover td { background: transparent; }
+  .rl-rules-table td.rl-col-on { grid-area: on; align-self: start; padding-top: 0.15rem; }
+  .rl-rules-table td.rl-col-who { grid-area: who; }
+  .rl-rules-table td.rl-col-model { grid-area: model; }
+  .rl-rules-table td.rl-col-limit { grid-area: limit; margin-top: 0.4rem; }
+  .rl-rules-table td.rl-col-now { grid-area: now; margin-top: 0.3rem; }
+  .rl-rules-table td.rl-col-refused { grid-area: refused; margin-top: 0.3rem; text-align: right; }
+  .rl-rules-table td.rl-col-chev { grid-area: open; align-self: start; }
+  .rl-row.changed td:first-child { box-shadow: none; }
+  .rl-row.changed { box-shadow: inset 3px 0 0 var(--accent); }
+  .rl-target, .rl-model { white-space: normal; overflow-wrap: anywhere; }
+  .rl-limit-nums { display: flex; flex-wrap: wrap; column-gap: var(--space-4); justify-items: start; }
+  .rl-limit-nums i { display: inline; }
+  .rl-cell-label { display: inline; font-family: var(--font-sans); color: var(--text-secondary); }
+  .rl-filter { max-width: none; flex: 1 1 100%; }
+  .rl-chips { flex-wrap: nowrap; overflow-x: auto; max-width: 100%; padding-bottom: 2px; scrollbar-width: thin; }
+  .rl-chips .preset { flex: none; }
+  .rl-cal-controls { width: 100%; }
+  .rl-savebar { padding: var(--space-3); }
+  .rl-savebar .action { flex: 1 1 auto; justify-content: center; }
+  .rl-savebar .action.rl-primary { flex: 1 1 100%; order: 3; }
+  .rl-status-actions .action { flex: 0 1 auto; }
+  .rl-activity-controls { width: 100%; }
+  .rl-cal-controls select { flex: 1 1 8rem; min-width: 0; }
 }
 
 /* ---- Rate limits: help (English / Persian) --------------------------------------------------
@@ -2136,17 +2258,13 @@ html.wallboard .page-content { animation: wallboard-shift 900s steps(1) infinite
    drawer that may paint above the rule/tier/new-rule drawers. Persian is right-to-left: the `dir`
    attribute on each block flips it, and :lang(fa) swaps in a font with Arabic-script glyphs, since
    the vendored IBM Plex Sans is latin-only and would otherwise fall back per glyph. */
-.rl-help-bar { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; padding: var(--space-3) var(--space-4); margin: var(--space-3) 0 var(--space-2); border: 1px solid var(--accent-border); border-radius: var(--r-md); background: var(--accent-softer); font-size: var(--text-xs); color: var(--text-secondary); }
-.rl-help-bar > .icon { color: var(--accent-text); flex: none; }
-.rl-help-bar .t { flex: 1 1 14rem; min-width: 0; }
-.rl-help-bar .action.sm { flex: none; }
 .rl-help-row { display: flex; gap: var(--space-3); flex-wrap: wrap; align-items: flex-start; }
 .rl-help-row > .rl-help { flex: 1 1 18rem; min-width: 0; }
 .rl-help { margin: var(--space-2) 0 var(--space-3); font-size: var(--text-xs); border: 1px dashed var(--border-strong); border-radius: var(--r-md); background: var(--bg-sunken); max-width: var(--measure); }
 .rl-help > summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 0.45rem; padding: 0.45rem 0.7rem; color: var(--text-secondary); font-weight: var(--fw-medium); line-height: 1.4; }
 .rl-help > summary::-webkit-details-marker { display: none; }
 .rl-help > summary:hover { color: var(--text-primary); }
-.rl-help > summary:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--bg-base), 0 0 0 4px var(--accent); border-radius: var(--r-md); }
+.rl-help > summary:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--bg-app), 0 0 0 4px var(--accent); border-radius: var(--r-md); }
 .rl-help > summary .icon { color: var(--accent-text); flex: none; }
 .rl-help[open] > summary { border-bottom: 1px dashed var(--border); color: var(--text-primary); }
 .rl-help-body { padding: 0.55rem 0.7rem 0.7rem; color: var(--text-secondary); line-height: 1.65; }
@@ -2180,8 +2298,7 @@ html.wallboard .page-content { animation: wallboard-shift 900s steps(1) infinite
 
 /* Right-to-left blocks: logical properties do the mirroring; the two places with a physical side
    (the drawer edge, the scope card's left-aligned text) are flipped by hand. */
-[dir="rtl"].rl-help, [dir="rtl"].rl-help-scope, [dir="rtl"].rl-help-bar, [dir="rtl"].rl-help-drawer { text-align: start; }
-[dir="rtl"].rl-help-drawer { border-left: none; border-right: 1px solid var(--border); }
+[dir="rtl"].rl-help, [dir="rtl"].rl-help-scope, [dir="rtl"][dir="rtl"].rl-help-drawer { border-left: none; border-right: 1px solid var(--border); }
 [dir="rtl"].rl-help-drawer .drawer-header { flex-direction: row; }
 :lang(fa) { font-family: 'Vazirmatn', 'Vazir', 'IRANSansX', 'IRANSans', 'Segoe UI', Tahoma, 'Noto Sans Arabic', 'Noto Naskh Arabic', var(--font-sans); letter-spacing: 0; }
 :lang(fa) h3, :lang(fa) h4, :lang(fa) .eyebrow { font-family: inherit; }

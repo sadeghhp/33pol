@@ -257,6 +257,13 @@ function adminApp() {
     rateLimitUsage: null,
     rateLimitUsageError: '',
     rateLimitUsageMinutes: 60,
+    // A failed refresh keeps the last good report and says so, rather than blanking the card.
+    rateLimitUsageStale: false,
+    rateLimitUsageLoading: false,
+    // 503: the deployment runs without the tracker. Not an error to retry, a fact to state.
+    rateLimitUsageUnavailable: false,
+    rateLimitUsageLoadedAt: 0,
+    rlUsageTab: 'tenant',
     rateLimitFieldError: '',
     rateLimitsLoadError: '',
     rlReadOnlyReason: '',
@@ -276,8 +283,14 @@ function adminApp() {
     rlPreview: null,
     rlPreviewError: '',
     rlShowAllTransitions: false,
+    rlCombo: { field: '', index: -1, closed: {} },
     rlFilterText: '',
-    rlFilterScope: 'all',
+    // The list is filtered by the same two questions a rule is created with, never by stored scope.
+    rlFilterWho: 'all',
+    rlFilterWhere: 'any',
+    rlFilterFlag: '',
+    rlSortKey: 'who',
+    rlSortDir: 1,
     rlReviewOpen: false,
     rlRuleDrawerOpen: false,
     rlRule: { identity: '', scope: 'model', target: '', rpm: 0, burst: 0, maxConcurrentStreams: 0, schedule: [] },
@@ -320,6 +333,7 @@ function adminApp() {
     _modalReturnFocusOverride: null,
     /** The surface currently holding focus, and what was made inert behind it. */
     _modalSurface: null,
+    _modalStack: [],
     _modalInerted: [],
     revokeConfirmId: null,
     /** The key awaiting permanent deletion, plus the prefix the operator has to type back. */
@@ -850,7 +864,7 @@ function adminApp() {
 
       // The usage report is a separate read from the tiers, so it is fetched when its tab is opened
       // rather than on every settings load — an operator who never opens it never pays for it.
-      if (sub === 'limits' && !this.rateLimitUsage) {
+      if (sub === 'limits' && (!this.rateLimitUsage || Date.now() - (this.rateLimitUsageLoadedAt || 0) > 60000)) {
         void this.loadRateLimitUsage();
       }
       if (sub === 'limits' && this.rlDraft && Date.now() - (this.rlScheduleLoadedAt || 0) > 30000) {
@@ -1477,6 +1491,9 @@ function adminApp() {
       this.rlPreview = null;
       this.rlReadOnlyReason = '';
       this.rateLimitUsage = null;
+      this.rateLimitUsageStale = false;
+      this.rateLimitUsageError = '';
+      this.rateLimitUsageLoadedAt = 0;
       this.clearMessages();
       this.toast('Signed out — API key cleared from this browser.');
     },
@@ -2411,6 +2428,7 @@ function adminApp() {
      * two cannot drift: x-show sets display:none, which is exactly what offsetParent reports.
      */
     _visibleModalSurface() {
+      const visible = [];
       for (const el of document.querySelectorAll('[role="dialog"], [role="alertdialog"]')) {
         if (el.offsetParent === null) continue;
         // The help guide is the one surface that closes while another may stay open underneath.
@@ -2418,9 +2436,18 @@ function adminApp() {
         // still looks visible; its flag, not the DOM, says whether it is gone — otherwise the
         // drawer below would keep its inert attribute and be dead to the pointer.
         if (el.classList.contains('rl-help-drawer') && !this.rlHelpOpen) continue;
-        return el;
+        visible.push(el);
       }
-      return null;
+      // A confirmation is always the top surface: it is raised from inside a drawer (delete a rule,
+      // discard edits, remove a plan) and sits later in the document than every drawer. Taking the
+      // first visible surface chose the drawer underneath, which left the confirmation inert — on
+      // screen, but dead to the pointer and to Tab. Its flag gates it for the same fade-out reason
+      // as the help guide above.
+      if (this.confirmDialog || this.deleteConfirmKey || this.revokeConfirmId) {
+        const alert = visible.find(el => el.getAttribute('role') === 'alertdialog');
+        if (alert) return alert;
+      }
+      return visible.find(el => el.getAttribute('role') !== 'alertdialog') || null;
     },
 
     _focusableWithin(root) {
@@ -2457,10 +2484,26 @@ function adminApp() {
       }
       const surface = this._visibleModalSurface();
       if (!surface || surface === this._modalSurface) return;
-      if (this._modalSurface) this._releaseModalSurface();
 
-      this._modalReturnFocus = this._modalReturnFocusOverride
-        || (document.activeElement === document.body ? null : document.activeElement);
+      // Surfaces stack: a confirmation or the help guide opens over a drawer and closes back onto
+      // it. Each remembers where its own focus should return, so closing the top one goes back
+      // into the drawer, and closing the drawer still goes back to the row that opened it.
+      const stack = this._modalStack || (this._modalStack = []);
+      const resumed = stack.find(entry => entry.surface === surface);
+      const comingFrom = this._modalReturnFocus;
+      if (this._modalSurface) this._releaseModalSurface(false);
+
+      if (resumed) {
+        // Back on a surface that was covered: drop whatever sat above it.
+        stack.length = stack.indexOf(resumed) + 1;
+      } else {
+        stack.push({
+          surface,
+          returnTo: this._modalReturnFocusOverride
+            || (document.activeElement === document.body ? null : document.activeElement)
+        });
+      }
+      this._modalReturnFocus = (resumed || stack[stack.length - 1]).returnTo;
       this._modalReturnFocusOverride = null;
       this._modalSurface = surface;
 
@@ -2475,23 +2518,36 @@ function adminApp() {
         this._modalInerted.push(el);
       }
 
-      const target = this._initialModalFocus(surface);
+      // Resuming lands where the closed surface was opened from (the Delete button, the "?"), not
+      // back on the drawer's first field.
+      const back = resumed && comingFrom && comingFrom.isConnected && surface.contains(comingFrom) && comingFrom.offsetParent !== null
+        ? comingFrom : null;
+      const target = back || this._initialModalFocus(surface);
       if (target) target.focus();
     },
 
-    _releaseModalSurface() {
+    /** @param restoreFocus false while one surface hands over to another; true when the last one closes. */
+    _releaseModalSurface(restoreFocus = true) {
       for (const el of this._modalInerted || []) {
         el.inert = false;
         el.removeAttribute('aria-hidden');
       }
       this._modalInerted = [];
       this._modalSurface = null;
+      if (!restoreFocus) return;
 
-      const el = this._modalReturnFocus;
+      // Only back to something still on the page and on screen: a row action whose row has since
+      // been re-rendered is gone, and focusing a detached or hidden node silently drops focus to
+      // <body>. When the top surface's opener went away with the drawer under it (confirming a
+      // delete closes both), fall back through the stack to the control that opened the drawer.
+      const candidates = [this._modalReturnFocus, ...(this._modalStack || []).map(entry => entry.returnTo).reverse()];
       this._modalReturnFocus = null;
-      // Only back to something still on the page: a row action whose row has since been re-rendered
-      // is gone, and focusing a detached node silently drops focus to <body>.
-      if (el && el.isConnected && el.focus) el.focus();
+      this._modalStack = [];
+      // Nothing inside a surface qualifies: every surface is closed now, and a drawer that is still
+      // fading out would otherwise take the focus with it.
+      const el = candidates.find(c => c && c.isConnected && c.focus && c.offsetParent !== null
+        && !c.closest('[role="dialog"], [role="alertdialog"]'));
+      if (el) el.focus();
     },
 
     /** Keeps Tab inside the open surface, in both directions. */
@@ -3346,17 +3402,47 @@ function adminApp() {
       }, { localOnly: true });
     },
 
+    /** Rows asked for per section. The endpoint caps at 1000; 200 keeps the rule-list join honest. */
+    rlUsageTake() { return 200; },
+
     async loadRateLimitUsage() {
-      this.rateLimitUsageError = '';
+      // Last started wins: changing the window twice must not let the slower, older answer land.
+      const seq = (this._rlUsageSeq || 0) + 1;
+      this._rlUsageSeq = seq;
+      this.rateLimitUsageLoading = true;
       try {
         const minutes = Number(this.rateLimitUsageMinutes) || 60;
-        this.rateLimitUsage = await this.apiJson(
-          '/admin/api/rate-limits/usage?minutes=' + minutes + '&take=25'
+        const report = await this.apiJson(
+          '/admin/api/rate-limits/usage?minutes=' + minutes + '&take=' + this.rlUsageTake()
         );
+        if (seq !== this._rlUsageSeq) return;
+        this.rateLimitUsage = report;
+        this.rateLimitUsageError = '';
+        this.rateLimitUsageStale = false;
+        this.rateLimitUsageUnavailable = false;
+        this.rateLimitUsageLoadedAt = Date.now();
       } catch (e) {
-        this.rateLimitUsage = null;
-        this.rateLimitUsageError = e.message || 'Could not load the rate-limit usage report.';
+        if (seq !== this._rlUsageSeq) return;
+        // The previous report is kept on purpose. Activity is a side read: its failure must not
+        // blank numbers that were true a minute ago, and never touches the configuration above it.
+        this.rateLimitUsageUnavailable = e?.status === 503;
+        this.rateLimitUsageStale = !!this.rateLimitUsage;
+        this.rateLimitUsageError = e?.message || 'Could not load rate-limit activity.';
+      } finally {
+        if (seq === this._rlUsageSeq) this.rateLimitUsageLoading = false;
       }
+    },
+
+    /** The window control: picking a window is asking for it, so it loads without a second click. */
+    setRateLimitUsageMinutes(minutes) {
+      const value = Number(minutes) || 60;
+      if (value === Number(this.rateLimitUsageMinutes) && this.rateLimitUsage && !this.rateLimitUsageStale) return;
+      this.rateLimitUsageMinutes = value;
+      void this.loadRateLimitUsage();
+    },
+
+    setRateLimitUsageTab(tab) {
+      this.rlUsageTab = tab;
     },
 
     scrollToRateLimitUsage() {
@@ -3633,8 +3719,28 @@ function adminApp() {
       this.rlShowAllTransitions = !this.rlShowAllTransitions;
     },
 
-    setRateLimitScopeFilter(id) {
-      this.rlFilterScope = id;
+    setRateLimitWhoFilter(id) { this.rlFilterWho = id; },
+    setRateLimitWhereFilter(id) { this.rlFilterWhere = id; },
+    /** Scheduled / Off: pressing the active one again releases it. */
+    toggleRateLimitFlagFilter(id) { this.rlFilterFlag = this.rlFilterFlag === id ? '' : id; },
+
+    clearRateLimitFilters() {
+      this.rlFilterText = '';
+      this.rlFilterWho = 'all';
+      this.rlFilterWhere = 'any';
+      this.rlFilterFlag = '';
+      const input = document.getElementById('rl-filter-input');
+      if (input && input.focus) input.focus();
+    },
+
+    /** Same column again flips the direction; a new column starts ascending, Refused descending. */
+    setRateLimitSort(key) {
+      if (this.rlSortKey === key) {
+        this.rlSortDir = -this.rlSortDir;
+        return;
+      }
+      this.rlSortKey = key;
+      this.rlSortDir = key === 'refused' ? -1 : 1;
     },
 
     // ---- tiers ----
@@ -3676,7 +3782,9 @@ function adminApp() {
     },
 
     openRateLimitTier(kind, slug) {
-      if (!this.rlDraft || !this.rateLimitsEditable) return;
+      if (!this.rlDraft) return;
+      // Read-only: an existing tier opens for inspection; there is nothing to inspect in a new one.
+      if (!this.rateLimitsEditable && kind === 'plan' && !slug) return;
       const tier = kind === 'default' ? this.rlDraft.default : (this.rlDraft.plans[slug] || { rpm: 60, burst: 10, maxConcurrentStreams: 5 });
       this.rlTier = {
         kind,
@@ -3694,6 +3802,7 @@ function adminApp() {
     },
 
     applyRateLimitTier() {
+      if (!this.rateLimitsEditable) return;
       const t = this.rlTier;
       const tier = this.rlTierPayload(t);
       // The "needs a rate" messages come first: they say why zero is refused, which a range cannot.
@@ -3783,6 +3892,7 @@ function adminApp() {
 
     /** Writes the drawer's working copy back into the draft. */
     applyRateLimitRule() {
+      if (!this.rateLimitsEditable) return;
       const rule = this.rlFindDraftRule(this.rlRule.identity);
       if (!rule) return;
       const tier = this.rlTierPayload(this.rlRule);
@@ -3839,7 +3949,8 @@ function adminApp() {
         : '';
       this.openConfirm({
         title: 'Delete this rule permanently?',
-        message: info.short + ' “' + this.rlRule.target + '” stops being limited by this rule once you save.' + cost
+        // The name an operator knows it by, never a bare key id; singletons have no target to name.
+        message: (info.singleton ? info.name : info.short + ' “' + this.rlTargetDisplay(this.rlRule.scope, this.rlRule.target) + '”') + ' stops being limited by this rule once you save.' + cost
           + ' To stop enforcing it without losing the tier or the windows, switch it off instead.',
         confirmLabel: 'Delete permanently',
         danger: true,
@@ -3894,10 +4005,31 @@ function adminApp() {
       this.rlWindowPreview = null;
       this.rlWindowOpen = true;
       this.queueRateLimitWindowPreview();
+      // The panel swaps inside one dialog, so the modal focus handling does not run: say where we
+      // are by landing on the panel's heading, and come back to what opened it.
+      this._rlWindowReturn = existing ? 'rl-win-' + index : 'rl-add-window';
+      this.rlFocusSoon('rl-window-title');
     },
 
     closeRateLimitWindow() {
       this.rlWindowOpen = false;
+      this.rlFocusSoon(this._rlWindowReturn || 'rl-add-window', 'rl-rule-title');
+    },
+
+    /** Close from inside the window panel: leaves the whole drawer, asking first if either level has edits. */
+    dismissRateLimitRuleFromWindow() {
+      this.rlConfirmDismiss(this.rlWindowDirty || this.rlRuleDirty,
+        this.rlWindowDirty ? 'This window has not been added to the rule yet.' : 'This rule has edits that have not been applied to the draft yet.',
+        () => this.closeRateLimitRule());
+    },
+
+    /** Focus an element once the template swap has rendered it; `fallback` when the first is gone. */
+    rlFocusSoon(id, fallback) {
+      const go = () => {
+        const el = document.getElementById(id) || (fallback ? document.getElementById(fallback) : null);
+        if (el && el.focus) el.focus();
+      };
+      if (this.$nextTick) this.$nextTick(() => setTimeout(go, 0)); else go();
     },
 
     setRateLimitWindowKind(kind) {
@@ -4107,6 +4239,7 @@ function adminApp() {
       this.rlNewRule = { who, where: 'one', subject: '', model: '', rpm: 0, burst: 0, maxConcurrentStreams: 0, touched: false, picked: {}, tried: false, opened: '' };
       if (key) this.pickRateLimitSuggestion('subject', key.id, this.rlKeyPickText(key));
       this.rlSeedNewRuleTier();
+      this.rlCombo = { field: '', index: -1, closed: {} };
       this.rlNewRule.opened = this.rlNewRuleSnapshot();
       this.rlNewRuleOpen = true;
       // Refreshed each time: a key target must be a key the list knows, so a key created since the
@@ -4209,26 +4342,35 @@ function adminApp() {
       const rule = { scope, target: parts.length ? parts.join('|') : '*', ...tier, enabled: true, schedule: [] };
 
       let error = '';
+      // Which control the message belongs under; '' for one that is about the rule as a whole.
+      let errorField = '';
       if (hasSubject && parts[0].includes('|')) {
         error = 'A tenant id or slug cannot contain “|”: it is what separates the tenant from the model in a stored target.';
+        errorField = 'subject';
       } else if (hasSubject && !subjectText) {
         error = intent.who === 'key' ? 'Choose the API key this limit applies to.' : 'Name the tenant: its id or its slug.';
+        errorField = 'subject';
       } else if (intent.who === 'key' && this.rlNewRuleKeyError()) {
         error = this.rlNewRuleKeyError();
+        errorField = 'subject';
       } else if (hasModel && !canon.id) {
         error = 'Choose a model, or switch to “All models”.';
+        errorField = 'model';
       } else if (this.rlFindDraftRule(this.rlIdentity(rule.scope, rule.target))) {
         error = 'A rule for exactly this already exists; open it from the list instead.';
       } else if (tier.rpm === 0 && tier.maxConcurrentStreams === 0) {
         error = scope === 'global'
           ? 'Name the ceiling: set rpm above zero. There is no default that is right for every gateway.'
           : 'A rule must limit something: set rpm or streams above zero.';
+        errorField = 'tier';
       } else if (this.rlTierBoundsError(tier, false)) {
         error = this.rlTierBoundsError(tier, false);
+        errorField = 'tier';
       } else if (scope === 'tenant' && tier.rpm === 0 && tier.burst !== 0) {
         error = 'A tenant rule with rpm 0 keeps the plan rate; set burst to 0 as well.';
+        errorField = 'tier';
       }
-      return { rule, intent, hasSubject, hasModel, key, canon, error };
+      return { rule, intent, hasSubject, hasModel, key, canon, error, errorField };
     },
 
     /** The target the form would store. */
@@ -4240,7 +4382,85 @@ function adminApp() {
       const text = fill || value;
       this.rlNewRule[field] = text;
       this.rlNewRule.picked = { ...(this.rlNewRule.picked || {}), [field]: { value, text } };
+      this.rlCombo = { field: '', index: -1, closed: {} };
     },
+
+    // ---- pickers as comboboxes ----
+    //
+    // Focus never leaves the text field: arrows move an "active" option that the field points at
+    // with aria-activedescendant, Enter picks it, Escape closes the list. The list is the same
+    // bounded one rlSuggestList renders, so index i here is option i there.
+
+    rlComboKind(field) {
+      return field === 'model' ? 'models' : (this.rlNewRule.who === 'key' ? 'keys' : 'tenants');
+    },
+
+    rlComboOptionId(field, index) {
+      return 'rl-opt-' + field + '-' + index;
+    },
+
+    /** Typing reopens a list Escape closed and forgets the active option, which no longer means the same row. */
+    rateLimitComboInput(field) {
+      const closed = { ...(this.rlCombo?.closed || {}) };
+      delete closed[field];
+      this.rlCombo = { field, index: -1, closed };
+    },
+
+    rateLimitComboKeydown(event, field) {
+      const key = event.key;
+      if (!['ArrowDown', 'ArrowUp', 'Home', 'End', 'Enter', 'Escape'].includes(key)) return;
+      const combo = this.rlCombo || { field: '', index: -1, closed: {} };
+      const isClosed = !!combo.closed?.[field];
+      const list = this.rlSuggestList(field, this.rlComboKind(field));
+      const count = isClosed ? 0 : list.items.length;
+      const active = combo.field === field ? combo.index : -1;
+
+      if (key === 'Escape') {
+        // Only while there is a list to close. With none, Escape is the drawer's, as everywhere else.
+        if (!count) return;
+        event.preventDefault();
+        event.stopPropagation();
+        this.rlCombo = { field, index: -1, closed: { ...(combo.closed || {}), [field]: true } };
+        return;
+      }
+      if (key === 'Enter') {
+        if (count && active >= 0 && active < count) {
+          event.preventDefault();
+          list.items[active].pick();
+        }
+        return;
+      }
+      // Home and End belong to the caret until an option is active.
+      if ((key === 'Home' || key === 'End') && active < 0) return;
+      let openCount = count;
+      let closedMap = combo.closed || {};
+      if (isClosed) {
+        // An arrow reopens a list Escape closed and lands on its first (or last) option.
+        if (key !== 'ArrowDown' && key !== 'ArrowUp') return;
+        closedMap = { ...closedMap };
+        delete closedMap[field];
+        openCount = list.items.length;
+      }
+      if (!openCount) return;
+      event.preventDefault();
+      const next = this.rlComboNext(key, isClosed ? -1 : active, openCount);
+      this.rlCombo = { field, index: next, closed: closedMap };
+      const id = this.rlComboOptionId(field, next);
+      const scroll = () => { const el = document.getElementById(id); if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest' }); };
+      if (this.$nextTick) this.$nextTick(scroll); else scroll();
+    },
+
+    rlComboNext(key, active, count) {
+      return key === 'ArrowDown' ? (active + 1) % count
+        : key === 'ArrowUp' ? (active <= 0 ? count - 1 : active - 1)
+        : key === 'Home' ? 0
+        : count - 1;
+    },
+
+    onRateLimitSubjectInput() { this.rateLimitComboInput('subject'); },
+    onRateLimitModelInput() { this.rateLimitComboInput('model'); },
+    onRateLimitSubjectKeydown(event) { this.rateLimitComboKeydown(event, 'subject'); },
+    onRateLimitModelKeydown(event) { this.rateLimitComboKeydown(event, 'model'); },
 
     /** Creates the rule in the draft; with `andSchedule` the rule drawer opens straight onto Add window. */
     createRateLimitRule(andSchedule) {
@@ -4910,9 +5130,6 @@ function adminApp() {
           outputPricePerMillion: b('editModel.outputPricePerMillion'),
           maxContextLength: b('editModel.maxContextLength'),
           aliasesText: b('editModel.aliasesText')
-        },
-        rateLimits: {
-          usageMinutes: b('rateLimitUsageMinutes')
         },
         rlDraft: {
           // Turning enforcement off asks first; see setRateLimitEnforcement.
@@ -7401,7 +7618,8 @@ function adminApp() {
         enabledAria: d.enabled === false ? 'false' : 'true',
         adaptiveAria: d.adaptiveEnabled ? 'true' : 'false',
         adaptiveText: d.adaptiveEnabled ? 'Adaptive load shedding on' : 'Adaptive load shedding off',
-        rules: this.formatNum(rules.length),
+        // Ordinary rules only: the two protective budgets are counted in their own section.
+        rules: this.formatNum(this.rlListRules().length),
         windows: this.formatNum(windows),
         active: this.formatNum(active),
         activeClass: active > 0 ? 'live' : '',
@@ -7441,6 +7659,7 @@ function adminApp() {
         rpm: this.formatNum(t.rpm), burst: this.formatNum(t.burst),
         streams: t.maxConcurrentStreams > 0 ? this.formatNum(t.maxConcurrentStreams) : '∞',
         streamsTitle: t.maxConcurrentStreams > 0 ? 'Concurrent streams' : 'Streams unlimited',
+        openLabel: (this.rateLimitsEditable ? 'Edit ' : 'View ') + (kind === 'default' ? 'the default tier' : 'plan ' + slug),
         edit: () => this.openRateLimitTier(kind, slug)
       });
       const cards = [card('default', '', d.default)];
@@ -7448,10 +7667,19 @@ function adminApp() {
       return cards;
     },
 
+    /** The two protective budgets are stored as rules but are not answers to "who, on which model". */
+    rlIsProtective(scope) {
+      return scope === 'anonymous' || scope === 'auth_failure';
+    },
+
     rlRuleMatchesFilter(rule) {
-      const chip = this.rlFilterScope || 'all';
-      if (chip === 'scheduled' && !(rule.schedule || []).length) return false;
-      if (chip !== 'all' && chip !== 'scheduled' && rule.scope !== chip) return false;
+      const intent = this.rlIntentFor(rule.scope) || { who: '', where: '' };
+      const who = this.rlFilterWho || 'all';
+      const where = this.rlFilterWhere || 'any';
+      if (who !== 'all' && intent.who !== who) return false;
+      if (where !== 'any' && intent.where !== where) return false;
+      if (this.rlFilterFlag === 'scheduled' && !(rule.schedule || []).length) return false;
+      if (this.rlFilterFlag === 'off' && rule.enabled !== false) return false;
       const q = String(this.rlFilterText || '').trim().toLowerCase();
       if (!q) return true;
       const info = this.rlScopeInfo(rule.scope);
@@ -7461,21 +7689,51 @@ function adminApp() {
         (rule.schedule || []).some(w => String(w.name || '').toLowerCase().includes(q));
     },
 
+    /** Ordinary rules only: what the list, its counts and its filters are about. */
+    rlListRules() {
+      return (this.rlDraft?.rules || []).filter(r => !this.rlIsProtective(r.scope));
+    },
+
     get rlScopeChips() {
-      const rules = this.rlDraft?.rules || [];
-      const chips = [{ id: 'all', label: 'All', count: rules.length }];
-      for (const s of this.rlScopeCatalog()) {
-        const count = rules.filter(r => r.scope === s.id).length;
-        if (count) chips.push({ id: s.id, label: s.short, count });
-      }
-      const scheduled = rules.filter(r => (r.schedule || []).length).length;
-      if (scheduled) chips.push({ id: 'scheduled', label: 'Scheduled', count: scheduled });
-      return chips.map(c => ({
-        key: c.id, label: c.label, count: String(c.count),
-        cls: (this.rlFilterScope || 'all') === c.id ? 'active' : '',
-        pressed: (this.rlFilterScope || 'all') === c.id ? 'true' : 'false',
-        select: () => this.setRateLimitScopeFilter(c.id)
-      }));
+      const rules = this.rlListRules();
+      const intents = rules.map(r => this.rlIntentFor(r.scope) || { who: '', where: '' });
+      const chip = (group, id, label, count, active, select) => ({
+        key: group + ':' + id, label, count: String(count),
+        cls: active ? 'active' : '',
+        pressed: active ? 'true' : 'false',
+        select
+      });
+      const whoNow = this.rlFilterWho || 'all';
+      const whereNow = this.rlFilterWhere || 'any';
+      const who = [['all', 'All'], ['key', 'API keys'], ['tenant', 'Tenants'], ['everyone', 'Everyone']].map(([id, label]) =>
+        chip('who', id, label, id === 'all' ? rules.length : intents.filter(i => i.who === id).length, whoNow === id, () => this.setRateLimitWhoFilter(id)));
+      const where = [['any', 'Any'], ['one', 'One model'], ['all', 'All models']].map(([id, label]) =>
+        chip('where', id, label, id === 'any' ? rules.length : intents.filter(i => i.where === id).length, whereNow === id, () => this.setRateLimitWhereFilter(id)));
+      const flags = [
+        ['scheduled', 'Scheduled', rules.filter(r => (r.schedule || []).length).length],
+        ['off', 'Off', rules.filter(r => r.enabled === false).length]
+      ].map(([id, label, count]) => chip('flag', id, label, count, this.rlFilterFlag === id, () => this.toggleRateLimitFlagFilter(id)));
+      return { who, where, flags };
+    },
+
+    get rlFiltersActive() {
+      return !!String(this.rlFilterText || '').trim() || (this.rlFilterWho || 'all') !== 'all' ||
+        (this.rlFilterWhere || 'any') !== 'any' || !!this.rlFilterFlag;
+    },
+
+    /** Sortable headers: a real button each, with the state a screen reader announces. */
+    get rlSortView() {
+      const col = (key) => {
+        const on = this.rlSortKey === key;
+        return {
+          ariaSort: on ? (this.rlSortDir > 0 ? 'ascending' : 'descending') : 'none',
+          icon: on
+            ? '<span class="sort-icon' + (this.rlSortDir > 0 ? '' : ' icon-flip') + '">' + (window.AdminIcons ? window.AdminIcons('chevron-up') : (this.rlSortDir > 0 ? '▲' : '▼')) + '</span>'
+            : '',
+          toggle: () => this.setRateLimitSort(key)
+        };
+      };
+      return { who: col('who'), model: col('model'), rpm: col('rpm'), refused: col('refused') };
     },
 
     rlForceFor(rule) {
@@ -7506,53 +7764,146 @@ function adminApp() {
       };
     },
 
+    /** One rule as the list and the protective cards show it. */
+    rlRuleRow(rule, index) {
+      const info = this.rlScopeInfo(rule.scope);
+      const intent = this.rlIntentFor(rule.scope) || { who: '', where: '' };
+      const identity = this.rlIdentity(rule.scope, rule.target);
+      const saved = (this.rateLimits?.rules || []).find(r => this.rlIdentity(r.scope, r.target) === identity);
+      const changed = !saved || JSON.stringify(this.buildRateLimitsPayload({ rules: [saved], plans: {}, default: {} }).rules[0]) !==
+        JSON.stringify(this.buildRateLimitsPayload({ rules: [rule], plans: {}, default: {} }).rules[0]);
+      const windows = (rule.schedule || []).length;
+      const off = rule.enabled === false;
+      // A switched-off rule enforces nothing, so it reports that rather than a tier it is not
+      // applying — and it says the tier is kept, which is the whole difference from deleting it.
+      const force = off
+        ? { dot: 'warn', text: 'off', sub: this.rlTierText(rule) + ' kept', title: 'This rule is switched off and enforces nothing' }
+        : changed
+          ? { dot: '', text: this.rlTierText(rule), sub: 'unsaved · in force once saved', title: '' }
+          : this.rlForceFor(rule);
+      const target = info.singleton ? info.name : this.rlTargetDisplay(rule.scope, rule.target);
+
+      // Who and Model, the way the creation form asks for them. The stored target stays the title.
+      const [subject, ...modelParts] = String(rule.target || '').split('|');
+      const key = this.rlRuleKey(rule.scope, rule.target);
+      const who = intent.who === 'everyone' ? 'Everyone'
+        : intent.who === 'key' ? (key ? this.rlKeyName(key) : subject)
+        : intent.who === 'tenant' ? subject
+        : info.name;
+      const whoKind = intent.who === 'key' ? 'API key' + (key || subject ? ' · ' + String(key?.id || subject).slice(0, 8) + '…' : '')
+        : intent.who === 'tenant' ? 'Tenant'
+        : intent.who === 'everyone' ? 'All callers'
+        : info.desc;
+      const model = intent.where === 'one' ? (intent.who === 'everyone' ? subject : modelParts.join('|')) : '';
+
+      // Now: one cell for "is this different from the numbers beside it, and why". Always words,
+      // never a dot alone.
+      const plural = windows + ' window' + (windows === 1 ? '' : 's');
+      let now;
+      if (off) now = { tag: 'off', cls: 'tag warn', sub: 'numbers kept' };
+      else if (changed) now = { tag: 'unsaved', cls: 'tag accent', sub: 'in force once saved' };
+      else if (force.dot === 'on') now = { tag: 'window active', cls: 'tag live', sub: force.text + ' · ' + force.sub };
+      else if (force.dot === 'warn') now = { tag: 'paused', cls: 'tag warn', sub: force.sub };
+      else if (force.dot === 'err') now = { tag: force.text === 'unknown' ? 'schedule unavailable' : 'window skipped', cls: 'tag level-error', sub: force.sub };
+      else if (windows) now = { tag: plural, cls: 'tag muted', sub: force.sub.startsWith('base · ') ? 'next: ' + force.sub.slice(7) : '' };
+      else now = { tag: '', cls: '', sub: '' };
+
+      const refusals = this.rlRefusalsView(rule.scope, rule.target);
+      const tenantRate = rule.scope === 'tenant' && !(rule.rpm > 0);
+      return {
+        key: identity + ':' + index,
+        identity,
+        target,
+        // The stored target, for when the name is not enough to tell two keys apart.
+        targetTitle: info.singleton ? '' : String(rule.target || ''),
+        who, whoKind,
+        model: model || 'All models',
+        modelCls: model ? 'rl-model' : 'rl-model muted',
+        modelTitle: model,
+        tier: this.rlTierText(rule),
+        rpm: rule.rpm > 0 ? this.formatNum(rule.rpm) : (tenantRate ? 'plan' : '—'),
+        rpmTitle: rule.rpm > 0 ? 'Sustained requests per minute' : (tenantRate ? 'RPM 0: the tenant keeps its plan’s rate' : 'RPM 0: this rule does not limit the rate'),
+        burst: this.formatNum(rule.burst || 0),
+        streams: rule.maxConcurrentStreams > 0 ? this.formatNum(rule.maxConcurrentStreams) : '∞',
+        streamsTitle: rule.maxConcurrentStreams > 0 ? 'Concurrent streams' : 'Streams unlimited',
+        nowTag: now.tag, nowCls: now.cls, nowSub: now.sub,
+        hasNowTag: !!now.tag, noNow: !now.tag, hasNowSub: !!now.sub,
+        nowTitle: force.title || '',
+        refused: refusals.text,
+        refusedTitle: refusals.title,
+        refusedCls: 'rl-col-refused num' + (refusals.known && refusals.hits > 0 ? ' rl-refused-some' : '') + (refusals.known ? '' : ' muted'),
+        refusedMark: refusals.qualified ? '*' : '',
+        enabled: !off,
+        enabledAria: off ? 'false' : 'true',
+        enabledLabel: (off ? 'Switch on rule ' : 'Switch off rule ') + target,
+        toggle: () => this.toggleRateLimitRuleEnabled(identity),
+        openLabel: 'Open rule ' + target + ', ' + this.rlTierText(rule) + (now.tag ? ', ' + now.tag : ''),
+        rowCls: 'rl-row' + (changed ? ' changed' : '') + (off ? ' off' : ''),
+        open: () => this.openRateLimitRule(identity),
+        _sort: {
+          who: who.toLowerCase(), model: model.toLowerCase(),
+          rpm: Number(rule.rpm) || 0,
+          refused: refusals.known ? refusals.hits : -1
+        }
+      };
+    },
+
     get rlRuleRows() {
       const rules = this.rlDraft?.rules || [];
+      const key = this.rlSortKey || 'who';
+      const dir = this.rlSortDir || 1;
       return rules
         .map((rule, index) => ({ rule, index }))
-        .filter(({ rule }) => this.rlRuleMatchesFilter(rule))
-        .map(({ rule, index }) => {
-          const info = this.rlScopeInfo(rule.scope);
-          const identity = this.rlIdentity(rule.scope, rule.target);
-          const saved = (this.rateLimits?.rules || []).find(r => this.rlIdentity(r.scope, r.target) === identity);
-          const changed = !saved || JSON.stringify(this.buildRateLimitsPayload({ rules: [saved], plans: {}, default: {} }).rules[0]) !==
-            JSON.stringify(this.buildRateLimitsPayload({ rules: [rule], plans: {}, default: {} }).rules[0]);
-          const windows = (rule.schedule || []).length;
-          const off = rule.enabled === false;
-          // A switched-off rule enforces nothing, so it reports that rather than a tier it is not
-          // applying — and it says the tier is kept, which is the whole difference from deleting it.
-          const force = off
-            ? { dot: 'warn', text: 'off', sub: this.rlTierText(rule) + ' kept', title: 'This rule is switched off and enforces nothing' }
-            : changed
-              ? { dot: '', text: this.rlTierText(rule), sub: 'unsaved · in force once saved', title: '' }
-              : this.rlForceFor(rule);
-          const target = info.singleton ? info.name : this.rlTargetDisplay(rule.scope, rule.target);
-          return {
-            key: identity + ':' + index,
-            target,
-            // The stored target, for when the name is not enough to tell two keys apart.
-            targetTitle: info.singleton ? '' : String(rule.target || ''),
-            scope: info.singleton ? info.desc : info.name.replace(/^An? /, '').replace(/^./, c => c.toUpperCase()),
-            tier: this.rlTierText(rule),
-            windowsText: windows ? windows + ' window' + (windows === 1 ? '' : 's') : '—',
-            windowsCls: windows ? 'tag accent' : 'muted',
-            forceDot: 'rl-dot ' + force.dot,
-            forceText: force.text,
-            forceSub: force.sub,
-            forceTitle: force.title,
-            enabled: !off,
-            enabledAria: off ? 'false' : 'true',
-            enabledLabel: (off ? 'Switch on rule ' : 'Switch off rule ') + target,
-            toggle: () => this.toggleRateLimitRuleEnabled(identity),
-            ariaLabel: 'Open rule ' + target + (info.singleton ? '' : ' (' + info.name + ')') + ', ' + force.text,
-            rowCls: 'rl-row' + (changed ? ' changed' : '') + (off ? ' off' : ''),
-            open: () => this.openRateLimitRule(identity)
-          };
+        .filter(({ rule }) => !this.rlIsProtective(rule.scope) && this.rlRuleMatchesFilter(rule))
+        .map(({ rule, index }) => this.rlRuleRow(rule, index))
+        .sort((a, b) => {
+          const x = a._sort[key], y = b._sort[key];
+          // Unknown refusals sort last in either direction: "—" is not a small number.
+          if (key === 'refused' && (x < 0 || y < 0) && x !== y) return x < 0 ? 1 : -1;
+          const primary = typeof x === 'number' ? x - y : String(x).localeCompare(String(y));
+          if (primary) return primary * dir;
+          return a._sort.who.localeCompare(b._sort.who) || a._sort.model.localeCompare(b._sort.model);
         });
     },
 
-    get rlHasRules() { return (this.rlDraft?.rules || []).length > 0; },
-    get rlNoRules() { return !!this.rlDraft && (this.rlDraft.rules || []).length === 0; },
+    /**
+     * The two protective budgets, always both: configured ones open their rule, the others offer to
+     * be configured. Same stored rules, same drawer — only where they are listed differs.
+     */
+    get rlProtectiveCards() {
+      const rules = this.rlDraft?.rules || [];
+      return ['anonymous', 'auth_failure'].map((scope) => {
+        const info = this.rlScopeInfo(scope);
+        const index = rules.findIndex(r => r.scope === scope);
+        const row = index >= 0 ? this.rlRuleRow(rules[index], index) : null;
+        const who = this.rlIntentFor(scope).who;
+        return {
+          key: scope,
+          name: info.name,
+          desc: info.desc,
+          configured: !!row,
+          unset: !row,
+          canConfigure: !row && this.rateLimitsEditable,
+          unsetText: scope === 'anonymous'
+            ? 'Not set — anonymous callers are held to the default tier.'
+            : 'Not set — failed sign-ins fall back to the default tier.',
+          rpm: row ? row.rpm : '', burst: row ? row.burst : '', streams: row ? row.streams : '',
+          isAuthFailure: scope === 'auth_failure',
+          hasStreams: !!row && scope !== 'auth_failure',
+          nowTag: row ? row.nowTag : '', nowCls: row ? row.nowCls : '', hasNowTag: !!row && row.hasNowTag,
+          enabled: row ? row.enabled : false,
+          enabledAria: row ? row.enabledAria : 'false',
+          enabledLabel: row ? row.enabledLabel : '',
+          toggle: row ? row.toggle : () => {},
+          openLabel: row ? row.openLabel : 'Configure ' + info.name,
+          open: row ? row.open : () => {},
+          configure: () => this.startRateLimitNewRule({ who })
+        };
+      });
+    },
+
+    get rlHasRules() { return this.rlListRules().length > 0; },
+    get rlNoRules() { return !!this.rlDraft && this.rlListRules().length === 0; },
     get rlNoFilteredRules() { return this.rlHasRules && this.rlRuleRows.length === 0; },
 
     get rlZoneOptions() {
@@ -7742,6 +8093,7 @@ function adminApp() {
           cls: 'rl-win ' + (state === 'active' ? 'active' : state === 'expired' || state === 'invalid' ? 'muted' : ''),
           stateCls: 'status-chip ' + (state === 'active' ? 'ok' : state === 'invalid' ? 'fail' : state === 'expired' ? 'warn' : 'muted'),
           stateText,
+          domId: 'rl-win-' + i,
           edit: () => this.openRateLimitWindow(i)
         };
       });
@@ -7766,13 +8118,10 @@ function adminApp() {
           };
         });
 
-      const usage = this.rateLimitUsage;
-      const section = r.scope === 'model' ? usage?.byModel : r.scope === 'api_key' ? usage?.byApiKey : r.scope === 'tenant' ? usage?.byTenant : r.scope === 'tenant_model' ? usage?.byTenantModel : null;
-      const row = (section || []).find(x => String(x.key || '').toLowerCase() === String(r.target || '').toLowerCase());
-      const windowMinutes = usage?.windowMinutes || Number(this.rateLimitUsageMinutes) || 60;
+      const usage = this.rlRuleUsageView(r.scope, r.target);
 
       return {
-        eyebrow: 'Rule · ' + info.name,
+        eyebrow: (this.rlIsProtective(r.scope) ? 'Protective limit' : 'Rule · ' + info.name) + (this.rateLimitsEditable ? '' : ' · read-only'),
         title: info.singleton ? info.name : this.rlTargetDisplay(r.scope, r.target),
         // The name leads; the id the rule is stored against stays one glance away.
         subtitle: info.desc + (this.rlRuleKey(r.scope, r.target) ? ' Key id ' + String(r.target).split('|')[0] + '.' : ''),
@@ -7790,8 +8139,9 @@ function adminApp() {
         // The strip is drawn from whichever report the calendar holds, so it says which that is.
         bandsSource: this.rateLimitsDirty ? 'as drafted' : 'as saved',
         nowStyle: 'left: ' + pct(now) + '%',
-        usageText: row ? this.formatNum(row.requests) + ' requests · ' + this.formatNum(row.rejected) + ' refused · ' + (row.requestsPerMinute ?? 0).toFixed(1) + ' req/min' : 'No traffic recorded for this rule',
-        usageWindow: 'Last ' + windowMinutes + ' min',
+        usage,
+        readOnly: !this.rateLimitsEditable,
+        editable: this.rateLimitsEditable,
         error: this.rlRuleError || ''
       };
     },
@@ -8037,8 +8387,12 @@ function adminApp() {
       if (!kind || this.rlNewRulePick(field)) return { items: [], has: false, more: '' };
       const all = this.rlSuggestionsFor(kind, this.rlNewRule[field]);
       const max = 200;
+      const active = this.rlCombo?.field === field ? this.rlCombo.index : -1;
       const items = all.slice(0, max).map((s, i) => ({
         key: field + ':' + i, text: s.text, sub: s.sub,
+        id: this.rlComboOptionId(field, i),
+        selected: i === active ? 'true' : 'false',
+        cls: i === active ? 'active' : '',
         pick: () => this.pickRateLimitSuggestion(field, s.value, s.fill)
       }));
       return {
@@ -8242,6 +8596,14 @@ function adminApp() {
       const none = { items: [], has: false, more: '' };
       const subjectList = hasSubject ? this.rlSuggestList('subject', isKeys ? 'keys' : 'tenants') : none;
       const modelList = hasModel ? this.rlSuggestList('model', 'models') : none;
+      const closed = this.rlCombo?.closed || {};
+      const subjectOpen = subjectList.has && !closed.subject;
+      const modelOpen = modelList.has && !closed.model;
+      const combo = (field, open) => ({
+        expanded: open ? 'true' : 'false',
+        active: open && this.rlCombo?.field === field && this.rlCombo.index >= 0 ? this.rlComboOptionId(field, this.rlCombo.index) : ''
+      });
+      const liveError = !!n.tried && !!built.error;
       const modelText = hasModel ? String(n.model || '').trim() : '';
       const modelNote = !modelText ? ''
         : !canon.known ? 'Not a registered model. The rule is stored and applies as soon as a model with this id exists.'
@@ -8301,11 +8663,22 @@ function adminApp() {
         subjectLabel: isKeys ? 'Which API key?' : 'Which tenant?',
         subjectPlaceholder: isKeys ? 'Key name, prefix or id' : 'Tenant id or slug, e.g. acme',
         subjectSuggestions: subjectList.items,
-        hasSubjectSuggestions: subjectList.has,
+        hasSubjectSuggestions: subjectOpen,
         subjectMore: subjectList.more,
         modelSuggestions: modelList.items,
-        hasModelSuggestions: modelList.has,
+        hasModelSuggestions: modelOpen,
         modelMore: modelList.more,
+        // Combobox state for the two pickers: what the field announces about its list.
+        subjectCombo: combo('subject', subjectOpen),
+        modelCombo: combo('model', modelOpen),
+        // A message sits under the control it is about; only rule-wide ones use the shared alert.
+        subjectError: liveError && built.errorField === 'subject' ? built.error : '',
+        modelError: liveError && built.errorField === 'model' ? built.error : '',
+        tierError: liveError && built.errorField === 'tier' ? built.error : '',
+        generalError: liveError && !built.errorField ? built.error : '',
+        subjectInvalid: liveError && built.errorField === 'subject' ? 'true' : 'false',
+        modelInvalid: liveError && built.errorField === 'model' ? 'true' : 'false',
+        tierInvalid: liveError && built.errorField === 'tier' ? 'true' : 'false',
         keysLoading: isKeys && this.rlKeysState === 'loading',
         keysFailed: isKeys && this.rlKeysState === 'failed',
         keysEmpty: isKeys && keysReady && !(this.keys || []).some(k => !k.isRevoked && !k.isArchived),
@@ -8435,7 +8808,8 @@ function adminApp() {
           ? 'Tenants whose plan slug matches get this tier instead of the default. A tenant rule still overrides it.'
           : 'The tier every tenant gets unless a plan or a tenant rule matches them.',
         isPlan,
-        canRemove: isPlan && !t.isNew,
+        eyebrow: this.rateLimitsEditable ? 'Tier' : 'Tier · read-only',
+        canRemove: isPlan && !t.isNew && this.rateLimitsEditable,
         applyLabel: t.isNew ? 'Add plan' : 'Done',
         summary: who + ' may take ' + this.formatNum(tier.rpm) + ' requests a minute' +
           (tier.burst > 0 ? ', up to ' + this.formatNum(capacity) + ' at once after a quiet spell (' + this.formatNum(tier.rpm) + ' + ' + this.formatNum(tier.burst) + ' burst)' : '') +
@@ -8446,21 +8820,59 @@ function adminApp() {
     // The admin page runs under a CSP-friendly Alpine build that evaluates property paths only, so
     // every formatted cell below is precomputed here rather than in the template.
 
-    get rateLimitUsageTotals() {
+    // ---- Activity: what the usage report can and cannot say ----
+    //
+    // Three time bases live in one payload, and mixing them up is how this card used to mislead:
+    // totals and the by-subject sections are sums over the SELECTED WINDOW; `violations` are plain
+    // counters, cumulative SINCE THE GATEWAY STARTED; the adaptive and store blocks are CURRENT.
+    // Every label below names its basis. The by-subject rows are also subject-level — all traffic
+    // from a tenant, key or model, whichever limit decided it — so they are never called a rule's.
+
+    get rlActivityView() {
       const u = this.rateLimitUsage;
-      if (!u) return { requests: 0, admitted: 0, rejected: 0, refusedText: '0', partitionsText: '—' };
-      const rejected = u.totals?.rejected ?? 0;
-      const rate = u.totals?.rateRejected ?? 0;
-      const concurrency = u.totals?.concurrencyRejected ?? 0;
+      const has = !!(u && u.totals);
+      const failed = !!this.rateLimitUsageError;
+      const unavailable = this.rateLimitUsageUnavailable && !has;
+      const t = (has && u.totals) || {};
+      const requests = t.requests ?? 0;
+      const rejected = t.rejected ?? 0;
+      const rate = t.rateRejected ?? 0;
+      const concurrency = t.concurrencyRejected ?? 0;
+      const share = requests > 0 ? rejected / requests : 0;
+      const minutes = (has && u.windowMinutes) || Number(this.rateLimitUsageMinutes) || 60;
+      const asOf = has && u.generatedUtc ? this.rlFmtShort(u.generatedUtc) : '';
       return {
-        requests: u.totals?.requests ?? 0,
-        admitted: u.totals?.admitted ?? 0,
-        rejected: rejected,
+        has,
+        loading: this.rateLimitUsageLoading && !has,
+        refreshing: this.rateLimitUsageLoading,
+        // Stale: a report is on screen, and the refresh after it failed.
+        stale: has && failed,
+        staleText: has && failed
+          ? 'Activity could not be refreshed, so these figures are from ' + (asOf || 'an earlier load') + '. ' + this.rateLimitUsageError
+          : '',
+        failedEmpty: !has && failed && !unavailable,
+        failedText: !has && failed && !unavailable ? 'Activity could not be loaded. ' + this.rateLimitUsageError + ' Rules and tiers above are unaffected.' : '',
+        unavailable,
+        asOfText: asOf ? 'As of ' + asOf : '',
+        windowText: 'last ' + minutes + ' min',
+        windowHeading: 'In the selected window · last ' + minutes + ' min',
+        decisions: this.formatNum(requests),
+        admitted: this.formatNum(t.admitted ?? 0),
         // The split says which control is biting, and they call for opposite responses: a rate
         // refusal means the tier is too small for the traffic, a concurrency refusal means too many
         // streams are held open at once.
-        refusedText: rejected === 0 ? '0' : rejected + ' (' + rate + ' rate / ' + concurrency + ' streams)',
-        partitionsText: (u.store?.requestPartitions ?? 0) + ' / ' + (u.store?.maxPartitions ?? 0)
+        refusedText: rejected === 0 ? '0' : this.formatNum(rejected) + ' (' + this.formatNum(rate) + ' rate · ' + this.formatNum(concurrency) + ' streams)',
+        refusedCls: rejected > 0 ? 'mini-stat warn' : 'mini-stat',
+        refusalRateText: requests > 0 ? (share * 100).toFixed(share > 0 && share < 0.1 ? 1 : 0) + '%' : '—',
+        bucketsText: has ? this.formatNum(u.store?.requestPartitions ?? 0) + ' of ' + this.formatNum(u.store?.maxPartitions ?? 0) : '—',
+        backedOffText: has ? this.formatNum(u.adaptive?.backedOffPartitions ?? 0) : '—',
+        windowRows: [15, 60, 180].map((m) => ({
+          key: m,
+          label: m === 15 ? '15 min' : m === 60 ? '1 hour' : '3 hours',
+          cls: Number(this.rateLimitUsageMinutes) === m ? 'active' : '',
+          pressed: Number(this.rateLimitUsageMinutes) === m ? 'true' : 'false',
+          select: () => this.setRateLimitUsageMinutes(m)
+        }))
       };
     },
 
@@ -8473,30 +8885,277 @@ function adminApp() {
         : row.effectiveRpm + ' of ' + row.configuredRpm;
     },
 
-    get rateLimitUsageTenantModelRows() {
-      return (this.rateLimitUsage?.byTenantModel || []).map((row) => ({
-        key: row.key,
-        tenant: row.tenantId || '—',
-        model: row.modelId || '—',
-        requests: row.requests,
-        rejected: row.rejected,
-        rpmText: (row.requestsPerMinute ?? 0).toFixed(1),
-        limitText: this.rateLimitLimitText(row)
+    /** What an operator calls a tenant the tracker only knows by id. Anonymous partitions say so. */
+    rlTenantLabel(id) {
+      const raw = String(id || '');
+      if (raw.toLowerCase().startsWith('anon:')) return 'Anonymous · ' + raw.slice(5);
+      const known = this.rlKnownTenants().find(t => String(t.id || '').toLowerCase() === raw.toLowerCase());
+      return known?.slug || raw || '—';
+    },
+
+    /**
+     * The tenant id a rule target means, or null when the console cannot tell. A tenant rule may be
+     * written by slug, but the tracker keys everything by id — and the console only knows the
+     * tenants the overview lists. Traffic seen under the exact text proves it is an id.
+     */
+    rlResolveTenantId(target) {
+      const q = String(target || '').trim().toLowerCase();
+      if (!q) return null;
+      const known = this.rlKnownTenants();
+      const byId = known.find(t => String(t.id || '').toLowerCase() === q);
+      if (byId) return byId.id;
+      const bySlug = known.find(t => String(t.slug || '').toLowerCase() === q);
+      if (bySlug) return bySlug.id || null;
+      const seen = (this.rateLimitUsage?.byTenant || []).some(r => String(r.key || '').toLowerCase() === q);
+      return seen ? String(target).trim() : null;
+    },
+
+    /** The tracker's key for a rule's bucket, or null when it cannot be derived. */
+    rlUsageKeyFor(scope, target) {
+      if (scope === 'global') return '*';
+      if (scope === 'tenant') return this.rlResolveTenantId(target);
+      if (scope === 'tenant_model') {
+        const [tenant, ...model] = String(target || '').split('|');
+        const id = this.rlResolveTenantId(tenant);
+        return id ? id + '|' + model.join('|') : null;
+      }
+      return String(target || '');
+    },
+
+    /**
+     * Requests refused by one rule's bucket since the gateway started — the only per-limit figure
+     * the report carries. The tracker counts a refusal against the scope and partition that
+     * refused, which for model, key and pair rules IS the rule's bucket. For a tenant it is the
+     * tenant's whole allowance (plan tier composed with the rule), hence `qualified`. States other
+     * than 'ok' render as "—": an unknown is not a zero.
+     */
+    rlRefusalsFor(scope, target) {
+      const violations = this.rateLimitUsage?.violations;
+      if (!Array.isArray(violations)) return { state: 'unavailable', hits: 0, qualified: false };
+      // Metered by their own middleware, which reports to the metrics endpoint only.
+      if (scope === 'anonymous' || scope === 'auth_failure') return { state: 'untracked', hits: 0, qualified: false };
+      const key = this.rlUsageKeyFor(scope, target);
+      if (!key) return { state: 'unresolved', hits: 0, qualified: false };
+      const q = key.toLowerCase();
+      const rows = violations.filter(v => v.scope === scope && String(v.key || '').toLowerCase() === q);
+      // A full page of rows may have cut this one off; a short page is the whole list.
+      if (!rows.length && violations.length >= this.rlUsageTake()) return { state: 'truncated', hits: 0, qualified: false };
+      return {
+        state: 'ok',
+        hits: rows.reduce((n, v) => n + (Number(v.hits) || 0), 0),
+        qualified: scope === 'tenant'
+      };
+    },
+
+    /** The cell and tooltip for rlRefusalsFor — one wording for the list and the drawer. */
+    rlRefusalsView(scope, target) {
+      const r = this.rlRefusalsFor(scope, target);
+      const title = {
+        ok: r.qualified
+          ? 'Refused by this tenant’s allowance — its plan tier combined with this rule — since the gateway last started.'
+          : 'Refused by this limit since the gateway last started. When several limits apply, only the first to refuse is counted.',
+        unavailable: 'Activity is unavailable, so refusals are unknown.',
+        untracked: 'Protective limits are not part of the activity report; they are counted in the gateway metrics only.',
+        unresolved: 'Refusals are counted by tenant id. This rule is written by slug and the console cannot match it to an id.',
+        truncated: 'Not among the top ' + this.rlUsageTake() + ' limits by refusals.'
+      }[r.state] || '';
+      return {
+        state: r.state,
+        known: r.state === 'ok',
+        hits: r.hits,
+        text: r.state === 'ok' ? this.formatNum(r.hits) : '—',
+        qualified: r.qualified,
+        title
+      };
+    },
+
+    /**
+     * Subject-level traffic for a rule: every decision about that tenant, key or model in the
+     * window, whichever limit made it. Null row with a `state` that says exactly why there is none.
+     */
+    rlSubjectTrafficFor(scope, target) {
+      const u = this.rateLimitUsage;
+      if (!u || !u.totals) return { state: 'unavailable', row: null };
+      if (scope === 'global') {
+        const t = u.totals;
+        const minutes = u.windowMinutes || 60;
+        return { state: 'ok', row: { requests: t.requests ?? 0, rejected: t.rejected ?? 0, requestsPerMinute: (t.requests ?? 0) / minutes } };
+      }
+      const section = scope === 'model' ? u.byModel
+        : scope === 'api_key' ? u.byApiKey
+        : scope === 'tenant' ? u.byTenant
+        : scope === 'tenant_model' ? u.byTenantModel
+        : null;
+      // Key-on-model and the protective scopes have no section of their own in the report.
+      if (!section) return { state: 'nosection', row: null };
+      const key = this.rlUsageKeyFor(scope, target);
+      if (!key) return { state: 'unresolved', row: null };
+      const row = section.find(x => String(x.key || '').toLowerCase() === key.toLowerCase());
+      if (row) return { state: 'ok', row };
+      if (section.length >= this.rlUsageTake()) return { state: 'truncated', row: null };
+      return { state: (u.totals.requests ?? 0) === 0 ? 'quiet' : 'absent', row: null };
+    },
+
+    get rlUsageTabRows() {
+      const tabs = [
+        { id: 'tenant', label: 'Tenant' },
+        { id: 'key', label: 'API key' },
+        { id: 'model', label: 'Model' },
+        { id: 'tenantModel', label: 'Tenant × model' }
+      ];
+      return tabs.map(t => ({
+        key: t.id, label: t.label,
+        cls: this.rlUsageTab === t.id ? 'active' : '',
+        pressed: this.rlUsageTab === t.id ? 'true' : 'false',
+        select: () => this.setRateLimitUsageTab(t.id)
       }));
+    },
+
+    get rlUsageSubjectView() {
+      const u = this.rateLimitUsage || {};
+      const tab = this.rlUsageTab;
+      const section = tab === 'key' ? u.byApiKey : tab === 'model' ? u.byModel : tab === 'tenantModel' ? u.byTenantModel : u.byTenant;
+      const list = Array.isArray(section) ? section : [];
+      const rows = list.map((row) => {
+        let name;
+        let sub = '';
+        if (tab === 'key') {
+          const k = this.rlFindKey(row.apiKeyId || row.key);
+          name = k ? this.rlKeyName(k) : String(row.apiKeyId || row.key || '—');
+          sub = k ? String(k.id || '') : '';
+        } else if (tab === 'model') {
+          name = row.modelId || row.key || '—';
+        } else {
+          name = this.rlTenantLabel(row.tenantId || String(row.key || '').split('|')[0]);
+          if (tab === 'tenantModel') name += ' · ' + (row.modelId || '—');
+          sub = name.startsWith(String(row.tenantId || '')) ? '' : String(row.tenantId || '');
+        }
+        return {
+          key: String(row.key),
+          name, sub, hasSub: !!sub,
+          title: String(row.key || ''),
+          decisions: this.formatNum(row.requests ?? 0),
+          refused: this.formatNum(row.rejected ?? 0),
+          refusedCls: (row.rejected ?? 0) > 0 ? 'num rl-refused-some' : 'num',
+          rpmText: (row.requestsPerMinute ?? 0).toFixed(1),
+          limitText: this.rateLimitLimitText(row)
+        };
+      });
+      const take = this.rlUsageTake();
+      return {
+        rows,
+        has: rows.length > 0,
+        empty: !!this.rateLimitUsage?.totals && rows.length === 0,
+        emptyText: (u.totals?.requests ?? 0) === 0
+          ? 'No inference requests were decided in this window.'
+          : 'Nothing recorded under this heading in this window.',
+        subjectHeading: tab === 'key' ? 'API key' : tab === 'model' ? 'Model' : tab === 'tenantModel' ? 'Tenant · model' : 'Tenant',
+        // Refusals made before the body is read carry no model, so the model-bearing sections
+        // cannot show them. Said here rather than left for an operator to reconcile by hand.
+        note: tab === 'tenantModel' || tab === 'model'
+          ? 'Requests refused before the model was read — by the gateway, tenant or key limits — are counted under Tenant and API key, not here.'
+          : '',
+        hasNote: tab === 'tenantModel' || tab === 'model',
+        truncated: rows.length >= take ? 'Showing the ' + take + ' busiest.' : '',
+        caption: 'Traffic by ' + (tab === 'key' ? 'API key' : tab === 'model' ? 'model' : tab === 'tenantModel' ? 'tenant and model' : 'tenant') + ', selected window'
+      };
+    },
+
+    /**
+     * The rule drawer's two activity readings, kept apart because they answer different questions:
+     * how busy the rule's subject is (windowed, subject-level), and how often this limit itself
+     * refused (cumulative). Neither is ever described as "traffic for this rule".
+     */
+    rlRuleUsageView(scope, target) {
+      const info = this.rlScopeInfo(scope);
+      const traffic = this.rlSubjectTrafficFor(scope, target);
+      const refusals = this.rlRefusalsView(scope, target);
+      const minutes = this.rateLimitUsage?.windowMinutes || Number(this.rateLimitUsageMinutes) || 60;
+      const display = info.singleton ? info.name : this.rlTargetDisplay(scope, target);
+      const who = scope === 'global' ? 'the whole gateway' : display;
+      const kind = scope === 'model' ? 'model' : scope === 'api_key' ? 'key' : scope === 'global' ? 'gateway' : 'tenant';
+      const row = traffic.row;
+      const trafficText = {
+        ok: row ? this.formatNum(row.requests ?? 0) + ' decisions · ' + this.formatNum(row.rejected ?? 0) + ' refused by any limit · ' + (row.requestsPerMinute ?? 0).toFixed(1) + ' avg req/min' : '',
+        quiet: 'No decisions were recorded in this window.',
+        absent: 'No decisions recorded from ' + who + ' in this window.',
+        truncated: who + ' is not among the ' + this.rlUsageTake() + ' busiest subjects in this window, so its traffic is not in the report.',
+        unresolved: 'Traffic is recorded by tenant id. This rule is written by slug and the console cannot match it to an id.',
+        unavailable: 'Activity is unavailable.',
+        nosection: ''
+      }[traffic.state] || '';
+      return {
+        // No section in the report for this scope: say nothing rather than claim silence.
+        showTraffic: traffic.state !== 'nosection',
+        noSection: traffic.state === 'nosection',
+        noSectionText: 'The activity report has no per-subject figures for this kind of limit.',
+        trafficTitle: 'Traffic from ' + who,
+        trafficWindow: '· last ' + minutes + ' min · subject-level',
+        trafficText,
+        trafficNote: scope === 'global'
+          ? 'Every inference decision in the window, whichever limit made it.'
+          : 'Every request from this ' + kind + ', whichever limit decided it — not only the ones this rule refused.',
+        refusedText: refusals.text,
+        refusedKnown: refusals.known,
+        refusedNote: refusals.title,
+        stale: !!this.rateLimitUsageError && !!this.rateLimitUsage?.totals,
+        staleText: 'Activity could not be refreshed; these figures may be out of date.'
+      };
+    },
+
+    /** A limit the tracker names by scope and partition, in the words the rest of the page uses. */
+    rlLimitLabel(scope, key) {
+      const raw = String(key || '');
+      const [first, ...rest] = raw.split('|');
+      const model = rest.join('|');
+      const keyName = (id) => { const k = this.rlFindKey(id); return k ? this.rlKeyName(k) : id; };
+      switch (scope) {
+        case 'global': return { name: 'Whole gateway', sub: 'every inference request' };
+        case 'tenant': return raw.toLowerCase().startsWith('anon:')
+          ? { name: 'Anonymous caller ' + raw.slice(5), sub: 'anonymous allowance' }
+          : { name: this.rlTenantLabel(raw), sub: 'tenant allowance · plan tier or tenant rule' };
+        case 'api_key': return { name: keyName(raw), sub: 'API key · all models' };
+        case 'model': return { name: raw, sub: 'everyone on this model' };
+        case 'tenant_model': return { name: this.rlTenantLabel(first) + ' · ' + model, sub: 'tenant on one model' };
+        case 'api_key_model': return { name: keyName(first) + ' · ' + model, sub: 'API key on one model' };
+        default: return { name: raw || scope, sub: scope };
+      }
+    },
+
+    /** The draft rule whose bucket a violation row names, if there is one. */
+    rlRuleForUsageKey(scope, key) {
+      const q = String(key || '').toLowerCase();
+      return (this.rlDraft?.rules || []).find(r =>
+        r.scope === scope && String(this.rlUsageKeyFor(r.scope, r.target) || '').toLowerCase() === q) || null;
     },
 
     get rateLimitViolationRows() {
-      return (this.rateLimitUsage?.violations || []).map((v) => ({
-        key: v.scope + '|' + v.key + '|' + v.control,
-        scope: v.scope,
-        target: v.key,
-        control: v.control,
-        hits: v.hits
-      }));
+      const list = this.rateLimitUsage?.violations;
+      return (Array.isArray(list) ? list : []).map((v) => {
+        const label = this.rlLimitLabel(v.scope, v.key);
+        const rule = this.rlRuleForUsageKey(v.scope, v.key);
+        const identity = rule ? this.rlIdentity(rule.scope, rule.target) : '';
+        return {
+          key: v.scope + '|' + v.key + '|' + v.control,
+          name: label.name,
+          sub: label.sub,
+          title: String(v.key || ''),
+          control: v.control === 'concurrency' ? 'streams' : 'rate',
+          hits: this.formatNum(v.hits ?? 0),
+          hasRule: !!rule,
+          noRule: !rule,
+          openLabel: 'Open rule ' + label.name,
+          open: () => { if (identity) this.openRateLimitRule(identity); }
+        };
+      });
     },
 
     get rateLimitHasViolations() { return this.rateLimitViolationRows.length > 0; },
-    get rateLimitNoViolations() { return !!this.rateLimitUsage && this.rateLimitViolationRows.length === 0; },
+    get rateLimitNoViolations() { return !!this.rateLimitUsage?.totals && this.rateLimitViolationRows.length === 0; },
+    get rateLimitViolationsTruncated() {
+      const n = this.rateLimitViolationRows.length;
+      return n >= this.rlUsageTake() ? 'Showing the top ' + n + ' limits by refusals.' : '';
+    },
 
     get rateLimitAdaptiveRows() {
       return (this.rateLimitUsage?.adaptive?.models || []).map((m) => ({

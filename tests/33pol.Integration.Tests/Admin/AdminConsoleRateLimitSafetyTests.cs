@@ -285,8 +285,12 @@ public sealed class AdminConsoleRateLimitSafetyTests
         js.Should().Contain("text: 'off', sub: this.rlTierText(rule) + ' kept'");
         js.Should().Contain("enabledText: off ? 'Switched off — the tier and windows below are kept' : 'Enforced'");
 
-        // Dimmed, not struck through: it is a rule an operator is coming back to.
-        css.Should().Contain(".rl-row.off td { opacity: 0.62; }");
+        // Stepped down, not struck through: it is a rule an operator is coming back to. Secondary
+        // text rather than an opacity, which took the row's small captions below contrast minimums;
+        // the "off" tag in the Now column is what says why.
+        css.Should().Contain(".rl-row.off .rl-limit-nums b, .rl-row.off .rl-model { color: var(--text-secondary); font-weight: var(--fw-normal); }");
+        css.Should().NotContain(".rl-row.off td { opacity");
+        js.Should().Contain("if (off) now = { tag: 'off', cls: 'tag warn', sub: 'numbers kept' };");
     }
 
     /// <summary>
@@ -356,7 +360,9 @@ public sealed class AdminConsoleRateLimitSafetyTests
         }
 
         // The deliberate exits keep calling the immediate close.
-        html.Should().Contain("@click=\"closeRateLimitRule\">Cancel</button>");
+        // (Cancel is shown only with edit rights; a read-only drawer offers Close on the same handler.)
+        html.Should().Contain("@click=\"closeRateLimitRule\" x-show=\"rlRuleDrawerView.editable\">Cancel</button>");
+        html.Should().Contain("@click=\"closeRateLimitRule\" x-show=\"rlRuleDrawerView.readOnly\">Close</button>");
         html.Should().Contain("@click=\"closeRateLimitWindow\">Back</button>");
     }
 

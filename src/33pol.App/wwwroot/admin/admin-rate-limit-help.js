@@ -90,7 +90,7 @@
       target: {
         title: 'Which key, tenant or model?',
         text: 'Pick from the list. An API key is found by its name, prefix or id and has to exist: the rule is stored against the key’s id, never its name and never the secret. A model alias is stored as the model’s own id, because that is what limits are matched on. A tenant is its id or its slug; both match the same tenant. Tenants are not checked against what exists: a typo is stored and simply never matches.',
-        example: 'Tenant “acme” on model “gpt-4” is stored as the target acme|gpt-4; a key on a model is stored as the key’s id, then |gpt-4. Confirm it bites afterwards in the Usage report: a working rule appears under Limits being hit or changes a row’s limit in force.',
+        example: 'Tenant “acme” on model “gpt-4” is stored as the target acme|gpt-4; a key on a model is stored as the key’s id, then |gpt-4. Confirm it bites afterwards under Activity: a rule that refuses requests gains a Refused count in the rules list and a row under Refusals by limit, counted since the gateway last started.',
         topic: 'combine'
       },
       limit: {
@@ -217,7 +217,7 @@
           { term: 'Applies without a restart', text: 'Saving the page writes to the gateway database and the new numbers are in force for the next request. Tightening bites immediately; a raised limit fills up at the new rate rather than jumping to full.', example: '' },
           { term: 'Response headers', text: 'Every inference response carries X-33pol-RateLimit-Limit (RPM + Burst), -Remaining, -Reset (seconds until full) and -Scope, which names the scope that refused, or on success the one closest to refusing. That is how a client tells “my key is exhausted” from “this model is busy”.', example: 'X-33pol-RateLimit-Scope: model with Remaining: 0 tells the client to try another model, not to slow its whole integration.' }
         ],
-        tip: 'The Usage report at the bottom of the page shows live counters per tenant and model and which limits are being hit. It is the fastest way to see whether a rule is doing anything.'
+        tip: 'The Activity section shows live counters per tenant, key and model for the window you pick, and — counted since the gateway last started — which limits refused requests. The Refused column in the rules list is the same count per rule. It is the fastest way to see whether a rule is doing anything.'
       },
       {
         id: 'numbers',
@@ -268,8 +268,8 @@
         items: [
           { term: 'Adding a rule only tightens', text: 'Because every applicable rule must admit the request, a new rule can never let a caller do more than before. There is no “most specific wins” to reason about. To loosen something, raise the number that is binding or remove the rule.', example: 'Model 600 rpm plus tenant 1,000 rpm: the tenant gets at most 600 on that model. Raising the tenant to 2,000 changes nothing there.' },
           { term: 'Refunds on refusal', text: 'Tokens are taken from each bucket in turn and handed back if a later scope refuses. A caller blocked by a narrow model rule does not also burn its tenant budget on every retry.', example: '' },
-          { term: 'Targets are not validated', text: 'A rule for a model, tenant or key that does not exist is stored and never matches, which is useful while provisioning and a trap when it is a typo. Tenants match by id or slug; keys only by id.', example: 'A rule on “gpt4” while the model is registered as “gpt-4” does nothing. The Usage report shows no hits on it; fix the target.' },
-          { term: 'Which scope refused?', text: 'The X-33pol-RateLimit-Scope response header names it, and the Usage report’s Limits being hit table lists refusals by scope and target.', example: '' },
+          { term: 'Targets are not validated', text: 'A rule for a model, tenant or key that does not exist is stored and never matches, which is useful while provisioning and a trap when it is a typo. Tenants match by id or slug; keys only by id.', example: 'A rule on “gpt4” while the model is registered as “gpt-4” does nothing. Its Refused count stays at 0 and it never appears under Refusals by limit; fix the target.' },
+          { term: 'Which scope refused?', text: 'The X-33pol-RateLimit-Scope response header names it, and the Refusals by limit table under Activity lists refusals by limit since the gateway last started. When several limits apply to a request, only the first one to refuse it is counted.', example: '' },
           { term: 'Windows change a rule, not the rules around it', text: 'A window replaces its own rule’s numbers for a span of time. Other rules and tiers still apply as before, so an off-peak window on a model does not raise the tenants’ tiers.', example: 'Model 600 rpm with a night window of 1,200: a tenant on a 120 rpm plan still gets 120 at night.' }
         ],
         tip: 'When a caller reports unexpected 429s with a generous rule, look for another scope binding tighter: usually the tenant tier or the gateway ceiling.'
@@ -312,7 +312,7 @@
           { term: 'Switching a rule off', text: 'The On switch on a rule stages it as not enforced while keeping its tier and windows, so a rule can be retired for a while and brought back unchanged. Delete permanently removes it.', example: '' },
           { term: 'Read-only', text: 'When the page cannot be edited it says why at the top: the key lacks the admin role, or the server refused the last save. Editing controls are disabled until the reason is gone.', example: '' }
         ],
-        tip: 'A rule that is dangerous to get wrong (the gateway ceiling, Failed sign-ins) deserves a look at the Usage report a few minutes after saving.'
+        tip: 'A rule that is dangerous to get wrong (the gateway ceiling, Failed sign-ins) deserves a look at Activity a few minutes after saving.'
       },
       {
         id: 'recipes',
@@ -329,7 +329,7 @@
           { term: 'Stop credential guessing', text: 'Keep a Failed sign-ins rule. Fresh installs have 60/20; the wizard proposes 20/10. Streams must stay 0.', example: 'Failed sign-ins 20 rpm, 10 burst: an address is refused after 30 bad keys in a minute.' },
           { term: 'Bound anonymous traffic to public models', text: 'Keep an Anonymous callers rule whenever any model is public. Each address gets its own bucket.', example: 'Anonymous callers 30 rpm, 10 burst, 2 streams.' }
         ],
-        tip: 'Add the rule, save, then open the Usage report: a rule that bites shows up under Limits being hit within a few minutes of real traffic.'
+        tip: 'Add the rule, save, then look at Activity: a rule that bites gains a Refused count, and a row under Refusals by limit, within a few minutes of real traffic.'
       },
       {
         id: 'faq',
@@ -418,7 +418,7 @@
       target: {
         title: 'کدام کلید، تننت یا مدل؟',
         text: 'از فهرست انتخاب کنید. کلید API با نام، پیشوند یا شناسه‌اش پیدا می‌شود و باید وجود داشته باشد: قاعده روی شناسهٴ کلید ذخیره می‌شود، نه نام آن و نه خودِ رمز. نام مستعار مدل به شناسهٴ اصلی مدل ذخیره می‌شود، چون محدودیت‌ها با همان تطبیق داده می‌شوند. تننت با شناسه یا اسلاگش نوشته می‌شود؛ هر دو به همان تننت می‌رسند. وجود تننت بررسی نمی‌شود: غلط تایپی ذخیره می‌شود و هرگز تطبیق نمی‌کند.',
-        example: 'تننت «acme» روی مدل «gpt-4» به شکل هدف acme|gpt-4 ذخیره می‌شود؛ کلید روی مدل به شکل شناسهٴ کلید و سپس ‎|gpt-4. بعداً در گزارش مصرف مطمئن شوید که اثر دارد: قاعدهٴ کارآمد در جدول «محدودیت‌های برخوردشده» ظاهر می‌شود یا «محدودیت جاری» یک ردیف را تغییر می‌دهد.',
+        example: 'تننت «acme» روی مدل «gpt-4» به شکل هدف acme|gpt-4 ذخیره می‌شود؛ کلید روی مدل به شکل شناسهٴ کلید و سپس ‎|gpt-4. بعداً در بخش «فعالیت» مطمئن شوید که اثر دارد: قاعده‌ای که درخواست رد می‌کند در فهرست قاعده‌ها شمارهٴ «ردشده» می‌گیرد و در جدول «ردها به‌ازای محدودیت» ظاهر می‌شود؛ این شمارش از آخرین راه‌اندازی گیت‌وی است.',
         topic: 'combine'
       },
       limit: {
@@ -545,7 +545,7 @@
           { term: 'بدون راه‌اندازی مجدد اعمال می‌شود', text: 'ذخیرهٴ صفحه در پایگاه دادهٴ گیت‌وی نوشته می‌شود و اعداد جدید برای درخواست بعدی برقرارند. سخت‌ترکردن فوراً اثر می‌کند؛ محدودیت بالاتر با نرخ جدید پر می‌شود و یک‌باره پر نمی‌شود.', example: '' },
           { term: 'هدرهای پاسخ', text: 'هر پاسخ استنتاج، هدرهای X-33pol-RateLimit-Limit (RPM + Burst)، -Remaining، -Reset (ثانیه تا پرشدن) و -Scope را دارد؛ Scope دامنه‌ای را نام می‌برد که رد کرده، یا در موفقیت، نزدیک‌ترین به ردکردن را. کلاینت از همین می‌فهمد «کلید من تمام شده» یا «این مدل شلوغ است».', example: 'X-33pol-RateLimit-Scope: model با Remaining: 0 به کلاینت می‌گوید مدل دیگری را امتحان کند، نه اینکه کل اتصالش را آهسته کند.' }
         ],
-        tip: 'گزارش مصرف در پایین صفحه، شمارنده‌های زنده به‌ازای تننت و مدل و محدودیت‌های برخوردشده را نشان می‌دهد. سریع‌ترین راه برای فهمیدن این‌که یک قاعده کاری می‌کند یا نه، همین است.'
+        tip: 'بخش «فعالیت» شمارنده‌های زنده به‌ازای تننت، کلید و مدل را برای بازه‌ای که انتخاب می‌کنید نشان می‌دهد، و — با شمارش از آخرین راه‌اندازی گیت‌وی — این‌که کدام محدودیت‌ها درخواست رد کرده‌اند. ستون «ردشده» در فهرست قاعده‌ها همان شمارش به‌ازای هر قاعده است. سریع‌ترین راه برای فهمیدن این‌که یک قاعده کاری می‌کند یا نه، همین است.'
       },
       {
         id: 'numbers',
@@ -596,8 +596,8 @@
         items: [
           { term: 'اضافه‌کردن قاعده فقط سخت‌تر می‌کند', text: 'چون هر قاعدهٴ مربوط باید درخواست را بپذیرد، قاعدهٴ جدید هیچ‌وقت نمی‌تواند به درخواست‌دهنده اجازهٴ بیشتری از قبل بدهد. «مشخص‌تر برنده است» وجود ندارد که لازم باشد به آن فکر کنید. برای آسان‌کردن، عددِ محدودکننده را بالا ببرید یا قاعده را حذف کنید.', example: 'مدل ۶۰۰ RPM به‌علاوهٴ تننت ۱٬۰۰۰ RPM: تننت روی آن مدل حداکثر ۶۰۰ می‌گیرد. بالابردن تننت به ۲٬۰۰۰ در آنجا هیچ‌چیز را تغییر نمی‌دهد.' },
           { term: 'بازگشت توکن در رد', text: 'توکن‌ها به‌ترتیب از هر سطل برداشته می‌شوند و اگر دامنهٴ بعدی رد کند، پس داده می‌شوند. درخواست‌دهنده‌ای که با قاعدهٴ باریک مدل مسدود شده، با هر تلاش مجدد بودجهٴ تننتش را هم نمی‌سوزاند.', example: '' },
-          { term: 'هدف‌ها اعتبارسنجی نمی‌شوند', text: 'قاعده‌ای برای مدل، تننت یا کلیدی که وجود ندارد ذخیره می‌شود و هیچ‌وقت منطبق نمی‌شود؛ در زمان راه‌اندازی مفید است و در اشتباه تایپی، یک تله. تننت با شناسه یا اسلاگ منطبق می‌شود؛ کلید فقط با شناسه.', example: 'قاعده روی «gpt4» وقتی مدل با نام «gpt-4» ثبت شده، کاری نمی‌کند. گزارش مصرف هیچ برخوردی روی آن نشان نمی‌دهد؛ هدف را درست کنید.' },
-          { term: 'کدام دامنه رد کرد؟', text: 'هدر پاسخ X-33pol-RateLimit-Scope آن را نام می‌برد، و جدول «محدودیت‌های برخوردشده» در گزارش مصرف، ردها را به‌ازای دامنه و هدف فهرست می‌کند.', example: '' },
+          { term: 'هدف‌ها اعتبارسنجی نمی‌شوند', text: 'قاعده‌ای برای مدل، تننت یا کلیدی که وجود ندارد ذخیره می‌شود و هیچ‌وقت منطبق نمی‌شود؛ در زمان راه‌اندازی مفید است و در اشتباه تایپی، یک تله. تننت با شناسه یا اسلاگ منطبق می‌شود؛ کلید فقط با شناسه.', example: 'قاعده روی «gpt4» وقتی مدل با نام «gpt-4» ثبت شده، کاری نمی‌کند. شمارهٴ «ردشده»ی آن صفر می‌ماند و هیچ‌وقت در «ردها به‌ازای محدودیت» ظاهر نمی‌شود؛ هدف را درست کنید.' },
+          { term: 'کدام دامنه رد کرد؟', text: 'هدر پاسخ X-33pol-RateLimit-Scope آن را نام می‌برد، و جدول «ردها به‌ازای محدودیت» در بخش «فعالیت»، ردها را به‌ازای هر محدودیت از آخرین راه‌اندازی گیت‌وی فهرست می‌کند. وقتی چند محدودیت روی یک درخواست اعمال می‌شود، فقط اولین محدودیتی که آن را رد می‌کند شمرده می‌شود.', example: '' },
           { term: 'پنجره‌ها قاعدهٴ خودشان را تغییر می‌دهند، نه قاعده‌های اطراف را', text: 'پنجره اعداد قاعدهٴ خودش را برای یک بازه جایگزین می‌کند. قاعده‌ها و سطح‌های دیگر مثل قبل اعمال می‌شوند، پس پنجرهٴ خارج از پیک روی یک مدل، سطح تننت‌ها را بالا نمی‌برد.', example: 'مدل ۶۰۰ RPM با پنجرهٴ شبانهٴ ۱٬۲۰۰: تننتی روی پلن ۱۲۰ RPM در شب هم ۱۲۰ می‌گیرد.' }
         ],
         tip: 'وقتی یک درخواست‌دهنده با قاعدهٴ سخاوتمندانه از 429 های غیرمنتظره خبر می‌دهد، دنبال دامنهٴ دیگری بگردید که سخت‌تر محدود می‌کند: معمولاً سطح تننت یا سقف گیت‌وی.'
@@ -640,7 +640,7 @@
           { term: 'خاموش‌کردن یک قاعده', text: 'کلید «روشن» روی یک قاعده، آن را به‌عنوان اعمال‌نشده در پیش‌نویس می‌گذارد و سطح و پنجره‌هایش را نگه می‌دارد، پس قاعده می‌تواند مدتی کنار گذاشته شود و بدون تغییر برگردد. «حذف دائمی» آن را پاک می‌کند.', example: '' },
           { term: 'فقط‌خواندنی', text: 'وقتی صفحه قابل ویرایش نیست، بالای صفحه می‌گوید چرا: کلید نقش مدیر ندارد، یا سرور آخرین ذخیره را رد کرده است. کنترل‌های ویرایش تا رفع دلیل غیرفعال‌اند.', example: '' }
         ],
-        tip: 'قاعده‌ای که اشتباهش خطرناک است (سقف گیت‌وی، ورودهای ناموفق) ارزش دارد چند دقیقه بعد از ذخیره در گزارش مصرف بررسی شود.'
+        tip: 'قاعده‌ای که اشتباهش خطرناک است (سقف گیت‌وی، ورودهای ناموفق) ارزش دارد چند دقیقه بعد از ذخیره در بخش «فعالیت» بررسی شود.'
       },
       {
         id: 'recipes',
@@ -657,7 +657,7 @@
           { term: 'جلوگیری از حدس‌زدن اعتبارنامه', text: 'قاعدهٴ «ورودهای ناموفق» را نگه دارید. نصب تازه ۶۰/۲۰ دارد؛ جادوگر ۲۰/۱۰ پیشنهاد می‌کند. Streams باید ۰ بماند.', example: 'ورودهای ناموفق ۲۰ RPM، ۱۰ Burst: یک نشانی پس از ۳۰ کلید نامعتبر در یک دقیقه رد می‌شود.' },
           { term: 'محدودکردن ترافیک ناشناس به مدل‌های عمومی', text: 'هر وقت مدلی عمومی است قاعدهٴ «درخواست‌دهندگان ناشناس» را نگه دارید. هر نشانی سطل خودش را می‌گیرد.', example: 'درخواست‌دهندگان ناشناس ۳۰ RPM، ۱۰ Burst، ۲ Streams.' }
         ],
-        tip: 'قاعده را اضافه کنید، ذخیره کنید، بعد گزارش مصرف را باز کنید: قاعده‌ای که اثر می‌کند چند دقیقه پس از ترافیک واقعی در «محدودیت‌های برخوردشده» ظاهر می‌شود.'
+        tip: 'قاعده را اضافه کنید، ذخیره کنید، بعد بخش «فعالیت» را ببینید: قاعده‌ای که اثر می‌کند چند دقیقه پس از ترافیک واقعی شمارهٴ «ردشده» می‌گیرد و در «ردها به‌ازای محدودیت» ظاهر می‌شود.'
       },
       {
         id: 'faq',
