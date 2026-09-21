@@ -67,6 +67,56 @@ public sealed class RateLimitPolicyResolver(
         return baseTier;
     }
 
+    /// <summary>
+    /// Which configured control supplies the tenant scope's rate and which supplies its stream cap,
+    /// for the per-limit usage report. Mirrors <see cref="ResolveTenantTier"/> and
+    /// <see cref="Compose"/> exactly: an override with a rate owns both, one without keeps the base
+    /// tier's rate and owns only the cap.
+    /// </summary>
+    internal static (string RateLimitId, string StreamLimitId) ResolveTenantTierSource(
+        Core.Configuration.RateLimitsConfigSection rateLimits,
+        string? planSlug,
+        string? tenantId,
+        string? tenantSlug)
+    {
+        var baseId = !string.IsNullOrWhiteSpace(planSlug) && rateLimits.Plans.ContainsKey(planSlug)
+            ? RateLimitLimitIds.Plan(planSlug)
+            : RateLimitLimitIds.Default;
+
+        string? matched = null;
+        if (TryResolveTenantOverride(rateLimits, tenantId, out var tier))
+        {
+            matched = tenantId;
+        }
+        else if (TryResolveTenantOverride(rateLimits, tenantSlug, out tier))
+        {
+            matched = tenantSlug;
+        }
+
+        if (matched is null)
+        {
+            return (baseId, baseId);
+        }
+
+        var overrideId = RateLimitLimitIds.Rule(RateLimitScopeNames.Tenant, matched);
+        return (tier.Rpm > 0 ? overrideId : baseId, overrideId);
+    }
+
+    /// <summary>The anonymous counterpart of <see cref="ResolveTenantTierSource"/>.</summary>
+    internal static (string RateLimitId, string StreamLimitId) ResolveAnonymousTierSource(
+        Core.Configuration.RateLimitsConfigSection rateLimits,
+        bool authenticationRequired)
+    {
+        if (!authenticationRequired || rateLimits.Anonymous.EnforcesNothing)
+        {
+            return (RateLimitLimitIds.Default, RateLimitLimitIds.Default);
+        }
+
+        return (
+            rateLimits.Anonymous.Rpm > 0 ? RateLimitLimitIds.Anonymous : RateLimitLimitIds.Default,
+            RateLimitLimitIds.Anonymous);
+    }
+
     private static bool TryResolveTenantOverride(
         Core.Configuration.RateLimitsConfigSection rateLimits,
         string? target,

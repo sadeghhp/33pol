@@ -162,6 +162,18 @@ public sealed class RateLimitConfigAdminService(
         return RateLimitWindowPreviewBuilder.Build(rule, candidateName, _timeProvider.GetUtcNow());
     }
 
+    /// <remarks>
+    /// Resolves the repository exactly as <see cref="UpdateAsync"/> does, so the two cannot disagree:
+    /// the one precondition a save has beyond validation is that a database is configured.
+    /// </remarks>
+    public RateLimitWriteAvailability GetWriteAvailability()
+    {
+        using var scope = scopeFactory.CreateScope();
+        return scope.ServiceProvider.GetService<IRateLimitSettingsRepository>() is null
+            ? new RateLimitWriteAvailability(false, RateLimitWriteAvailability.StoreUnavailable)
+            : RateLimitWriteAvailability.Available;
+    }
+
     public async Task<RateLimitConfigUpdateResult> UpdateAsync(
         bool enabled,
         bool adaptiveEnabled,

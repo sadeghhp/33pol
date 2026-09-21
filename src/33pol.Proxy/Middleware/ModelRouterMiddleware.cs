@@ -841,7 +841,11 @@ public sealed class ModelRouterMiddleware
         }
 
         var plan = _rateLimitPlanResolver.Resolve(subject, modelId);
-        return _rateLimitStore.TryAcquireStreamSlots(plan.Rules, out lease);
+        var acquired = _rateLimitStore.TryAcquireStreamSlots(plan.Rules, out lease);
+
+        // Per limit: a stream started under every cap, or one refusal under the cap that was full.
+        _rateLimitUsage?.RecordStreamStage(plan.Rules, acquired.IsAcquired ? null : acquired.PartitionKey);
+        return acquired;
     }
 
     /// <summary>

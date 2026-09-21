@@ -32,6 +32,72 @@ public interface IRateLimitUsageTracker
 
     /// <summary>Drops every counter. Used by the admin "reset stats" action.</summary>
     void Reset();
+
+    /// <summary>
+    /// Records what one rate stage did to each configured limit in <paramref name="rules"/>, for the
+    /// per-limit section of the report. Called from the request path: no allocation, no shared lock.
+    /// </summary>
+    /// <param name="rules">The rule set exactly as it was handed to the store.</param>
+    /// <param name="outcome">How the stage ended for this request.</param>
+    /// <param name="refusedPartitionKey">
+    /// With <see cref="RateLimitStageOutcome.Refused"/>, the bucket that refused. Rules before it
+    /// were passed and refunded, rules after it were never asked.
+    /// </param>
+    void RecordRateStage(
+        ReadOnlySpan<RateLimitRule> rules,
+        RateLimitStageOutcome outcome,
+        string? refusedPartitionKey = null)
+    {
+    }
+
+    /// <summary>
+    /// Records a stream-slot decision against the limits that cap concurrency: one stream started
+    /// under each, or one refusal under the cap that was full.
+    /// </summary>
+    void RecordStreamStage(ReadOnlySpan<RateLimitRule> rules, string? refusedPartitionKey = null)
+    {
+    }
+
+    /// <summary>
+    /// Records one step of the failed-credential limiter, which is enforced outside the rule set and
+    /// so has no <see cref="RateLimitRule"/> to describe it.
+    /// </summary>
+    void RecordAuthFailure(RateLimitAuthFailureStep step, int enforcedRpm)
+    {
+    }
+
+    /// <summary>
+    /// Per-minute points over the last <paramref name="minutes"/>, gateway-wide or for one limit.
+    /// Null when <paramref name="limitId"/> names a limit the tracker holds nothing for.
+    /// </summary>
+    RateLimitUsageSeries? BuildSeries(int minutes, int bucketMinutes, string? limitId, bool anonymousBucket, DateTimeOffset now) =>
+        null;
+}
+
+/// <summary>How one rate stage ended, from the point of view of the limits in it.</summary>
+public enum RateLimitStageOutcome
+{
+    /// <summary>Every limit gave a token and the request went on: each one was charged.</summary>
+    Charged = 0,
+
+    /// <summary>One limit in this stage refused; the ones before it were refunded.</summary>
+    Refused = 1,
+
+    /// <summary>Every limit here gave a token, then a later stage refused and these were refunded.</summary>
+    RefundedByLaterStage = 2,
+}
+
+/// <summary>The three things the failed-credential limiter does.</summary>
+public enum RateLimitAuthFailureStep
+{
+    /// <summary>A credentialed request was checked against the address block's budget and let on.</summary>
+    Checked = 0,
+
+    /// <summary>The budget was spent and the credential could not be proven: answered 429.</summary>
+    Refused = 1,
+
+    /// <summary>The credential was rejected downstream, so one token was debited.</summary>
+    Charged = 2,
 }
 
 /// <param name="TenantId">The tenant, or the anonymous partition key for unauthenticated traffic.</param>

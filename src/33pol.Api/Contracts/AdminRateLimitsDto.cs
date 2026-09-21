@@ -48,6 +48,18 @@ public sealed class AdminRateLimitsDto
     /// just another field the caller controls.
     /// </remarks>
     public long Version { get; set; }
+
+    /// <summary>
+    /// Whether a PUT could be persisted right now. Response-only; ignored on a PUT. Null on a
+    /// request body, so a client echoing the GET back does not have to strip it.
+    /// </summary>
+    public bool? Writable { get; set; }
+
+    /// <summary>
+    /// Why not, as a stable code, when <see cref="Writable"/> is false: <c>store_unavailable</c>
+    /// (no database is configured; limits come from appsettings). Null otherwise.
+    /// </summary>
+    public string? ReadOnlyReason { get; set; }
 }
 
 /// <param name="Scope">

@@ -24,12 +24,12 @@
   <link rel="preload" as="font" type="font/woff2" href="vendor/fonts/IBMPlexSans-400.woff2" crossorigin />
   <link rel="preload" as="font" type="font/woff2" href="vendor/fonts/IBMPlexSans-500.woff2" crossorigin />
   <link rel="stylesheet" href="vendor/fonts.css?v=1" />
-  <link rel="stylesheet" href="admin.css?v=31" />
+  <link rel="stylesheet" href="admin.css?v=34" />
   <script defer src="admin-icons.js?v=12"></script>
   <script defer src="admin-errors.js?v=8"></script>
   <script defer src="admin-store.js?v=12"></script>
   <script defer src="admin-rate-limit-help.js?v=4"></script>
-  <script defer src="admin-app.js?v=51"></script>
+  <script defer src="admin-app.js?v=54"></script>
   <script defer src="vendor/alpine-csp-3.14.9.min.js"></script>
 </head>
 <body x-data="adminApp" x-cloak @keydown.window="onModalKeydown">
@@ -1803,44 +1803,56 @@
               <div class="rl-page">
                 <p class="notice warn" x-show="rateLimitsReadOnlyText" role="status"><span class="tag muted">read-only</span> <span x-text="rateLimitsReadOnlyText"></span> Rules and tiers can still be opened and inspected.</p>
 
-                <!-- Header: the master switch, what is configured, and the page-level actions. -->
+                <!-- Summary: what production is doing (the saved master switch, never the draft), whether
+                     anything is being refused, and what changes next. Each figure names its own time
+                     basis and is a button to the section or filter that explains it. -->
                 <div class="card rl-status">
                   <label class="rl-switch" title="Enforce rate limits">
                     <input type="checkbox" role="switch" x-model="mdl.rlDraft.enabled" :aria-checked="rlStatusView.enabledAria" :disabled="rateLimitsLocked" aria-label="Enforce rate limits" />
                     <span class="rl-switch-track"></span>
                   </label>
                   <div class="rl-status-text">
-                    <div class="rl-status-title" :class="rlStatusView.titleClass" x-text="rlStatusView.title"></div>
+                    <div class="rl-status-title" :class="rlStatusView.titleClass"><span x-text="rlStatusView.title"></span><span :class="rlSummaryView.healthCls" x-show="rlSummaryView.health"> · <span x-text="rlSummaryView.health"></span></span> <span class="tag accent" x-show="rlStatusView.hasPending" x-text="rlStatusView.pending"></span></div>
                     <div class="rl-status-sub">
                       <label class="rl-switch sm" title="When the gateway is saturated, model limits may be reduced below the numbers set here, and restored as load falls.">
-                        <input type="checkbox" role="switch" x-model="mdl.rlDraft.adaptiveEnabled" :aria-checked="rlStatusView.adaptiveAria" :disabled="rateLimitsLocked" aria-label="Adapt model limits to load" />
+                        <input type="checkbox" role="switch" x-model="mdl.rlDraft.adaptiveEnabled" :aria-checked="rlStatusView.adaptiveAria" :disabled="rateLimitsLocked" aria-label="Adapt model limits to load" aria-describedby="rl-adaptive-desc" />
                         <span class="rl-switch-track"></span>
                         <span x-text="rlStatusView.adaptiveText"></span>
                       </label>
+                      <span class="sr-only" id="rl-adaptive-desc">When the gateway is saturated, model limits may be reduced below the numbers set here, and restored as load falls.</span>
+                      <span x-show="rlSummaryView.adaptiveDetail"><span class="rl-sep" aria-hidden="true">·</span><span x-text="rlSummaryView.adaptiveDetail"></span></span>
+                      <span class="tag accent" x-show="rlStatusView.hasAdaptivePending" x-text="rlStatusView.adaptivePending"></span>
                       <span class="rl-sep" aria-hidden="true">·</span>
                       <span>changes apply without a restart</span>
                     </div>
                   </div>
-                  <div class="rl-stats">
-                    <div class="rl-stat"><span class="v" x-text="rlStatusView.rules"></span><span class="l">Rules</span></div>
-                    <div class="rl-stat"><span class="v" x-text="rlStatusView.windows"></span><span class="l">Windows</span></div>
-                    <div class="rl-stat" :title="rlStatusView.scheduleError"><span class="v" :class="rlStatusView.activeClass"><span class="rl-dot on" x-show="rlStatusView.activeClass" aria-hidden="true"></span><span x-text="rlStatusView.active"></span></span><span class="l">Windows active now</span></div>
-                    <div class="rl-stat"><span class="v" x-text="rlStatusView.next"></span><span class="l" x-text="rlStatusView.nextSub"></span></div>
-                  </div>
                   <div class="rl-status-actions">
                     <button type="button" class="action secondary sm" @click="rlHelpView.open.overview" :dir="rlHelpView.dir" :lang="rlHelpView.lang" :title="rlHelpView.ui.guideSub"><span class="icon" x-html="icons.book-open"></span> <span x-text="rlHelpView.ui.guide"></span></button>
-                    <div class="rl-seg rl-lang" role="group" :aria-label="rlHelpView.ui.language">
-                      <template x-for="l in rlHelpView.langRows" :key="l.key"><button type="button" :class="l.cls" :aria-pressed="l.pressed" :lang="l.key" :title="l.name" @click="l.select" x-text="l.label"></button></template>
-                    </div>
-                    <button type="button" class="action ghost sm" @click="scrollToRateLimitUsage">Activity</button>
                     <button type="button" class="action ghost sm" @click="reloadRateLimits" :disabled="loadingSettings"><span class="icon" x-html="icons.refresh"></span> Reload</button>
                   </div>
+                  <div class="mini-stats rl-opsum" :title="rlStatusView.scheduleError">
+                    <template x-for="m in rlSummaryView.stats" :key="m.key">
+                      <button type="button" :class="m.cls" @click="m.go" :title="m.title" :aria-label="m.ariaLabel"><span class="ms-label" x-text="m.label"></span><span class="ms-value" x-text="m.value"></span><span class="ms-foot" x-show="m.hasSub" x-text="m.sub"></span></button>
+                    </template>
+                  </div>
+                  <p class="hint rl-sum-warn" x-show="rlStatusView.scheduleError" role="status"><span class="tag level-error">schedule unavailable</span> Windows active now and the next change are unknown: <span x-text="rlStatusView.scheduleError"></span> <button type="button" class="rl-link" @click="loadRateLimitSchedule">Retry</button></p>
+                  <div class="rl-trend" x-show="rlSeriesView.show">
+                    <svg class="rl-trend-svg" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+                      <path class="spark-fill rl-trend-refused-fill" :d="rlSeriesView.refusedFill"></path>
+                      <polyline class="spark-line rl-trend-refused" :points="rlSeriesView.refusedLine"></polyline>
+                    </svg>
+                    <span class="rl-trend-text"><span class="ms-label" x-text="rlSeriesView.label"></span> <b x-text="rlSeriesView.text" aria-hidden="true"></b><span class="sr-only" x-text="rlSeriesView.sr"></span> <span class="hint" x-show="rlSeriesView.partialText" x-text="rlSeriesView.partialText"></span></span>
+                  </div>
+                  <p class="rl-fresh" role="status"><span x-show="rlActivityFreshView.has" x-text="rlActivityFreshView.text"></span> <span class="tag warn" x-show="rlActivityFreshView.stale">stale</span> <span class="tag warn" x-show="rlTrackerView.saturated">activity incomplete</span></p>
                 </div>
-                <p class="notice error" x-show="rateLimitsDisabled" role="status">Rate limiting is disabled — clients can send unlimited requests. Quotas and budgets still apply. Schedules are paused, not deleted.</p>
+                <nav class="rl-anchors" aria-label="Rate limits sections">
+                  <template x-for="n in rlSummaryView.nav" :key="n.key"><button type="button" class="rl-link" @click="n.go" x-text="n.label"></button></template>
+                </nav>
+                <p class="notice error" x-show="rateLimitsSavedDisabled" role="status">Rate limiting is disabled — clients can send unlimited requests. Quotas and budgets still apply. Schedules are paused, not deleted.</p>
                 <p class="hint rl-lede">Over a limit, a request is refused with <code>429</code> and a <code>Retry-After</code> telling the client when to come back. Nothing is queued or slowed &mdash; a refused request is a failed one.</p>
 
                 <!-- Rules -->
-                <div class="rl-section">
+                <div class="rl-section" id="rl-rules">
                   <div class="rl-section-head">
                     <div><h3>Rules</h3><p class="sub">Limits on one model, key or tenant. Every rule that applies must admit a request, so a rule only ever tightens. Open a rule to change it or schedule it.</p></div>
                     <div class="rl-drawer-head-actions">
@@ -1851,25 +1863,40 @@
                   <div class="toolbar rl-toolbar" x-show="rlHasRules">
                     <div class="filter-field rl-filter">
                       <span class="icon" x-html="icons.search"></span>
-                      <input type="search" id="rl-filter-input" x-model="mdl.rlFilterText" placeholder="Find a model, tenant, key or window" aria-label="Filter rules" />
+                      <input type="search" id="rl-filter-input" x-model.debounce.200ms="mdl.rlFilterText" placeholder="Find a model, tenant, key or window" aria-label="Filter rules" />
                     </div>
                     <div class="rl-chips" role="group" aria-label="Filter by who is limited">
                       <span class="rl-chips-label" aria-hidden="true">Who</span>
-                      <template x-for="c in rlScopeChips.who" :key="c.key">
+                      <template x-for="c in rlIntentChips.who" :key="c.key">
                         <button type="button" class="preset" :class="c.cls" :aria-pressed="c.pressed" @click="c.select"><span x-text="c.label"></span> <i x-text="c.count"></i></button>
                       </template>
                     </div>
                     <div class="rl-chips" role="group" aria-label="Filter by model coverage">
                       <span class="rl-chips-label" aria-hidden="true">Model</span>
-                      <template x-for="c in rlScopeChips.where" :key="c.key">
+                      <template x-for="c in rlIntentChips.where" :key="c.key">
                         <button type="button" class="preset" :class="c.cls" :aria-pressed="c.pressed" @click="c.select"><span x-text="c.label"></span> <i x-text="c.count"></i></button>
                       </template>
                     </div>
                     <div class="rl-chips" role="group" aria-label="Filter by status">
-                      <template x-for="c in rlScopeChips.flags" :key="c.key">
-                        <button type="button" class="preset" :class="c.cls" :aria-pressed="c.pressed" @click="c.select"><span x-text="c.label"></span> <i x-text="c.count"></i></button>
+                      <span class="rl-chips-label" aria-hidden="true">Status</span>
+                      <template x-for="c in rlFlagChips" :key="c.key">
+                        <button type="button" class="preset" :class="c.cls" :aria-pressed="c.pressed" :title="c.title" @click="c.select"><span x-text="c.label"></span> <i x-text="c.count"></i><span class="sr-only" x-text="c.srTitle"></span></button>
                       </template>
                     </div>
+                    <!-- The header row, and its sort buttons with it, is hidden at narrow widths. -->
+                    <label class="field-inline rl-sort-select">Sort
+                      <select class="inline-select" x-model="mdl.rlSortChoice" aria-label="Sort rules">
+                        <option value="who:asc">Who, A–Z</option>
+                        <option value="who:desc">Who, Z–A</option>
+                        <option value="model:asc">Model, A–Z</option>
+                        <option value="model:desc">Model, Z–A</option>
+                        <option value="rpm:asc">RPM, low to high</option>
+                        <option value="rpm:desc">RPM, high to low</option>
+                        <option value="refused:desc">Refused, most first</option>
+                        <option value="refused:asc">Refused, fewest first</option>
+                      </select>
+                    </label>
+                    <span class="hint rl-rule-count" role="status" x-text="rlRuleCountView.text"></span>
                   </div>
                   <div class="empty-state" x-show="rlNoRules">
                     <span class="empty-state-icon icon" x-html="icons.layers"></span>
@@ -1880,17 +1907,18 @@
                     <span>No rule matches these filters.</span>
                     <button type="button" class="action secondary sm" @click="clearRateLimitFilters">Clear filters</button>
                   </div>
-                  <div class="rl-rules card" x-show="rlRuleRows.length">
+                  <div class="rl-rules card" x-show="rlHasMatchingRules">
                     <table class="rl-rules-table">
                       <caption class="sr-only">Rate-limit rules. Refused counts are cumulative since the gateway last started.</caption>
                       <thead><tr>
-                        <th class="rl-col-on">On</th>
+                        <th scope="col" class="rl-col-on">On</th>
                         <th scope="col" class="rl-col-who" :aria-sort="rlSortView.who.ariaSort"><button type="button" class="th-sort" @click="rlSortView.who.toggle">Who<span x-html="rlSortView.who.icon"></span></button></th>
                         <th scope="col" class="rl-col-model" :aria-sort="rlSortView.model.ariaSort"><button type="button" class="th-sort" @click="rlSortView.model.toggle">Model<span x-html="rlSortView.model.icon"></span></button></th>
                         <th scope="col" class="rl-col-limit" :aria-sort="rlSortView.rpm.ariaSort"><button type="button" class="th-sort" @click="rlSortView.rpm.toggle" title="Sort by rpm">Limit<span x-html="rlSortView.rpm.icon"></span></button><span class="rl-limit-units" aria-hidden="true"><span>rpm</span><span>burst</span><span>streams</span></span></th>
-                        <th scope="col" class="rl-col-now">Now</th>
-                        <th scope="col" class="rl-col-refused num" :aria-sort="rlSortView.refused.ariaSort"><button type="button" class="th-sort" @click="rlSortView.refused.toggle" title="Requests refused by this limit since the gateway last started. When several limits apply, only the first to refuse is counted.">Refused<span x-html="rlSortView.refused.icon"></span></button><span class="rl-th-sub">since restart</span></th>
-                        <th class="rl-col-chev"><span class="sr-only">Open</span></th>
+                        <th scope="col" class="rl-col-now" title="What production applies right now: the saved rule, its schedule, the master switch and load-aware shedding. Unsaved edits never change this column.">Enforcing now<span class="rl-th-sub">saved configuration</span></th>
+                        <th scope="col" class="rl-col-refused num" :aria-sort="rlSortView.refused.ariaSort"><button type="button" class="th-sort" @click="rlSortView.refused.toggle" title="Requests refused by this limit since the gateway last started. When several limits apply, only the first to refuse is counted.">Refused<span x-html="rlSortView.refused.icon"></span></button><span class="rl-th-sub">since restart</span><span class="rl-th-sub rl-th-age" x-show="rlActivityFreshView.short" x-text="rlActivityFreshView.short"></span></th>
+                        <th scope="col" class="rl-col-traffic num" :aria-sort="rlSortView.activity.ariaSort"><button type="button" class="th-sort" @click="rlSortView.activity.toggle" title="Decisions made by this limit itself in the selected activity window, reported by the gateway per limit. Sorts by how close the busiest minute came to the rate.">Limit activity<span x-html="rlSortView.activity.icon"></span></button><span class="rl-th-sub" x-text="rlActivityView.windowText"></span></th>
+                        <th scope="col" class="rl-col-chev"><span class="sr-only">Open</span></th>
                       </tr></thead>
                       <tbody>
                         <template x-for="r in rlRuleRows" :key="r.key">
@@ -1901,89 +1929,34 @@
                                 <span class="rl-switch-track"></span>
                               </label>
                             </td>
-                            <td class="rl-col-who" @click="r.open"><span class="rl-target" x-text="r.who" :title="r.targetTitle"></span><span class="rl-scope" x-text="r.whoKind"></span></td>
+                            <td class="rl-col-who" @click="r.open"><span class="rl-target" x-text="r.who" :title="r.targetTitle"></span> <span class="tag accent rl-draft-tag" x-show="r.hasDraftTag" x-text="r.draftTag"></span><span class="rl-scope" x-text="r.whoKind"></span></td>
                             <td class="rl-col-model" @click="r.open"><span class="sr-only rl-cell-label">Model: </span><span :class="r.modelCls" x-text="r.model" :title="r.modelTitle"></span></td>
                             <td class="rl-col-limit" @click="r.open">
                               <span class="rl-limit-nums">
-                                <span :title="r.rpmTitle"><b x-text="r.rpm"></b><i>rpm</i></span>
+                                <span :title="r.rpmTitle"><b x-text="r.rpm"></b><span class="sr-only" x-text="r.rpmSr"></span><i>rpm</i></span>
                                 <span title="Extra requests allowed at once"><b x-text="r.burst"></b><i>burst</i></span>
-                                <span :title="r.streamsTitle"><b x-text="r.streams"></b><i>streams</i></span>
+                                <span :title="r.streamsTitle"><b x-text="r.streams" :aria-hidden="r.streamsUnlimited"></b><span class="sr-only" x-show="r.streamsUnlimited">unlimited</span><i>streams</i></span>
                               </span>
+                              <span class="rl-was" x-show="r.hasWas" x-text="r.was"></span>
                             </td>
-                            <td class="rl-col-now" @click="r.open" :title="r.nowTitle">
-                              <span :class="r.nowCls" x-show="r.hasNowTag" x-text="r.nowTag"></span>
-                              <span class="muted" x-show="r.noNow" aria-hidden="true">—</span><span class="sr-only" x-show="r.noNow">No schedule; the limit shown applies</span>
-                              <span class="rl-until" x-show="r.hasNowSub" x-text="r.nowSub"></span>
+                            <td class="rl-col-now" @click="r.open" :title="r.enfTitle">
+                              <span class="rl-cell-label" aria-hidden="true">Enforcing now </span>
+                              <span class="rl-enf-text" x-text="r.enfText"></span>
+                              <template x-for="g in r.enfTags" :key="g.key"><span :class="g.cls" x-text="g.text"></span></template>
+                              <span class="rl-until" x-show="r.hasEnfSub" x-text="r.enfSub"></span>
                             </td>
-                            <td :class="r.refusedCls" @click="r.open" :title="r.refusedTitle"><span class="rl-cell-label" aria-hidden="true">Refused </span><span x-text="r.refused"></span><span x-text="r.refusedMark" aria-hidden="true"></span></td>
+                            <td :class="r.refusedCls" @click="r.open" :title="r.refusedTitle"><span class="rl-cell-label" aria-hidden="true">Refused </span><span x-text="r.refused" :aria-hidden="r.refusedUnknown"></span><span class="sr-only" x-show="r.refusedUnknown" x-text="r.refusedWhy"></span><span x-text="r.refusedMark" aria-hidden="true"></span><span class="sr-only" x-show="r.refusedQualified"> by the tenant’s whole allowance, plan and rule together</span></td>
+                            <td :class="r.actCls" @click="r.open" :title="r.actTitle"><span class="rl-cell-label" aria-hidden="true">Limit activity </span><span x-text="r.actText" :aria-hidden="r.actUnknown"></span><span class="sr-only" x-show="r.actUnknown" x-text="r.actSr"></span><span class="rl-act-sub" x-show="r.hasActSub" x-text="r.actSub"></span><span class="load-track rl-act-bar" x-show="r.hasActBar" aria-hidden="true"><span :class="r.actBarCls" :style="r.actBarStyle"></span></span></td>
                             <td class="rl-col-chev"><button type="button" class="icon-btn" @click="r.open" :aria-label="r.openLabel" :title="r.openLabel"><span class="icon" x-html="icons.chevron-right"></span></button></td>
                           </tr>
                         </template>
                       </tbody>
                     </table>
                   </div>
-                  <p class="hint rl-rules-foot" x-show="rlRuleRows.length"><b>Refused</b> counts requests this limit itself refused since the gateway last started; when several limits apply, only the first to refuse is counted. <span aria-hidden="true">*</span> For a tenant it is the tenant&rsquo;s whole allowance &mdash; plan tier and rule together. &ldquo;&mdash;&rdquo; means unknown, not zero.</p>
-                </div>
-
-                <!-- Protective limits: stored as rules, listed apart. They guard the gateway itself and
-                     are not an answer to "who is limited, on which model". -->
-                <div class="rl-section">
-                  <div class="rl-section-head">
-                    <div><h3>Protective limits</h3><p class="sub">Two budgets that protect the gateway itself, each counted per client address. They have no subject and no model, so they are kept apart from the rules above.</p></div>
-                    <button type="button" class="icon-btn" @click="rlHelpView.open.scopes" :title="rlHelpView.ui.helpTitle" :aria-label="rlHelpView.ui.help"><span class="icon" x-html="icons.help-circle"></span></button>
+                  <div class="toolbar rl-more" x-show="rlRuleCountView.hasMore">
+                    <button type="button" class="action secondary" @click="showMoreRateLimitRules" x-text="rlRuleCountView.moreLabel"></button>
                   </div>
-                  <div class="rl-protect">
-                    <template x-for="p in rlProtectiveCards" :key="p.key">
-                      <div class="rl-protect-card card">
-                        <div class="rl-protect-head">
-                          <span class="icon" x-html="icons.shield"></span>
-                          <div class="rl-protect-name"><b x-text="p.name"></b><span x-text="p.desc"></span></div>
-                          <label class="rl-switch sm" x-show="p.configured" :title="p.enabledLabel">
-                            <input type="checkbox" role="switch" :checked="p.enabled" :aria-checked="p.enabledAria" :aria-label="p.enabledLabel" :disabled="rateLimitsLocked" @change="p.toggle" />
-                            <span class="rl-switch-track"></span>
-                          </label>
-                        </div>
-                        <div class="rl-protect-body" x-show="p.configured">
-                          <span class="rl-tier-nums">
-                            <span class="rl-tier-n"><b x-text="p.rpm"></b><span>rpm</span></span>
-                            <span class="rl-tier-n"><b x-text="p.burst"></b><span>burst</span></span>
-                            <span class="rl-tier-n" x-show="p.hasStreams"><b x-text="p.streams"></b><span>streams</span></span>
-                          </span>
-                          <span :class="p.nowCls" x-show="p.hasNowTag" x-text="p.nowTag"></span>
-                          <span class="spacer"></span>
-                          <button type="button" class="action secondary sm" @click="p.open" :aria-label="p.openLabel">Open</button>
-                        </div>
-                        <div class="rl-protect-body" x-show="p.unset">
-                          <span class="hint" x-text="p.unsetText"></span>
-                          <span class="spacer"></span>
-                          <button type="button" class="action secondary sm" x-show="p.canConfigure" @click="p.configure" :aria-label="p.openLabel">Configure</button>
-                        </div>
-                      </div>
-                    </template>
-                  </div>
-                </div>
-
-                <!-- Tenant tiers -->
-                <div class="rl-section">
-                  <div class="rl-section-head">
-                    <div><h3>Tenant tiers</h3><p class="sub">What a tenant gets by plan. Every key a tenant holds shares its tier; a tenant rule below overrides it.</p></div>
-                    <div class="rl-drawer-head-actions">
-                      <button type="button" class="icon-btn" @click="rlHelpView.open.tiers" :title="rlHelpView.ui.helpTitle" :aria-label="rlHelpView.ui.help"><span class="icon" x-html="icons.help-circle"></span></button>
-                      <button type="button" class="action secondary" @click="openRateLimitNewPlan" x-show="rateLimitsEditable"><span class="icon" x-html="icons.plus"></span> Add plan</button>
-                    </div>
-                  </div>
-                  <div class="rl-tiers">
-                    <template x-for="t in rlTierCards" :key="t.key">
-                      <button type="button" class="rl-tier" @click="t.edit" :aria-label="t.openLabel">
-                        <span class="rl-tier-name"><span x-text="t.name"></span><span class="rl-tier-who" x-text="t.who"></span></span>
-                        <span class="rl-tier-nums">
-                          <span class="rl-tier-n"><b x-text="t.rpm"></b><span>rpm</span></span>
-                          <span class="rl-tier-n"><b x-text="t.burst"></b><span>burst</span></span>
-                          <span class="rl-tier-n" :title="t.streamsTitle"><b x-text="t.streams"></b><span>streams</span></span>
-                        </span>
-                      </button>
-                    </template>
-                  </div>
+                  <p class="hint rl-rules-foot" x-show="rlHasMatchingRules"><b>Limit</b> is what Save would store; <b>Enforcing now</b> is what the gateway applies at this moment and never reflects unsaved edits. <b>Refused</b> counts requests this limit itself refused since the gateway last started; when several limits apply, only the first to refuse is counted. <span aria-hidden="true">†</span> For a tenant it is the tenant&rsquo;s whole allowance &mdash; plan tier and rule together. &ldquo;&mdash;&rdquo; means unknown, not zero; open the rule to see why. <span class="rl-traffic-note"><b>Limit activity</b> is what this limit itself decided in the activity window, as the gateway reports it per limit: <b>passed</b> means the request cleared every rate limit and this one kept its token; <b>refused</b> means this limit answered 429. The peak and its percentage appear only where a limit counts a single bucket; &ldquo;unknown&rdquo; means the gateway&rsquo;s counters were full, not that nothing happened. Traffic by subject is a different figure and stays in Activity.</span></p>
                 </div>
 
                 <!-- Rate-limit activity. Three time bases share this card and each block names its own:
@@ -1996,8 +1969,9 @@
                       <p class="sub">Whether limits are being reached. Counters live in the gateway&rsquo;s memory and start again when it restarts &mdash; durable spend is on the Usage page, and rejections by reason over 24 hours are on Overview &rarr; Policy.</p>
                     </div>
                     <div class="rl-activity-controls">
-                      <span class="rl-asof" x-show="rlActivityView.asOfText" x-text="rlActivityView.asOfText"></span>
+                      <span class="rl-asof" x-show="rlActivityFreshView.has" x-text="rlActivityFreshView.text" :title="rlActivityView.asOfText"></span>
                       <span class="tag warn" x-show="rlActivityView.stale">stale</span>
+                      <label class="checkbox field-inline" title="Refresh these figures every 30 seconds while this page is open"><input type="checkbox" x-model="mdl.rlUsageAutoRefresh" /> Auto-refresh</label>
                       <div class="rl-seg" role="group" aria-label="Activity window">
                         <template x-for="w in rlActivityView.windowRows" :key="w.key"><button type="button" :class="w.cls" :aria-pressed="w.pressed" @click="w.select" x-text="w.label"></button></template>
                       </div>
@@ -2006,9 +1980,11 @@
                   </div>
                   <div class="card">
                   <p class="hint" x-show="rlActivityView.loading" role="status">Loading activity…</p>
-                  <p class="notice warn" x-show="rlActivityView.stale" role="alert"><span x-text="rlActivityView.staleText"></span> <button type="button" class="rl-link" @click="loadRateLimitUsage">Retry</button></p>
+                  <p class="notice warn" x-show="rlActivityView.stale" role="status"><span x-text="rlActivityView.staleText"></span> <button type="button" class="rl-link" @click="loadRateLimitUsage">Retry</button></p>
                   <p class="notice warn" x-show="rlActivityView.failedEmpty" role="alert"><span x-text="rlActivityView.failedText"></span> <button type="button" class="rl-link" @click="loadRateLimitUsage">Retry</button></p>
                   <p class="hint" x-show="rlActivityView.unavailable" role="status">Activity tracking is not enabled in this deployment.</p>
+                  <p class="notice warn rl-tracker-note" x-show="rlTrackerView.saturated" role="status"><span class="tag warn">incomplete</span> <span x-text="rlTrackerView.text"></span></p>
+                  <p class="hint rl-tracker-note" x-show="rlTrackerView.full" role="status" x-text="rlTrackerView.fullText"></p>
                   <template x-if="rlActivityView.has">
                     <div>
                       <h4 class="rl-subhead"><span x-text="rlActivityView.windowHeading"></span></h4>
@@ -2028,30 +2004,42 @@
                       </div>
                       <p class="hint">All requests from each subject, whichever limit decided them. <span x-show="rlUsageSubjectView.hasNote" x-text="rlUsageSubjectView.note"></span></p>
                       <p class="hint" x-show="rlUsageSubjectView.empty" x-text="rlUsageSubjectView.emptyText"></p>
+                      <div class="toolbar rl-usage-tools" x-show="rlUsageSubjectView.has">
+                        <label class="filter-field narrow"><span class="icon" x-html="icons.search"></span><input type="search" x-model.debounce.200ms="mdl.rlUsageFilter" placeholder="Find a subject" aria-label="Filter traffic by subject" /></label>
+                        <span class="hint" role="status" x-text="rlUsageSubjectView.countText"></span>
+                      </div>
+                      <p class="hint" x-show="rlUsageSubjectView.noMatch" role="status">No subject matches.</p>
                       <div class="table-wrap" x-show="rlUsageSubjectView.has">
                         <table class="t-rl-usage">
                           <caption class="sr-only" x-text="rlUsageSubjectView.caption"></caption>
                           <thead><tr>
                             <th scope="col" x-text="rlUsageSubjectView.subjectHeading"></th>
-                            <th scope="col" class="num">Decisions</th>
-                            <th scope="col" class="num">Refused</th>
-                            <th scope="col" class="num" title="Average over the selected window, not the current rate">Avg req/min</th>
-                            <th scope="col" class="num" title="Sustained rpm of the tightest limit on this subject’s most recent request. It may belong to a wider limit, such as a model or the gateway.">Last limit seen</th>
+                            <th scope="col" class="num" :aria-sort="rlUsageSubjectView.sort.decisions.ariaSort"><button type="button" class="th-sort" @click="rlUsageSubjectView.sort.decisions.toggle">Decisions<span x-html="rlUsageSubjectView.sort.decisions.icon"></span></button></th>
+                            <th scope="col" class="num" :aria-sort="rlUsageSubjectView.sort.refused.ariaSort"><button type="button" class="th-sort" @click="rlUsageSubjectView.sort.refused.toggle">Refused<span x-html="rlUsageSubjectView.sort.refused.icon"></span></button></th>
+                            <th scope="col" class="num rl-wide-col" :aria-sort="rlUsageSubjectView.sort.rpm.ariaSort" title="Average over the selected window, not the current rate"><button type="button" class="th-sort" @click="rlUsageSubjectView.sort.rpm.toggle">Avg req/min<span x-html="rlUsageSubjectView.sort.rpm.icon"></span></button></th>
+                            <th scope="col" class="rl-col-load rl-wide-col" :aria-sort="rlUsageSubjectView.sort.load.ariaSort" title="The window’s average rate as a share of the last limit seen for this subject. That limit may belong to a wider scope, such as a model or the gateway — this is a pressure hint for the subject, not any one rule’s utilisation."><button type="button" class="th-sort" @click="rlUsageSubjectView.sort.load.toggle">Load vs last limit<span x-html="rlUsageSubjectView.sort.load.icon"></span></button></th>
+                            <th scope="col" class="num rl-wide-col" title="Sustained rpm of the tightest limit on this subject’s most recent request. It may belong to a wider limit, such as a model or the gateway.">Last limit seen</th>
+                            <th scope="col" class="cell-actions"><span class="sr-only">Actions</span></th>
                           </tr></thead>
                           <tbody>
                             <template x-for="row in rlUsageSubjectView.rows" :key="row.key">
                               <tr>
-                                <td :title="row.title"><span class="rl-subject" x-text="row.name"></span><span class="rl-scope mono" x-show="row.hasSub" x-text="row.sub"></span></td>
-                                <td class="num" x-text="row.decisions"></td>
-                                <td :class="row.refusedCls" x-text="row.refused"></td>
-                                <td class="num" x-text="row.rpmText"></td>
-                                <td class="num" x-text="row.limitText"></td>
+                                <td :title="row.title"><span class="rl-subject" x-text="row.name"></span><span class="rl-scope mono" x-show="row.hasSub" x-text="row.sub"></span><span class="rl-narrow-line" x-text="row.secondLine"></span></td>
+                                <td class="num"><span class="rl-xs-label" aria-hidden="true">Decisions </span><span x-text="row.decisions"></span></td>
+                                <td :class="row.refusedCls"><span class="rl-xs-label" aria-hidden="true">Refused </span><span x-text="row.refused"></span></td>
+                                <td class="num rl-wide-col" x-text="row.rpmText"></td>
+                                <td class="rl-col-load rl-wide-col"><span class="rl-load" x-show="row.hasLoad"><span class="load-track" aria-hidden="true"><span :class="row.loadCls" :style="row.loadStyle"></span></span><span class="num" x-text="row.loadText"></span></span><span class="muted" x-show="row.noLoad"><span aria-hidden="true">—</span><span class="sr-only">no limit seen</span></span></td>
+                                <td class="num rl-wide-col" x-text="row.limitText"></td>
+                                <td class="cell-actions"><div class="row-actions">
+                                  <button type="button" class="icon-btn" @click="row.showRules" :title="row.showRulesLabel" :aria-label="row.showRulesLabel"><span class="icon" x-html="icons.layers"></span></button>
+                                  <button type="button" class="icon-btn" x-show="row.canLimit" @click="row.limit" :title="row.limitLabel" :aria-label="row.limitLabel"><span class="icon" x-html="icons.plus"></span></button>
+                                </div></td>
                               </tr>
                             </template>
                           </tbody>
                         </table>
                       </div>
-                      <p class="hint" x-show="rlUsageSubjectView.has">Avg req/min is the window average, not the current rate. Last limit seen is the sustained rpm of the tightest limit on the subject&rsquo;s most recent request &mdash; it may belong to a wider limit. <span x-text="rlUsageSubjectView.truncated"></span></p>
+                      <p class="hint" x-show="rlUsageSubjectView.has">Avg req/min is the window average, not the current rate. Last limit seen is the sustained rpm of the tightest limit on the subject&rsquo;s most recent request &mdash; it may belong to a wider limit, which is why <b>Load vs last limit</b> describes pressure on the subject and never the utilisation of one rule. <span x-text="rlUsageSubjectView.truncated"></span></p>
 
                       <div class="rl-cumulative">
                         <h4 class="rl-subhead">Refusals by limit &mdash; since restart <span class="tag muted">cumulative</span></h4>
@@ -2079,20 +2067,25 @@
                         <p class="hint" x-show="rateLimitViolationsTruncated" x-text="rateLimitViolationsTruncated"></p>
                       </div>
 
+                      <div x-show="rlActivityView.adaptiveIdle">
+                        <h4 class="rl-subhead">Load-aware adjustments <span class="tag muted">current</span></h4>
+                        <p class="hint">Adaptive shedding is on and no model is being reduced right now. <span x-text="rlActivityView.adaptiveEvaluatedText"></span></p>
+                      </div>
                       <template x-if="rateLimitAdaptiveActive">
                         <div>
                           <h4 class="rl-subhead">Load-aware adjustments <span class="tag muted">current</span></h4>
+                          <p class="hint" x-text="rlActivityView.adaptiveEvaluatedText"></p>
                           <div class="table-wrap">
                             <table class="t-rl-adaptive">
                               <caption class="sr-only">Models whose limits are currently reduced by load</caption>
-                              <thead><tr><th scope="col">Model</th><th scope="col">Enforcing</th><th scope="col">Saturation</th><th scope="col">Why</th></tr></thead>
+                              <thead><tr><th scope="col">Model</th><th scope="col">Enforcing</th><th scope="col" class="rl-wide-col">Saturation</th><th scope="col" class="rl-wide-col">Why</th></tr></thead>
                               <tbody>
                                 <template x-for="m in rateLimitAdaptiveRows" :key="m.key">
                                   <tr>
-                                    <td x-text="m.modelId"></td>
+                                    <td><span x-text="m.modelId"></span><span class="rl-narrow-line" x-text="m.secondLine"></span></td>
                                     <td x-text="m.factorText"></td>
-                                    <td x-text="m.saturationText"></td>
-                                    <td x-text="m.reason"></td>
+                                    <td class="rl-wide-col" x-text="m.saturationText"></td>
+                                    <td class="rl-wide-col" x-text="m.reason"></td>
                                   </tr>
                                 </template>
                               </tbody>
@@ -2100,14 +2093,15 @@
                           </div>
                         </div>
                       </template>
-                      <p class="hint rl-activity-foot" title="Each limited subject holds one bucket. Near the ceiling the oldest are evicted and start again full.">Current: <span x-text="rlActivityView.bucketsText"></span> tracked buckets · <span x-text="rlActivityView.backedOffText"></span> callers held to a longer retry.</p>
+                      <p class="hint rl-activity-foot" title="Each limited subject holds one bucket. Near the ceiling the oldest are evicted and start again full.">Current: <span x-text="rlActivityView.bucketsText"></span> tracked buckets · <span x-text="rlActivityView.streamSlotsText"></span> stream slots · <span x-text="rlActivityView.backedOffText"></span> callers held to a longer retry. Each limited subject holds one bucket; near the ceiling the oldest are evicted and start again full.</p>
                     </div>
                   </template>
                 </div>
                 </div>
 
-                <!-- Calendar -->
-                <div class="rl-section">
+                <!-- Calendar: what changes, and when. Draws the draft while one is staged. (Named as the
+                     EN/FA guide names it.) -->
+                <div class="rl-section" id="rl-schedule">
                   <div class="rl-section-head">
                     <div>
                       <h3>Calendar <span class="tag accent" x-show="rlTimelineView.draft">draft</span></h3>
@@ -2136,7 +2130,7 @@
                         </div>
                         <template x-for="row in rlTimelineView.rows" :key="row.key">
                           <div class="rl-tl-row">
-                            <button type="button" class="rl-tl-label" @click="row.open"><span class="t" x-text="row.label"></span><span class="s" x-text="row.sub"></span></button>
+                            <button type="button" class="rl-tl-label" @click="row.open" :title="row.labelTitle"><span class="t" x-text="row.label"></span><span class="s" x-text="row.sub"></span></button>
                             <div class="rl-tl-track" aria-hidden="true">
                               <div class="rl-tl-grid"></div>
                               <template x-for="b in row.bands" :key="b.key"><div :class="b.cls" :style="b.style" :title="b.title"></div></template>
@@ -2150,18 +2144,23 @@
                         <span><i class="rl-legend-swatch base"></i>base tier</span>
                         <span><i class="rl-legend-swatch past"></i>past</span>
                       </div>
+                      <p class="hint" x-show="rlTimelineView.rowNote" x-text="rlTimelineView.rowNote" role="status"></p>
+                      <button type="button" class="rl-link" x-show="rlTimelineView.showRowToggle" @click="toggleRateLimitTimelineRows" x-text="rlTimelineView.rowToggleText"></button>
+                      <p class="hint" x-show="rlTimelineView.truncatedNote" x-text="rlTimelineView.truncatedNote" role="status"></p>
                       <div class="rl-preview">
                         <label class="rl-preview-label" for="rl-preview-at">Preview at</label>
                         <input type="datetime-local" id="rl-preview-at" x-model="mdl.rlPreviewAt" @change="runRateLimitPreview" @keydown.enter="runRateLimitPreview" />
                         <button type="button" class="action secondary sm" @click="runRateLimitPreview">Show</button>
+                        <button type="button" class="action ghost sm" @click="previewRateLimitNow" title="Preview the current moment">Now</button>
+                        <button type="button" class="action ghost sm" @click="previewRateLimitNextChange" :disabled="rlPreviewShortcutView.noNext" :title="rlPreviewShortcutView.nextTitle" x-text="rlPreviewShortcutView.nextLabel"></button>
                         <button type="button" class="action ghost sm" @click="clearRateLimitPreview" x-show="rlPreviewView.has">Clear</button>
                         <span class="muted">what would every rule enforce at that moment?</span>
                       </div>
                       <p class="field-error" x-show="rlPreviewView.error" x-text="rlPreviewView.error"></p>
-                      <div class="rl-preview-res" x-show="rlPreviewView.has">
+                      <div class="rl-preview-res" x-show="rlPreviewView.has" role="status">
                         <div class="rl-preview-title" x-text="rlPreviewView.title"></div>
                         <template x-for="p in rlPreviewView.rows" :key="p.key">
-                          <div class="rl-preview-row"><span class="k" x-text="p.target"></span><span :class="p.tagCls" x-text="p.tag"></span><span class="r"><span x-text="p.tier"></span> <span class="muted" x-text="p.next"></span></span></div>
+                          <div class="rl-preview-row"><button type="button" class="rl-link k" @click="p.open" :aria-label="p.openLabel" :title="p.targetTitle" x-text="p.target"></button><span :class="p.tagCls" x-text="p.tag"></span><span class="r"><span x-text="p.tier"></span> <span class="muted" x-text="p.next"></span></span></div>
                         </template>
                         <div class="rl-preview-row muted" x-show="rlPreviewView.unchanged" x-text="rlPreviewView.unchanged"></div>
                       </div>
@@ -2172,7 +2171,7 @@
                       <template x-for="t in rlTransitionRows" :key="t.key">
                         <div class="rl-trans">
                           <span class="when"><span x-text="t.when"></span><span class="rel" x-text="t.rel"></span></span>
-                          <span class="what"><span class="mono" x-text="t.target"></span> <span x-text="t.what"></span></span>
+                          <span class="what"><button type="button" class="rl-link mono" @click="t.open" :aria-label="t.openLabel" :title="t.targetTitle" x-text="t.target"></button> <span x-text="t.what"></span></span>
                           <span :class="t.deltaCls" x-text="t.delta"></span>
                         </div>
                       </template>
@@ -2182,19 +2181,152 @@
                   </div>
                 </div>
 
-                <!-- Sticky save bar: present only while the draft differs from the server. -->
-                <div class="rl-savebar" x-show="rlDirtyView.show" x-transition.opacity role="region" aria-label="Unsaved rate-limit changes">
-                  <span class="rl-dot accent" aria-hidden="true"></span>
-                  <div class="rl-savebar-text" role="status"><span x-text="rlDirtyView.countText"></span><small x-text="rlDirtyView.detail"></small></div>
-                  <span class="spacer"></span>
-                  <button type="button" class="action ghost" @click="discardRateLimitChanges" :disabled="loadingSettings">Discard</button>
-                  <button type="button" class="action secondary" @click="toggleRateLimitReview" :disabled="loadingSettings">Review changes</button>
-                  <button type="button" class="action rl-primary" @click="onSaveRateLimitsClick" :disabled="rateLimitsSaveDisabled">Save</button>
+                <!-- Baselines: what applies when no rule does. Rarely changed, so after the operational
+                     sections; tiers first because every tenant is held to one. -->
+                <div class="rl-section" id="rl-baselines">
+                  <div class="rl-section-head">
+                    <div><h3>Tenant tiers</h3><p class="sub">What a tenant gets by plan. Every key a tenant holds shares its tier; a tenant rule in the list above overrides it.</p></div>
+                    <div class="rl-drawer-head-actions">
+                      <button type="button" class="icon-btn" @click="rlHelpView.open.tiers" :title="rlHelpView.ui.helpTitle" :aria-label="rlHelpView.ui.help"><span class="icon" x-html="icons.help-circle"></span></button>
+                      <button type="button" class="action secondary" @click="openRateLimitNewPlan" x-show="rateLimitsEditable"><span class="icon" x-html="icons.plus"></span> Add plan</button>
+                    </div>
+                  </div>
+                  <div class="table-wrap">
+                    <table class="t-rl-tiers">
+                      <caption class="sr-only">Tenant tiers: the limit a tenant gets from its plan. These are the draft values; open a tier to change it.</caption>
+                      <thead><tr>
+                        <th scope="col">Tier</th>
+                        <th scope="col">Applies to</th>
+                        <th scope="col" class="num">rpm</th>
+                        <th scope="col" class="num">burst</th>
+                        <th scope="col" class="num">streams</th>
+                        <th scope="col" class="num rl-wide-col" title="Decisions made under this tier in the activity window, summed across every tenant on it. Each tenant has its own bucket, so this is not compared with the rate.">Activity<span class="rl-th-sub" x-text="rlActivityView.windowText"></span></th>
+                        <th scope="col" class="cell-actions"><span class="sr-only">Open</span></th>
+                      </tr></thead>
+                      <tbody>
+                        <template x-for="t in rlTierCards" :key="t.key">
+                          <tr class="rl-base-row">
+                            <th scope="row" class="rl-base-name" @click="t.edit"><span x-text="t.name"></span></th>
+                            <td @click="t.edit" x-text="t.who"></td>
+                            <td class="num" @click="t.edit" x-text="t.rpm"></td>
+                            <td class="num" @click="t.edit" x-text="t.burst"></td>
+                            <td class="num" @click="t.edit"><span x-text="t.streams" :aria-hidden="t.streamsUnlimited"></span><span class="sr-only" x-show="t.streamsUnlimited">unlimited</span></td>
+                            <td class="num rl-wide-col" @click="t.edit" :title="t.activity.title"><span x-text="t.activity.text" :aria-hidden="t.activity.unknown"></span><span class="sr-only" x-show="t.activity.unknown" x-text="t.activity.sr"></span><span class="rl-act-sub" x-show="t.activity.sub" x-text="t.activity.sub"></span></td>
+                            <td class="cell-actions"><button type="button" class="icon-btn" @click="t.edit" :aria-label="t.openLabel" :title="t.openLabel"><span class="icon" x-html="icons.chevron-right"></span></button></td>
+                          </tr>
+                        </template>
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
-                <div class="card rl-review" x-show="rlReviewOpen">
-                  <ul>
-                    <template x-for="i in rlDirtyView.items" :key="i.key"><li x-text="i.text"></li></template>
-                  </ul>
+
+                <!-- Protective limits: stored as rules, listed apart. They guard the gateway itself and
+                     are not an answer to "who is limited, on which model". -->
+                <div class="rl-section">
+                  <div class="rl-section-head">
+                    <div><h3>Protective limits</h3><p class="sub">Two budgets that protect the gateway itself, each counted per client address. They have no subject and no model, so they are kept apart from the rules above.</p></div>
+                    <button type="button" class="icon-btn" @click="rlHelpView.open.scopes" :title="rlHelpView.ui.helpTitle" :aria-label="rlHelpView.ui.help"><span class="icon" x-html="icons.help-circle"></span></button>
+                  </div>
+                  <div class="table-wrap">
+                    <table class="t-rl-protect">
+                      <caption class="sr-only">Protective limits. The numbers are the draft; “now” is what the gateway is enforcing from the saved configuration.</caption>
+                      <thead><tr>
+                        <th scope="col" class="rl-col-on">On</th>
+                        <th scope="col">Limit</th>
+                        <th scope="col" class="num">rpm</th>
+                        <th scope="col" class="num">burst</th>
+                        <th scope="col" class="num">streams</th>
+                        <th scope="col" class="cell-actions"><span class="sr-only">Open</span></th>
+                      </tr></thead>
+                      <tbody>
+                        <template x-for="p in rlProtectiveCards" :key="p.key">
+                          <tr class="rl-base-row">
+                            <td class="rl-col-on">
+                              <label class="rl-switch sm" x-show="p.configured" :title="p.enabledLabel">
+                                <input type="checkbox" role="switch" :checked="p.enabled" :aria-checked="p.enabledAria" :aria-label="p.enabledLabel" :disabled="rateLimitsLocked" @change="p.toggle" />
+                                <span class="rl-switch-track"></span>
+                              </label>
+                            </td>
+                            <th scope="row" class="rl-base-name">
+                              <span x-text="p.name"></span> <span class="tag accent" x-show="p.hasDraftTag" x-text="p.draftTag"></span>
+                              <span class="rl-scope" x-text="p.desc"></span>
+                              <span class="rl-protect-now" x-show="p.configured"><span class="muted">Enforcing now:</span> <span x-text="p.enfText"></span> <template x-for="g in p.enfTags" :key="g.key"><span :class="g.cls" x-text="g.text"></span></template> <span class="rl-was-inline" x-show="p.hasWas" x-text="p.was"></span></span>
+                              <span class="rl-protect-now" x-show="p.unset" x-text="p.unsetText"></span>
+                              <span class="rl-protect-act" x-show="p.activity.known"><span class="muted">Activity:</span> <span x-text="p.activity.text"></span><span class="rl-act-sub" x-show="p.activity.sub" x-text="p.activity.sub"></span></span>
+                              <span class="hint rl-protect-note" x-text="p.activityNote"></span>
+                            </th>
+                            <td class="num"><span x-text="p.rpm"></span><span x-show="p.unset" aria-hidden="true">·</span></td>
+                            <td class="num"><span x-text="p.burst"></span><span x-show="p.unset" aria-hidden="true">·</span></td>
+                            <td class="num"><span x-show="p.hasStreams"><span x-text="p.streams" :aria-hidden="p.streamsUnlimited"></span><span class="sr-only" x-show="p.streamsUnlimited">unlimited</span></span><span x-show="p.noStreams"><span aria-hidden="true">·</span><span class="sr-only" x-text="p.noStreamsText"></span></span></td>
+                            <td class="cell-actions">
+                              <button type="button" class="action secondary sm" x-show="p.configured" @click="p.open" :aria-label="p.openLabel">Open</button>
+                              <button type="button" class="action secondary sm" x-show="p.canConfigure" @click="p.configure" :aria-label="p.openLabel">Configure</button>
+                            </td>
+                          </tr>
+                        </template>
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                <!-- Change history: secondary, collapsed until asked for, read from the admin audit trail. -->
+                <div class="rl-section rl-history" id="rl-history">
+                  <div class="rl-section-head">
+                    <div><h3><button type="button" class="rl-hist-toggle" id="rl-history-toggle" @click="toggleRateLimitHistory" :aria-expanded="rlHistoryView.expanded" aria-controls="rl-history-body"><span class="icon" x-html="icons.chevron-right"></span> Change history</button></h3><p class="sub">Saves and refused attempts, newest first, from the gateway&rsquo;s admin audit trail.</p></div>
+                  </div>
+                  <div id="rl-history-body" x-show="rlHistoryView.open">
+                    <p class="hint" x-show="rlHistoryView.loading" role="status">Loading history…</p>
+                    <p class="notice warn" x-show="rlHistoryView.error" role="alert"><span x-text="rlHistoryView.error"></span> <button type="button" class="rl-link" @click="retryRateLimitHistory">Retry</button></p>
+                    <p class="hint" x-show="rlHistoryView.unavailable" role="status">No audit trail exists on this gateway yet, so there is no history to show. That is not the same as &ldquo;nothing changed&rdquo;.</p>
+                    <p class="hint" x-show="rlHistoryView.empty" role="status">No rate-limit change is recorded in the audit trail.</p>
+                    <ol class="rl-hist">
+                      <template x-for="e in rlHistoryView.entries" :key="e.key">
+                        <li :class="e.cls">
+                          <div class="rl-hist-head"><b x-text="e.summary"></b> <span class="tag muted" x-show="e.version" x-text="e.version"></span> <span class="tag warn" x-show="e.based" x-text="e.based"></span> <span class="hint"><time :datetime="e.iso" x-text="e.ago"></time> · <span x-text="e.when"></span> · <span x-text="e.actor"></span><span x-show="e.switches"> · <span x-text="e.switches"></span></span></span></div>
+                          <p class="hint" x-show="e.message" x-text="e.message"></p>
+                          <ul class="rl-hist-changes" x-show="e.hasChanges">
+                            <template x-for="c in e.changes" :key="c.key">
+                              <li><span :class="c.kindCls" x-text="c.kind"></span> <button type="button" class="rl-link" x-show="c.canOpen" @click="c.open" x-text="c.name"></button><span x-show="c.plain" x-text="c.name"></span> <span class="muted" x-text="c.detail"></span></li>
+                            </template>
+                          </ul>
+                          <p class="hint" x-show="e.truncated" x-text="e.truncated"></p>
+                        </li>
+                      </template>
+                    </ol>
+                    <p class="hint" x-show="rlHistoryView.scanNote" x-text="rlHistoryView.scanNote"></p>
+                    <div class="toolbar rl-more" x-show="rlHistoryView.hasMore"><button type="button" class="action secondary" @click="loadMoreRateLimitHistory" :disabled="rlHistoryLoading" x-text="rlHistoryView.moreLabel"></button></div>
+                  </div>
+                </div>
+
+                <!-- Sticky save bar: present only while the draft differs from the server. The review
+                     lives inside it, above the buttons, so it opens where the operator is looking
+                     rather than at the end of the page. -->
+                <div class="rl-savebar" x-show="rlDirtyView.show" x-transition.opacity role="region" aria-label="Unsaved rate-limit changes">
+                  <div class="rl-review" id="rl-review" x-show="rlReviewOpen">
+                    <div x-show="rlDirtyView.hasTheirs">
+                      <h4 class="rl-h4">Changed by someone else since you loaded</h4>
+                      <ul class="rl-diff" aria-label="Changes saved by someone else">
+                        <template x-for="i in rlDirtyView.theirs" :key="i.key">
+                          <li class="rl-diff-item">
+                            <span :class="i.kindCls" x-text="i.kind"></span>
+                            <span class="rl-diff-what"><b x-text="i.subject"></b> <span class="rl-diff-change" x-show="i.hasChange" x-text="i.change"></span></span>
+                            <span class="tag warn" x-show="i.overwritten">undone if you save</span>
+                            <span class="tag muted" x-show="i.kept">kept</span>
+                            <button type="button" class="rl-link rl-keep" @click="i.keep" :aria-label="i.keepLabel" x-show="i.overwritten">Keep theirs</button>
+                          </li>
+                        </template>
+                      </ul>
+                      <h4 class="rl-h4">Your changes &mdash; saving applies these over theirs</h4>
+                    </div>
+                    <ul class="rl-diff" aria-label="Unsaved changes">
+                      <template x-for="i in rlDirtyView.items" :key="i.key">
+                        <li class="rl-diff-item">
+                          <span :class="i.kindCls" x-text="i.kind"></span>
+                          <span class="rl-diff-what"><b x-text="i.subject"></b> <span class="rl-diff-change" x-show="i.hasChange" x-text="i.change"></span></span>
+                          <button type="button" class="rl-link rl-undo" @click="i.undo" :aria-label="i.undoLabel" x-show="rateLimitsEditable">Undo</button>
+                        </li>
+                      </template>
+                    </ul>
 <details class="rl-help" :dir="rlHelpView.dir" :lang="rlHelpView.lang">
   <summary><span class="icon" x-html="icons.help-circle"></span><span x-text="rlHelpView.f.save.title"></span></summary>
   <div class="rl-help-body">
@@ -2206,9 +2338,18 @@
     </div>
   </div>
 </details>
+                  </div>
+                  <p class="field-error" x-show="rateLimitFieldError" x-text="rateLimitFieldError" role="alert"></p>
+                  <button type="button" class="rl-link" x-show="rlSaveErrorView.show" @click="rlSaveErrorView.open" x-text="rlSaveErrorView.label"></button>
+                  <div class="rl-savebar-row">
+                    <span class="rl-dot accent" aria-hidden="true"></span>
+                    <div class="rl-savebar-text" role="status"><span x-text="rlDirtyView.countText"></span><small x-text="rlDirtyView.detail"></small></div>
+                    <span class="spacer"></span>
+                    <button type="button" class="action ghost" @click="discardRateLimitChanges" :disabled="loadingSettings">Discard</button>
+                    <button type="button" class="action secondary" @click="toggleRateLimitReview" :disabled="loadingSettings" :aria-expanded="rlDirtyView.reviewExpanded" aria-controls="rl-review" x-text="rlDirtyView.reviewLabel"></button>
+                    <button type="button" id="rl-save-button" class="action rl-primary" @click="onSaveRateLimitsClick" :disabled="rateLimitsSaveDisabled" x-text="rlDirtyView.saveLabel"></button>
+                  </div>
                 </div>
-                <p class="field-error" x-show="rateLimitFieldError" x-text="rateLimitFieldError"></p>
-                <button type="button" class="rl-link" x-show="rlSaveErrorView.show" @click="rlSaveErrorView.open" x-text="rlSaveErrorView.label"></button>
               </div>
             </template>
           </div>
@@ -2553,7 +2694,7 @@
 
           <div :class="rlRuleDrawerView.forceCls">
             <span :class="rlRuleDrawerView.forceDot"></span>
-            <div><span class="big" x-text="rlRuleDrawerView.forceBig"></span><div class="rest" x-text="rlRuleDrawerView.forceSub"></div></div>
+            <div><div class="rest rl-force-label">Now in production</div><span class="big" x-text="rlRuleDrawerView.forceBig"></span><div class="rest" x-text="rlRuleDrawerView.forceSub"></div><div class="rest rl-after-save" x-show="rlRuleDrawerView.hasAfterSave"><span class="tag accent">after you save</span> <span x-text="rlRuleDrawerView.afterSave"></span></div></div>
             <span class="spacer"></span>
             <label class="rl-switch sm" title="Enforce this rule. Switching it off keeps the tier and windows below.">
               <input type="checkbox" role="switch" x-model="mdl.rlRule.enabled" :aria-checked="rlRuleDrawerView.enabledAria" :disabled="rateLimitsLocked" aria-label="Enforce this rule" />
@@ -2617,9 +2758,8 @@
               <template x-for="w in rlRuleDrawerView.windows" :key="w.key">
                 <button type="button" :id="w.domId" :class="w.cls" @click="w.edit" :disabled="rateLimitsLocked">
                   <span class="t"><span x-text="w.name"></span> <span :class="w.kindCls" x-text="w.kindTag"></span></span>
-                  <span class="n" x-text="w.tier"></span>
-                  <span class="w" x-text="w.when"></span>
                   <span class="s"><span :class="w.stateCls" x-text="w.stateText"></span></span>
+                  <span class="w rl-win-sentence" x-text="w.sentence"></span>
                 </button>
               </template>
             </div>
@@ -2640,6 +2780,32 @@
           <div class="drawer-section">
             <h4 class="rl-h4">Activity</h4>
             <p class="notice warn" x-show="rlRuleDrawerView.usage.stale" x-text="rlRuleDrawerView.usage.staleText"></p>
+            <div class="rl-limit-act" x-show="rlRuleDrawerView.showLimit">
+              <h5 class="rl-h5">This limit&rsquo;s own decisions <span class="muted" x-text="rlActivityView.windowText"></span></h5>
+              <p class="hint" x-show="rlRuleDrawerView.limitNote" x-text="rlRuleDrawerView.limitNote"></p>
+              <div x-show="rlRuleDrawerView.limitOk">
+                <p class="rl-limit-act-head"><b x-text="rlRuleDrawerView.limit.text"></b> <span class="rl-act-sub" x-text="rlRuleDrawerView.limit.sub"></span></p>
+                <span class="load-track rl-act-bar" x-show="rlRuleDrawerView.limit.hasBar" aria-hidden="true"><span :class="rlRuleDrawerView.limit.barCls" :style="rlRuleDrawerView.limit.barStyle"></span></span>
+                <div class="rl-trend in-drawer" x-show="rlRuleDrawerView.limitSeries.show">
+                  <svg class="rl-trend-svg" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+                    <polyline class="spark-line rl-trend-all" :points="rlRuleDrawerView.limitSeries.passedLine"></polyline>
+                    <path class="spark-fill rl-trend-refused-fill" :d="rlRuleDrawerView.limitSeries.refusedFill"></path>
+                    <polyline class="spark-line rl-trend-refused" :points="rlRuleDrawerView.limitSeries.refusedLine"></polyline>
+                  </svg>
+                  <span class="rl-trend-text"><span class="ms-label" x-text="rlRuleDrawerView.limitSeries.label"></span><span class="sr-only" x-text="rlRuleDrawerView.limitSeries.sr"></span> <span class="rl-trend-key" aria-hidden="true"><i class="all"></i>passed <i class="refused"></i>refused</span></span>
+                </div>
+                <p class="hint" x-show="rlRuleDrawerView.limitSeries.note" x-text="rlRuleDrawerView.limitSeries.note" role="status"></p>
+                <dl class="rl-limit-defs">
+                  <template x-for="l in rlRuleDrawerView.limit.lines" :key="l.key"><div :title="l.title"><dt x-text="l.label"></dt><dd x-text="l.value"></dd></div></template>
+                </dl>
+                <p class="hint"><span x-text="rlRuleDrawerView.limit.rateText"></span> <span x-text="rlRuleDrawerView.limit.last"></span></p>
+                <p class="hint" x-show="rlRuleDrawerView.limitAnon" x-text="rlRuleDrawerView.limitAnon"></p>
+              </div>
+            </div>
+            <div class="rl-limit-act" x-show="rlRuleDrawerView.showProtectiveActivity">
+              <p x-text="rlRuleDrawerView.protectiveActivity.text"></p>
+              <p class="hint"><span x-text="rlRuleDrawerView.protectiveActivity.sub"></span> <span x-text="rlRuleDrawerView.protectiveActivity.note"></span></p>
+            </div>
             <dl class="rl-usage-defs">
               <dt>Refused by this limit <span class="muted">· since restart</span></dt>
               <dd><b x-text="rlRuleDrawerView.usage.refusedText"></b><span class="hint" x-text="rlRuleDrawerView.usage.refusedNote"></span></dd>
@@ -2649,6 +2815,16 @@
               <dd><span x-text="rlRuleDrawerView.usage.trafficText"></span><span class="hint" x-text="rlRuleDrawerView.usage.trafficNote"></span></dd>
             </dl>
             <p class="hint" x-show="rlRuleDrawerView.usage.noSection" x-text="rlRuleDrawerView.usage.noSectionText"></p>
+          </div>
+
+          <div class="drawer-section" x-show="rlRuleDrawerView.ruleHistory.loaded">
+            <h4 class="rl-h4">Saved changes to this rule</h4>
+            <ul class="rl-rule-hist" x-show="rlRuleDrawerView.ruleHistory.hasRows">
+              <template x-for="h in rlRuleDrawerView.ruleHistory.rows" :key="h.key">
+                <li><span class="rl-diff-kind" x-text="h.kind"></span> <span x-text="h.detail"></span> <span class="hint"><span x-text="h.ago"></span> · <span x-text="h.when"></span> · <span x-text="h.actor"></span></span></li>
+              </template>
+            </ul>
+            <p class="hint" x-show="rlRuleDrawerView.ruleHistory.note" x-text="rlRuleDrawerView.ruleHistory.note"></p>
           </div>
 
           <div class="drawer-footer">

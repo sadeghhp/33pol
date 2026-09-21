@@ -212,7 +212,13 @@ public sealed class AdminConsoleRateLimitSafetyTests
         var js = await GetAssetAsync("/admin/admin-app.js");
 
         // Both panels switch on the same condition, so they cannot describe different configurations.
-        js.Should().Contain("this.rlSchedule = this.rateLimitsDirty");
+        // The Schedule section's report is the draft's preview while one is staged...
+        js.Should().Contain("const dirty = this.rateLimitsDirty;");
+        js.Should().Contain("const draftRequest = dirty");
+        // ...while "what is enforced now" always comes from the stored configuration, so staging an
+        // edit cannot change what the rules list and the summary say production is doing.
+        js.Should().Contain("this.rlScheduleSaved = saved.value;");
+        js.Should().Contain("const statuses = this.rlScheduleSaved?.rules || [];");
         js.Should().Contain("this.rlPreview = this.rateLimitsDirty");
         js.Should().Contain("'/admin/api/rate-limits/schedule/preview'");
 
@@ -253,7 +259,7 @@ public sealed class AdminConsoleRateLimitSafetyTests
         var js = await GetAssetAsync("/admin/admin-app.js");
 
         // In the row, where an incident reaches for it; the cell stops the click opening the drawer.
-        html.Should().Contain("<th class=\"rl-col-on\">On</th>");
+        html.Should().Contain("<th scope=\"col\" class=\"rl-col-on\">On</th>");
         html.Should().Contain("<td class=\"rl-col-on\" @click.stop>");
         html.Should().Contain("@change=\"r.toggle\"");
 
@@ -302,15 +308,19 @@ public sealed class AdminConsoleRateLimitSafetyTests
         var css = await GetAssetAsync("/admin/admin.css");
         var js = await GetAssetAsync("/admin/admin-app.js");
 
-        js.Should().Contain("text: 'off', sub: this.rlTierText(rule) + ' kept'");
+        // Said by the "Enforcing now" cell, which reads the saved rule: a rule switched off in
+        // production enforces nothing, and its tier is kept.
+        js.Should().Contain("return { kind: 'off', text: 'nothing', tags: [tag('warn', 'off')], sub: base + ' kept'");
         js.Should().Contain("enabledText: off ? 'Switched off — the tier and windows below are kept' : 'Enforced'");
 
         // Stepped down, not struck through: it is a rule an operator is coming back to. Secondary
         // text rather than an opacity, which took the row's small captions below contrast minimums;
-        // the "off" tag in the Now column is what says why.
+        // the "off" tag in the Enforcing now column is what says why.
         css.Should().Contain(".rl-row.off .rl-limit-nums b, .rl-row.off .rl-model { color: var(--text-secondary); font-weight: var(--fw-normal); }");
         css.Should().NotContain(".rl-row.off td { opacity");
-        js.Should().Contain("if (off) now = { tag: 'off', cls: 'tag warn', sub: 'numbers kept' };");
+        // A rule switched off only in the draft is still enforced, and the row says both: the draft
+        // marker and "was on" beside the limit, production's state in the Enforcing now cell.
+        js.Should().Contain("(saved.enabled !== false) !== !off ? (off ? 'was on' : 'was off')");
     }
 
     /// <summary>

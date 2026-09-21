@@ -168,6 +168,7 @@ public sealed class RateLimitMiddleware
         var tightest = AcquireIdentityScopes(identityPlan, now);
         if (!tightest.IsAcquired)
         {
+            RecordIdentityStage(identityPlan, RateLimitStageOutcome.Refused, tightest.PartitionKey);
             await RejectAsync(context, subject, modelId: null, tightest, now).ConfigureAwait(false);
             return;
         }
@@ -191,6 +192,7 @@ public sealed class RateLimitMiddleware
                 var modelScopes = AcquireModelScopes(subject, model.Id, identityPlan, now);
                 if (!modelScopes.IsAcquired)
                 {
+                    RecordIdentityStage(identityPlan, RateLimitStageOutcome.RefundedByLaterStage);
                     await RejectAsync(context, subject, model.Id, modelScopes, now).ConfigureAwait(false);
                     return;
                 }
@@ -200,6 +202,7 @@ public sealed class RateLimitMiddleware
         }
 
         RateLimitResponseHeaders.Write(context, tightest);
+        RecordIdentityStage(identityPlan, RateLimitStageOutcome.Charged);
         RecordAdmission(subject, modelId, tightest);
 
         // Answered here, after the debit, when the cached parse already says the router is going to
@@ -217,6 +220,16 @@ public sealed class RateLimitMiddleware
     /// <summary>Takes a token from every scope that can be decided without the request body.</summary>
     private RateLimitAcquireResult AcquireIdentityScopes(RateLimitPlan identityPlan, DateTimeOffset now) =>
         _rateLimitStore.TryAcquireAll(identityPlan.IdentityRules, now);
+
+    /// <summary>
+    /// Tells the per-limit report what stage one did to each control, once the request's fate is
+    /// known: a stage-one token is only <em>charged</em> if stage two did not hand it back.
+    /// </summary>
+    private void RecordIdentityStage(
+        RateLimitPlan identityPlan,
+        RateLimitStageOutcome outcome,
+        string? refusedPartitionKey = null) =>
+        _usage?.RecordRateStage(identityPlan.IdentityRules, outcome, refusedPartitionKey);
 
     /// <summary>
     /// Takes the caller's one token for an admin-API or model-listing request.
@@ -320,6 +333,12 @@ public sealed class RateLimitMiddleware
             // everywhere.
             _rateLimitStore.RefundAll(identityPlan.IdentityRules, now);
         }
+
+        // Stage two is the last rate stage, so its outcome is final for these limits either way.
+        _usage?.RecordRateStage(
+            modelRules,
+            result.IsAcquired ? RateLimitStageOutcome.Charged : RateLimitStageOutcome.Refused,
+            result.IsAcquired ? null : result.PartitionKey);
 
         return result;
     }

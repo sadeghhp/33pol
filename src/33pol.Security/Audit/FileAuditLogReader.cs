@@ -18,38 +18,72 @@ public sealed class FileAuditLogReader(FileAuditLogger logger) : IAuditLogReader
 
     public bool IsAvailable => File.Exists(logger.AuditLogPath) || File.Exists(logger.AuditLogPath + ".1");
 
-    public Task<AuditLogReadResult> ReadRecentAsync(int limit, CancellationToken cancellationToken = default)
+    public Task<AuditLogReadResult> ReadRecentAsync(int limit, CancellationToken cancellationToken = default) =>
+        ReadRecentAsync(new AuditLogQuery(limit), cancellationToken);
+
+    public Task<AuditLogReadResult> ReadRecentAsync(AuditLogQuery query, CancellationToken cancellationToken = default)
     {
-        var take = Math.Clamp(limit, 1, MaxLimit);
+        ArgumentNullException.ThrowIfNull(query);
+
+        var take = Math.Clamp(query.Limit, 1, MaxLimit);
+        var maxScanned = Math.Max(take, query.MaxScanned);
         var entries = new List<AuditLogEntryView>(take);
         var parseErrors = 0;
+        var scanned = 0;
+        var hasMore = false;
+        var scanLimitReached = false;
 
         foreach (var path in new[] { logger.AuditLogPath, logger.AuditLogPath + ".1" })
         {
-            if (entries.Count >= take)
+            if (hasMore || scanLimitReached)
             {
                 break;
             }
 
             foreach (var line in ReadLinesBackwards(path, cancellationToken))
             {
-                if (entries.Count >= take)
+                if (scanned >= maxScanned)
                 {
+                    scanLimitReached = true;
                     break;
                 }
 
-                if (TryParse(line, out var entry))
-                {
-                    entries.Add(entry);
-                }
-                else
+                scanned++;
+
+                if (!TryParse(line, out var entry))
                 {
                     parseErrors++;
+                    continue;
                 }
+
+                if (query.ActionPrefix is { Length: > 0 } prefix &&
+                    !entry.Action.StartsWith(prefix, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                if (query.BeforeUtc is { } before && entry.TimestampUtc >= before)
+                {
+                    continue;
+                }
+
+                // One past the page is read only to learn that it exists.
+                if (entries.Count >= take)
+                {
+                    hasMore = true;
+                    break;
+                }
+
+                entries.Add(entry);
             }
         }
 
-        return Task.FromResult(new AuditLogReadResult(entries, parseErrors, entries.Count > 0 ? entries[0].TimestampUtc : null));
+        return Task.FromResult(
+            new AuditLogReadResult(entries, parseErrors, entries.Count > 0 ? entries[0].TimestampUtc : null)
+            {
+                HasMore = hasMore,
+                ScanLimitReached = scanLimitReached,
+            });
     }
 
     private static bool TryParse(string line, out AuditLogEntryView entry)

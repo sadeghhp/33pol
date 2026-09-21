@@ -4,7 +4,7 @@
  * The list is read by the same two questions a rule is created with — who is limited, on which
  * model — and never by the scope a rule is stored under. This pins:
  *
- *   - rows expose Who / Model / Limit / Now / Refused, with the key's name first and its id kept;
+ *   - rows expose Who / Model / Limit (the draft) / Enforcing now (production) / Refused, with the key's name first and its id kept;
  *   - the protective budgets are stored as rules but listed in their own section, always both;
  *   - filters follow the creation model (who × model, plus Scheduled / Off) and keep text search;
  *   - sorting is by who, model, rpm and refusals, with unknown refusals last either way;
@@ -102,16 +102,110 @@ test('a row answers who, on which model, how much — without a stored scope nam
   });
 
   await t.test('no visible cell carries a stored scope id', () => {
-    const visible = rows.flatMap(r => [r.who, r.whoKind, r.model, r.nowTag, r.nowSub, r.openLabel]).join(' ');
+    const visible = rows.flatMap(r => [r.who, r.whoKind, r.model, r.enfText, r.enfSub, ...r.enfTags.map(g => g.text), r.draftTag, r.was, r.openLabel]).join(' ');
     assert.doesNotMatch(visible, /api_key|tenant_model|\bglobal\b|auth_failure/);
   });
 
-  await t.test('Now is words: off, unsaved, windows — never a bare dot, and blank when nothing differs', () => {
-    assert.equal(by('acme').find(r => r.model === 'claude').nowTag, 'off');
-    assert.equal(by('Everyone').find(r => r.model === 'gpt-4').nowTag, '1 window');
-    assert.equal(by('Everyone').find(r => r.model === 'All models').noNow, true);
+  await t.test('Enforcing now is words about production — never blank, never a dash, never the draft', () => {
+    const tags = r => r.enfTags.map(g => g.text);
+    assert.deepEqual(tags(by('acme').find(r => r.model === 'claude')), ['off']);
+    assert.deepEqual(tags(by('Everyone').find(r => r.model === 'gpt-4')), ['1 window'], 'until the schedule report says which tier is in force');
+    const gateway = by('Everyone').find(r => r.model === 'All models');
+    assert.deepEqual([gateway.enfText, tags(gateway)], ['5,000 rpm · 10 burst', ['base']]);
+    for (const r of rows) {
+      assert.ok(r.enfTags.length >= 1 && r.enfText, 'every row says something');
+      assert.doesNotMatch(r.enfText, /^—$/);
+    }
+
     app.rlDraft.rules[5].rpm = 4000;
-    assert.equal(app.rlRuleRows.find(r => r.who === 'Everyone' && r.model === 'All models').nowTag, 'unsaved');
+    const edited = app.rlRuleRows.find(r => r.who === 'Everyone' && r.model === 'All models');
+    assert.deepEqual([edited.rpm, edited.draftTag, edited.was], ['4,000', 'unsaved', 'was 5,000 / 10 / ∞']);
+    assert.deepEqual([edited.enfText, tags(edited)], ['5,000 rpm · 10 burst', ['base']], 'production still runs the saved tier');
+    const untouched = app.rlRuleRows.find(r => r.who === 'Everyone' && r.model === 'gpt-4');
+    assert.deepEqual([untouched.draftTag, untouched.was], ['', ''], 'editing one rule marks only that rule');
+  });
+});
+
+test('the list separates the draft from production', async t => {
+  const SCHEDULE = {
+    rules: [{
+      scope: 'model', target: 'gpt-4', base: { rpm: 600, burst: 10, maxConcurrentStreams: 0, suspended: false },
+      effective: { rpm: 1200, burst: 0, maxConcurrentStreams: 0, suspended: false },
+      activeWindow: 'off-peak', activeUntil: '2026-09-21T07:00:00Z', nextChangeAt: '2026-09-21T07:00:00Z', nextWindow: null, windows: [],
+    }],
+    occurrences: [], transitions: [],
+  };
+  const model = app => app.rlRuleRows.find(r => r.who === 'Everyone' && r.model === 'gpt-4');
+
+  await t.test('a running window is reported from the saved schedule', () => {
+    const app = listApp();
+    app.rlScheduleSaved = clone(SCHEDULE);
+    const row = model(app);
+    assert.equal(row.enfText, '1,200 rpm');
+    assert.deepEqual(row.enfTags.map(g => g.text), ['window: off-peak']);
+    assert.equal(row.windowActive, true);
+  });
+
+  await t.test('the draft preview never feeds the column, so a staged schedule is not shown as running', () => {
+    const app = listApp();
+    app.rlSchedule = clone(SCHEDULE);          // what the Schedule section draws
+    app.rlScheduleSaved = { rules: [], occurrences: [], transitions: [] };
+    assert.deepEqual(model(app).enfTags.map(g => g.text), ['1 window']);
+  });
+
+  await t.test('a rule switched off in the draft is still enforced until saved — and says so', () => {
+    const app = listApp();
+    app.toggleRateLimitRuleEnabled('model:gpt-4');
+    const row = model(app);
+    assert.deepEqual([row.enabled, row.draftTag, row.was], [false, 'unsaved', 'was on']);
+    assert.deepEqual(row.enfTags.map(g => g.text), ['1 window']);
+    assert.notEqual(row.enfTags[0].text, 'off');
+  });
+
+  await t.test('a rule that exists only in the draft enforces nothing yet', () => {
+    const app = listApp();
+    app.rlDraft.rules.push(rule('model', 'new-model', 5));
+    const row = app.rlRuleRows.find(r => r.model === 'new-model');
+    assert.deepEqual([row.draftTag, row.enfTags.map(g => g.text)], ['new', ['not saved yet']]);
+  });
+
+  await t.test('the master switch reaches every row, and only once it is saved', () => {
+    const app = listApp();
+    app.rlDraft.enabled = false;
+    assert.equal(app.rlRuleRows.some(r => r.enfKind === 'unenforced'), false, 'staged, not in force');
+    assert.equal(app.rlStatusView.title, 'Rate limits are enforced');
+    assert.match(app.rlStatusView.pending, /stops enforcing when you save/);
+    assert.equal(app.rateLimitsSavedDisabled, false);
+
+    app.rateLimits.enabled = false;
+    app.rateLimits = clone(app.rateLimits);
+    assert.equal(app.rlRuleRows.every(r => r.enfKind === 'unenforced'), true);
+    assert.equal(app.rlStatusView.title, 'Rate limits are not enforced');
+    assert.equal(app.rlStatusView.pending, '');
+    assert.equal(app.rateLimitsSavedDisabled, true);
+
+    app.rlDraft.enabled = true;
+    assert.match(app.rlStatusView.pending, /resumes enforcing when you save/);
+    assert.equal(app.rlStatusView.title, 'Rate limits are not enforced', 'still off in production');
+  });
+
+  await t.test('adaptive shedding is named on the rules it scales, and on no others', () => {
+    const app = listApp({ ...USAGE, adaptive: { enabled: true, models: [{ modelId: 'gpt-4', factor: 0.7, saturation: 0.93, reason: 'queue depth' }] } });
+    app.rateLimits.adaptiveEnabled = true;
+    const row = model(app);
+    assert.deepEqual(row.enfTags.map(g => g.text), ['1 window', 'adaptive ×0.70']);
+    assert.match(row.enfSub, /≈ 420 of 600 rpm · queue depth/);
+    const pair = app.rlRuleRows.find(r => r.who === 'billing-worker' && r.model === 'gpt-4');
+    assert.deepEqual(pair.enfTags.map(g => g.text), ['base', 'adaptive ×0.70']);
+    const allModels = app.rlRuleRows.find(r => r.who === 'billing-worker' && r.model === 'All models');
+    assert.deepEqual(allModels.enfTags.map(g => g.text), ['base']);
+  });
+
+  await t.test('the markup keeps the two statements in separate columns', () => {
+    assert.match(HTML, />Enforcing now<span class="rl-th-sub">saved configuration<\/span>/);
+    assert.match(HTML, /x-show="r\.hasWas" x-text="r\.was"/);
+    assert.match(HTML, /x-show="rateLimitsSavedDisabled"/);
+    assert.doesNotMatch(HTML, /Limit in force|Limits being hit/);
   });
 });
 
@@ -179,14 +273,50 @@ test('filters follow the creation model', async t => {
     assert.deepEqual(names(app), ['acme/claude']);
   });
 
-  await t.test('status toggles: scheduled, off — and pressing again releases', () => {
+  await t.test('status flags are toggles that combine, and pressing again releases', () => {
     const app = listApp();
     app.toggleRateLimitFlagFilter('scheduled');
     assert.deepEqual(names(app), ['Everyone/gpt-4']);
     app.toggleRateLimitFlagFilter('off');
+    assert.deepEqual(names(app), [], 'scheduled AND off: no rule is both');
+    app.toggleRateLimitFlagFilter('scheduled');
     assert.deepEqual(names(app), ['acme/claude']);
     app.toggleRateLimitFlagFilter('off');
     assert.equal(app.rlRuleRows.length, 6);
+  });
+
+  await t.test('refused, window active and unsaved filter on what the page really knows', () => {
+    const app = listApp(USAGE);
+    app.toggleRateLimitFlagFilter('refused');
+    assert.deepEqual(names(app), ['Everyone/gpt-4', 'billing-worker/All models']);
+    app.clearRateLimitFilters();
+
+    app.rlScheduleSaved = { rules: [{ scope: 'model', target: 'gpt-4', activeWindow: 'off-peak', effective: { rpm: 1200 }, windows: [] }] };
+    app.toggleRateLimitFlagFilter('active');
+    assert.deepEqual(names(app), ['Everyone/gpt-4']);
+    app.clearRateLimitFilters();
+
+    app.rlDraft.rules[2].rpm = 31;
+    app.toggleRateLimitFlagFilter('unsaved');
+    assert.deepEqual(names(app), ['billing-worker/All models']);
+    assert.equal(app.rlFiltersActive, true);
+  });
+
+  await t.test('near-limit exists, and only the gateway’s per-limit report can put a rule in it', () => {
+    const app = listApp();
+    assert.deepEqual(app.rlScopeChips.flags.map(c => c.label), ['Scheduled', 'Window active', 'Refused', 'Near limit', 'Off', 'Unsaved']);
+    // A report with no per-limit section — however hot its subject rows look — marks nothing.
+    app.rateLimitUsage = { windowMinutes: 60, totals: { requests: 10 }, violations: [],
+      byModel: [{ key: 'gpt-4', requests: 9999, requestsPerMinute: 999, effectiveRpm: 10, utilization: 99 }] };
+    assert.equal(app.rlScopeChips.flags.find(c => c.label === 'Near limit').count, 0);
+    // The gateway names the limit by id and states its peak against the rate it enforced.
+    app.rateLimitUsage = { ...app.rateLimitUsage, limits: [
+      { limitId: 'model:gpt-4', singleBucket: true, evaluations: 100, charged: 95, refusedByRate: 5, peakChargedInOneMinute: 9, effectiveRpm: 10, peakUtilization: 0.9 },
+      { limitId: 'plan:pro', singleBucket: false, evaluations: 900, charged: 900, peakChargedInOneMinute: 500, effectiveRpm: 10, peakUtilization: null }
+    ] };
+    assert.equal(app.rlScopeChips.flags.find(c => c.label === 'Near limit').count, 1);
+    app.toggleRateLimitFlagFilter('near');
+    assert.deepEqual(names(app), ['Everyone/gpt-4']);
   });
 
   await t.test('text search still finds by key name, stored id and window name', () => {
@@ -215,7 +345,7 @@ test('filters follow the creation model', async t => {
     const chips = listApp().rlScopeChips;
     assert.deepEqual(chips.who.map(c => c.label + ' ' + c.count), ['All 6', 'API keys 2', 'Tenants 2', 'Everyone 2']);
     assert.deepEqual(chips.where.map(c => c.label + ' ' + c.count), ['Any 6', 'One model 3', 'All models 3']);
-    assert.deepEqual(chips.flags.map(c => c.label + ' ' + c.count), ['Scheduled 1', 'Off 1']);
+    assert.deepEqual(chips.flags.map(c => c.label + ' ' + c.count), ['Scheduled 1', 'Window active 0', 'Refused 0', 'Near limit 0', 'Off 1', 'Unsaved 0']);
   });
 });
 
@@ -285,4 +415,54 @@ test('the list redesign changes nothing that is sent', () => {
   void app.rlRuleRows; void app.rlProtectiveCards; void app.rlScopeChips;
   assert.equal(JSON.stringify(app.buildRateLimitsPayload(app.rlDraft)), before);
   assert.equal(app.rateLimitsDirty, false);
+});
+
+test('the list stays usable at the server\'s rule ceiling', async t => {
+  const big = () => {
+    const app = listApp(USAGE);
+    const rules = [];
+    for (let i = 0; i < 2000; i++) rules.push(rule('model', 'model-' + String(i).padStart(4, '0'), 10 + i));
+    app.rateLimits = { ...clone(CONFIG), rules };
+    app.rlDraft = clone(app.rateLimits);
+    return app;
+  };
+
+  await t.test('a hundred rows at a time, with the count said and a way to see more', () => {
+    const app = big();
+    assert.equal(app.rlRuleRows.length, 100);
+    assert.deepEqual(app.rlRuleCountView, { text: 'Showing 100 of 2,000 rules', hasMore: true, moreLabel: 'Show 100 more' });
+    app.showMoreRateLimitRules();
+    assert.equal(app.rlRuleRows.length, 200);
+    app.setRateLimitFilterText('model-19');
+    assert.equal(app.rlRuleLimit, 100, 'a new question starts from the top');
+    assert.deepEqual([app.rlRuleRows.length, app.rlRuleCountView.text], [100, '100 of 2,000 rules']);
+    app.setRateLimitFilterText('model-1');
+    assert.equal(app.rlRuleCountView.text, 'Showing 100 of 1,000 matching rules');
+  });
+
+  await t.test('sorting applies to every rule, not only the visible hundred', () => {
+    const app = big();
+    app.setRateLimitSort('rpm');
+    app.setRateLimitSort('rpm');
+    assert.equal(app.rlRuleRows[0].rpm, '2,009');
+  });
+
+  await t.test('a row finds its saved twin by lookup, not by scanning: one payload build per row', () => {
+    const app = big();
+    void app.rlRuleRows;                       // warm the index
+    let builds = 0;
+    const original = app.rlRulePayload;
+    app.rlRulePayload = function (row) { builds++; return original.call(this, row); };
+    void app.rlRuleRows;
+    assert.ok(builds <= 100, 'visible rows only, and no rebuild of the saved side — got ' + builds);
+  });
+
+  await t.test('the narrow-width sort control drives the same state as the header buttons', () => {
+    const app = listApp(USAGE);
+    app.setRateLimitSortChoice('refused:desc');
+    assert.deepEqual([app.rlSortKey, app.rlSortDir, app.rlSortView.refused.ariaSort], ['refused', -1, 'descending']);
+    app.setRateLimitSortChoice('bogus:asc');
+    assert.equal(app.rlSortKey, 'refused');
+    assert.match(HTML, /<select class="inline-select" x-model="mdl\.rlSortChoice" aria-label="Sort rules">/);
+  });
 });

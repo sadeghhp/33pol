@@ -455,7 +455,8 @@ public sealed class AuthFailureRateLimitMiddlewareTests
         out InMemoryDistributedRateLimitStore store,
         bool enabled = true,
         bool protectionEnabled = true,
-        int probeMultiplier = 10)
+        int probeMultiplier = 10,
+        IRateLimitUsageTracker? usage = null)
     {
         var resolver = new RateLimitPolicyResolver(new StubConfigProvider(new GatewayConfigSnapshot
         {
@@ -478,7 +479,50 @@ public sealed class AuthFailureRateLimitMiddlewareTests
             {
                 AuthFailureProtectionEnabled = protectionEnabled,
                 AuthFailureProbeMultiplier = probeMultiplier,
-            }));
+            }),
+            usage);
+    }
+
+    /// <summary>
+    /// The protective row on the console is built from these three steps. A valid credential is
+    /// checked and never charged; a rejected one is checked then charged; once the budget is spent a
+    /// request that cannot prove itself is refused — and a refusal is not also a charge.
+    /// </summary>
+    [Fact]
+    public async Task InvokeAsync_ReportsEachStepToTheUsageTracker()
+    {
+        var usage = new StepRecorder();
+        var valid = CreateMiddleware(new RateLimitPolicy(1, 0, 0), Answer(StatusCodes.Status200OK), out _, usage: usage);
+        await InvokeAsync(valid, "/v1/chat/completions");
+        usage.Steps.Should().Equal((RateLimitAuthFailureStep.Checked, 1));
+
+        usage.Steps.Clear();
+        var guessing = CreateMiddleware(new RateLimitPolicy(1, 0, 0), RejectCredential, out _, usage: usage);
+        await InvokeAsync(guessing, "/v1/chat/completions", authentication: Unauthenticated());
+        var refused = await InvokeAsync(guessing, "/v1/chat/completions", authentication: Unauthenticated());
+
+        refused.Should().Be(StatusCodes.Status429TooManyRequests);
+        usage.Steps.Should().Equal(
+            (RateLimitAuthFailureStep.Checked, 1),
+            (RateLimitAuthFailureStep.Charged, 1),
+            (RateLimitAuthFailureStep.Refused, 1));
+    }
+
+    private sealed class StepRecorder : IRateLimitUsageTracker
+    {
+        public List<(RateLimitAuthFailureStep Step, int Rpm)> Steps { get; } = [];
+
+        public void RecordAuthFailure(RateLimitAuthFailureStep step, int enforcedRpm) => Steps.Add((step, enforcedRpm));
+
+        public void Record(in RateLimitUsageEvent usageEvent)
+        {
+        }
+
+        public RateLimitUsageReport BuildReport(int minutes, int take, DateTimeOffset now) => throw new NotSupportedException();
+
+        public void Reset()
+        {
+        }
     }
 
     private sealed class StubConfigProvider(GatewayConfigSnapshot snapshot) : IGatewayConfigProvider

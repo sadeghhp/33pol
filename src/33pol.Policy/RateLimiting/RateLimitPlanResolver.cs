@@ -131,7 +131,11 @@ public sealed class RateLimitPlanResolver(
 
         if (!rateLimits.Global.EnforcesNothing)
         {
-            rules.Add(new RateLimitRule(RateLimitScope.Global, RateLimitKeys.GlobalPartition, rateLimits.Global));
+            rules.Add(new RateLimitRule(RateLimitScope.Global, RateLimitKeys.GlobalPartition, rateLimits.Global)
+            {
+                LimitId = RateLimitLimitIds.Global,
+                StreamLimitId = RateLimitLimitIds.Global,
+            });
         }
 
         // The tenant scope always produces a rule: it is the gateway's universal limit, and the
@@ -145,16 +149,34 @@ public sealed class RateLimitPlanResolver(
                 subject.PlanSlug,
                 subject.TenantId,
                 subject.TenantSlug);
+        // Which control the tier came from, so the per-limit report counts this bucket under the
+        // number an operator would have to edit. Resolved here, once per cached plan.
+        var (tenantRateId, tenantStreamId) = anonymous
+            ? RateLimitPolicyResolver.ResolveAnonymousTierSource(rateLimits, authenticationRequired: true)
+            : RateLimitPolicyResolver.ResolveTenantTierSource(
+                rateLimits,
+                subject.PlanSlug,
+                subject.TenantId,
+                subject.TenantSlug);
         rules.Add(new RateLimitRule(
             RateLimitScope.Tenant,
             RateLimitKeys.Tenant(subject.PartitionKey),
-            tenantTier));
+            tenantTier)
+        {
+            LimitId = tenantRateId,
+            StreamLimitId = tenantStreamId,
+        });
 
         if (!string.IsNullOrEmpty(subject.ApiKeyId) &&
             rateLimits.ApiKeys.TryGetValue(subject.ApiKeyId, out var keyTier) &&
             !keyTier.EnforcesNothing)
         {
-            rules.Add(new RateLimitRule(RateLimitScope.ApiKey, RateLimitKeys.ApiKey(subject.ApiKeyId), keyTier));
+            var keyLimitId = RateLimitLimitIds.Rule(RateLimitScopeNames.ApiKey, subject.ApiKeyId);
+            rules.Add(new RateLimitRule(RateLimitScope.ApiKey, RateLimitKeys.ApiKey(subject.ApiKeyId), keyTier)
+            {
+                LimitId = keyLimitId,
+                StreamLimitId = keyLimitId,
+            });
         }
 
         var modelStageIndex = rules.Count;
@@ -173,21 +195,30 @@ public sealed class RateLimitPlanResolver(
                 var modelPartition = anonymous
                     ? RateLimitKeys.AnonymousModel(modelId)
                     : RateLimitKeys.Model(modelId);
-                rules.Add(Adapt(RateLimitScope.Model, modelPartition, modelTier, factor));
+                rules.Add(Adapt(
+                    RateLimitScope.Model,
+                    modelPartition,
+                    modelTier,
+                    factor,
+                    RateLimitLimitIds.Rule(RateLimitScopeNames.Model, modelId)) with
+                {
+                    AnonymousBucket = anonymous,
+                });
             }
 
             // Matched on the tenant id first and its slug second, for the same reason the tenant
             // scope matches both: the id is what the request carries, the slug is what an operator
             // writes. The partition key stays the id either way, so which spelling the rule was
             // found by never changes which bucket it counts against.
-            if (TryFindTenantModelTier(rateLimits, subject, modelId, out var tenantModelTier) &&
+            if (TryFindTenantModelTier(rateLimits, subject, modelId, out var tenantModelTier, out var tenantModelTarget) &&
                 !tenantModelTier.EnforcesNothing)
             {
                 rules.Add(Adapt(
                     RateLimitScope.TenantModel,
                     RateLimitKeys.TenantModel(subject.PartitionKey, modelId),
                     tenantModelTier,
-                    factor));
+                    factor,
+                    RateLimitLimitIds.Rule(RateLimitScopeNames.TenantModel, tenantModelTarget)));
             }
 
             if (!string.IsNullOrEmpty(subject.ApiKeyId) &&
@@ -198,7 +229,10 @@ public sealed class RateLimitPlanResolver(
                     RateLimitScope.ApiKeyModel,
                     RateLimitKeys.ApiKeyModel(subject.ApiKeyId, modelId),
                     keyModelTier,
-                    factor));
+                    factor,
+                    RateLimitLimitIds.Rule(
+                        RateLimitScopeNames.ApiKeyModel,
+                        RateLimitKeys.Pair(subject.ApiKeyId, modelId))));
             }
         }
 
@@ -209,21 +243,31 @@ public sealed class RateLimitPlanResolver(
         RateLimitsConfigSection rateLimits,
         in RateLimitSubject subject,
         string modelId,
-        out RateLimitPolicy tier)
+        out RateLimitPolicy tier,
+        out string target)
     {
-        if (!string.IsNullOrEmpty(subject.TenantId) &&
-            rateLimits.TenantModels.TryGetValue(RateLimitKeys.Pair(subject.TenantId, modelId), out tier!))
+        // The target the rule was found under is handed back because it is the rule's identity: a
+        // rule written against the slug and one written against the id are different rules.
+        if (!string.IsNullOrEmpty(subject.TenantId))
         {
-            return true;
+            target = RateLimitKeys.Pair(subject.TenantId, modelId);
+            if (rateLimits.TenantModels.TryGetValue(target, out tier!))
+            {
+                return true;
+            }
         }
 
-        if (!string.IsNullOrEmpty(subject.TenantSlug) &&
-            rateLimits.TenantModels.TryGetValue(RateLimitKeys.Pair(subject.TenantSlug, modelId), out tier!))
+        if (!string.IsNullOrEmpty(subject.TenantSlug))
         {
-            return true;
+            target = RateLimitKeys.Pair(subject.TenantSlug, modelId);
+            if (rateLimits.TenantModels.TryGetValue(target, out tier!))
+            {
+                return true;
+            }
         }
 
         tier = default!;
+        target = string.Empty;
         return false;
     }
 
@@ -235,14 +279,14 @@ public sealed class RateLimitPlanResolver(
         RateLimitScope scope,
         string partitionKey,
         RateLimitPolicy tier,
-        double factor)
+        double factor,
+        string limitId)
     {
-        if (factor >= 1.0)
-        {
-            return new RateLimitRule(scope, partitionKey, tier);
-        }
+        var rule = factor >= 1.0
+            ? new RateLimitRule(scope, partitionKey, tier)
+            : new RateLimitRule(scope, partitionKey, tier.Scale(factor), tier.Rpm, factor);
 
-        return new RateLimitRule(scope, partitionKey, tier.Scale(factor), tier.Rpm, factor);
+        return rule with { LimitId = limitId, StreamLimitId = limitId };
     }
 
     /// <param name="ConfigVersion">

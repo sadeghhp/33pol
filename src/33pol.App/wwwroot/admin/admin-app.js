@@ -18,6 +18,9 @@ function adminApp() {
    */
   const LIVE_STALE_MS = 3 * 15000;
 
+  /** Lookup tables for the rate-limit rules list; see rlIndex(). Module-level on purpose: not reactive. */
+  const RL_INDEX = {};
+
   /**
    * How still the pointer and keyboard have to be before the wallboard hides its cursor and its
    * exit button. Long enough that an operator walking up to the screen is not fighting a vanishing
@@ -267,10 +270,28 @@ function adminApp() {
     rateLimitFieldError: '',
     rateLimitsLoadError: '',
     rlReadOnlyReason: '',
+    // Per-limit series for the open rule, the gateway-wide series for the summary, and the change
+    // history. Each is a side read: a failure leaves the page as it was and says so in place.
+    rlSeries: null,
+    rlSeriesError: '',
+    rlLimitSeries: null,
+    rlLimitSeriesFor: '',
+    rlLimitSeriesState: 'idle',
+    rlHistory: null,
+    rlHistoryError: '',
+    rlHistoryLoading: false,
+    rlHistoryOpen: false,
     rlSaving: false,
     rlSchedule: null,
     rlScheduleError: '',
     rlScheduleLoadedAt: 0,
+    // The stored configuration's report — what production enforces now. `rlSchedule` above is what
+    // the Schedule section draws, which is the draft's preview while edits are staged.
+    // Render cache for the heavy rate-limit view-models; see rlStartLiveViews(). Null = not computed.
+    _rlc: { dirty: null, dirtyView: null, timeline: null, flagChips: null, intentChips: null, countView: null, matching: null, status: null, summary: null },
+    rlScheduleSaved: null,
+    rlScheduleSavedError: '',
+    _rlScheduleSeq: 0,
     _rlScheduleTimer: null,
     _rlPreviewTimer: null,
     _rlWindowBaseline: '',
@@ -283,15 +304,27 @@ function adminApp() {
     rlPreview: null,
     rlPreviewError: '',
     rlShowAllTransitions: false,
+    rlShowAllTimeline: false,
     rlCombo: { field: '', index: -1, closed: {} },
+    rlUsageAutoRefresh: true,
+    rlUsageSortKey: 'refused',
+    rlUsageSortDir: -1,
+    rlUsageFilter: '',
     rlFilterText: '',
     // The list is filtered by the same two questions a rule is created with, never by stored scope.
     rlFilterWho: 'all',
     rlFilterWhere: 'any',
-    rlFilterFlag: '',
+    // Status filters combine ("scheduled and refused" is a real question), so each is its own flag.
+    rlFilterFlags: { scheduled: false, active: false, refused: false, off: false, unsaved: false },
+    // How many rule rows are in the DOM. The server accepts 2,000 rules; the list grows by a
+    // hundred at a time, the way the Usage page's rollups do.
+    rlRuleLimit: 100,
     rlSortKey: 'who',
     rlSortDir: 1,
     rlReviewOpen: false,
+    // Set by a version conflict: the diff between the baseline this page had and the one that
+    // replaced it, i.e. what somebody else saved. Cleared by a save, a discard or a reload.
+    rlTheirChanges: [],
     rlRuleDrawerOpen: false,
     rlRule: { identity: '', scope: 'model', target: '', rpm: 0, burst: 0, maxConcurrentStreams: 0, schedule: [] },
     rlRuleError: '',
@@ -428,6 +461,7 @@ function adminApp() {
         const open = this.anyModalOpen;
         this.$nextTick(() => this.syncModalFocus(open));
       });
+      this.rlStartLiveViews();
       this._tickTimer = setInterval(() => {
         if (document.hidden) return;
         // Only the Overview reads the clock; ticking it elsewhere would re-render for nothing.
@@ -1206,6 +1240,10 @@ function adminApp() {
         // Same cadence for errors. Facets are not polled — they move slowly, and they are refreshed
         // on tab activation and after a clear.
         if (this.errorsAutoRefresh && this.tab === 'errors' && this._pollTick % 5 === 0) this.loadErrors(true);
+        // Rate-limit activity: every 15th tick (30s), only while that page is on screen. The list's
+        // Refused column and the summary read this report, so it must not age silently; the
+        // endpoint is an in-memory read built to be polled. Never touches the configuration draft.
+        if (this.rateLimitActivityPollDue(this._pollTick)) void this.loadRateLimitUsage();
         this._pollTick++;
       }, 2000);
     },
@@ -2988,12 +3026,15 @@ function adminApp() {
     },
 
     rlIntentFor(scope) {
-      const hit = this.rlIntents().find(i => i.scope === String(scope || '').toLowerCase());
+      // Looked up per rule, per render: a table built once, not a fresh array scanned each time.
+      if (!RL_INDEX.intents) RL_INDEX.intents = new Map(this.rlIntents().map(i => [i.scope, { who: i.who, where: i.where }]));
+      const hit = RL_INDEX.intents.get(String(scope || '').toLowerCase());
       return hit ? { who: hit.who, where: hit.where } : null;
     },
 
     rlScopeInfo(id) {
-      return this.rlScopeCatalog().find(s => s.id === id) || { id, name: id, short: id, desc: '' };
+      if (!RL_INDEX.scopes) RL_INDEX.scopes = new Map(this.rlScopeCatalog().map(s => [s.id, s]));
+      return RL_INDEX.scopes.get(id) || { id, name: id, short: id, desc: '' };
     },
 
     rlIdentity(scope, target) {
@@ -3097,11 +3138,25 @@ function adminApp() {
         return;
       }
       this.rateLimits = normalized;
-      if (!keepDraft || !this.rlDraft) this.rlDraft = this.rlClone(normalized);
+      if (!keepDraft || !this.rlDraft) {
+        this.rlDraft = this.rlClone(normalized);
+        this.rlTheirChanges = [];
+      }
       this.rateLimitsLoadError = '';
       if (!keepDraft) this.rateLimitFieldError = '';
-      // The read-only reason is learnt from a refused write, so a successful read does not clear
-      // it; a successful write and an explicit Reload do.
+      // The gateway says whether a save can work, decided by the same check the save makes. When it
+      // says so the answer is authoritative in both directions. A gateway that predates the field
+      // says nothing, and then read-only is still only learnt from a refused write.
+      const writable = data?.writable ?? data?.Writable;
+      if (writable === false) this.rlReadOnlyReason = this.rlReadOnlyText(data?.readOnlyReason ?? data?.ReadOnlyReason);
+      else if (writable === true) this.rlReadOnlyReason = '';
+    },
+
+    /** The sentence for a read-only reason code. An unknown code still reads as read-only. */
+    rlReadOnlyText(code) {
+      return code === 'store_unavailable'
+        ? 'This gateway has no database, so rate limits are read-only here.'
+        : 'This gateway cannot save rate-limit changes right now, so they are read-only here.';
     },
 
     /**
@@ -3190,6 +3245,8 @@ function adminApp() {
       if (!this.rateLimits) return;
       this.rlDraft = this.rlClone(this.rateLimits);
       this.rateLimitFieldError = '';
+      this.rlTheirChanges = [];
+      this.rlReviewOpen = false;
       this.closeRateLimitDrawers();
       this.queueRateLimitScheduleRefresh();
       this.toast('Changes discarded.');
@@ -3394,6 +3451,21 @@ function adminApp() {
       return payload;
     },
 
+    /** One rule as it is sent — also the form two versions of a rule are compared in. */
+    rlRulePayload(row) {
+      return {
+        scope: String(row.scope ?? '').trim(),
+        target: String(row.target ?? '').trim(),
+        ...this.rlTierPayload(row),
+        // Sent explicitly rather than omitted when true: the payload replaces the rule set
+        // wholesale, so a field left out is a field the server fills with its own default.
+        enabled: row.enabled !== false,
+        // Always an array: the draft is the complete truth, and an absent field would tell the
+        // server to keep whatever windows it has stored.
+        schedule: (row.schedule || []).map((w) => this.rlWindowPayload(w))
+      };
+    },
+
     buildRateLimitsPayload(source) {
       const cfg = source || this.rlDraft || {};
       const plans = {};
@@ -3409,17 +3481,7 @@ function adminApp() {
       // them, and the operator was told "Rate limits saved."
       const rules = (cfg.rules || [])
         .filter((row) => String(row.target ?? '').trim() !== '')
-        .map((row) => ({
-          scope: String(row.scope ?? '').trim(),
-          target: String(row.target ?? '').trim(),
-          ...this.rlTierPayload(row),
-          // Sent explicitly rather than omitted when true: the payload replaces the rule set
-          // wholesale, so a field left out is a field the server fills with its own default.
-          enabled: row.enabled !== false,
-          // Always an array: the draft is the complete truth, and an absent field would tell the
-          // server to keep whatever windows it has stored.
-          schedule: (row.schedule || []).map((w) => this.rlWindowPayload(w))
-        }));
+        .map((row) => this.rlRulePayload(row));
       return {
         enabled: cfg.enabled !== false,
         adaptiveEnabled: cfg.adaptiveEnabled === true,
@@ -3483,6 +3545,13 @@ function adminApp() {
      * Anything else is a bug and still surfaces.
      */
     async onSaveRateLimitsClick() {
+      // Not a dialog: the first press on a save that deletes something, or switches enforcement
+      // off, opens the list of what it will do; the button already names the count, and the second
+      // press sends it.
+      if (!this.rlReviewOpen && this.rlDirtyView.destructive > 0) {
+        this.rlReviewOpen = true;
+        return;
+      }
       try {
         await this.saveRateLimits();
       } catch (e) {
@@ -3547,6 +3616,9 @@ function adminApp() {
       if (unchanged) this.rlDraft = this.rlClone(this.rateLimits);
       this.rateLimitFieldError = '';
       this.rlReviewOpen = false;
+      this.rlTheirChanges = [];
+      // A save is a new history entry; a list already on screen must not go stale behind it.
+      if (this.rlHistory) void this.loadRateLimitHistory(false);
       // The server's own rendering of what was saved. Unforced, so it is skipped outright when
       // edits were made meanwhile and dropped if one is made before it lands; nothing depends on
       // it succeeding. A gateway that reports no version is asked for one, without the draft being
@@ -3580,7 +3652,7 @@ function adminApp() {
         return;
       }
       if (e.status === 503) {
-        this.rlReadOnlyReason = 'This gateway has no database, so rate limits are read-only here.';
+        this.rlReadOnlyReason = this.rlReadOnlyText('store_unavailable');
       } else if (e.status === 403) {
         this.rlReadOnlyReason = 'This key may view rate limits but not change them.';
       }
@@ -3597,7 +3669,9 @@ function adminApp() {
      */
     async rlRecoverFromConflict() {
       try {
+        const previous = this.rateLimits ? this.buildRateLimitsPayload(this.rateLimits) : null;
         if (!await this.rlRefreshBaseline()) return;
+        this.rlTheirChanges = this.rlDiff(previous, this.buildRateLimitsPayload(this.rateLimits));
         this.rlReviewOpen = true;
         this.rateLimitFieldError =
           'Rate limits were changed by someone else while you were editing. Your edits are kept. '
@@ -3613,8 +3687,21 @@ function adminApp() {
       }
     },
 
-    /** Rows asked for per section. The endpoint caps at 1000; 200 keeps the rule-list join honest. */
-    rlUsageTake() { return 200; },
+    /**
+     * Rows asked for per section. 200 is plenty for a page of rules; a larger rule set asks for
+     * more, up to the endpoint's cap of 1000, so fewer rules fall off the end of the report and
+     * show "—" for their refusals.
+     */
+    rlUsageTake() {
+      return Math.max(200, Math.min(1000, (this.rateLimits?.rules || []).length));
+    },
+
+    /** Activity table sort: every column is a count, so a new column starts with the largest first. */
+    setRateLimitUsageSort(key) {
+      if (this.rlUsageSortKey === key) { this.rlUsageSortDir = -this.rlUsageSortDir; return; }
+      this.rlUsageSortKey = key;
+      this.rlUsageSortDir = -1;
+    },
 
     async loadRateLimitUsage() {
       // Last started wins: changing the window twice must not let the slower, older answer land.
@@ -3632,6 +3719,9 @@ function adminApp() {
         this.rateLimitUsageStale = false;
         this.rateLimitUsageUnavailable = false;
         this.rateLimitUsageLoadedAt = Date.now();
+        // The trend is read from the same counters, so it is refreshed with them.
+        void this.loadRateLimitSeries();
+        if (this.rlRuleDrawerOpen && this.rlRule?.identity) void this.loadRateLimitLimitSeries(this.rlRule.identity);
       } catch (e) {
         if (seq !== this._rlUsageSeq) return;
         // The previous report is kept on purpose. Activity is a side read: its failure must not
@@ -3642,6 +3732,18 @@ function adminApp() {
       } finally {
         if (seq === this._rlUsageSeq) this.rateLimitUsageLoading = false;
       }
+    },
+
+    /**
+     * Whether this poll tick should refresh activity. Skipped while a request is already out (the
+     * manual Refresh and the window picker share the loader), while the operator has switched
+     * auto-refresh off, and on a gateway that has no tracker at all — asking again every 30 seconds
+     * would only collect the same 503.
+     */
+    rateLimitActivityPollDue(tick) {
+      return !!this.rlUsageAutoRefresh && this.tab === 'settings' && this.isSettingsLimits
+        && tick > 0 && tick % 15 === 0
+        && !this.rateLimitUsageLoading && !this.rateLimitUsageUnavailable;
     },
 
     /** The window control: picking a window is asking for it, so it loads without a second click. */
@@ -3656,11 +3758,7 @@ function adminApp() {
       this.rlUsageTab = tab;
     },
 
-    scrollToRateLimitUsage() {
-      if (!this.rateLimitUsage) void this.loadRateLimitUsage();
-      const el = document.getElementById('rate-limit-usage');
-      if (el && el.scrollIntoView) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    },
+    scrollToRateLimitUsage() { this.scrollToRateLimitSection('rate-limit-usage'); },
 
     // ---- time helpers (display zone aware) ----
 
@@ -3810,6 +3908,63 @@ function adminApp() {
         (overnight ? ' next day' : '') + ' · ' + (w.timeZone || 'UTC');
     },
 
+    /** Days as a reader would say them: runs of three or more collapse ("Mon–Fri", "Tue–Thu, Sun"). */
+    rlDaysCompact(days) {
+      const labels = this.rlDayLabels();
+      const set = new Set((days || []).map(d => String(d).toLowerCase()));
+      const on = labels.map(([id]) => set.has(id));
+      if (on.every(Boolean)) return 'Every day';
+      if (!on.some(Boolean)) return 'No days';
+      const parts = [];
+      for (let i = 0; i < 7; i++) {
+        if (!on[i]) continue;
+        let j = i;
+        while (j + 1 < 7 && on[j + 1]) j++;
+        if (j - i >= 2) parts.push(labels[i][1] + '–' + labels[j][1]);
+        else for (let k = i; k <= j; k++) parts.push(labels[k][1]);
+        i = j;
+      }
+      return parts.join(', ');
+    },
+
+    /**
+     * One window as one sentence: when it runs, in which zone, and what it does —
+     * "Mon–Fri · 09:00–17:00 · Europe/London → 120 rpm · 20 burst". It restates the fields as they
+     * are stored and decides nothing: whether a window is running, next runs or is outranked comes
+     * from the server's report, and is shown beside this, never folded into it.
+     *
+     *  - weekly: days, the daily span (an end at or before the start runs into the next day;
+     *    00:00–24:00 is "all day"), and the window's own zone, which is what it is evaluated in;
+     *  - once: instants, shown in the page's display zone, which is therefore named; without an
+     *    end it says so;
+     *  - a suspending window "→ paused"; validity bounds and an explicit priority are appended,
+     *    because they change when and whether the window applies.
+     */
+    rlWindowSentence(w) {
+      if (!w) return '';
+      const effect = w.suspend ? 'paused' : this.rlTierText(w);
+      let when;
+      if (w.kind === 'once') {
+        const zone = this.rlZoneOrDefault();
+        const day = (iso) => this.rlFmt(iso, { day: 'numeric', month: 'short' });
+        const time = (iso) => this.rlFmt(iso, { hour: '2-digit', minute: '2-digit' });
+        if (!w.from) when = 'Once · start not set';
+        else if (!w.until) when = 'Once · from ' + day(w.from) + ' ' + time(w.from) + ', open-ended · ' + zone;
+        else if (day(w.from) === day(w.until)) when = 'Once · ' + day(w.from) + ' ' + time(w.from) + '–' + time(w.until) + ' · ' + zone;
+        else when = 'Once · ' + day(w.from) + ' ' + time(w.from) + ' → ' + day(w.until) + ' ' + time(w.until) + ' · ' + zone;
+      } else {
+        const start = w.start || '?', end = w.end || '?';
+        const allDay = start === '00:00' && end === '24:00';
+        const overnight = !allDay && w.start && w.end && w.end !== '24:00' && w.end <= w.start;
+        when = this.rlDaysCompact(w.days) + ' · ' + (allDay ? 'all day' : start + '–' + end + (overnight ? ' (next day)' : '')) + ' · ' + (w.timeZone || 'UTC');
+      }
+      const bounds = [];
+      if (w.validFrom) bounds.push('valid from ' + this.rlFmt(w.validFrom, { day: 'numeric', month: 'short', year: 'numeric' }));
+      if (w.validUntil) bounds.push('until ' + this.rlFmt(w.validUntil, { day: 'numeric', month: 'short', year: 'numeric' }));
+      const priority = w.priority === null || w.priority === undefined || w.priority === '' ? '' : ' · priority ' + w.priority;
+      return when + ' → ' + effect + (bounds.length ? ' · ' + bounds.join(' ') : '') + priority;
+    },
+
     // ---- schedule report ----
 
     rlRangeFromTo() {
@@ -3837,49 +3992,67 @@ function adminApp() {
       }, 300);
     },
 
+    /**
+     * Two reports, because the page answers two questions. `rlScheduleSaved` is always the stored
+     * configuration — what production enforces now — and feeds the summary and the rules list's
+     * "Enforcing now" column. `rlSchedule` is what the Schedule section draws: the same report
+     * while nothing is staged, and the preview of the draft once something is, so an operator can
+     * check a schedule before saving it. Editing one rule therefore never hides the live state of
+     * the others.
+     */
     async loadRateLimitSchedule() {
       this.rlScheduleError = '';
       if (this._rlScheduleTimer) { clearTimeout(this._rlScheduleTimer); this._rlScheduleTimer = null; }
-      try {
-        const { from, to } = this.rlRangeFromTo();
-        // A dirty draft is what the operator is actually asking about: the calendar exists to answer
-        // "did I get this schedule right?", and the saved configuration cannot answer that for a
-        // change that has not been saved. The preview route computes the same report over the
-        // staged rules; with nothing staged the two are identical, so the GET stays the default.
-        this.rlSchedule = this.rateLimitsDirty
-          ? await this.apiJson('/admin/api/rate-limits/schedule/preview', {
-            method: 'POST',
-            body: JSON.stringify({
-              rules: this.buildRateLimitsPayload().rules,
-              from: from.toISOString(),
-              to: to.toISOString(),
-              take: 200
-            })
+      const seq = this._rlScheduleSeq = (this._rlScheduleSeq || 0) + 1;
+      const { from, to } = this.rlRangeFromTo();
+      const dirty = this.rateLimitsDirty;
+      const savedRequest = this.apiJson(
+        '/admin/api/rate-limits/schedule?from=' + encodeURIComponent(from.toISOString()) +
+        '&to=' + encodeURIComponent(to.toISOString()) + '&take=200');
+      // The preview route computes the same report over the staged rules; with nothing staged the
+      // two are identical, so one GET serves both.
+      const draftRequest = dirty
+        ? this.apiJson('/admin/api/rate-limits/schedule/preview', {
+          method: 'POST',
+          body: JSON.stringify({
+            rules: this.buildRateLimitsPayload().rules,
+            from: from.toISOString(),
+            to: to.toISOString(),
+            take: 200
           })
-          : await this.apiJson(
-            '/admin/api/rate-limits/schedule?from=' + encodeURIComponent(from.toISOString()) +
-            '&to=' + encodeURIComponent(to.toISOString()) + '&take=200');
+        })
+        : savedRequest;
+      const [saved, draft] = await Promise.allSettled([savedRequest, draftRequest]);
+      // Last started wins: a slower, older answer must not land on top of a newer one.
+      if (seq !== this._rlScheduleSeq) return;
+      if (saved.status === 'fulfilled') {
+        this.rlScheduleSaved = saved.value;
+        this.rlScheduleSavedError = '';
+      } else {
+        this.rlScheduleSaved = null;
+        this.rlScheduleSavedError = saved.reason?.message || 'Could not load the schedule.';
+      }
+      if (draft.status === 'fulfilled') {
+        this.rlSchedule = draft.value;
         this.rlScheduleLoadedAt = Date.now();
-        // Re-read when the next window boundary passes so the "in force" column turns over on
-        // its own; capped so a distant change does not pin a multi-day timer.
-        const next = (this.rlSchedule?.rules || [])
-          .map(r => r.nextChangeAt ? new Date(r.nextChangeAt).getTime() : NaN)
-          .filter(t => Number.isFinite(t) && t > Date.now());
-        if (next.length) {
-          const wait = Math.min(Math.min(...next) - Date.now() + 1500, 30 * 60000);
-          // Two loads in flight would each arm a timer; the later one wins.
-          if (this._rlScheduleTimer) clearTimeout(this._rlScheduleTimer);
-          this._rlScheduleTimer = setTimeout(() => {
-            this._rlScheduleTimer = null;
-            // Only while the page is actually being looked at: signed in, on this tab, visible.
-            if (this.apiKey && this.tab === 'settings' && this.isSettingsLimits && !document.hidden) {
-              void this.loadRateLimitSchedule();
-            }
-          }, wait);
-        }
-      } catch (e) {
+      } else {
         this.rlSchedule = null;
-        this.rlScheduleError = e.message || 'Could not load the schedule.';
+        this.rlScheduleError = draft.reason?.message || 'Could not load the schedule.';
+      }
+      // Re-read when the next window boundary passes so the "Enforcing now" column turns over on
+      // its own; capped so a distant change does not pin a multi-day timer.
+      const next = [...(this.rlScheduleSaved?.rules || []), ...(this.rlSchedule?.rules || [])]
+        .map(r => r.nextChangeAt ? new Date(r.nextChangeAt).getTime() : NaN)
+        .filter(t => Number.isFinite(t) && t > Date.now());
+      if (next.length) {
+        const wait = Math.min(Math.min(...next) - Date.now() + 1500, 30 * 60000);
+        this._rlScheduleTimer = setTimeout(() => {
+          this._rlScheduleTimer = null;
+          // Only while the page is actually being looked at: signed in, on this tab, visible.
+          if (this.apiKey && this.tab === 'settings' && this.isSettingsLimits && !document.hidden) {
+            void this.loadRateLimitSchedule();
+          }
+        }, wait);
       }
     },
 
@@ -3926,20 +4099,102 @@ function adminApp() {
       this.rlPreviewError = '';
     },
 
+    toggleRateLimitTimelineRows() { this.rlShowAllTimeline = !this.rlShowAllTimeline; },
+
+    /**
+     * Preview shortcuts. Both only choose the instant; the server evaluates it, exactly as it does
+     * for a typed one. "Now" is the current wall-clock time in the display zone. "Next change" is
+     * the earliest transition in the report the calendar is showing (the draft's while one is
+     * staged) — one minute past it, so the preview lands on the side where the change has happened.
+     */
+    previewRateLimitNow() {
+      this.rlPreviewAt = this.rlIsoToLocal(new Date().toISOString(), this.rlZoneOrDefault());
+      return this.runRateLimitPreview();
+    },
+    rlNextChangeIso() {
+      const now = Date.now();
+      const times = (this.rlSchedule?.rules || [])
+        .map(r => r.nextChangeAt ? new Date(r.nextChangeAt).getTime() : NaN)
+        .filter(t => Number.isFinite(t) && t > now);
+      return times.length ? new Date(Math.min(...times) + 60000).toISOString() : '';
+    },
+    previewRateLimitNextChange() {
+      const iso = this.rlNextChangeIso();
+      if (!iso) return;
+      this.rlPreviewAt = this.rlIsoToLocal(iso, this.rlZoneOrDefault());
+      return this.runRateLimitPreview();
+    },
+    get rlPreviewShortcutView() {
+      const iso = this.rlNextChangeIso();
+      return {
+        hasNext: !!iso, noNext: !iso,
+        // Says why it is disabled in its own label: a disabled button's tooltip is unreachable.
+        nextLabel: iso ? 'Next change · ' + this.rlFmtShort(iso) : 'Next change · none in range',
+        nextTitle: iso ? 'Preview one minute after the next scheduled change' : 'Nothing is scheduled to change in this range'
+      };
+    },
+
     toggleRateLimitTransitions() {
       this.rlShowAllTransitions = !this.rlShowAllTransitions;
     },
 
-    setRateLimitWhoFilter(id) { this.rlFilterWho = id; },
-    setRateLimitWhereFilter(id) { this.rlFilterWhere = id; },
-    /** Scheduled / Off: pressing the active one again releases it. */
-    toggleRateLimitFlagFilter(id) { this.rlFilterFlag = this.rlFilterFlag === id ? '' : id; },
+    setRateLimitWhoFilter(id) { this.rlFilterWho = id; this.rlRuleLimit = 100; },
+    setRateLimitWhereFilter(id) { this.rlFilterWhere = id; this.rlRuleLimit = 100; },
+    /** Status flags: each is a toggle, and they combine. */
+    toggleRateLimitFlagFilter(id) {
+      this.rlFilterFlags = { ...this.rlFilterFlags, [id]: !this.rlFilterFlags[id] };
+      this.rlRuleLimit = 100;
+    },
+    setRateLimitFilterText(text) { this.rlFilterText = text; this.rlRuleLimit = 100; },
+    /**
+     * A hundred more rows. Focus moves to the first new row's Open button: the button that was
+     * pressed slides down the page (and disappears on the last batch), and the rows are not
+     * focusable themselves, so that button is the row's keyboard handle.
+     */
+    showMoreRateLimitRules() {
+      const from = this.rlRuleLimit || 100;
+      this.rlRuleLimit = from + 100;
+      const run = () => {
+        if (typeof document === 'undefined' || !document.querySelectorAll) return;
+        const row = document.querySelectorAll('.rl-rules-table tbody tr')[from];
+        const target = row && row.querySelector ? row.querySelector('.rl-col-chev button') : null;
+        if (target && target.focus) target.focus();
+      };
+      if (typeof this.$nextTick === 'function') this.$nextTick(run); else run();
+    },
+    /** The summary's shortcuts: one question, answered by the list. Clears whatever was set before. */
+    showRateLimitRulesWhere(flag, sortKey) {
+      this.clearRateLimitFilters();
+      if (flag) this.rlFilterFlags = { ...this.rlFilterFlags, [flag]: true };
+      if (sortKey) { this.rlSortKey = sortKey; this.rlSortDir = sortKey === 'refused' ? -1 : 1; }
+      this.scrollToRateLimitSection('rl-rules');
+    },
+    /** From an Activity row to the rules about that subject. */
+    showRateLimitRulesFor(text) {
+      this.clearRateLimitFilters();
+      this.rlFilterText = String(text || '');
+      this.scrollToRateLimitSection('rl-rules');
+    },
+    scrollToRateLimitSection(id) {
+      if (id === 'rate-limit-usage' && !this.rateLimitUsage) void this.loadRateLimitUsage();
+      const el = document.getElementById(id);
+      if (el && el.scrollIntoView) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    },
+    /** The narrow-width sort control: the header buttons are hidden with the header row there. */
+    setRateLimitSortChoice(value) {
+      const [key, dir] = String(value || '').split(':');
+      if (!['who', 'model', 'rpm', 'refused'].includes(key)) return;
+      this.rlSortKey = key;
+      this.rlSortDir = dir === 'desc' ? -1 : 1;
+      this.rlRuleLimit = 100;
+    },
 
     clearRateLimitFilters() {
       this.rlFilterText = '';
       this.rlFilterWho = 'all';
       this.rlFilterWhere = 'any';
-      this.rlFilterFlag = '';
+      this.rlFilterFlags = { scheduled: false, active: false, refused: false, off: false, unsaved: false };
+      this.rlRuleLimit = 100;
       const input = document.getElementById('rl-filter-input');
       if (input && input.focus) input.focus();
     },
@@ -3952,6 +4207,7 @@ function adminApp() {
       }
       this.rlSortKey = key;
       this.rlSortDir = key === 'refused' ? -1 : 1;
+      this.rlRuleLimit = 100;
     },
 
     // ---- tiers ----
@@ -4103,6 +4359,9 @@ function adminApp() {
       this.rlWindowOpen = false;
       this.rlRuleDrawerOpen = true;
       if (!this.rateLimitUsage) void this.loadRateLimitUsage();
+      // This rule's own trend and its past changes. Side reads: the drawer is usable without them.
+      void this.loadRateLimitLimitSeries(identity);
+      if (!this.rlHistory && !this.rlHistoryError) void this.loadRateLimitHistory(false);
     },
 
     closeRateLimitRule() {
@@ -5366,7 +5625,16 @@ function adminApp() {
           },
           adaptiveEnabled: b('rlDraft.adaptiveEnabled')
         },
-        rlFilterText: b('rlFilterText'),
+        rlFilterText: {
+          get() { return self.rlFilterText; },
+          set(v) { self.setRateLimitFilterText(v); }
+        },
+        rlUsageAutoRefresh: b('rlUsageAutoRefresh'),
+        rlUsageFilter: b('rlUsageFilter'),
+        rlSortChoice: {
+          get() { return self.rlSortKey + ':' + (self.rlSortDir > 0 ? 'asc' : 'desc'); },
+          set(v) { self.setRateLimitSortChoice(v); }
+        },
         rlZone: b('rlZone'),
         rlRangeDays: b('rlRangeDays'),
         rlPreviewAt: b('rlPreviewAt'),
@@ -5530,7 +5798,7 @@ function adminApp() {
       ];
       // The itemised diff costs roughly half again what the plain dirty check does, and the
       // pristine case is the common one on the four sub-tabs that only render the badge.
-      const unsaved = this.rateLimitsDirty ? this.rateLimitsUnsavedCount : 0;
+      const unsaved = this.rlDirtyRender ? this.rateLimitsUnsavedCount : 0;
       return defs.map(([id, label]) => ({
         key: id,
         label,
@@ -7705,6 +7973,8 @@ function adminApp() {
     get rateLimitsLocked() { return !this.rateLimitsEditable; },
     get rateLimitsReadOnlyText() { return this.rlReadOnlyReason || ''; },
     get rateLimitsDisabled() { return !!this.rlDraft && !this.rlDraft.enabled; },
+    /** The stored master switch: what production is doing, whatever the draft says. */
+    get rateLimitsSavedDisabled() { return !!this.rateLimits && this.rateLimits.enabled === false; },
 
     /** The "take me to it" affordance beside a refused save; hidden when nothing is openable. */
     get rlSaveErrorView() {
@@ -7724,7 +7994,27 @@ function adminApp() {
      */
     get rateLimitsDirty() {
       if (!this.rateLimits || !this.rlDraft) return false;
-      return this.rlCanonical(this.rlDraft) !== this.rlCanonical(this.rateLimits);
+      return this.rlCanonical(this.rlDraft) !== this.rlSavedCanonical();
+    },
+
+    /**
+     * The saved configuration in canonical form and as a payload, computed once per saved object.
+     * It is replaced, never edited in place, so its identity is a sound cache key — and "is the
+     * draft dirty" is asked by a dozen bindings on every render.
+     */
+    rlSavedCanonical() {
+      const c = RL_INDEX;
+      const size = (this.rateLimits?.rules || []).length;
+      if (c.canonSrc !== this.rateLimits || c.canonSize !== size) {
+        c.canonSrc = this.rateLimits; c.canonSize = size;
+        c.canon = this.rlCanonical(this.rateLimits);
+        c.savedPayload = this.rateLimits ? this.buildRateLimitsPayload(this.rateLimits) : null;
+      }
+      return c.canon;
+    },
+    rlSavedPayload() {
+      this.rlSavedCanonical();
+      return RL_INDEX.savedPayload;
     },
 
     /** Save is refused while read-only and while a save is already out. */
@@ -7791,79 +8081,432 @@ function adminApp() {
     },
 
     /** What the sticky bar says has changed, so an operator can tell a stray edit from an intended one. */
-    get rlDirtyView() {
-      const before = this.rateLimits ? this.buildRateLimitsPayload(this.rateLimits) : null;
-      const after = this.rlDraft ? this.buildRateLimitsPayload(this.rlDraft) : null;
-      if (!before || !after) return { show: false, count: 0, countText: '', detail: '', items: [] };
+    /** Which numbers of a tier moved, as "600 → 300 rpm · burst 60 → 30"; '' when none did. */
+    rlTierChange(b, a) {
+      const num = (v) => this.formatNum(Number(v) || 0);
+      const streams = (v) => (Number(v) > 0 ? num(v) : '∞');
+      const parts = [];
+      if ((b.rpm || 0) !== (a.rpm || 0)) parts.push(num(b.rpm) + ' → ' + num(a.rpm) + ' rpm');
+      if ((b.burst || 0) !== (a.burst || 0)) parts.push('burst ' + num(b.burst) + ' → ' + num(a.burst));
+      if ((b.maxConcurrentStreams || 0) !== (a.maxConcurrentStreams || 0)) parts.push('streams ' + streams(b.maxConcurrentStreams) + ' → ' + streams(a.maxConcurrentStreams));
+      return parts.join(' · ');
+    },
+
+    /**
+     * What separates two configurations, one item per thing an operator would name: the master
+     * switch, adaptive shedding, the default tier, a plan, a rule. Each item says what kind of
+     * change it is and the values on both sides, because a save replaces the whole rule set in
+     * production and "rule X" is not enough to approve that on. `destructive` marks the changes
+     * that take a limit away; they sort first. Both arguments are payloads (buildRateLimitsPayload),
+     * so the comparison is between what is stored and what would be sent.
+     *
+     * Used twice: draft against saved for the review, and old baseline against new after a conflict
+     * to show what somebody else changed.
+     */
+    rlDiff(before, after) {
+      if (!before || !after) return [];
       const items = [];
-      if (before.enabled !== after.enabled) items.push(after.enabled ? 'enforcement on' : 'enforcement off');
-      if (before.adaptiveEnabled !== after.adaptiveEnabled) items.push(after.adaptiveEnabled ? 'adaptive on' : 'adaptive off');
-      if (JSON.stringify(before.default) !== JSON.stringify(after.default)) items.push('default tier');
+      const windowsText = (n) => n + ' window' + (n === 1 ? '' : 's');
+      const push = (id, kind, subject, change, text, destructive = false) => items.push({
+        id, kind, subject, change, text, destructive,
+        kindCls: 'tag ' + ({ new: 'accent', deleted: 'level-error', removed: 'level-error', 'enforcement off': 'level-error', 'switched off': 'warn' }[kind] || '')
+      });
+      if (before.enabled !== after.enabled) {
+        push('enabled', after.enabled ? 'enforcement on' : 'enforcement off', 'Whole gateway',
+          after.enabled ? 'rate limits are enforced again' : 'every rule and window stops applying',
+          after.enabled ? 'enforcement on' : 'enforcement off', !after.enabled);
+      }
+      if (before.adaptiveEnabled !== after.adaptiveEnabled) {
+        push('adaptive', 'changed', 'Adaptive load shedding', after.adaptiveEnabled ? 'off → on' : 'on → off', after.adaptiveEnabled ? 'adaptive on' : 'adaptive off');
+      }
+      if (JSON.stringify(before.default) !== JSON.stringify(after.default)) {
+        push('default', 'changed', 'Default tier', this.rlTierChange(before.default, after.default), 'default tier');
+      }
       const slugs = new Set([...Object.keys(before.plans), ...Object.keys(after.plans)]);
       for (const slug of slugs) {
-        if (JSON.stringify(before.plans[slug]) !== JSON.stringify(after.plans[slug])) {
-          items.push((!before.plans[slug] ? 'new plan ' : !after.plans[slug] ? 'removed plan ' : 'plan ') + slug);
-        }
+        const b = before.plans[slug], a = after.plans[slug];
+        if (JSON.stringify(b) === JSON.stringify(a)) continue;
+        if (!b) push('plan:' + slug, 'new', 'Plan ' + slug, this.rlTierText(a), 'new plan ' + slug);
+        else if (!a) push('plan:' + slug, 'removed', 'Plan ' + slug, 'was ' + this.rlTierText(b) + ' · its tenants fall back to the default tier', 'removed plan ' + slug, true);
+        else push('plan:' + slug, 'changed', 'Plan ' + slug, this.rlTierChange(b, a), 'plan ' + slug);
       }
-      const byId = (list) => Object.fromEntries(list.map(r => [this.rlIdentity(r.scope, r.target), r]));
+      const byId = (list) => new Map(list.map(r => [this.rlIdentity(r.scope, r.target), r]));
       const b = byId(before.rules);
       const a = byId(after.rules);
-      for (const id of new Set([...Object.keys(b), ...Object.keys(a)])) {
-        if (JSON.stringify(b[id]) === JSON.stringify(a[id])) continue;
-        const r = a[id] || b[id];
-        const label = this.rlScopeInfo(r.scope).short + ' ' + (r.target === '*' ? '' : r.target);
-        // Switching a rule off is the one edit whose effect is invisible in the numbers, so the
-        // change list names it rather than reporting a bare "rule X".
-        const prefix = !b[id] ? 'new rule '
-          : !a[id] ? 'deleted rule '
-          : b[id].enabled !== a[id].enabled ? (a[id].enabled ? 'switched on rule ' : 'switched off rule ')
-          : '';
-        items.push(prefix + label.trim());
+      for (const id of new Set([...b.keys(), ...a.keys()])) {
+        const was = b.get(id), now = a.get(id);
+        if (was && now && JSON.stringify(was) === JSON.stringify(now)) continue;
+        const r = now || was;
+        const info = this.rlScopeInfo(r.scope);
+        const label = (info.short + ' ' + (r.target === '*' ? '' : r.target)).trim();
+        // The name an operator knows the rule by; the legacy `text` keeps the stored target.
+        const subject = info.singleton ? info.name : info.short + ' “' + this.rlTargetDisplay(r.scope, r.target) + '”';
+        if (!was) {
+          const n = (now.schedule || []).length;
+          push('rule:' + id, 'new', subject, this.rlTierText(now) + (n ? ' · ' + windowsText(n) : '') + (now.enabled ? '' : ' · switched off'), 'new rule ' + label);
+        } else if (!now) {
+          const n = (was.schedule || []).length;
+          push('rule:' + id, 'deleted', subject, 'was ' + this.rlTierText(was) + (n ? ' · ' + windowsText(n) + ' go with it' : ''), 'deleted rule ' + label, true);
+        } else {
+          const parts = [];
+          const tier = this.rlTierChange(was, now);
+          if (tier) parts.push(tier);
+          const wb = (was.schedule || []).length, wa = (now.schedule || []).length;
+          if (JSON.stringify(was.schedule || []) !== JSON.stringify(now.schedule || [])) {
+            parts.push(wb === wa ? windowsText(wa) + ' edited' : wb + ' → ' + windowsText(wa));
+          }
+          // Switching a rule off is the one edit whose effect is invisible in the numbers, so the
+          // change list names it rather than reporting a bare "rule X".
+          const toggled = was.enabled !== now.enabled;
+          const kind = toggled ? (now.enabled ? 'switched on' : 'switched off') : 'changed';
+          if (toggled && !now.enabled) parts.push('tier and windows kept');
+          push('rule:' + id, kind, subject, parts.join(' · '),
+            (toggled ? (now.enabled ? 'switched on rule ' : 'switched off rule ') : '') + label);
+        }
       }
-      const count = items.length;
+      // Stable, so equal kinds keep the order above; what takes a limit away comes first.
+      return items.map((item, i) => ({ item, i }))
+        .sort((x, y) => (Number(y.item.destructive) - Number(x.item.destructive)) || (x.i - y.i))
+        .map(({ item }) => item);
+    },
+
+    /**
+     * Where focus goes when the button that held it has just removed itself. Undo (and Keep theirs)
+     * take their own row out of the review, and a control that vanishes drops focus to <body> —
+     * a keyboard user is thrown to the top of the page in the middle of a review. The order is
+     * fixed: the button now in the same position (the next item), else the last one left, else the
+     * other list's first button, else Save, and if the bar itself has gone (nothing left unsaved)
+     * the rules filter, which is where the operator was working.
+     */
+    rlFocusInReview(selector, index) {
+      const run = () => {
+        if (typeof document === 'undefined' || !document.querySelectorAll) return;
+        const visible = (el) => !!el && el.offsetParent !== null && !el.disabled;
+        const same = [...document.querySelectorAll('#rl-review ' + selector)].filter(visible);
+        const other = [...document.querySelectorAll('#rl-review .rl-undo, #rl-review .rl-keep')].filter(visible);
+        // Asked of the draft itself: the bar fades out, so for a moment its Save button is still
+        // on screen after the last change has gone, and focus parked there would vanish with it.
+        const bar = this.rateLimitsDirty;
+        const target = (bar && (same[index] || same[same.length - 1] || other[0]
+          || [document.getElementById('rl-save-button')].filter(visible)[0]))
+          || document.getElementById('rl-filter-input');
+        if (target && target.focus) target.focus();
+      };
+      if (typeof this.$nextTick === 'function') this.$nextTick(run); else run();
+    },
+
+    /** Puts one reviewed change back to what is saved, leaving every other edit staged. */
+    undoRateLimitChange(id) {
+      if (!this.rlDraft || !this.rateLimits || !this.rateLimitsEditable) return;
+      const saved = this.rateLimits;
+      if (id === 'enabled') this.rlDraft.enabled = saved.enabled;
+      else if (id === 'adaptive') this.rlDraft.adaptiveEnabled = saved.adaptiveEnabled;
+      else if (id === 'default') this.rlDraft.default = this.rlClone(saved.default);
+      else if (id.startsWith('plan:')) {
+        const slug = id.slice(5);
+        const plans = { ...(this.rlDraft.plans || {}) };
+        for (const k of Object.keys(plans)) if (k.toLowerCase() === slug.toLowerCase()) delete plans[k];
+        const stored = Object.keys(saved.plans || {}).find(k => k.toLowerCase() === slug.toLowerCase());
+        if (stored) plans[stored] = this.rlClone(saved.plans[stored]);
+        this.rlDraft.plans = plans;
+      } else if (id.startsWith('rule:')) {
+        const identity = id.slice(5);
+        const stored = this.rlSavedRule(identity);
+        const rules = (this.rlDraft.rules || []).filter(r => this.rlIdentity(r.scope, r.target) !== identity);
+        const at = (this.rlDraft.rules || []).findIndex(r => this.rlIdentity(r.scope, r.target) === identity);
+        if (stored) rules.splice(at >= 0 ? at : rules.length, 0, this.rlClone(stored));
+        this.rlDraft.rules = rules;
+        this.queueRateLimitScheduleRefresh();
+      }
+      if (!this.rateLimitsDirty) this.rlReviewOpen = false;
+    },
+
+    get rlDirtyView() { return this.rlLive('dirtyView', () => this.rlComputeDirtyView()); },
+    rlComputeDirtyView() {
+      const before = this.rateLimits ? this.rlSavedPayload() : null;
+      const after = this.rlDraft ? this.buildRateLimitsPayload(this.rlDraft) : null;
+      if (!before || !after) return { show: false, count: 0, countText: '', detail: '', items: [], theirs: [], hasTheirs: false, saveLabel: 'Save', reviewLabel: 'Review changes', reviewExpanded: 'false', destructive: 0 };
+      const mine = this.rlDiff(before, after);
+      const mineIds = new Set(mine.map(i => i.id));
+      const count = mine.length;
+      const destructive = mine.filter(i => i.destructive).length;
+      const deletions = mine.filter(i => i.kind === 'deleted' || i.kind === 'removed').length;
+      const stopping = mine.some(i => i.kind === 'enforcement off');
+      const warn = [deletions ? deletions + ' deletion' + (deletions === 1 ? '' : 's') : '', stopping ? 'stops enforcing' : ''].filter(Boolean).join(', ');
       return {
         // Shown whenever the draft is dirty, by the same test everything else uses; the itemised
         // list describes the difference but does not get to decide whether there is one.
-        show: this.rateLimitsDirty,
+        show: mine.length > 0 || this.rateLimitsDirty,
         count,
+        destructive,
         countText: count > 0 ? count + ' unsaved change' + (count === 1 ? '' : 's') : 'Unsaved changes',
-        detail: items.slice(0, 4).join(' · ') + (count > 4 ? ' · …' : ''),
-        items: items.map((text, i) => ({ key: i, text }))
+        detail: mine.slice(0, 4).map(i => i.text).join(' · ') + (count > 4 ? ' · …' : ''),
+        items: mine.map((i, n) => ({
+          ...i, key: i.id + ':' + n,
+          hasChange: !!i.change,
+          undoLabel: 'Undo: ' + i.kind + ' ' + i.subject,
+          undo: () => { this.undoRateLimitChange(i.id); this.rlFocusInReview('.rl-undo', n); }
+        })),
+        // After a conflict: what the other save changed, so overwriting it is a decision made with
+        // it in view. The draft was started from the older configuration, so saving it puts back
+        // everything they changed unless the draft is brought into line item by item — which is
+        // what "Keep theirs" does (the same operation as Undo, since the baseline is now theirs).
+        theirs: (this.rlTheirChanges || []).map((i, n) => ({
+          ...i, key: 't:' + i.id + ':' + n, hasChange: !!i.change,
+          overwritten: mineIds.has(i.id), kept: !mineIds.has(i.id),
+          keepLabel: 'Keep their change: ' + i.kind + ' ' + i.subject,
+          keep: () => { this.undoRateLimitChange(i.id); this.rlFocusInReview('.rl-keep', n); }
+        })),
+        hasTheirs: (this.rlTheirChanges || []).length > 0,
+        saveLabel: count > 0 ? 'Save ' + count + ' change' + (count === 1 ? '' : 's') + (warn ? ' (' + warn + ')' : '') : 'Save',
+        reviewLabel: this.rlReviewOpen ? 'Hide review' : 'Review changes',
+        reviewExpanded: this.rlReviewOpen ? 'true' : 'false'
       };
     },
 
     /** The schedule report row for a rule, keyed the same way the draft is. */
     rlStatusFor(scope, target) {
-      const id = this.rlIdentity(scope, target);
-      return (this.rlSchedule?.rules || []).find(r => this.rlIdentity(r.scope, r.target) === id) || null;
+      return this.rlIndex().draftStatus.get(this.rlIdentity(scope, target)) || null;
     },
 
-    get rlStatusView() {
+    /**
+     * Alpine has no computed cache: a getter runs once for every binding that names it, and each
+     * run subscribes that binding to everything the getter read. "Is the draft dirty" reads every
+     * field of every rule, and thirty-odd bindings asked it — so one edit to a 2,000-rule draft
+     * re-serialised the draft, and re-tracked ~16,000 properties, dozens of times over (seconds of
+     * work; Discard took half a minute).
+     *
+     * Here one effect per heavy view-model does that reading, and stores the result where bindings
+     * pick it up with a single property read. The stored values are marked so the reactivity layer
+     * does not wrap them. Only rendering goes through the cache: the exact getters
+     * (rateLimitsDirty, and every rlCompute* below) are what methods call, because a method that
+     * has just changed the draft must not act on an answer from before the change. Without a
+     * reactive engine — the unit tests — everything simply computes.
+     */
+    rlStartLiveViews() {
+      if (typeof Alpine === 'undefined' || typeof Alpine.effect !== 'function') return;
+      const live = (name, compute) => Alpine.effect(() => {
+        const value = compute();
+        if (value && typeof value === 'object') value.__v_skip = true;
+        this._rlc[name] = value;
+      });
+      live('dirty', () => this.rateLimitsDirty);
+      live('matching', () => this.rlComputeMatchingRules());
+      live('dirtyView', () => this.rlComputeDirtyView());
+      live('timeline', () => this.rlComputeTimelineView());
+      live('intentChips', () => this.rlComputeIntentChips());
+      live('flagChips', () => this.rlComputeFlagChips());
+      live('countView', () => this.rlComputeRuleCountView());
+      live('status', () => this.rlComputeStatusView());
+      live('summary', () => this.rlComputeSummaryView());
+      RL_INDEX.live = true;
+    },
+
+    rlLive(name, compute) {
+      const cached = RL_INDEX.live ? this._rlc[name] : null;
+      return cached === null || cached === undefined ? compute() : cached;
+    },
+
+    /** "Is the draft dirty", for rendering. Methods ask rateLimitsDirty, which is never cached. */
+    get rlDirtyRender() { return this.rlLive('dirty', () => this.rateLimitsDirty); },
+
+    /**
+     * A drawer's view-model while the drawer is shut: the last one it showed. Its bindings exist
+     * whether or not it is open, and two of them (the rule drawer, the new-rule form) walk the
+     * whole rule set. Returning the last view — not a blank one — keeps the closing fade intact.
+     */
+    rlClosedView(slot, open) {
+      return RL_INDEX.live && !open && RL_INDEX[slot] ? RL_INDEX[slot] : null;
+    },
+
+    /** The same row from the stored configuration's report: what production enforces now. */
+    rlSavedStatusFor(scope, target) {
+      return this.rlIndex().savedStatus.get(this.rlIdentity(scope, target)) || null;
+    },
+
+    /** The stored rule with this identity, or null for one that exists only in the draft. */
+    rlSavedRule(identity) {
+      return this.rlIndex().savedRules.get(identity)?.rule || null;
+    },
+
+    /**
+     * Lookup tables for the rules list, rebuilt only when their source object is replaced. A row
+     * used to find its stored twin, its schedule status, its refusals and its key by scanning each
+     * list, which made one render of the list quadratic — and the server accepts 2,000 rules. The
+     * tables live outside the component so that filling them inside a getter is not a reactive
+     * write; the getters still read the source properties, so they re-run when those change.
+     */
+    rlIndex() {
+      const c = RL_INDEX;
+      // Inside one synchronous pass over the rules nothing can have been replaced, and checking
+      // a dozen reactive properties per lookup, per rule, was a fifth of the pass.
+      if (c.hold) return c;
+      const stale = (slot, source, size) => {
+        if (c[slot + 'Src'] === source && c[slot + 'Size'] === size) return false;
+        c[slot + 'Src'] = source; c[slot + 'Size'] = size;
+        // Row views are reused while nothing they were built from has been replaced.
+        c.epoch = (c.epoch || 0) + 1;
+        return true;
+      };
+      const savedRules = this.rateLimits?.rules || [];
+      if (stale('saved', this.rateLimits, savedRules.length)) {
+        c.savedRules = new Map(savedRules.map(r => [this.rlIdentity(r.scope, r.target),
+          { rule: r, canon: JSON.stringify(this.rlRulePayload(r)) }]));
+      }
+      const statusMap = (report) => new Map((report?.rules || []).map(r => [this.rlIdentity(r.scope, r.target), r]));
+      if (stale('savedStatus', this.rlScheduleSaved, (this.rlScheduleSaved?.rules || []).length)) c.savedStatus = statusMap(this.rlScheduleSaved);
+      if (stale('draftStatus', this.rlSchedule, (this.rlSchedule?.rules || []).length)) c.draftStatus = statusMap(this.rlSchedule);
+      const keys = this.keys || [];
+      if (stale('keys', this.keys, keys.length)) {
+        c.keysById = new Map(keys.map(k => [String(k.id || '').toLowerCase(), k]));
+      }
+      const u = this.rateLimitUsage;
+      const violations = Array.isArray(u?.violations) ? u.violations : null;
+      if (stale('usage', u, (violations || []).length)) {
+        c.refusals = new Map();
+        for (const v of violations || []) {
+          const k = v.scope + '|' + String(v.key || '').toLowerCase();
+          c.refusals.set(k, (c.refusals.get(k) || 0) + (Number(v.hits) || 0));
+        }
+        const section = (rows) => new Map((Array.isArray(rows) ? rows : []).map(x => [String(x.key || '').toLowerCase(), x]));
+        c.traffic = { model: section(u?.byModel), api_key: section(u?.byApiKey), tenant: section(u?.byTenant), tenant_model: section(u?.byTenantModel) };
+        c.adaptive = new Map((u?.adaptive?.models || []).map(m => [String(m.modelId || '').toLowerCase(), m]));
+        // Joined by limit id, which is the rule's own identity: never by name, target text or order.
+        const limits = Array.isArray(u?.limits) ? u.limits : [];
+        c.limits = new Map(limits.filter(l => !l.anonymousBucket).map(l => [String(l.limitId || '').toLowerCase(), l]));
+        c.limitsAnon = new Map(limits.filter(l => l.anonymousBucket).map(l => [String(l.limitId || '').toLowerCase(), l]));
+        c.protective = new Map((Array.isArray(u?.protective) ? u.protective : []).map(x => [x.scope, x]));
+        // Asked once per rule by the list, its chips and its sort: answered here, once per report.
+        c.limitsState = !u || !u.totals ? 'unavailable' : !Array.isArray(u.limits) ? 'unsupported' : 'ok';
+        const dropped = (name) => ((u?.tracker?.dimensions || []).find(d => d.name === name)?.droppedDecisions || 0) > 0;
+        c.limitsLossy = dropped('limits');
+        c.violationsLossy = dropped('violations');
+        c.windowMinutes = u?.windowMinutes || 60;
+      }
+      const tenants = this.overviewTenants?.topConsumersMonthToDate || [];
+      if (stale('tenants', this.overviewTenants, tenants.length)) {
+        c.tenants = this.rlKnownTenants();
+        c.tenantsById = new Map(c.tenants.filter(t => t.id).map(t => [String(t.id).toLowerCase(), t]));
+        c.tenantsBySlug = new Map(c.tenants.filter(t => t.slug).map(t => [String(t.slug).toLowerCase(), t]));
+      }
+      return c;
+    },
+
+    get rlStatusView() { return this.rlLive('status', () => this.rlComputeStatusView()); },
+    rlComputeStatusView() {
       const d = this.rlDraft || {};
+      const saved = this.rateLimits || d;
       const rules = d.rules || [];
       const windows = rules.reduce((n, r) => n + (r.schedule || []).length, 0);
-      const statuses = this.rlSchedule?.rules || [];
+      // Production, not the draft: a staged schedule is not running yet.
+      const statuses = this.rlScheduleSaved?.rules || [];
       const active = statuses.filter(r => r.activeWindow).length;
       const now = this.rlNow();
       const nexts = statuses
         .map(r => r.nextChangeAt ? new Date(r.nextChangeAt).getTime() : NaN)
         .filter(t => Number.isFinite(t) && t > now);
       const next = nexts.length ? new Date(Math.min(...nexts)).toISOString() : null;
+      const savedOff = saved.enabled === false;
+      const draftOff = d.enabled === false;
+      // The title states what the gateway is doing. The switch beside it is the control, so it
+      // shows the draft; when the two disagree the difference is said in words.
+      const pending = savedOff === draftOff ? ''
+        : draftOff ? 'unsaved: stops enforcing when you save'
+        : 'unsaved: resumes enforcing when you save';
+      const adaptivePending = !!saved.adaptiveEnabled === !!d.adaptiveEnabled ? ''
+        : d.adaptiveEnabled ? 'unsaved: on when you save' : 'unsaved: off when you save';
       return {
-        title: d.enabled === false ? 'Rate limits are not enforced' : 'Rate limits are enforced',
-        titleClass: d.enabled === false ? 'off' : '',
-        enabledAria: d.enabled === false ? 'false' : 'true',
+        title: savedOff ? 'Rate limits are not enforced' : 'Rate limits are enforced',
+        titleClass: savedOff ? 'off' : '',
+        pending, hasPending: !!pending,
+        enabledAria: draftOff ? 'false' : 'true',
         adaptiveAria: d.adaptiveEnabled ? 'true' : 'false',
-        adaptiveText: d.adaptiveEnabled ? 'Adaptive load shedding on' : 'Adaptive load shedding off',
+        adaptiveText: saved.adaptiveEnabled ? 'Adaptive load shedding on' : 'Adaptive load shedding off',
+        adaptivePending, hasAdaptivePending: !!adaptivePending,
         // Ordinary rules only: the two protective budgets are counted in their own section.
         rules: this.formatNum(this.rlListRules().length),
         windows: this.formatNum(windows),
         active: this.formatNum(active),
+        activeCount: active,
         activeClass: active > 0 ? 'live' : '',
         next: next ? this.rlRelative(next) : '—',
         nextSub: next ? 'Next change · ' + this.rlFmtShort(next) : 'Next change',
-        scheduleError: this.rlScheduleError || ''
+        nextAt: next ? this.rlFmtShort(next) : '',
+        scheduleError: this.rlScheduleSavedError || ''
       };
+    },
+
+    /**
+     * The operational summary at the top of the page: is anything being refused, by whom, by which
+     * limits, and is that because of a schedule or of load. Every figure names its own time basis —
+     * the selected window, since restart, or now — because they are three different clocks, and
+     * every one is a button that lands on the section or the filter that explains it.
+     *
+     * Deliberately absent: "subjects near their limit". The report's per-subject limit is whichever
+     * scope was tightest on that subject's latest request, so a count built on it would be a guess.
+     */
+    get rlSummaryView() { return this.rlLive('summary', () => this.rlComputeSummaryView()); },
+    rlComputeSummaryView() {
+      const u = this.rateLimitUsage;
+      const has = !!(u && u.totals);
+      const t = (has && u.totals) || {};
+      const minutes = (has && u.windowMinutes) || Number(this.rateLimitUsageMinutes) || 60;
+      const requests = t.requests ?? 0;
+      const rejected = t.rejected ?? 0;
+      const share = requests > 0 ? rejected / requests : 0;
+      const pct = (share * 100).toFixed(share > 0 && share < 0.1 ? 1 : 0) + ' %';
+      const take = this.rlUsageTake();
+      const refusedIn = (rows) => (Array.isArray(rows) ? rows : []).filter(r => (r.rejected ?? 0) > 0).length;
+      const plus = (rows, n) => this.formatNum(n) + (Array.isArray(rows) && rows.length >= take ? '+' : '');
+      const keys = has ? refusedIn(u.byApiKey) : 0;
+      const tenants = has ? refusedIn(u.byTenant) : 0;
+      const limits = has ? new Set((u.violations || []).map(v => v.scope + '|' + String(v.key || '').toLowerCase())).size : 0;
+      const status = this.rlStatusView;
+      const savedOff = this.rateLimitsSavedDisabled;
+      const adaptiveOn = !!this.rateLimits?.adaptiveEnabled;
+      const reduced = has ? (u.adaptive?.models || []).filter(m => Number(m.factor) < 1).length : 0;
+      const evaluated = has && u.adaptive?.lastEvaluatedUtc && u.generatedUtc
+        ? Math.max(0, Math.round((new Date(u.generatedUtc).getTime() - new Date(u.adaptive.lastEvaluatedUtc).getTime()) / 1000)) : null;
+      const stat = (key, label, value, sub, cls, title, go) => ({ key, label, value, sub, hasSub: !!sub, cls: 'mini-stat rl-sum-stat' + (cls ? ' ' + cls : ''), title, ariaLabel: label + ': ' + value + (sub ? ', ' + sub : '') + '. ' + title, go });
+      const window = 'last ' + minutes + ' min';
+      const stats = [];
+      if (has) {
+        stats.push(stat('refused', 'Refused · ' + window, rejected === 0 ? '0' : this.formatNum(rejected) + ' · ' + pct,
+          rejected === 0 ? 'of ' + this.formatNum(requests) + ' decisions' : this.formatNum(t.rateRejected ?? 0) + ' rate · ' + this.formatNum(t.concurrencyRejected ?? 0) + ' streams',
+          rejected > 0 ? 'warn' : '', 'Go to Activity', () => this.scrollToRateLimitSection('rate-limit-usage')));
+        stats.push(stat('subjects', 'Refused subjects · ' + window,
+          keys + tenants === 0 ? 'none' : plus(u.byApiKey, keys) + ' key' + (keys === 1 ? '' : 's') + ' · ' + plus(u.byTenant, tenants) + ' tenant' + (tenants === 1 ? '' : 's'),
+          '', keys + tenants > 0 ? 'warn' : '', 'Go to traffic by subject, most refused first', () => this.showRateLimitRefusedSubjects()));
+        stats.push(stat('limits', 'Limits that refused · since restart', limits >= take ? take + '+' : this.formatNum(limits), '',
+          '', 'Show the rules that have refused, most first', () => this.showRateLimitRulesWhere('refused', 'refused')));
+      }
+      stats.push(stat('active', 'Windows active now', status.active, '', status.activeCount > 0 ? 'live' : '', 'Show the rules with a window in force', () => this.showRateLimitRulesWhere('active', '')));
+      stats.push(stat('next', 'Next scheduled change', status.next, status.nextAt, '', 'Go to the calendar', () => this.scrollToRateLimitSection('rl-schedule')));
+      return {
+        stats,
+        // One sentence for "healthy, or refusing": derived from the same figures, never a badge of its own.
+        health: savedOff ? '' : !has ? '' : rejected > 0 ? 'refusing ' + pct + ' of requests' : 'nothing refused in the ' + window,
+        healthCls: rejected > 0 && !savedOff ? 'rl-health warn' : 'rl-health',
+        adaptiveDetail: !adaptiveOn ? '' : !has ? '' :
+          (reduced > 0 ? reduced + ' model' + (reduced === 1 ? '' : 's') + ' reduced' : 'no model reduced') +
+          (evaluated === null ? '' : ' · evaluated ' + evaluated + ' s before this reading'),
+        usageMissing: !has,
+        nav: [
+          ['rl-rules', 'Rules (' + this.formatNum(this.rlListRules().length) + ')'],
+          ['rate-limit-usage', 'Activity'],
+          ['rl-schedule', 'Calendar'],
+          ['rl-baselines', 'Baselines'],
+          ['rl-history', 'History']
+        ].map(([id, label]) => ({ key: id, label, go: () => this.scrollToRateLimitSection(id) }))
+      };
+    },
+
+    /** From the summary: who was refused in the window — keys first, which is where a fix usually is. */
+    showRateLimitRefusedSubjects() {
+      this.rlUsageTab = 'key';
+      this.rlUsageSortKey = 'refused';
+      this.rlUsageSortDir = -1;
+      this.scrollToRateLimitSection('rate-limit-usage');
     },
 
     /** Tenants the overview knows about, as {slug, id, plan}; empty until that section has loaded. */
@@ -7896,8 +8539,11 @@ function adminApp() {
         rpm: this.formatNum(t.rpm), burst: this.formatNum(t.burst),
         streams: t.maxConcurrentStreams > 0 ? this.formatNum(t.maxConcurrentStreams) : '∞',
         streamsTitle: t.maxConcurrentStreams > 0 ? 'Concurrent streams' : 'Streams unlimited',
+        streamsUnlimited: !(t.maxConcurrentStreams > 0),
         openLabel: (this.rateLimitsEditable ? 'Edit ' : 'View ') + (kind === 'default' ? 'the default tier' : 'plan ' + slug),
-        edit: () => this.openRateLimitTier(kind, slug)
+        edit: () => this.openRateLimitTier(kind, slug),
+        // The tier's own counters: `default`, or `plan:<slug>` — the ids the gateway reports under.
+        activity: this.rlLimitActivityView(kind === 'default' ? 'default' : 'plan:' + slug)
       });
       const cards = [card('default', '', d.default)];
       for (const slug of Object.keys(d.plans || {}).sort((a, b) => a.localeCompare(b))) cards.push(card('plan', slug, d.plans[slug]));
@@ -7915,8 +8561,8 @@ function adminApp() {
       const where = this.rlFilterWhere || 'any';
       if (who !== 'all' && intent.who !== who) return false;
       if (where !== 'any' && intent.where !== where) return false;
-      if (this.rlFilterFlag === 'scheduled' && !(rule.schedule || []).length) return false;
-      if (this.rlFilterFlag === 'off' && rule.enabled !== false) return false;
+      const flags = this.rlFilterFlags || {};
+      for (const id of Object.keys(flags)) if (flags[id] && !this.rlRuleHasFlag(rule, id)) return false;
       const q = String(this.rlFilterText || '').trim().toLowerCase();
       if (!q) return true;
       const info = this.rlScopeInfo(rule.scope);
@@ -7926,36 +8572,101 @@ function adminApp() {
         (rule.schedule || []).some(w => String(w.name || '').toLowerCase().includes(q));
     },
 
+    /**
+     * The status flags a rule can be filtered by. Every one is backed by data the page really has:
+     * the draft (scheduled, off, unsaved), the saved schedule report (window active) and the
+     * cumulative refusal counters (refused). There is deliberately no "near its limit": the usage
+     * report cannot attribute a rate to a rule.
+     */
+    rlRuleHasFlag(rule, id) {
+      if (id === 'scheduled') return (rule.schedule || []).length > 0;
+      if (id === 'off') return rule.enabled === false;
+      if (id === 'unsaved') {
+        const saved = this.rlIndex().savedRules.get(this.rlIdentity(rule.scope, rule.target));
+        return !saved || saved.canon !== JSON.stringify(this.rlRulePayload(rule));
+      }
+      if (id === 'active') {
+        const saved = this.rlSavedRule(this.rlIdentity(rule.scope, rule.target));
+        if (!saved || saved.enabled === false || this.rateLimits?.enabled === false) return false;
+        const s = this.rlSavedStatusFor(rule.scope, rule.target);
+        return !!(s && (s.activeWindow || s.effective?.suspended));
+      }
+      if (id === 'refused') {
+        const r = this.rlRefusalsFor(rule.scope, rule.target);
+        return r.state === 'ok' && r.hits > 0;
+      }
+      if (id === 'near') return this.rlLimitActivityFor(this.rlIdentity(rule.scope, rule.target)).near === true;
+      return true;
+    },
+
     /** Ordinary rules only: what the list, its counts and its filters are about. */
     rlListRules() {
       return (this.rlDraft?.rules || []).filter(r => !this.rlIsProtective(r.scope));
     },
 
-    get rlScopeChips() {
-      const rules = this.rlListRules();
-      const intents = rules.map(r => this.rlIntentFor(r.scope) || { who: '', where: '' });
-      const chip = (group, id, label, count, active, select) => ({
+    rlChip(group, id, label, count, active, select, title) {
+      return {
         key: group + ':' + id, label, count: String(count),
         cls: active ? 'active' : '',
         pressed: active ? 'true' : 'false',
-        select
-      });
+        select, title: title || '', srTitle: title ? ' — ' + title : ''
+      };
+    },
+
+    /** Who and Model chips: one pass over the rules, counting by intent. */
+    get rlIntentChips() { return this.rlLive('intentChips', () => this.rlComputeIntentChips()); },
+    rlComputeIntentChips() {
+      const rules = this.rlListRules();
+      const tally = { key: 0, tenant: 0, everyone: 0, one: 0, all: 0 };
+      for (const r of rules) {
+        const i = this.rlIntentFor(r.scope);
+        if (!i) continue;
+        tally[i.who] = (tally[i.who] || 0) + 1;
+        tally[i.where] = (tally[i.where] || 0) + 1;
+      }
       const whoNow = this.rlFilterWho || 'all';
       const whereNow = this.rlFilterWhere || 'any';
-      const who = [['all', 'All'], ['key', 'API keys'], ['tenant', 'Tenants'], ['everyone', 'Everyone']].map(([id, label]) =>
-        chip('who', id, label, id === 'all' ? rules.length : intents.filter(i => i.who === id).length, whoNow === id, () => this.setRateLimitWhoFilter(id)));
-      const where = [['any', 'Any'], ['one', 'One model'], ['all', 'All models']].map(([id, label]) =>
-        chip('where', id, label, id === 'any' ? rules.length : intents.filter(i => i.where === id).length, whereNow === id, () => this.setRateLimitWhereFilter(id)));
-      const flags = [
-        ['scheduled', 'Scheduled', rules.filter(r => (r.schedule || []).length).length],
-        ['off', 'Off', rules.filter(r => r.enabled === false).length]
-      ].map(([id, label, count]) => chip('flag', id, label, count, this.rlFilterFlag === id, () => this.toggleRateLimitFlagFilter(id)));
-      return { who, where, flags };
+      return {
+        who: [['all', 'All'], ['key', 'API keys'], ['tenant', 'Tenants'], ['everyone', 'Everyone']].map(([id, label]) =>
+          this.rlChip('who', id, label, id === 'all' ? rules.length : tally[id], whoNow === id, () => this.setRateLimitWhoFilter(id))),
+        where: [['any', 'Any'], ['one', 'One model'], ['all', 'All models']].map(([id, label]) =>
+          this.rlChip('where', id, label, id === 'any' ? rules.length : tally[id], whereNow === id, () => this.setRateLimitWhereFilter(id)))
+      };
+    },
+
+    /** Status chips: one pass, every flag counted together. */
+    get rlFlagChips() { return this.rlLive('flagChips', () => this.rlComputeFlagChips()); },
+    rlComputeFlagChips() {
+      const defs = [
+        ['scheduled', 'Scheduled', 'Has schedule windows'],
+        ['active', 'Window active', 'A window is in force right now, in the saved configuration'],
+        ['refused', 'Refused', 'Has refused at least one request since the gateway last started'],
+        ['near', 'Near limit', 'Its busiest minute in the activity window used 80% or more of the rate it enforces. Only for limits that count one bucket.'],
+        ['off', 'Off', 'Switched off'],
+        ['unsaved', 'Unsaved', 'Differs from what is saved']
+      ];
+      const counts = Object.fromEntries(defs.map(([id]) => [id, 0]));
+      // A clean draft has no unsaved rule, which spares serialising every rule to find that out.
+      const dirty = this.rlDirtyRender;
+      this.rlIndex();
+      RL_INDEX.hold = true;
+      try {
+        for (const r of this.rlListRules()) {
+          for (const [id] of defs) if ((id !== 'unsaved' || dirty) && this.rlRuleHasFlag(r, id)) counts[id]++;
+        }
+      } finally { RL_INDEX.hold = false; }
+      const on = this.rlFilterFlags || {};
+      return defs.map(([id, label, title]) =>
+        this.rlChip('flag', id, label, counts[id], !!on[id], () => this.toggleRateLimitFlagFilter(id), title));
+    },
+
+    get rlScopeChips() {
+      return { ...this.rlIntentChips, flags: this.rlFlagChips };
     },
 
     get rlFiltersActive() {
       return !!String(this.rlFilterText || '').trim() || (this.rlFilterWho || 'all') !== 'all' ||
-        (this.rlFilterWhere || 'any') !== 'any' || !!this.rlFilterFlag;
+        (this.rlFilterWhere || 'any') !== 'any' || Object.values(this.rlFilterFlags || {}).some(Boolean);
     },
 
     /** Sortable headers: a real button each, with the state a screen reader announces. */
@@ -7970,35 +8681,74 @@ function adminApp() {
           toggle: () => this.setRateLimitSort(key)
         };
       };
-      return { who: col('who'), model: col('model'), rpm: col('rpm'), refused: col('refused') };
+      return { who: col('who'), model: col('model'), rpm: col('rpm'), refused: col('refused'), activity: col('activity') };
     },
 
-    rlForceFor(rule) {
-      const s = this.rlStatusFor(rule.scope, rule.target);
+    /**
+     * What production is doing with a rule right now, in words: the tier in force and where it
+     * comes from. Built from the stored configuration and its schedule report only — never from the
+     * draft — so an unsaved edit cannot change what this says. `tags` always has at least one entry
+     * and every entry is a word, so the cell is never empty and never colour alone.
+     *
+     * Order matters: the master switch outranks a rule's own switch, which outranks its windows.
+     * Adaptive shedding is reported beside whichever tier is in force, for the scopes the gateway
+     * scales (the ones that name a model).
+     */
+    rlEnforcingView(scope, target) {
+      const saved = this.rlSavedRule(this.rlIdentity(scope, target));
+      const tag = (cls, text) => ({ key: text, cls: 'tag ' + cls, text });
+      if (!saved) {
+        return { kind: 'new', text: 'nothing yet', tags: [tag('accent', 'not saved yet')], sub: 'enforced once you save', title: '' };
+      }
+      const base = this.rlTierText(saved);
+      if (this.rateLimits && this.rateLimits.enabled === false) {
+        return { kind: 'unenforced', text: base, tags: [tag('level-error', 'not enforced')], sub: 'master switch off', title: 'Rate limiting is switched off for the whole gateway' };
+      }
+      if (saved.enabled === false) {
+        return { kind: 'off', text: 'nothing', tags: [tag('warn', 'off')], sub: base + ' kept', title: 'This rule is switched off and enforces nothing' };
+      }
+      const windows = (saved.schedule || []).length;
+      const s = this.rlSavedStatusFor(scope, target);
+      let view;
       if (!s) {
-        return this.rlScheduleError
-          ? { dot: 'err', text: 'unknown', sub: 'schedule unavailable', title: this.rlScheduleError }
-          : { dot: '', text: this.rlTierText(rule), sub: 'as saved', title: '' };
+        view = windows && this.rlScheduleSavedError
+          ? { kind: 'unknown', text: 'unknown', tags: [tag('level-error', 'schedule unavailable')], sub: 'base ' + base, title: this.rlScheduleSavedError }
+          : windows
+            ? { kind: 'base', text: base, tags: [tag('muted', windows + ' window' + (windows === 1 ? '' : 's'))], sub: '', title: '' }
+            : { kind: 'base', text: base, tags: [tag('muted', 'base')], sub: '', title: '' };
+      } else if (s.effective?.suspended) {
+        view = { kind: 'paused', text: 'nothing', tags: [tag('warn', 'paused')],
+          sub: 'by ' + (s.activeWindow || 'a window') + (s.activeUntil ? ' · until ' + this.rlFmtShort(s.activeUntil) : ''),
+          title: 'This rule is not enforced while the window runs' };
+      } else if (s.activeWindow) {
+        view = { kind: 'window', text: this.rlTierText(s.effective), tags: [tag('live', 'window: ' + s.activeWindow)],
+          sub: s.activeUntil ? 'until ' + this.rlFmtShort(s.activeUntil) + ' · ' + this.rlRelative(s.activeUntil) : 'open-ended',
+          title: 'A window is in force' };
+      } else {
+        const invalid = (s.windows || []).find(w => w.state === 'invalid');
+        view = invalid
+          ? { kind: 'skipped', text: this.rlTierText(s.effective), tags: [tag('level-error', 'window skipped')], sub: '“' + invalid.name + '”: ' + (invalid.error || 'cannot be evaluated'), title: invalid.error || '' }
+          : { kind: 'base', text: this.rlTierText(s.effective), tags: [tag('muted', 'base')],
+            sub: s.nextChangeAt && s.nextWindow ? 'next: ' + s.nextWindow + ' ' + this.rlFmtShort(s.nextChangeAt) + ' · ' + this.rlRelative(s.nextChangeAt) : '', title: '' };
       }
-      const invalid = (s.windows || []).find(w => w.state === 'invalid');
-      if (s.effective?.suspended) {
-        return { dot: 'warn', text: 'paused', sub: (s.activeWindow || '') + (s.activeUntil ? ' · until ' + this.rlFmtShort(s.activeUntil) : ''), title: 'This rule is not enforced while the window runs' };
+      // Load-aware shedding scales the model, tenant-on-model and key-on-model rates; nothing else.
+      const intent = this.rlIntentFor(scope);
+      const adaptive = this.rateLimits?.adaptiveEnabled && intent?.where === 'one' && view.kind !== 'paused' && view.kind !== 'unknown'
+        ? this.rlIndex().adaptive.get(String(intent.who === 'everyone' ? target : String(target || '').split('|').slice(1).join('|')).toLowerCase())
+        : null;
+      const rpm = Number((s && s.effective?.rpm) ?? saved.rpm) || 0;
+      if (adaptive && Number(adaptive.factor) < 1 && rpm > 0) {
+        view.tags = [...view.tags, tag('warn', 'adaptive ×' + Number(adaptive.factor).toFixed(2))];
+        view.sub = '≈ ' + this.formatNum(Math.round(rpm * adaptive.factor)) + ' of ' + this.formatNum(rpm) + ' rpm' + (adaptive.reason ? ' · ' + adaptive.reason : '') + (view.sub ? ' · ' + view.sub : '');
+        view.adaptive = true;
       }
-      if (s.activeWindow) {
-        return {
-          dot: 'on', text: this.rlTierText(s.effective),
-          sub: s.activeWindow + (s.activeUntil ? ' · until ' + this.rlFmtShort(s.activeUntil) + ' · ' + this.rlRelative(s.activeUntil) : ' · open-ended'),
-          title: 'A window is in force'
-        };
-      }
-      if (invalid) {
-        return { dot: 'err', text: this.rlTierText(s.effective), sub: 'base · window “' + invalid.name + '” skipped: ' + invalid.error, title: invalid.error || '' };
-      }
-      return {
-        dot: '', text: this.rlTierText(s.effective),
-        sub: s.nextChangeAt && s.nextWindow ? 'base · ' + s.nextWindow + ' at ' + this.rlFmtShort(s.nextChangeAt) + ' · ' + this.rlRelative(s.nextChangeAt) : 'base',
-        title: ''
-      };
+      return view;
+    },
+
+    /** The stored tier as three bare numbers, for the "was …" line under a changed limit. */
+    rlTierTriple(t) {
+      return (t.rpm > 0 ? this.formatNum(t.rpm) : '0') + ' / ' + this.formatNum(t.burst || 0) + ' / ' +
+        (t.maxConcurrentStreams > 0 ? this.formatNum(t.maxConcurrentStreams) : '∞');
     },
 
     /** One rule as the list and the protective cards show it. */
@@ -8006,18 +8756,20 @@ function adminApp() {
       const info = this.rlScopeInfo(rule.scope);
       const intent = this.rlIntentFor(rule.scope) || { who: '', where: '' };
       const identity = this.rlIdentity(rule.scope, rule.target);
-      const saved = (this.rateLimits?.rules || []).find(r => this.rlIdentity(r.scope, r.target) === identity);
-      const changed = !saved || JSON.stringify(this.buildRateLimitsPayload({ rules: [saved], plans: {}, default: {} }).rules[0]) !==
-        JSON.stringify(this.buildRateLimitsPayload({ rules: [rule], plans: {}, default: {} }).rules[0]);
-      const windows = (rule.schedule || []).length;
+      const savedEntry = this.rlIndex().savedRules.get(identity);
+      const saved = savedEntry?.rule || null;
+      const changed = !savedEntry || savedEntry.canon !== JSON.stringify(this.rlRulePayload(rule));
       const off = rule.enabled === false;
-      // A switched-off rule enforces nothing, so it reports that rather than a tier it is not
-      // applying — and it says the tier is kept, which is the whole difference from deleting it.
-      const force = off
-        ? { dot: 'warn', text: 'off', sub: this.rlTierText(rule) + ' kept', title: 'This rule is switched off and enforces nothing' }
-        : changed
-          ? { dot: '', text: this.rlTierText(rule), sub: 'unsaved · in force once saved', title: '' }
-          : this.rlForceFor(rule);
+      // Two separate statements. The Limit cell is the draft: what Save would store. The Enforcing
+      // cell is production: the stored rule, its schedule and the master switch. A changed rule
+      // says both, so an edit never hides what is actually being enforced.
+      const enforcing = this.rlEnforcingView(rule.scope, rule.target);
+      const sameTier = !!saved && saved.rpm === rule.rpm && saved.burst === rule.burst && saved.maxConcurrentStreams === rule.maxConcurrentStreams;
+      const was = !changed || !saved ? ''
+        : !sameTier ? 'was ' + this.rlTierTriple(saved)
+        : (saved.enabled !== false) !== !off ? (off ? 'was on' : 'was off')
+        : 'windows changed';
+      const draftTag = !saved ? 'new' : changed ? 'unsaved' : '';
       const target = info.singleton ? info.name : this.rlTargetDisplay(rule.scope, rule.target);
 
       // Who and Model, the way the creation form asks for them. The stored target stays the title.
@@ -8033,20 +8785,17 @@ function adminApp() {
         : info.desc;
       const model = intent.where === 'one' ? (intent.who === 'everyone' ? subject : modelParts.join('|')) : '';
 
-      // Now: one cell for "is this different from the numbers beside it, and why". Always words,
-      // never a dot alone.
-      const plural = windows + ' window' + (windows === 1 ? '' : 's');
-      let now;
-      if (off) now = { tag: 'off', cls: 'tag warn', sub: 'numbers kept' };
-      else if (changed) now = { tag: 'unsaved', cls: 'tag accent', sub: 'in force once saved' };
-      else if (force.dot === 'on') now = { tag: 'window active', cls: 'tag live', sub: force.text + ' · ' + force.sub };
-      else if (force.dot === 'warn') now = { tag: 'paused', cls: 'tag warn', sub: force.sub };
-      else if (force.dot === 'err') now = { tag: force.text === 'unknown' ? 'schedule unavailable' : 'window skipped', cls: 'tag level-error', sub: force.sub };
-      else if (windows) now = { tag: plural, cls: 'tag muted', sub: force.sub.startsWith('base · ') ? 'next: ' + force.sub.slice(7) : '' };
-      else now = { tag: '', cls: '', sub: '' };
-
       const refusals = this.rlRefusalsView(rule.scope, rule.target);
       const tenantRate = rule.scope === 'tenant' && !(rule.rpm > 0);
+      // Subject-level context, never the rule's own utilisation: every decision about this tenant,
+      // key or model in the window, whichever limit made it.
+      const traffic = this.rlSubjectTrafficFor(rule.scope, rule.target);
+      const trafficText = traffic.state === 'ok' && traffic.row
+        ? (traffic.row.requestsPerMinute ?? 0).toFixed(1) + '/min · ' + this.formatNum(traffic.row.rejected ?? 0) + ' refused'
+        : traffic.state === 'quiet' || traffic.state === 'absent' ? 'no decisions'
+        : traffic.state === 'nosection' ? '' : '—';
+      // This rule's own counters, joined by its identity.
+      const act = this.rlLimitActivityView(identity);
       return {
         key: identity + ':' + index,
         identity,
@@ -8058,49 +8807,131 @@ function adminApp() {
         modelCls: model ? 'rl-model' : 'rl-model muted',
         modelTitle: model,
         tier: this.rlTierText(rule),
-        rpm: rule.rpm > 0 ? this.formatNum(rule.rpm) : (tenantRate ? 'plan' : '—'),
+        // Never a dash: a dash on this page means "unknown", and a rule without a rate is known.
+        rpm: rule.rpm > 0 ? this.formatNum(rule.rpm) : (tenantRate ? 'plan' : 'none'),
+        rpmSr: rule.rpm > 0 ? '' : (tenantRate ? ' rate' : ' — no rate limit'),
         rpmTitle: rule.rpm > 0 ? 'Sustained requests per minute' : (tenantRate ? 'RPM 0: the tenant keeps its plan’s rate' : 'RPM 0: this rule does not limit the rate'),
         burst: this.formatNum(rule.burst || 0),
         streams: rule.maxConcurrentStreams > 0 ? this.formatNum(rule.maxConcurrentStreams) : '∞',
         streamsTitle: rule.maxConcurrentStreams > 0 ? 'Concurrent streams' : 'Streams unlimited',
-        nowTag: now.tag, nowCls: now.cls, nowSub: now.sub,
-        hasNowTag: !!now.tag, noNow: !now.tag, hasNowSub: !!now.sub,
-        nowTitle: force.title || '',
+        streamsUnlimited: !(rule.maxConcurrentStreams > 0),
+        changed, draftTag, hasDraftTag: !!draftTag,
+        was, hasWas: !!was,
+        enforcing,
+        enfText: enforcing.text, enfTags: enforcing.tags, enfSub: enforcing.sub, hasEnfSub: !!enforcing.sub,
+        enfTitle: enforcing.title || '',
+        enfKind: enforcing.kind,
+        windowActive: enforcing.kind === 'window' || enforcing.kind === 'paused',
+        trafficText, trafficTitle: traffic.state === 'ok' ? 'Every decision about this subject in the selected window, whichever limit made it' : '',
+        actText: act.text, actSub: act.sub, hasActSub: !!act.sub, actTitle: act.title,
+        actUnknown: act.unknown, actSr: act.sr, hasActBar: act.hasBar, actBarStyle: act.barStyle, actBarCls: act.barCls,
+        actCls: 'rl-col-traffic num' + (act.unknown ? ' muted' : '') + (act.near ? ' rl-act-near' : ''),
+        refusedKnown: refusals.known, refusedHits: refusals.hits,
+        refusedUnknown: !refusals.known,
+        refusedWhy: refusals.known ? '' : 'unknown: ' + refusals.title,
         refused: refusals.text,
         refusedTitle: refusals.title,
         refusedCls: 'rl-col-refused num' + (refusals.known && refusals.hits > 0 ? ' rl-refused-some' : '') + (refusals.known ? '' : ' muted'),
-        refusedMark: refusals.qualified ? '*' : '',
+        refusedMark: refusals.qualified ? '†' : '',
+        refusedQualified: !!refusals.qualified,
         enabled: !off,
         enabledAria: off ? 'false' : 'true',
         enabledLabel: (off ? 'Switch on rule ' : 'Switch off rule ') + target,
         toggle: () => this.toggleRateLimitRuleEnabled(identity),
-        openLabel: 'Open rule ' + target + ', ' + this.rlTierText(rule) + (now.tag ? ', ' + now.tag : ''),
+        openLabel: 'Open rule ' + target + ', ' + this.rlTierText(rule) + (draftTag ? ', ' + draftTag : '') + ', now ' + enforcing.tags.map(t => t.text).join(', '),
         rowCls: 'rl-row' + (changed ? ' changed' : '') + (off ? ' off' : ''),
         open: () => this.openRateLimitRule(identity),
-        _sort: {
-          who: who.toLowerCase(), model: model.toLowerCase(),
-          rpm: Number(rule.rpm) || 0,
-          refused: refusals.known ? refusals.hits : -1
-        }
       };
     },
 
-    get rlRuleRows() {
+    /** What a rule is sorted by — the cheap part of a row, so sorting 2,000 rules builds no views. */
+    rlRuleSortKeys(rule) {
+      const intent = this.rlIntentFor(rule.scope) || { who: '', where: '' };
+      const [subject, ...modelParts] = String(rule.target || '').split('|');
+      const key = intent.who === 'key' ? this.rlRuleKey(rule.scope, rule.target) : null;
+      const who = intent.who === 'everyone' ? 'Everyone'
+        : intent.who === 'key' ? (key ? this.rlKeyName(key) : subject)
+        : intent.who === 'tenant' ? subject
+        : this.rlScopeInfo(rule.scope).name;
+      const model = intent.where === 'one' ? (intent.who === 'everyone' ? subject : modelParts.join('|')) : '';
+      const refusals = this.rlRefusalsFor(rule.scope, rule.target);
+      return {
+        who: String(who).toLowerCase(), model: model.toLowerCase(),
+        rpm: Number(rule.rpm) || 0,
+        refused: refusals.state === 'ok' ? refusals.hits : -1,
+        activity: this.rlLimitActivityFor(this.rlIdentity(rule.scope, rule.target)).sort
+      };
+    },
+
+    /** Every rule that passes the filters, in order — before the list is cut to what is shown. */
+    rlMatchingRules() { return this.rlLive('matching', () => this.rlComputeMatchingRules()); },
+    rlComputeMatchingRules() {
       const rules = this.rlDraft?.rules || [];
       const key = this.rlSortKey || 'who';
       const dir = this.rlSortDir || 1;
+      this.rlIndex();
+      RL_INDEX.hold = true;
+      try { return this.rlSortedMatches(rules, key, dir); } finally { RL_INDEX.hold = false; }
+    },
+    rlSortedMatches(rules, key, dir) {
       return rules
         .map((rule, index) => ({ rule, index }))
         .filter(({ rule }) => !this.rlIsProtective(rule.scope) && this.rlRuleMatchesFilter(rule))
-        .map(({ rule, index }) => this.rlRuleRow(rule, index))
+        .map((entry) => ({ ...entry, sort: this.rlRuleSortKeys(entry.rule) }))
         .sort((a, b) => {
-          const x = a._sort[key], y = b._sort[key];
+          const x = a.sort[key], y = b.sort[key];
           // Unknown refusals sort last in either direction: "—" is not a small number.
           if (key === 'refused' && (x < 0 || y < 0) && x !== y) return x < 0 ? 1 : -1;
           const primary = typeof x === 'number' ? x - y : String(x).localeCompare(String(y));
           if (primary) return primary * dir;
-          return a._sort.who.localeCompare(b._sort.who) || a._sort.model.localeCompare(b._sort.model);
+          return a.sort.who.localeCompare(b.sort.who) || a.sort.model.localeCompare(b.sort.model);
         });
+    },
+
+    get rlRuleRows() {
+      return this.rlMatchingRules().slice(0, this.rlRuleLimit || 100)
+        .map(({ rule, index }) => this.rlRuleRowCached(rule, index));
+    },
+
+    /**
+     * A row's view-model, reused while nothing it was built from has changed. x-for hands each row
+     * its object; given the same object again Alpine has nothing to update, given a fresh one it
+     * re-runs every binding in the row — and "Show 100 more" or a keystroke in the filter used to
+     * rebuild every row already on screen. The signature is everything rlRuleRow reads: the rule as
+     * it would be sent, its position, the lookup tables' epoch (saved rules, both schedule reports,
+     * usage, keys, tenants), the two saved switches, editability, and the coarse clock the relative
+     * times ("in 2 h") are drawn from.
+     */
+    rlRuleRowCached(rule, index) {
+      if (!RL_INDEX.live) return this.rlRuleRow(rule, index);
+      const idx = this.rlIndex();
+      const sig = [JSON.stringify(this.rlRulePayload(rule)), index, idx.epoch, this.rateLimits?.enabled, this.rateLimits?.adaptiveEnabled,
+        this.rateLimitsEditable, this._rlTick, this.rlScheduleSavedError].join('|');
+      const rows = idx.rows || (idx.rows = new Map());
+      const id = this.rlIdentity(rule.scope, rule.target) + ':' + index;
+      const hit = rows.get(id);
+      if (hit && hit.sig === sig) return hit.view;
+      const view = this.rlRuleRow(rule, index);
+      view.__v_skip = true;
+      // Bounded by the rule ceiling; entries for deleted rules are dropped when the map outgrows it.
+      if (rows.size > 4000) rows.clear();
+      rows.set(id, { sig, view });
+      return view;
+    },
+
+    /** "12 of 340 rules", and whether there are more to show. */
+    get rlRuleCountView() { return this.rlLive('countView', () => this.rlComputeRuleCountView()); },
+    rlComputeRuleCountView() {
+      const total = this.rlListRules().length;
+      const matching = this.rlMatchingRules().length;
+      const shown = Math.min(matching, this.rlRuleLimit || 100);
+      const rulesWord = ' rule' + (total === 1 ? '' : 's');
+      const text = shown < matching
+        ? 'Showing ' + this.formatNum(shown) + ' of ' + this.formatNum(matching) + (matching < total ? ' matching' : '') + rulesWord
+        : matching < total ? this.formatNum(matching) + ' of ' + this.formatNum(total) + rulesWord
+        : this.formatNum(total) + rulesWord;
+      const more = Math.min(100, matching - shown);
+      return { text, hasMore: shown < matching, moreLabel: 'Show ' + more + ' more' };
     },
 
     /**
@@ -8125,9 +8956,22 @@ function adminApp() {
             ? 'Not set — anonymous callers are held to the default tier.'
             : 'Not set — failed sign-ins fall back to the default tier.',
           rpm: row ? row.rpm : '', burst: row ? row.burst : '', streams: row ? row.streams : '',
+          // The gateway reports both budgets in a section of their own. When it does not — an older
+          // gateway, or activity unavailable — the row says where the figure can still be found.
+          activity: this.rlProtectiveActivityView(scope),
+          activityNote: this.rlProtectiveActivityView(scope).known
+            ? this.rlProtectiveActivityView(scope).note
+            : scope === 'auth_failure'
+              ? 'Refusals by this budget are counted in the gateway metrics (gateway_rate_limit_rejections_total, reason auth_failure) — see Settings → Observability.'
+              : 'Refusals of anonymous callers appear under Activity → Refusals by limit as “Anonymous caller <address>”.',
           isAuthFailure: scope === 'auth_failure',
           hasStreams: !!row && scope !== 'auth_failure',
-          nowTag: row ? row.nowTag : '', nowCls: row ? row.nowCls : '', hasNowTag: !!row && row.hasNowTag,
+          noStreams: !row || scope === 'auth_failure',
+          noStreamsText: scope === 'auth_failure' ? 'not applicable: this budget limits rate only' : 'not set',
+          streamsUnlimited: !!row && row.streamsUnlimited,
+          enfText: row ? row.enfText : '', enfTags: row ? row.enfTags : [], enfSub: row ? row.enfSub : '',
+          draftTag: row ? row.draftTag : '', hasDraftTag: !!row && row.hasDraftTag,
+          was: row ? row.was : '', hasWas: !!row && row.hasWas,
           enabled: row ? row.enabled : false,
           enabledAria: row ? row.enabledAria : 'false',
           enabledLabel: row ? row.enabledLabel : '',
@@ -8139,9 +8983,12 @@ function adminApp() {
       });
     },
 
-    get rlHasRules() { return this.rlListRules().length > 0; },
+    get rlHasRules() { return (this.rlDraft?.rules || []).some(r => !this.rlIsProtective(r.scope)); },
     get rlNoRules() { return !!this.rlDraft && this.rlListRules().length === 0; },
-    get rlNoFilteredRules() { return this.rlHasRules && this.rlRuleRows.length === 0; },
+    // From the shared matching list: asked by three bindings, and a filter whose first hit is the
+    // 1,900th rule made each of them scan that far.
+    get rlHasMatchingRules() { return this.rlMatchingRules().length > 0; },
+    get rlNoFilteredRules() { return this.rlHasRules && !this.rlHasMatchingRules; },
 
     get rlZoneOptions() {
       // ~420 entries that never change: built once, or the two zone selects would be re-diffed
@@ -8169,8 +9016,10 @@ function adminApp() {
       return ['b1', 'b2', 'b3', 'b4'][index % 4];
     },
 
-    get rlTimelineView() {
+    get rlTimelineView() { return this.rlLive('timeline', () => this.rlComputeTimelineView()); },
+    rlComputeTimelineView() {
       const report = this.rlSchedule;
+      const dirty = this.rlDirtyRender;
       const { from, to } = this.rlRangeFromTo();
       const span = to.getTime() - from.getTime();
       const now = this.rlNow();
@@ -8205,7 +9054,10 @@ function adminApp() {
             const idx = Math.max(0, names.indexOf(o.window));
             const state = e <= now ? 'past' : (s <= now ? 'current' : 'future');
             const cls = this.rlBandClass(idx);
-            legendMap.set(id + '|' + o.window, { cls, text: o.window + ' · ' + this.rlTierText(o.tier) });
+            // The window in one sentence, from its definition; the band's own title keeps the
+            // occurrence the server resolved.
+            const def = (rule.schedule || []).find(w => w.name === o.window);
+            legendMap.set(id + '|' + o.window, { cls, text: o.window + ' — ' + (def ? this.rlWindowSentence(def) : this.rlTierText(o.tier)) });
             return {
               key: i,
               style: 'left: ' + pct(s) + '%; width: ' + Math.max(0.4, pct(e) - pct(s)) + '%',
@@ -8214,29 +9066,56 @@ function adminApp() {
             };
           });
         const info = this.rlScopeInfo(rule.scope);
+        const status = this.rlIndex().draftStatus.get(id);
+        const nextAt = status?.nextChangeAt ? new Date(status.nextChangeAt).getTime() : Infinity;
         return {
+          // What is running now first, then whatever changes soonest: the rows kept when the list
+          // is cut are the ones an operator is most likely looking for.
+          _rank: status?.activeWindow || status?.effective?.suspended ? 0 : 1,
+          _next: nextAt,
           key: id,
-          label: info.singleton ? info.short : String(rule.target).replace('|', ' · '),
+          // The name an operator knows the rule by — a key rule is stored against a GUID.
+          label: info.singleton ? info.short : this.rlTargetDisplay(rule.scope, rule.target),
+          labelTitle: info.singleton ? '' : String(rule.target || ''),
           sub: 'base ' + this.rlTierText(rule),
           bands,
           open: () => this.openRateLimitRule(id)
         };
       });
 
+      // A row per scheduled rule is unbounded (2,000 rules may each carry windows), so the list is
+      // cut client-side and says so. This is a different thing from the server trimming the
+      // occurrences it sends (truncatedNote below): there, bands are missing; here, rows are folded.
+      const cap = 20;
+      const ordered = rows.length > cap ? [...rows].sort((a, b) => (a._rank - b._rank) || (a._next - b._next) || a.label.localeCompare(b.label)) : rows;
+      const shownRows = this.rlShowAllTimeline ? ordered : ordered.slice(0, cap);
+      const shownKeys = new Set(shownRows.map(r => r.key));
+      const folded = rows.length - shownRows.length;
       return {
         hasRows: rows.length > 0,
         empty: rows.length === 0,
-        rows,
+        rows: shownRows,
+        totalRows: rows.length,
+        showRowToggle: rows.length > cap,
+        rowToggleText: this.rlShowAllTimeline ? 'Show the first ' + cap + ' only' : 'Show all ' + this.formatNum(rows.length) + ' scheduled rules',
+        rowNote: folded > 0
+          ? 'Showing ' + cap + ' of ' + this.formatNum(rows.length) + ' scheduled rules — those with a window running now first, then the soonest to change. '
+            + this.formatNum(folded) + ' more are folded away, not missing; the Scheduled filter on the rules list finds any of them.'
+          : '',
         axis,
         nowStyle: 'left: ' + pct(now) + '%',
         showNow: now >= from.getTime() && now <= to.getTime(),
-        legend: [...legendMap.values()].map((l, i) => ({ key: i, cls: 'rl-legend-swatch ' + l.cls, text: l.text })),
+        legend: [...legendMap.entries()].filter(([k]) => shownKeys.has(k.slice(0, k.lastIndexOf('|')))).map(([, l], i) => ({ key: i, cls: 'rl-legend-swatch ' + l.cls, text: l.text })),
         rangeText: new Intl.DateTimeFormat(undefined, { timeZone: zone, day: 'numeric', month: 'short' }).format(from) + ' – ' +
           new Intl.DateTimeFormat(undefined, { timeZone: zone, day: 'numeric', month: 'short' }).format(new Date(to.getTime() - 1)),
         // Which configuration is on screen. The panel used to say "unsaved edits are not drawn"
         // and mean it; now it draws them, so it has to say which it is showing.
-        draft: this.rateLimitsDirty,
-        sourceText: this.rateLimitsDirty
+        // The server caps the spans one report carries; a partial calendar has to say it is one.
+        truncatedNote: report?.occurrencesTruncated
+          ? 'Showing the first ' + this.formatNum((report.occurrences || []).length) + ' of ' + this.formatNum(report.occurrencesTotal || 0) + ' window occurrences; choose a shorter range to see the rest.'
+          : '',
+        draft: dirty,
+        sourceText: dirty
           ? 'Drawn from your unsaved draft, so you can check a schedule before saving it.'
           : 'From the saved configuration.'
       };
@@ -8253,7 +9132,10 @@ function adminApp() {
           key: i,
           when: this.rlFmtShort(t.at),
           rel: this.rlRelative(t.at),
-          target: info.singleton ? info.short : String(t.target).replace('|', ' · '),
+          target: info.singleton ? info.short : this.rlTargetDisplay(t.scope, t.target),
+          targetTitle: info.singleton ? '' : String(t.target || ''),
+          openLabel: 'Open rule ' + (info.singleton ? info.name : this.rlTargetDisplay(t.scope, t.target)),
+          open: () => this.openRateLimitRule(this.rlIdentity(t.scope, t.target)),
           what: t.window ? (t.to?.suspended ? 'paused by ' + t.window : t.window) : 'back to base',
           // Rate alone when both sides have one: the full tiers would say the same thing three times.
           delta: (t.from?.rpm > 0 && t.to?.rpm > 0 && !t.from?.suspended && !t.to?.suspended)
@@ -8288,7 +9170,10 @@ function adminApp() {
           const info = this.rlScopeInfo(r.scope);
           return {
             key: i,
-            target: info.singleton ? info.short : String(r.target).replace('|', ' · '),
+            target: info.singleton ? info.short : this.rlTargetDisplay(r.scope, r.target),
+            targetTitle: info.singleton ? '' : String(r.target || ''),
+            openLabel: 'Open rule ' + (info.singleton ? info.name : this.rlTargetDisplay(r.scope, r.target)),
+            open: () => this.openRateLimitRule(this.rlIdentity(r.scope, r.target)),
             tag: r.activeWindow || 'base',
             tagCls: 'tag ' + (r.activeWindow ? (r.effective?.suspended ? 'warn' : 'accent') : 'muted'),
             tier: this.rlTierText(r.effective),
@@ -8303,15 +9188,27 @@ function adminApp() {
     // ---- rule drawer ----
 
     get rlRuleDrawerView() {
+      const shut = this.rlClosedView('lastRuleView', this.rlRuleDrawerOpen);
+      if (shut) return shut;
+      return (RL_INDEX.lastRuleView = this.rlComputeRuleDrawerView());
+    },
+    rlComputeRuleDrawerView() {
       const r = this.rlRule;
       const info = this.rlScopeInfo(r.scope);
       const status = this.rlStatusFor(r.scope, r.target);
       const off = r.enabled === false;
-      const force = off
-        ? { dot: 'warn', text: 'off', sub: this.rlTierText(r) + ' kept, enforcing nothing', title: '' }
-        : status
-          ? this.rlForceFor({ ...r, schedule: r.schedule })
-          : { dot: '', text: this.rlTierText(r), sub: 'not saved yet', title: '' };
+      // The bar at the top is production; what the working copy would do is said beneath it, and
+      // only when it would be something different.
+      const enforcing = this.rlEnforcingView(r.scope, r.target);
+      const savedRule = this.rlSavedRule(this.rlIdentity(r.scope, r.target));
+      const tier = this.rlRuleTierForm(r.scope, r);
+      const working = this.rlRulePayload({ ...r, ...tier });
+      const differs = !savedRule || JSON.stringify(this.rlRulePayload(savedRule)) !== JSON.stringify(working);
+      const afterSave = !differs ? ''
+        : off ? 'off — enforces nothing; ' + this.rlTierText(working) + ' kept'
+        : 'base ' + this.rlTierText(working) + ((working.schedule || []).length ? ' · ' + working.schedule.length + ' window' + (working.schedule.length === 1 ? '' : 's') : '');
+      const dot = { window: 'on', paused: 'warn', off: 'warn', skipped: 'err', unknown: 'err', unenforced: 'err' }[enforcing.kind] || '';
+      const force = { dot, text: enforcing.text, sub: enforcing.tags.map(t => t.text).join(' · ') + (enforcing.sub ? ' · ' + enforcing.sub : '') };
       const windows = (r.schedule || []).map((w, i) => {
         const ws = (status?.windows || []).find(x => String(x.name).toLowerCase() === String(w.name).toLowerCase());
         const state = ws?.state || 'unsaved';
@@ -8327,6 +9224,7 @@ function adminApp() {
           kindCls: 'tag ' + (w.kind === 'once' ? 'accent' : ''),
           when: this.rlWindowWhen(w),
           tier: w.suspend ? 'paused' : this.rlTierText(w),
+          sentence: this.rlWindowSentence(w),
           cls: 'rl-win ' + (state === 'active' ? 'active' : state === 'expired' || state === 'invalid' ? 'muted' : ''),
           stateCls: 'status-chip ' + (state === 'active' ? 'ok' : state === 'invalid' ? 'fail' : state === 'expired' ? 'warn' : 'muted'),
           stateText,
@@ -8356,8 +9254,22 @@ function adminApp() {
         });
 
       const usage = this.rlRuleUsageView(r.scope, r.target);
+      const protective = this.rlIsProtective(r.scope);
+      // The rule's own counters, its trend and its past changes — all joined by its identity.
+      const limit = protective ? null : this.rlLimitActivityView(r.identity);
+      const protectiveActivity = protective ? this.rlProtectiveActivityView(r.scope) : null;
 
       return {
+        limit: limit || { state: 'none', lines: [], text: '', sub: '', title: '', hasBar: false, barStyle: '', barCls: 'load-fill', rateText: '', last: '' },
+        showLimit: !!limit, limitOk: limit?.state === 'ok', limitNote: limit && limit.state !== 'ok' ? limit.title : '',
+        limitAnon: limit?.anonymous
+          ? 'Anonymous callers use a separate bucket under this rule: ' + this.formatNum(limit.anonymous.charged || 0) + ' passed · '
+            + this.formatNum((limit.anonymous.refusedByRate || 0) + (limit.anonymous.refusedByStreams || 0)) + ' refused.'
+          : '',
+        limitSeries: this.rlLimitSeriesView(r.identity),
+        protectiveActivity: protectiveActivity || { known: false, text: '', sub: '', note: '' },
+        showProtectiveActivity: !!protectiveActivity,
+        ruleHistory: this.rlRuleHistoryView(r.identity),
         eyebrow: (this.rlIsProtective(r.scope) ? 'Protective limit' : 'Rule · ' + info.name) + (this.rateLimitsEditable ? '' : ' · read-only'),
         title: info.singleton ? info.name : this.rlTargetDisplay(r.scope, r.target),
         // The name leads; the id the rule is stored against stays one glance away.
@@ -8365,7 +9277,8 @@ function adminApp() {
         forceCls: 'rl-forcebar ' + (force.dot === 'on' ? 'on' : force.dot === 'warn' ? 'warn' : force.dot === 'err' ? 'err' : ''),
         forceDot: 'rl-dot ' + force.dot,
         forceBig: force.text,
-        forceSub: force.dot === 'on' ? 'Enforcing ' + force.sub : force.sub,
+        forceSub: force.sub,
+        afterSave, hasAfterSave: !!afterSave,
         enabled: !off,
         enabledAria: off ? 'false' : 'true',
         enabledText: off ? 'Switched off — the tier and windows below are kept' : 'Enforced',
@@ -8388,6 +9301,11 @@ function adminApp() {
     // ---- window form ----
 
     get rlWindowView() {
+      const shut = this.rlClosedView('lastWindowView', this.rlWindowOpen);
+      if (shut) return shut;
+      return (RL_INDEX.lastWindowView = this.rlComputeWindowView());
+    },
+    rlComputeWindowView() {
       const f = this.rlWindow;
       const isOnce = f.kind === 'once';
       const preview = this.rlWindowPreview;
@@ -8476,7 +9394,7 @@ function adminApp() {
     rlFindKey(id) {
       const q = String(id || '').trim().toLowerCase();
       if (!q) return null;
-      return (this.keys || []).find(k => String(k.id || '').toLowerCase() === q) || null;
+      return this.rlIndex().keysById.get(q) || null;
     },
 
     /** What an operator calls a key: its label, else its assignee, else its prefix. */
@@ -8852,6 +9770,11 @@ function adminApp() {
     },
 
     get rlNewRuleView() {
+      const shut = this.rlClosedView('lastNewRuleView', this.rlNewRuleOpen);
+      if (shut) return shut;
+      return (RL_INDEX.lastNewRuleView = this.rlComputeNewRuleView());
+    },
+    rlComputeNewRuleView() {
       const n = this.rlNewRule;
       const built = this.rlNewRuleBuild();
       const { rule, intent, hasSubject, hasModel, key, canon } = built;
@@ -9106,6 +10029,25 @@ function adminApp() {
     // Every label below names its basis. The by-subject rows are also subject-level — all traffic
     // from a tenant, key or model, whichever limit decided it — so they are never called a rule's.
 
+    /**
+     * How old the activity figures are, for every place that shows one of them — the summary, the
+     * list's Refused column and the Activity card. Its own getter because it reads the 1 Hz clock:
+     * nothing heavier may re-render once a second.
+     */
+    get rlActivityFreshView() {
+      const at = this.rateLimitUsageLoadedAt || 0;
+      const has = !!this.rateLimitUsage?.totals;
+      if (this.rateLimitUsageUnavailable && !has) return { text: 'Activity tracking is not enabled in this deployment', stale: false, has: true, short: 'unavailable' };
+      if (!has || !at) return { text: this.rateLimitUsageLoading ? 'Loading activity…' : '', stale: false, has: this.rateLimitUsageLoading, short: '' };
+      const sec = Math.max(0, Math.floor((this._nowTick - at) / 1000));
+      const age = sec < 5 ? 'just now' : sec < 90 ? sec + ' s ago' : Math.round(sec / 60) + ' min ago';
+      const stale = !!this.rateLimitUsageError;
+      const tail = stale ? ' · the last refresh failed, showing the previous result'
+        : this.rateLimitUsageLoading ? ' · updating…'
+        : this.rlUsageAutoRefresh ? ' · refreshing every 30 s' : ' · auto-refresh off';
+      return { text: 'Activity updated ' + age + tail, stale, has: true, short: (stale ? 'stale · ' : '') + age };
+    },
+
     get rlActivityView() {
       const u = this.rateLimitUsage;
       const has = !!(u && u.totals);
@@ -9143,6 +10085,12 @@ function adminApp() {
         refusedCls: rejected > 0 ? 'mini-stat warn' : 'mini-stat',
         refusalRateText: requests > 0 ? (share * 100).toFixed(share > 0 && share < 0.1 ? 1 : 0) + '%' : '—',
         bucketsText: has ? this.formatNum(u.store?.requestPartitions ?? 0) + ' of ' + this.formatNum(u.store?.maxPartitions ?? 0) : '—',
+        streamSlotsText: has ? this.formatNum(u.store?.streamPartitions ?? 0) : '—',
+        // Adaptive shedding is shown whenever it is switched on, with a sentence when no model is
+        // being reduced: a block that vanishes reads as a feature that is absent.
+        adaptiveOn: has && !!u.adaptive?.enabled,
+        adaptiveIdle: has && !!u.adaptive?.enabled && !(u.adaptive?.models || []).length,
+        adaptiveEvaluatedText: has && u.adaptive?.lastEvaluatedUtc ? 'Last evaluated ' + this.rlFmtShort(u.adaptive.lastEvaluatedUtc) + '.' : '',
         backedOffText: has ? this.formatNum(u.adaptive?.backedOffPartitions ?? 0) : '—',
         windowRows: [15, 60, 180].map((m) => ({
           key: m,
@@ -9167,7 +10115,7 @@ function adminApp() {
     rlTenantLabel(id) {
       const raw = String(id || '');
       if (raw.toLowerCase().startsWith('anon:')) return 'Anonymous · ' + raw.slice(5);
-      const known = this.rlKnownTenants().find(t => String(t.id || '').toLowerCase() === raw.toLowerCase());
+      const known = this.rlIndex().tenantsById.get(raw.toLowerCase());
       return known?.slug || raw || '—';
     },
 
@@ -9179,13 +10127,12 @@ function adminApp() {
     rlResolveTenantId(target) {
       const q = String(target || '').trim().toLowerCase();
       if (!q) return null;
-      const known = this.rlKnownTenants();
-      const byId = known.find(t => String(t.id || '').toLowerCase() === q);
+      const idx = this.rlIndex();
+      const byId = idx.tenantsById.get(q);
       if (byId) return byId.id;
-      const bySlug = known.find(t => String(t.slug || '').toLowerCase() === q);
+      const bySlug = idx.tenantsBySlug.get(q);
       if (bySlug) return bySlug.id || null;
-      const seen = (this.rateLimitUsage?.byTenant || []).some(r => String(r.key || '').toLowerCase() === q);
-      return seen ? String(target).trim() : null;
+      return idx.traffic.tenant.has(q) ? String(target).trim() : null;
     },
 
     /** The tracker's key for a rule's bucket, or null when it cannot be derived. */
@@ -9214,15 +10161,12 @@ function adminApp() {
       if (scope === 'anonymous' || scope === 'auth_failure') return { state: 'untracked', hits: 0, qualified: false };
       const key = this.rlUsageKeyFor(scope, target);
       if (!key) return { state: 'unresolved', hits: 0, qualified: false };
-      const q = key.toLowerCase();
-      const rows = violations.filter(v => v.scope === scope && String(v.key || '').toLowerCase() === q);
+      const hits = this.rlIndex().refusals.get(scope + '|' + key.toLowerCase());
       // A full page of rows may have cut this one off; a short page is the whole list.
-      if (!rows.length && violations.length >= this.rlUsageTake()) return { state: 'truncated', hits: 0, qualified: false };
-      return {
-        state: 'ok',
-        hits: rows.reduce((n, v) => n + (Number(v.hits) || 0), 0),
-        qualified: scope === 'tenant'
-      };
+      if (hits === undefined && violations.length >= this.rlUsageTake()) return { state: 'truncated', hits: 0, qualified: false };
+      // The gateway stopped taking new refusing limits, so "not listed" is not "never refused".
+      if (hits === undefined && this.rlIndex().violationsLossy) return { state: 'saturated', hits: 0, qualified: false };
+      return { state: 'ok', hits: hits || 0, qualified: scope === 'tenant' };
     },
 
     /** The cell and tooltip for rlRefusalsFor — one wording for the list and the drawer. */
@@ -9235,7 +10179,8 @@ function adminApp() {
         unavailable: 'Activity is unavailable, so refusals are unknown.',
         untracked: 'Protective limits are not part of the activity report; they are counted in the gateway metrics only.',
         unresolved: 'Refusals are counted by tenant id. This rule is written by slug and the console cannot match it to an id.',
-        truncated: 'Not among the top ' + this.rlUsageTake() + ' limits by refusals.'
+        truncated: 'Not among the top ' + this.rlUsageTake() + ' limits by refusals.',
+        saturated: 'The gateway’s refusal counters are full, so refusals by this limit may not have been counted.'
       }[r.state] || '';
       return {
         state: r.state,
@@ -9268,10 +10213,374 @@ function adminApp() {
       if (!section) return { state: 'nosection', row: null };
       const key = this.rlUsageKeyFor(scope, target);
       if (!key) return { state: 'unresolved', row: null };
-      const row = section.find(x => String(x.key || '').toLowerCase() === key.toLowerCase());
+      const row = this.rlIndex().traffic[scope].get(key.toLowerCase());
       if (row) return { state: 'ok', row };
       if (section.length >= this.rlUsageTake()) return { state: 'truncated', row: null };
       return { state: (u.totals.requests ?? 0) === 0 ? 'quiet' : 'absent', row: null };
+    },
+
+    // ---- Per-limit activity, tracker completeness, series and history ----------------------------
+    // Everything below reads fields the gateway reports about a limit itself. Nothing here is
+    // worked out from the per-subject rows, and a gateway that does not send a field gets the
+    // plain "not reported" state rather than an estimate.
+
+    /** One section of the gateway's usage tracker, or null when the report does not describe it. */
+    rlTrackerDimension(name) {
+      const dims = this.rateLimitUsage?.tracker?.dimensions;
+      return (Array.isArray(dims) ? dims : []).find(d => d.name === name) || null;
+    },
+
+    /**
+     * Whether the activity counters are complete. Saturated is the gateway's own statement
+     * (`isSaturated`): at least one decision was not counted because a section was full. A section
+     * that is merely full has lost nothing yet and is reported as a note, not a warning.
+     */
+    get rlTrackerView() {
+      const t = this.rateLimitUsage?.tracker;
+      if (!t || !Array.isArray(t.dimensions)) return { known: false, saturated: false, full: false, text: '', fullText: '', tag: '' };
+      const labels = { tenants: 'tenants', models: 'models', apiKeys: 'API keys', tenantModels: 'tenant × model pairs', violations: 'refusing limits', limits: 'limits' };
+      const lossy = t.dimensions.filter(d => (d.droppedDecisions || 0) > 0);
+      const full = t.dimensions.filter(d => d.atCapacity && !(d.droppedDecisions > 0));
+      const names = (list) => list.map(d => labels[d.name] || d.name).join(', ');
+      const dropped = lossy.reduce((n, d) => n + (d.droppedDecisions || 0), 0);
+      const firsts = lossy.map(d => d.firstDroppedUtc).filter(Boolean).sort();
+      const saturated = t.isSaturated === true;
+      return {
+        known: true, saturated, full: !saturated && full.length > 0,
+        tag: saturated ? 'incomplete' : '',
+        text: saturated
+          ? 'Activity is incomplete. The gateway tracks at most ' + this.formatNum(t.maxKeysPerDimension) + ' ' + names(lossy)
+            + ', and ' + this.formatNum(dropped) + ' decision' + (dropped === 1 ? '' : 's') + ' about others '
+            + (firsts.length ? 'since ' + this.rlFmtShort(firsts[0]) + ' ' : '') + (dropped === 1 ? 'was' : 'were') + ' not counted. '
+            + 'Rows that are shown are exact and the totals are exact; a missing row is unknown, not zero. Counting restarts with the gateway.'
+          : '',
+        fullText: !saturated && full.length
+          ? 'The gateway is tracking as many ' + names(full) + ' as it can hold (' + this.formatNum(t.maxKeysPerDimension) + '). Nothing has been missed yet; the next new one will not be counted.'
+          : ''
+      };
+    },
+
+    /**
+     * What one configured limit did in the activity window, by its id. `state` says exactly why
+     * there is no row: the report is missing, the gateway does not report limits, the limits
+     * section lost decisions (unknown), or nothing happened (a real zero).
+     */
+    rlLimitActivityFor(limitId) {
+      const index = this.rlIndex();
+      if (index.limitsState !== 'ok') return { state: index.limitsState, row: null, near: false, sort: -2 };
+      const row = index.limits.get(String(limitId || '').toLowerCase()) || null;
+      if (!row) {
+        return { state: index.limitsLossy ? 'unknown' : 'quiet', row: null, near: false, sort: index.limitsLossy ? -1 : 0 };
+      }
+      const util = row.singleBucket && typeof row.peakUtilization === 'number' ? row.peakUtilization : null;
+      return {
+        state: 'ok', row, util,
+        near: util !== null && util >= 0.8,
+        // Utilisation first where it exists, then plain volume, so one sort serves every row.
+        sort: util !== null ? 1 + util : Math.min(0.999, (row.evaluations || 0) / 1e9)
+      };
+    },
+
+    /** The words and the bar for rlLimitActivityFor — one wording for the list, the tiers and the drawer. */
+    rlLimitActivityView(limitId) {
+      const a = this.rlLimitActivityFor(limitId);
+      // The same words the Activity card uses, without building that whole view once per row.
+      const windowText = 'last ' + this.rlIndex().windowMinutes + ' min';
+      const none = (text, title, unknown) => ({ state: a.state, text, sub: '', title, unknown, sr: unknown ? 'unknown: ' + title : '', hasBar: false, barStyle: '', barCls: 'load-fill', near: false, lines: [], rateText: '', last: '', anonymous: null });
+      if (a.state === 'unavailable') return none('—', 'Activity is unavailable.', true);
+      if (a.state === 'unsupported') return none('—', 'This gateway does not report activity per limit.', true);
+      if (a.state === 'unknown') return none('unknown', 'The gateway’s per-limit counters are full, so decisions by this limit may not have been counted.', true);
+      if (a.state === 'quiet') return none('no decisions', 'This limit was not evaluated ' + windowText + '.', false);
+      const r = a.row;
+      const refused = (r.refusedByRate || 0) + (r.refusedByStreams || 0);
+      const parts = [];
+      if ((r.evaluations || 0) > 0) parts.push(this.formatNum(r.charged || 0) + ' passed');
+      else if ((r.streamsStarted || 0) > 0) parts.push(this.formatNum(r.streamsStarted) + ' streams');
+      parts.push(this.formatNum(refused) + ' refused');
+      const rate = r.effectiveRpm > 0 ? this.formatNum(r.effectiveRpm) + ' rpm' : '';
+      const peak = (r.peakChargedInOneMinute || 0) > 0
+        ? 'peak ' + this.formatNum(r.peakChargedInOneMinute) + '/min' + (a.util !== null && rate ? ' of ' + rate + ' · ' + Math.round(a.util * 100) + '%' : r.singleBucket ? '' : ' across all callers')
+        : '';
+      const lines = [
+        ['Evaluated', this.formatNum(r.evaluations || 0), 'Times this limit was asked for a token. A limit that comes after one that refused is not asked.'],
+        ['Passed', this.formatNum(r.charged || 0), 'The request passed every rate limit and this limit kept its token.'],
+        ['Refused by rate', this.formatNum(r.refusedByRate || 0), 'This limit’s bucket was empty: it is the limit that answered 429.'],
+        ['Passed, then refunded', this.formatNum(r.passedThenRefunded || 0), 'This limit gave a token and got it back because another limit refused.'],
+        ['Streams started', this.formatNum(r.streamsStarted || 0), 'Streaming responses that took a slot under this limit’s cap.'],
+        ['Refused by streams', this.formatNum(r.refusedByStreams || 0), 'Streaming requests this limit’s concurrency cap refused.']
+      ].map(([label, value, title]) => ({ key: label, label, value, title }));
+      return {
+        state: 'ok', unknown: false, sr: '', near: a.near, lines,
+        text: parts.join(' · '),
+        sub: peak,
+        title: 'Decisions made by this limit itself ' + windowText + '. '
+          + (r.singleBucket
+            ? 'Peak is the busiest minute, against the rate the limit enforced; it can pass 100% because a bucket also holds burst.'
+            : 'Every caller under this limit has a bucket of its own, so the peak is a sum across callers and is not compared with the rate.'),
+        hasBar: a.util !== null,
+        barStyle: a.util !== null ? 'width:' + Math.min(100, Math.round(a.util * 100)) + '%' : '',
+        barCls: 'load-fill' + (a.util !== null && a.util >= 1 ? ' is-over' : a.near ? ' is-hot' : ''),
+        rateText: r.configuredRpm > 0
+          ? (r.effectiveRpm !== r.configuredRpm
+            ? this.formatNum(r.effectiveRpm) + ' rpm enforced (' + this.formatNum(r.configuredRpm) + ' before load shedding)'
+            : this.formatNum(r.effectiveRpm) + ' rpm enforced')
+          : '',
+        last: r.lastDecisionUtc ? 'Last decision ' + this.rlRelative(r.lastDecisionUtc) : '',
+        anonymous: this.rlIndex().limitsAnon.get(String(limitId || '').toLowerCase()) || null
+      };
+    },
+
+    /**
+     * Activity of a protective scope. Its own report section, because the numbers mean something
+     * different from a rule's: a failed-credential check is charged only when the credential turns
+     * out to be wrong. Both rows are always reported, so zero here is a real zero.
+     */
+    rlProtectiveActivityView(scope) {
+      const u = this.rateLimitUsage;
+      const windowText = this.rlActivityView.windowText;
+      const none = (text) => ({ known: false, text, sub: '', note: '', refused: 0, refusedSome: false });
+      if (!u || !u.totals) return none('Activity is unavailable.');
+      if (!Array.isArray(u.protective)) return none('This gateway does not report activity for protective limits.');
+      const row = this.rlIndex().protective.get(scope);
+      if (!row) return none('Not reported.');
+      const refused = (row.refused || 0) + (row.refusedByStreams || 0);
+      const text = scope === 'auth_failure'
+        ? this.formatNum(row.checked || 0) + ' credentialed requests checked · ' + this.formatNum(row.charged || 0) + ' failed credentials charged · ' + this.formatNum(refused) + ' refused'
+        : this.formatNum(row.checked || 0) + ' anonymous requests checked · ' + this.formatNum(row.charged || 0) + ' passed · ' + this.formatNum(refused) + ' refused';
+      const rate = row.enforcedRpm > 0 ? this.formatNum(row.enforcedRpm) + ' rpm per address block enforced' : '';
+      const last = row.lastDecisionUtc ? 'last ' + this.rlRelative(row.lastDecisionUtc) : '';
+      const note = scope === 'anonymous'
+        ? 'Counted here only while this limit sets a rate of its own; otherwise anonymous callers are held to, and counted under, the Default tier.'
+        : 'Each address block has its own budget. With no rule set, the Default tier’s rate is what is enforced.';
+      return { known: true, text: text + ' ' + windowText, sub: [rate, last].filter(Boolean).join(' · '), note, refused, refusedSome: refused > 0 };
+    },
+
+    /** Points of a series as the sparkline helpers want them, with uncovered buckets left out. */
+    rlSeriesSpark(series, pick) {
+      const points = (series?.points || []).filter(p => p.covered !== false);
+      return points.map(p => Number(pick(p)) || 0);
+    },
+
+    /** Gateway-wide refusals per bucket, for the summary: is it rising or settling. */
+    get rlSeriesView() {
+      const s = this.rlSeries;
+      // Every field in every state: the CSP build warns about a path that resolves to nothing.
+      const blank = { show: false, error: this.rlSeriesError || '', refusedLine: '', refusedFill: '', label: '', text: '', sr: '', partialText: '' };
+      if (!s || !Array.isArray(s.points)) return blank;
+      const covered = s.points.filter(p => p.covered !== false);
+      const refused = covered.map(p => (p.refusedByRate || 0) + (p.refusedByStreams || 0));
+      const total = refused.reduce((a, b) => a + b, 0);
+      const peakAt = refused.indexOf(Math.max(0, ...refused));
+      const partial = covered.length < s.points.length;
+      return {
+        show: covered.length > 1, error: '',
+        // Refusals on their own scale. Against total decisions a rising refusal count is a flat line
+        // along the bottom, and whether it is rising is the only thing this chart is for.
+        refusedLine: this.rlSparkLine(refused, Math.max(...refused, 1)), refusedFill: this.rlSparkFill(refused, Math.max(...refused, 1)),
+        label: 'Refusals per ' + (s.bucketMinutes === 1 ? 'minute' : s.bucketMinutes + ' min') + ', ' + this.rlActivityView.windowText,
+        text: total === 0 ? 'no refusals'
+          : 'peak ' + this.formatNum(refused[peakAt]) + ' at ' + this.rlFmtTime(covered[peakAt].startUtc),
+        sr: total === 0 ? 'No refusals in the window.'
+          : this.formatNum(total) + ' refusals in the window, peaking at ' + this.formatNum(refused[peakAt]) + ' at ' + this.rlFmtTime(covered[peakAt].startUtc) + '.',
+        partialText: partial ? 'Counting began ' + this.rlRelative(s.trackingSinceUtc) + '; earlier minutes are not shown.' : ''
+      };
+    },
+
+    /** The Overview's sparkline geometry, for values this page already holds. Both series of one chart share `max`. */
+    rlSparkXY(values, max) {
+      const n = values.length;
+      return values.map((val, i) => [(i / (n - 1)) * 100, 94 - Math.min(88, (val / Math.max(max, 1e-9)) * 88)]);
+    },
+    rlSparkLine(values, max) {
+      return values.length < 2 ? '' : this.rlSparkXY(values, max).map(([x, y]) => x.toFixed(2) + ',' + y.toFixed(2)).join(' ');
+    },
+    rlSparkFill(values, max) {
+      return values.length < 2 ? '' : 'M0,100' + this.rlSparkXY(values, max).map(([x, y]) => ' L' + x.toFixed(2) + ',' + y.toFixed(2)).join('') + ' L100,100 Z';
+    },
+
+    rlFmtTime(iso) {
+      const d = new Date(iso);
+      return Number.isFinite(d.getTime()) ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+    },
+
+    /** One bucket width for every chart: the window split into about sixty points. */
+    rlSeriesBucket() {
+      const minutes = Number(this.rateLimitUsageMinutes) || 60;
+      return minutes <= 60 ? 1 : minutes <= 120 ? 2 : 3;
+    },
+
+    async loadRateLimitSeries() {
+      const seq = (this._rlSeriesSeq || 0) + 1;
+      this._rlSeriesSeq = seq;
+      try {
+        const minutes = Number(this.rateLimitUsageMinutes) || 60;
+        const series = await this.apiJson('/admin/api/rate-limits/usage/timeseries?minutes=' + minutes + '&bucketMinutes=' + this.rlSeriesBucket());
+        if (seq !== this._rlSeriesSeq) return;
+        this.rlSeries = series;
+        this.rlSeriesError = '';
+      } catch (e) {
+        if (seq !== this._rlSeriesSeq) return;
+        // An older gateway has no such route. The trend is an extra; its absence is not an error
+        // worth a banner, and the last series is kept.
+        this.rlSeriesError = e?.status === 404 ? '' : (e?.message || 'Could not load the refusal trend.');
+      }
+    },
+
+    /** The open rule's own series. 404 means the gateway holds nothing for that limit: a real "no activity". */
+    async loadRateLimitLimitSeries(limitId) {
+      const id = String(limitId || '').toLowerCase();
+      const seq = (this._rlLimitSeriesSeq || 0) + 1;
+      this._rlLimitSeriesSeq = seq;
+      this.rlLimitSeriesFor = id;
+      this.rlLimitSeries = null;
+      if (!id) { this.rlLimitSeriesState = 'idle'; return; }
+      this.rlLimitSeriesState = 'loading';
+      try {
+        const minutes = Number(this.rateLimitUsageMinutes) || 60;
+        const series = await this.apiJson('/admin/api/rate-limits/usage/timeseries?minutes=' + minutes
+          + '&bucketMinutes=' + this.rlSeriesBucket() + '&limitId=' + encodeURIComponent(id));
+        if (seq !== this._rlLimitSeriesSeq) return;
+        this.rlLimitSeries = series;
+        this.rlLimitSeriesState = 'ok';
+      } catch (e) {
+        if (seq !== this._rlLimitSeriesSeq) return;
+        this.rlLimitSeriesState = e?.status === 404 ? 'none' : 'error';
+      }
+    },
+
+    rlLimitSeriesView(limitId) {
+      const id = String(limitId || '').toLowerCase();
+      const state = this.rlLimitSeriesFor === id ? this.rlLimitSeriesState : 'idle';
+      const s = state === 'ok' ? this.rlLimitSeries : null;
+      const covered = (s?.points || []).filter(p => p.covered !== false);
+      const passed = covered.map(p => p.admitted || 0);
+      const refused = covered.map(p => (p.refusedByRate || 0) + (p.refusedByStreams || 0));
+      return {
+        show: covered.length > 1,
+        passedLine: this.rlSparkLine(passed, Math.max(...passed, ...refused, 1)),
+        refusedLine: this.rlSparkLine(refused, Math.max(...passed, ...refused, 1)),
+        refusedFill: this.rlSparkFill(refused, Math.max(...passed, ...refused, 1)),
+        label: 'Passed and refused per ' + (s?.bucketMinutes === 1 ? 'minute' : (s?.bucketMinutes || '') + ' min') + ' by this limit, ' + this.rlActivityView.windowText,
+        sr: covered.length ? this.formatNum(passed.reduce((a, b) => a + b, 0)) + ' passed and ' + this.formatNum(refused.reduce((a, b) => a + b, 0)) + ' refused in the window.' : '',
+        note: state === 'loading' ? 'Loading trend…'
+          : state === 'error' ? 'The trend could not be loaded.'
+          : ''
+      };
+    },
+
+    // ---- Change history ----
+
+    async loadRateLimitHistory(more) {
+      if (this.rlHistoryLoading) return;
+      this.rlHistoryLoading = true;
+      try {
+        const before = more && this.rlHistory?.nextBefore ? '&before=' + encodeURIComponent(this.rlHistory.nextBefore) : '';
+        const page = await this.apiJson('/admin/api/rate-limits/history?take=20' + before);
+        const entries = (more ? (this.rlHistory?.entries || []) : []).concat(Array.isArray(page?.entries) ? page.entries : []);
+        this.rlHistory = { ...page, entries };
+        this.rlHistoryError = '';
+      } catch (e) {
+        this.rlHistoryError = e?.status === 404
+          ? 'This gateway does not serve rate-limit history.'
+          : (e?.message || 'Could not load the change history.');
+      } finally {
+        this.rlHistoryLoading = false;
+      }
+    },
+
+    toggleRateLimitHistory() {
+      this.rlHistoryOpen = !this.rlHistoryOpen;
+      if (this.rlHistoryOpen && !this.rlHistory) void this.loadRateLimitHistory(false);
+    },
+
+    loadMoreRateLimitHistory() { void this.loadRateLimitHistory(true); },
+    retryRateLimitHistory() { void this.loadRateLimitHistory(false); },
+
+    /** Who acted, as far as the trail says: the admin key's name when the console knows it, else its id. */
+    rlHistoryActor(entry) {
+      const key = entry.actorApiKeyId ? this.rlFindKey(entry.actorApiKeyId) : null;
+      if (key) return this.rlKeyName(key);
+      return entry.actorApiKeyId ? 'key ' + String(entry.actorApiKeyId).slice(0, 8) + '…' : 'unknown key';
+    },
+
+    rlHistoryChangeView(c, index) {
+      const [scope, ...rest] = String(c.ruleId || '').split(':');
+      const target = rest.join(':');
+      // The id is lower case. A rule that still exists is named the way the list names it.
+      const current = c.ruleId ? this.rlFindDraftRule(c.ruleId) : null;
+      const name = !c.ruleId ? ''
+        : this.rlScopeInfo(scope).singleton ? this.rlScopeInfo(scope).name
+        : this.rlTargetDisplay(scope, current ? current.target : target);
+      const exists = !!current;
+      return {
+        key: index + ':' + (c.ruleId || c.summary || ''),
+        kind: c.kind, kindCls: 'rl-diff-kind ' + (c.kind === 'removed' ? 'removed' : c.kind === 'added' ? 'added' : 'changed'),
+        name: name || c.summary || '',
+        detail: c.ruleId ? (c.kind === 'added' ? c.after : c.kind === 'removed' ? 'was ' + c.before : c.before + ' → ' + c.after) : '',
+        canOpen: exists, plain: !exists,
+        open: () => { if (exists) this.openRateLimitRule(c.ruleId); }
+      };
+    },
+
+    rlHistoryEntryView(e, index) {
+      const refused = e.outcome === 'refused';
+      const changes = Array.isArray(e.changes) ? e.changes : null;
+      const why = { 400: 'invalid', 409: 'conflict: based on an older version', 503: 'no database', 500: 'server error' }[e.statusCode] || '';
+      const summary = refused ? 'Save refused' + (why ? ' — ' + why : '')
+        : changes === null ? 'Saved (rules not included in this save)'
+        : e.changeCount === 0 ? 'Saved — no rule changed (tiers or switches only)'
+        : 'Saved — ' + this.formatNum(e.changeCount) + ' rule change' + (e.changeCount === 1 ? '' : 's');
+      return {
+        key: index + ':' + e.timestampUtc,
+        when: this.rlFmtShort(e.timestampUtc), ago: this.rlRelative(e.timestampUtc), iso: e.timestampUtc,
+        actor: this.rlHistoryActor(e),
+        summary, refused, cls: 'rl-hist-entry' + (refused ? ' refused' : ''),
+        version: e.version != null ? 'v' + e.version : '',
+        based: refused && e.basedOnVersion != null ? 'based on v' + e.basedOnVersion : '',
+        message: refused ? (e.message || '') : '',
+        switches: refused ? '' : [e.enabled === false ? 'enforcement off' : '', e.adaptiveEnabled === true ? 'adaptive on' : ''].filter(Boolean).join(' · '),
+        changes: (changes || []).map((c, i) => this.rlHistoryChangeView(c, i)),
+        hasChanges: !!changes && changes.length > 0,
+        truncated: e.changesTruncated ? 'Showing ' + this.formatNum((changes || []).length) + ' of ' + this.formatNum(e.changeCount) + ' rule changes.' : ''
+      };
+    },
+
+    get rlHistoryView() {
+      const h = this.rlHistory;
+      const entries = (h?.entries || []).map((e, i) => this.rlHistoryEntryView(e, i));
+      return {
+        open: this.rlHistoryOpen, expanded: this.rlHistoryOpen ? 'true' : 'false',
+        loading: this.rlHistoryLoading && !h,
+        error: this.rlHistoryError,
+        unavailable: !!h && h.available === false,
+        empty: !!h && h.available !== false && entries.length === 0,
+        entries,
+        hasMore: !!h?.hasMore, moreLabel: this.rlHistoryLoading ? 'Loading…' : 'Show older',
+        scanNote: h?.scanLimitReached ? 'Older entries may exist: the audit trail is shared with every other admin action and only its newest part was read.' : ''
+      };
+    },
+
+    /** Saves in the loaded history that touched one rule, newest first — for the rule drawer. */
+    rlRuleHistoryView(identity) {
+      const id = String(identity || '').toLowerCase();
+      const h = this.rlHistory;
+      if (!h) return { loaded: false, rows: [], hasRows: false, note: '' };
+      const rows = [];
+      for (const e of h.entries || []) {
+        for (const c of Array.isArray(e.changes) ? e.changes : []) {
+          if (String(c.ruleId || '').toLowerCase() !== id) continue;
+          rows.push({
+            key: e.timestampUtc + c.kind, when: this.rlFmtShort(e.timestampUtc), ago: this.rlRelative(e.timestampUtc),
+            actor: this.rlHistoryActor(e), kind: c.kind,
+            detail: c.kind === 'added' ? c.after : c.kind === 'removed' ? 'was ' + c.before : c.before + ' → ' + c.after
+          });
+        }
+      }
+      return {
+        loaded: true, rows, hasRows: rows.length > 0,
+        note: rows.length ? '' : h.available === false ? 'No audit trail is available on this gateway.'
+          : 'No change to this rule in the ' + this.formatNum((h.entries || []).length) + ' most recent saves' + (h.hasMore ? ' loaded' : '') + '.'
+      };
     },
 
     get rlUsageTabRows() {
@@ -9308,6 +10617,16 @@ function adminApp() {
           if (tab === 'tenantModel') name += ' · ' + (row.modelId || '—');
           sub = name.startsWith(String(row.tenantId || '')) ? '' : String(row.tenantId || '');
         }
+        // Load against the last limit seen. Computed here rather than read from the report, and
+        // only when a limit was seen at all. It is the window's average rate over the sustained rpm
+        // of whichever limit was tightest — or refused — on this subject's most recent request, so
+        // it is a pressure hint for the subject and never one rule's utilisation.
+        const ratio = row.effectiveRpm > 0 ? (row.requestsPerMinute ?? 0) / row.effectiveRpm : null;
+        const pct = ratio === null ? 0 : Math.round(ratio * 100);
+        const key = tab === 'key' ? this.rlFindKey(row.apiKeyId || row.key) : null;
+        const find = tab === 'model' ? (row.modelId || row.key || '')
+          : tab === 'key' ? (key ? this.rlKeyName(key) : String(row.apiKeyId || row.key || ''))
+          : this.rlTenantLabel(row.tenantId || String(row.key || '').split('|')[0]);
         return {
           key: String(row.key),
           name, sub, hasSub: !!sub,
@@ -9316,17 +10635,57 @@ function adminApp() {
           refused: this.formatNum(row.rejected ?? 0),
           refusedCls: (row.rejected ?? 0) > 0 ? 'num rl-refused-some' : 'num',
           rpmText: (row.requestsPerMinute ?? 0).toFixed(1),
-          limitText: this.rateLimitLimitText(row)
+          limitText: this.rateLimitLimitText(row),
+          hasLoad: ratio !== null,
+          noLoad: ratio === null,
+          loadText: ratio === null ? '' : this.formatNum(pct) + '%',
+          loadStyle: 'width:' + Math.min(100, pct) + '%',
+          loadCls: 'load-fill' + (ratio >= 1 ? ' is-over' : ratio >= 0.8 ? ' is-hot' : ''),
+          // The columns a narrow screen has no room for, as a second line under the subject, so
+          // nothing operational is dropped and nothing has to be scrolled sideways.
+          secondLine: (row.requestsPerMinute ?? 0).toFixed(1) + ' avg req/min' +
+            (ratio === null ? ' · no limit seen' : ' · load ' + this.formatNum(pct) + '% of last limit ' + this.rateLimitLimitText(row) + ' rpm'),
+          showRulesLabel: 'Show rules for ' + find,
+          showRules: () => this.showRateLimitRulesFor(find),
+          canLimit: !!key && this.rateLimitsEditable,
+          limitLabel: key ? 'New rule for key ' + this.rlKeyName(key) : '',
+          limit: () => { if (key) this.startRateLimitNewRule({ key }); },
+          _sort: { decisions: row.requests ?? 0, refused: row.rejected ?? 0, rpm: row.requestsPerMinute ?? 0, load: ratio === null ? -1 : ratio },
+          _text: (name + ' ' + sub + ' ' + String(row.key || '')).toLowerCase()
         };
       });
+      const q = String(this.rlUsageFilter || '').trim().toLowerCase();
+      const sortKey = this.rlUsageSortKey || 'refused';
+      const dir = this.rlUsageSortDir || -1;
+      const total = rows.length;
+      const shown = rows
+        .filter(r => !q || r._text.includes(q))
+        .sort((a, b) => ((a._sort[sortKey] - b._sort[sortKey]) * dir) || (b._sort.decisions - a._sort.decisions) || a.name.localeCompare(b.name));
+      // Without a per-model rule the gateway never learns the model of an admitted request, so
+      // these two tabs are empty for a reason that has nothing to do with traffic.
+      const modelTab = tab === 'tenantModel' || tab === 'model';
+      const anyModelRule = (this.rateLimits?.rules || []).some(r => this.rlIntentFor(r.scope)?.where === 'one');
       const take = this.rlUsageTake();
+      const col = (key) => {
+        const on = sortKey === key;
+        return {
+          ariaSort: on ? (dir > 0 ? 'ascending' : 'descending') : 'none',
+          icon: on ? '<span class="sort-icon' + (dir > 0 ? '' : ' icon-flip') + '">' + (window.AdminIcons ? window.AdminIcons('chevron-up') : (dir > 0 ? '▲' : '▼')) + '</span>' : '',
+          toggle: () => this.setRateLimitUsageSort(key)
+        };
+      };
       return {
-        rows,
-        has: rows.length > 0,
-        empty: !!this.rateLimitUsage?.totals && rows.length === 0,
+        rows: shown,
+        has: total > 0,
+        noMatch: total > 0 && shown.length === 0,
+        countText: q ? shown.length + ' of ' + total : '',
+        sort: { decisions: col('decisions'), refused: col('refused'), rpm: col('rpm'), load: col('load') },
+        empty: !!this.rateLimitUsage?.totals && total === 0,
         emptyText: (u.totals?.requests ?? 0) === 0
           ? 'No inference requests were decided in this window.'
-          : 'Nothing recorded under this heading in this window.',
+          : modelTab && !anyModelRule
+            ? 'Nothing is recorded by model yet: requests are attributed to a model only while at least one per-model rule exists.'
+            : 'Nothing recorded under this heading in this window.',
         subjectHeading: tab === 'key' ? 'API key' : tab === 'model' ? 'Model' : tab === 'tenantModel' ? 'Tenant · model' : 'Tenant',
         // Refusals made before the body is read carry no model, so the model-bearing sections
         // cannot show them. Said here rather than left for an operator to reconcile by hand.
@@ -9334,7 +10693,7 @@ function adminApp() {
           ? 'Requests refused before the model was read — by the gateway, tenant or key limits — are counted under Tenant and API key, not here.'
           : '',
         hasNote: tab === 'tenantModel' || tab === 'model',
-        truncated: rows.length >= take ? 'Showing the ' + take + ' busiest.' : '',
+        truncated: total >= take ? 'Showing the ' + take + ' busiest.' : '',
         caption: 'Traffic by ' + (tab === 'key' ? 'API key' : tab === 'model' ? 'model' : tab === 'tenantModel' ? 'tenant and model' : 'tenant') + ', selected window'
       };
     },
@@ -9409,9 +10768,17 @@ function adminApp() {
 
     get rateLimitViolationRows() {
       const list = this.rateLimitUsage?.violations;
-      return (Array.isArray(list) ? list : []).map((v) => {
+      const rows = Array.isArray(list) ? list : [];
+      const byUsageKey = new Map();
+      if (rows.length) {
+        for (const r of this.rlDraft?.rules || []) {
+          const k = this.rlUsageKeyFor(r.scope, r.target);
+          if (k) byUsageKey.set(r.scope + '|' + String(k).toLowerCase(), r);
+        }
+      }
+      return rows.map((v) => {
         const label = this.rlLimitLabel(v.scope, v.key);
-        const rule = this.rlRuleForUsageKey(v.scope, v.key);
+        const rule = byUsageKey.get(v.scope + '|' + String(v.key || '').toLowerCase()) || null;
         const identity = rule ? this.rlIdentity(rule.scope, rule.target) : '';
         return {
           key: v.scope + '|' + v.key + '|' + v.control,
@@ -9441,6 +10808,7 @@ function adminApp() {
         modelId: m.modelId,
         factorText: Math.round((m.factor ?? 1) * 100) + '% of configured',
         saturationText: Math.round((m.saturation ?? 0) * 100) + '%',
+        secondLine: 'saturation ' + Math.round((m.saturation ?? 0) * 100) + '%' + (m.reason ? ' · ' + m.reason : ''),
         reason: m.reason
       }));
     },

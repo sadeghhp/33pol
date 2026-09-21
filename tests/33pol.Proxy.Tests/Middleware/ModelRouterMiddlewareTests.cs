@@ -1562,14 +1562,16 @@ public sealed class ModelRouterMiddlewareTests
         IRateLimitPolicyResolver? rateLimitPolicyResolver = null,
         IDistributedRateLimitStore? rateLimitStore = null,
         IAdaptiveRateLimitGovernor? rateLimitGovernor = null,
-        IRateLimitUsageTracker? rateLimitUsage = null) =>
+        IRateLimitUsageTracker? rateLimitUsage = null,
+        IRateLimitPlanResolver? rateLimitPlanResolver = null) =>
         CreateMiddleware(
             registry: registry,
             forwarder: forwarder,
             rateLimitPolicyResolver: rateLimitPolicyResolver,
             rateLimitStore: rateLimitStore,
             rateLimitGovernor: rateLimitGovernor,
-            rateLimitUsage: rateLimitUsage);
+            rateLimitUsage: rateLimitUsage,
+            rateLimitPlanResolver: rateLimitPlanResolver);
 
     private static ModelRouterMiddleware CreateMiddleware(
         RequestDelegate? next = null,
@@ -1590,7 +1592,8 @@ public sealed class ModelRouterMiddlewareTests
         IRateLimitPolicyResolver? rateLimitPolicyResolver = null,
         IDistributedRateLimitStore? rateLimitStore = null,
         IAdaptiveRateLimitGovernor? rateLimitGovernor = null,
-        IRateLimitUsageTracker? rateLimitUsage = null)
+        IRateLimitUsageTracker? rateLimitUsage = null,
+        IRateLimitPlanResolver? rateLimitPlanResolver = null)
     {
         next ??= _ => Task.CompletedTask;
         registry ??= Substitute.For<IModelRegistry>();
@@ -1674,6 +1677,7 @@ public sealed class ModelRouterMiddlewareTests
             budgetEnforcement ?? CreateAllowAllBudgetEnforcement(),
             errorRecorder ?? Substitute.For<IGatewayErrorRecorder>(),
             NullLogger<ModelRouterMiddleware>.Instance,
+            rateLimitPlanResolver: rateLimitPlanResolver,
             rateLimitUsage: rateLimitUsage,
             rateLimitGovernor: rateLimitGovernor);
     }

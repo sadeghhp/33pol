@@ -58,4 +58,23 @@ public interface IRateLimitConfigAdminService
     /// occurrence, and how it stands against the rule's other windows.
     /// </summary>
     RateLimitWindowPreview PreviewWindow(RateLimitRuleDefinition rule, string candidateName);
+
+    /// <summary>
+    /// Whether <see cref="UpdateAsync"/> could persist a change right now, decided by the same
+    /// condition the write path checks, so a console can say "read-only" before anyone edits rather
+    /// than after a save fails.
+    /// </summary>
+    RateLimitWriteAvailability GetWriteAvailability() => RateLimitWriteAvailability.Available;
+}
+
+/// <param name="Writable">Whether a save can be persisted.</param>
+/// <param name="ReasonCode">
+/// Null when writable. Otherwise a stable code: <c>store_unavailable</c> — no database is configured,
+/// so limits come from appsettings and cannot be changed from the console.
+/// </param>
+public sealed record RateLimitWriteAvailability(bool Writable, string? ReasonCode)
+{
+    public const string StoreUnavailable = "store_unavailable";
+
+    public static RateLimitWriteAvailability Available { get; } = new(true, null);
 }

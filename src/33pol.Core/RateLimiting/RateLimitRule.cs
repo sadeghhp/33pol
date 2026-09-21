@@ -50,6 +50,34 @@ public readonly record struct RateLimitRule(
 
     /// <summary>Whether the governor is currently holding this rule below its configured rate.</summary>
     public bool IsAdapted => AdaptiveFactor < 1.0;
+
+    /// <summary>
+    /// The configured control that supplies this rule's <em>rate</em>, as a stable lower-case id:
+    /// a rule identity (<c>tenant:acme</c>, <c>model:gpt-4</c>, <c>global:*</c>), <c>plan:&lt;slug&gt;</c>,
+    /// or <c>default</c>. Null when the rule was built outside the plan resolver, in which case the
+    /// per-limit report does not hear about it.
+    /// </summary>
+    /// <remarks>
+    /// Distinct from <see cref="PartitionKey"/>, which names a bucket. One control can own many
+    /// buckets — every tenant on a plan has its own — and the tenant scope's bucket can be governed
+    /// by an override, a plan or the default tier, so the bucket key cannot say which number an
+    /// operator has to edit. Resolved when the plan is built, which is cached, so carrying it costs
+    /// the request path nothing.
+    /// </remarks>
+    public string? LimitId { get; init; }
+
+    /// <summary>
+    /// The control that supplies this rule's concurrent-stream cap. Differs from
+    /// <see cref="LimitId"/> only inside the tenant scope, where an override with no rate of its own
+    /// keeps the plan's rate and replaces only the cap.
+    /// </summary>
+    public string? StreamLimitId { get; init; }
+
+    /// <summary>
+    /// Whether this is the separate bucket a <c>model</c> rule keeps for anonymous callers. Same
+    /// control, different bucket, so it is reported as its own row.
+    /// </summary>
+    public bool AnonymousBucket { get; init; }
 }
 
 /// <summary>

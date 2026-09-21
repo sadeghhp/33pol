@@ -73,6 +73,7 @@ public sealed class AuthFailureRateLimitMiddleware
     private readonly IErrorResponseWriter _errors;
     private readonly IGatewayMetricsCollector _metrics;
     private readonly TimeProvider _timeProvider;
+    private readonly IRateLimitUsageTracker? _usage;
     private readonly bool _enabled;
     private readonly int _probeMultiplier;
 
@@ -83,8 +84,10 @@ public sealed class AuthFailureRateLimitMiddleware
         IErrorResponseWriter errors,
         IGatewayMetricsCollector metrics,
         TimeProvider? timeProvider = null,
-        IOptions<RateLimitingOptions>? options = null)
+        IOptions<RateLimitingOptions>? options = null,
+        IRateLimitUsageTracker? usage = null)
     {
+        _usage = usage;
         _next = next;
         _policyResolver = policyResolver;
         _rateLimitStore = rateLimitStore;
@@ -116,6 +119,7 @@ public sealed class AuthFailureRateLimitMiddleware
                 .ConfigureAwait(false))
         {
             _metrics.RecordRateLimitRejection("auth_failure", partitionKey, modelId: null);
+            _usage?.RecordAuthFailure(RateLimitAuthFailureStep.Refused, policy.Rpm);
             await context.WriteGatewayErrorAsync(
                 _errors.Write(GatewayErrorCode.RateLimitExceeded),
                 context.RequestAborted,
@@ -123,10 +127,13 @@ public sealed class AuthFailureRateLimitMiddleware
             return;
         }
 
+        _usage?.RecordAuthFailure(RateLimitAuthFailureStep.Checked, policy.Rpm);
+
         await _next(context).ConfigureAwait(false);
 
         if (WasCredentialRejected(context))
         {
+            _usage?.RecordAuthFailure(RateLimitAuthFailureStep.Charged, policy.Rpm);
             // Charged after the fact, against the clock the decision was made on.
             _rateLimitStore.DebitRequest(partitionKey, policy, now);
         }

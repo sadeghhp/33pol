@@ -1932,7 +1932,7 @@ html.wallboard .page-content { animation: wallboard-shift 900s steps(1) infinite
 .rl-stats { display: flex; gap: var(--space-6); margin-left: auto; flex-wrap: wrap; }
 /* Page-level actions sit on their own line under the switch and the stats, so the card reads
    state first, actions second, and wraps cleanly on a phone. */
-.rl-status-actions { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; flex: 1 1 100%; padding-top: var(--space-3); border-top: 1px solid var(--border); }
+.rl-status-actions { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; margin-left: auto; }
 .rl-status-actions .rl-seg { margin-bottom: 0; padding: 2px; }
 .rl-status-actions .rl-seg button { padding: 0.2rem 0.55rem; font-size: var(--text-xs); }
 .rl-lede { margin: var(--space-2) 0 0; }
@@ -1955,17 +1955,6 @@ html.wallboard .page-content { animation: wallboard-shift 900s steps(1) infinite
 .rl-switch.sm input:checked + .rl-switch-track::after { left: 14px; }
 
 /* Tiers */
-.rl-tiers { display: grid; grid-template-columns: repeat(auto-fill, minmax(13rem, 1fr)); gap: var(--space-3); }
-.rl-tier { display: flex; flex-direction: column; align-items: stretch; gap: var(--space-3); text-align: left; padding: var(--space-4); border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--bg-surface); box-shadow: var(--shadow-sm); cursor: pointer; font-family: inherit; color: var(--text-primary); transition: border-color var(--dur-fast), box-shadow var(--dur-fast); }
-.rl-tier:hover { border-color: var(--accent-border); box-shadow: var(--shadow-md); }
-.rl-tier:disabled { cursor: default; }
-.rl-tier:disabled:hover { border-color: var(--border); box-shadow: var(--shadow-sm); }
-.rl-tier-name { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-2); font-family: var(--font-mono); font-size: var(--text-sm); font-weight: var(--fw-semi); }
-.rl-tier-who { font-family: var(--font-sans); font-size: var(--text-2xs); color: var(--text-tertiary); font-weight: var(--fw-normal); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.rl-tier-nums { display: flex; gap: var(--space-4); flex-wrap: wrap; }
-.rl-tier-n { display: flex; flex-direction: column; min-width: 0; }
-.rl-tier-n b { font-family: var(--font-mono); font-size: var(--text-lg); font-weight: var(--fw-semi); font-variant-numeric: tabular-nums; line-height: 1.1; white-space: nowrap; }
-.rl-tier-n span { font-size: var(--text-2xs); color: var(--text-tertiary); margin-top: 0.15rem; }
 
 /* Rules */
 .rl-toolbar { margin-bottom: var(--space-3); row-gap: var(--space-2); flex-wrap: wrap; }
@@ -1983,7 +1972,7 @@ html.wallboard .page-content { animation: wallboard-shift 900s steps(1) infinite
 .rl-rules-table thead th { position: static; background: transparent; padding: 0.55rem 0.75rem; vertical-align: bottom; }
 .rl-rules-table td { padding: 0.65rem 0.75rem; vertical-align: middle; cursor: pointer; }
 .rl-col-on { width: 3.25rem; }
-.rl-col-who { width: 26%; } .rl-col-model { width: 20%; } .rl-col-limit { width: 13.5rem; } .rl-col-refused { width: 6.5rem; }
+.rl-col-who { width: 21%; } .rl-col-model { width: 13%; } .rl-col-limit { width: 12.75rem; } .rl-col-refused { width: 6rem; }
 .rl-col-chev { width: 3rem; text-align: right; }
 .rl-rules-table td.rl-col-on, .rl-rules-table td.rl-col-chev { cursor: default; }
 .rl-rules-table td.rl-col-on { padding-right: 0; }
@@ -2005,6 +1994,48 @@ html.wallboard .page-content { animation: wallboard-shift 900s steps(1) infinite
 .rl-th-sub { display: block; font-size: var(--text-2xs); font-weight: var(--fw-normal); text-transform: none; letter-spacing: 0; color: var(--text-secondary); margin-top: 0.1rem; }
 .rl-cell-label { display: none; }
 .rl-rules-foot { margin: var(--space-2) 0 0; }
+/* Draft beside production. The Limit cell is what Save would store; "was …" is the stored tier it
+   replaces; the Enforcing cell is production and is never restyled by an unsaved edit. */
+.rl-was { display: block; text-align: right; font-family: var(--font-mono); font-size: var(--text-2xs); color: var(--text-secondary); font-variant-numeric: tabular-nums; margin-top: 0.15rem; }
+.rl-draft-tag { vertical-align: 0.1em; margin-inline-start: 0.25rem; }
+.rl-col-who .rl-target { display: inline-block; max-width: calc(100% - 4.5rem); vertical-align: bottom; }
+.rl-enf-text { font-family: var(--font-mono); font-size: var(--text-xs); font-variant-numeric: tabular-nums; margin-inline-end: 0.35rem; }
+.rl-col-now .tag { margin-inline-end: 0.25rem; }
+.rl-th-age { font-family: var(--font-mono); }
+.rl-col-traffic { width: 12rem; font-size: var(--text-2xs); color: var(--text-secondary); white-space: nowrap; }
+.rl-rule-count { margin: 0 0 0 auto; white-space: nowrap; }
+/* The page header is sticky, so a section scrolled to by its link must stop below it. */
+.rl-section { scroll-margin-top: 4.5rem; }
+.rl-sort-select { display: none; }
+.rl-more { margin: var(--space-3) 0 0; justify-content: center; }
+/* The per-subject context column is the first to go: it is in the rule drawer too. */
+@media (max-width: 80rem) { .rl-rules-table th.rl-col-traffic, .rl-rules-table td.rl-col-traffic { display: none; } }
+
+/* Summary strip and section links */
+.rl-opsum { flex: 1 1 100%; margin: 0; padding-top: var(--space-3); border-top: 1px solid var(--border); gap: var(--space-2); }
+.rl-sum-stat { flex: 1 1 10rem; flex-direction: column; align-items: flex-start; gap: 0.1rem; font: inherit; font-size: var(--text-xs); color: var(--text-primary); cursor: pointer; text-align: left; }
+.rl-sum-stat:hover { border-color: var(--border-strong); background: var(--bg-hover); }
+.rl-sum-stat:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.rl-sum-stat .ms-value { font-size: var(--text-md); }
+.rl-sum-stat .ms-foot { font-size: var(--text-2xs); color: var(--text-secondary); font-family: var(--font-mono); }
+.rl-sum-stat.live .ms-value { color: var(--live-text); }
+.rl-health { font-weight: var(--fw-normal); color: var(--text-secondary); }
+.rl-health.warn { color: var(--warn); }
+.rl-fresh { flex: 1 1 100%; margin: 0; font-size: var(--text-2xs); font-family: var(--font-mono); color: var(--text-secondary); min-height: 1rem; }
+.rl-anchors { display: flex; flex-wrap: wrap; gap: var(--space-4); margin: var(--space-3) 0 0; }
+.rl-protect-now { font-size: var(--text-xs); }
+.rl-protect-note { margin: var(--space-2) 0 0; }
+.rl-force-label { text-transform: uppercase; letter-spacing: 0.06em; font-family: var(--font-mono); font-size: var(--text-2xs); }
+.rl-after-save { margin-top: 0.3rem; }
+
+/* Activity: subject load against the last limit seen (a pressure hint, never a rule's utilisation). */
+.rl-usage-tools { margin: 0 0 var(--space-2); }
+.rl-col-load { width: 11rem; }
+.rl-load { display: flex; align-items: center; gap: var(--space-2); }
+.rl-load .load-track { flex: 1 1 auto; min-width: 3rem; }
+.rl-load .num { flex: none; min-width: 3rem; text-align: right; font-family: var(--font-mono); font-size: var(--text-xs); font-variant-numeric: tabular-nums; }
+.rl-preview-row button.k, .rl-trans .what button.mono { text-align: left; color: var(--text-primary); }
+.rl-preview-row button.k:hover, .rl-trans .what button.mono:hover { color: var(--accent-text); }
 .rl-nums { font-family: var(--font-mono); font-size: var(--text-xs); font-variant-numeric: tabular-nums; }
 .rl-until { display: block; font-size: var(--text-2xs); color: var(--text-secondary); font-family: var(--font-mono); overflow-wrap: anywhere; margin-top: 0.15rem; }
 /* A sortable header is a button inside the th — focusable and announced — rather than a click
@@ -2027,16 +2058,6 @@ th.num .th-sort { flex-direction: row-reverse; }
   .rl-chips .preset, .rl-seg button { min-height: 36px; }
 }
 /* Protective limits: two fixed cards, never a list. */
-.rl-protect { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr)); gap: var(--space-3); }
-.rl-protect .rl-protect-card { display: flex; flex-direction: column; gap: var(--space-3); padding: var(--space-4); margin: 0; }
-.rl-protect-head { display: flex; align-items: flex-start; gap: var(--space-3); }
-.rl-protect-head > .icon { color: var(--text-tertiary); flex: none; margin-top: 2px; }
-.rl-protect-name { flex: 1; min-width: 0; }
-.rl-protect-name b { display: block; font-size: var(--text-sm); font-weight: var(--fw-semi); }
-.rl-protect-name span { display: block; font-size: var(--text-xs); color: var(--text-secondary); }
-.rl-protect-body { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; }
-.rl-protect-body .hint { margin: 0; }
-.rl-protect-body .spacer { flex: 1; }
 .rl-disclose { margin-top: var(--space-3); font-size: var(--text-xs); color: var(--text-secondary); }
 .rl-disclose summary { cursor: pointer; color: var(--text-secondary); }
 .rl-disclose summary:hover { color: var(--text-primary); }
@@ -2097,11 +2118,23 @@ th.num .th-sort { flex-direction: row-reverse; }
 .rl-delta.up { color: var(--live-text); } .rl-delta.down { color: var(--warn); }
 
 /* Sticky save bar */
-.rl-savebar { flex-wrap: wrap; position: sticky; bottom: var(--space-3); z-index: 5; margin-bottom: var(--space-4); display: flex; align-items: center; gap: var(--space-3); margin-top: var(--space-6); padding: var(--space-3) var(--space-5); border: 1px solid var(--accent-border); border-radius: var(--r-lg); background: var(--bg-elevated); box-shadow: var(--shadow-lg); }
+.rl-savebar { position: sticky; bottom: var(--space-3); z-index: 5; margin-bottom: var(--space-4); margin-top: var(--space-6); padding: var(--space-3) var(--space-5); border: 1px solid var(--accent-border); border-radius: var(--r-lg); background: var(--bg-elevated); box-shadow: var(--shadow-lg); }
+.rl-savebar-row { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; }
+.rl-savebar .field-error { margin: 0 0 var(--space-2); }
 .rl-savebar-text { font-size: var(--text-sm); }
 .rl-savebar-text small { display: block; font-size: var(--text-2xs); color: var(--text-tertiary); }
-.rl-review { margin-top: var(--space-3); font-size: var(--text-sm); }
-.rl-review ul { margin: 0; padding-left: 1.2rem; }
+/* The review opens inside the bar, above its buttons, so it appears where the operator is looking
+   whatever the scroll position; it scrolls on its own rather than pushing the buttons off screen. */
+.rl-review { max-height: 50vh; overflow-y: auto; margin-bottom: var(--space-3); padding-bottom: var(--space-3); border-bottom: 1px solid var(--border); font-size: var(--text-sm); }
+.rl-review .rl-h4 { margin: var(--space-2) 0 var(--space-1); }
+.rl-diff { list-style: none; margin: 0; padding: 0; }
+.rl-diff-item { display: flex; align-items: baseline; gap: var(--space-3); padding: 0.3rem 0; border-bottom: 1px solid var(--border); }
+.rl-diff-item:last-child { border-bottom: none; }
+.rl-diff-item .tag { flex: none; min-width: 5.5rem; text-align: center; }
+.rl-diff-what { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.rl-diff-what b { font-weight: var(--fw-semi); }
+.rl-diff-change { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-secondary); font-variant-numeric: tabular-nums; margin-inline-start: 0.35rem; }
+.rl-diff-item .rl-link { flex: none; }
 
 /* Drawers */
 .drawer.rl-drawer { width: min(36rem, 100vw); }
@@ -2118,9 +2151,13 @@ th.num .th-sort { flex-direction: row-reverse; }
 .rl-win { display: grid; grid-template-columns: 1fr auto; gap: 0.2rem 1rem; padding: 0.7rem 0.9rem; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--bg-surface); text-align: left; font: inherit; color: var(--text-primary); cursor: pointer; width: 100%; }
 .rl-win:hover { border-color: var(--accent-border); }
 .rl-win.active { border-color: var(--live-border); background: var(--live-soft); }
-.rl-win.muted { opacity: 0.65; }
+/* Expired or skipped: stepped down with colour tokens, not opacity, which took the text below contrast. */
+.rl-win.muted { background: var(--bg-sunken); }
+.rl-win.muted .t, .rl-win.muted .rl-win-sentence { color: var(--text-secondary); }
 .rl-win .t { display: flex; align-items: center; gap: 0.5rem; font-weight: var(--fw-semi); font-size: var(--text-sm); }
 .rl-win .w { font-size: var(--text-xs); color: var(--text-secondary); grid-column: 1; }
+.rl-win .rl-win-sentence { grid-column: 1 / -1; font-family: var(--font-mono); color: var(--text-primary); overflow-wrap: anywhere; }
+.rl-win .s { grid-row: 1; }
 .rl-win .n { font-family: var(--font-mono); font-size: var(--text-sm); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; grid-row: 1; grid-column: 2; }
 .rl-win .s { grid-column: 2; text-align: right; }
 /* The drawer pads its scroll area, so a footer stuck at bottom: 0 leaves that padding's worth of
@@ -2195,15 +2232,18 @@ th.num .th-sort { flex-direction: row-reverse; }
 .rl-activity-head { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--space-3); flex-wrap: wrap; margin-top: var(--space-6); }
 .rl-activity-head .rl-subhead { margin: 0; }
 .rl-subhead .muted, .rl-subhead .tag { font-weight: var(--fw-normal); }
-.rl-asof { font-family: var(--font-mono); color: var(--text-secondary); margin-inline-start: 0.35rem; }
+.rl-asof { font-family: var(--font-mono); font-size: var(--text-2xs); color: var(--text-secondary); margin-inline-start: 0.35rem; }
 .rl-cumulative { margin-top: var(--space-6); padding: var(--space-4); border: 1px solid var(--border); border-radius: var(--r-md); background: var(--bg-sunken); }
 .rl-cumulative .rl-subhead { margin-top: 0; }
 .rl-cumulative .table-wrap { box-shadow: none; }
 .rl-activity-foot { margin: var(--space-4) 0 0; }
-.t-rl-usage { min-width: 34rem; }
+.t-rl-usage { min-width: 52rem; }
+.t-rl-usage th.num { width: 7.5rem; }
+.t-rl-usage th.cell-actions { width: 5.5rem; }
+.t-rl-usage th:first-child { width: auto; }
 .t-rl-refusals { min-width: 24rem; }
 .t-rl-adaptive { min-width: 30rem; }
-.t-rl-usage th:first-child, .t-rl-refusals th:first-child { width: 40%; }
+.t-rl-refusals th:first-child { width: 40%; }
 .rl-subject { font-weight: var(--fw-medium); font-size: var(--text-sm); overflow-wrap: anywhere; text-align: start; }
 .rl-refused-some { color: var(--warn); }
 .rl-usage-defs { margin: var(--space-3) 0 0; }
@@ -2248,6 +2288,16 @@ th.num .th-sort { flex-direction: row-reverse; }
   .rl-savebar { padding: var(--space-3); }
   .rl-savebar .action { flex: 1 1 auto; justify-content: center; }
   .rl-savebar .action.rl-primary { flex: 1 1 100%; order: 3; }
+  .rl-review { max-height: 60vh; }
+  .rl-diff-item { flex-wrap: wrap; row-gap: 0.15rem; }
+  .rl-diff-item .tag { min-width: 0; }
+  .rl-sort-select { display: inline-flex; }
+  .rl-rule-count { margin-left: 0; flex: 1 1 100%; }
+  .rl-was { text-align: left; }
+  .rl-status-actions { margin-left: 0; }
+  .rl-sum-stat { flex: 1 1 calc(50% - var(--space-2)); }
+  .rl-col-load .load-track { display: none; }
+  .rl-col-load { width: auto; }
   .rl-status-actions .action { flex: 0 1 auto; }
   .rl-activity-controls { width: 100%; }
   .rl-cal-controls select { flex: 1 1 8rem; min-width: 0; }
@@ -2305,3 +2355,111 @@ th.num .th-sort { flex-direction: row-reverse; }
 :lang(fa) .rl-help-body, :lang(fa) .rl-help-section, :lang(fa) .rl-help-scope { line-height: 1.9; }
 /* The language toggle keeps its own script per button, whichever way the block around it runs. */
 .rl-lang button[lang="en"] { font-family: var(--font-sans); }
+
+/* Must follow the narrow-width card layout above, which sets every cell to display:block: the
+   subject-traffic cell has no grid area there and would otherwise be auto-placed into the card. */
+@media (max-width: 80rem) { .rl-rules-table td.rl-col-traffic, .rl-rules-table th.rl-col-traffic { display: none; } }
+
+/* Baselines: tiers and protective limits as compact tables (same cells as the rules list). */
+.t-rl-tiers { min-width: 24rem; }
+.t-rl-protect { min-width: 30rem; }
+.t-rl-tiers th.num, .t-rl-protect th.num { width: 5.5rem; }
+.t-rl-tiers th.cell-actions { width: 3.5rem; }
+.t-rl-protect th.cell-actions { width: 7rem; }
+.t-rl-protect th.rl-col-on { width: 3.5rem; }
+.rl-base-row td, .rl-base-row th { vertical-align: top; }
+.t-rl-tiers .rl-base-row td, .t-rl-tiers .rl-base-row th { cursor: pointer; vertical-align: middle; }
+.rl-base-row td.num { font-size: var(--text-sm); font-weight: var(--fw-semi); color: var(--text-primary); }
+tbody th.rl-base-name { position: static; background: transparent; text-align: left; text-transform: none; letter-spacing: 0; font-family: var(--font-mono); font-size: var(--text-sm); font-weight: var(--fw-semi); color: var(--text-primary); white-space: normal; border-bottom: 1px solid var(--border); padding: 0.65rem 0.75rem; }
+tbody tr:last-child th.rl-base-name { border-bottom: none; }
+.rl-base-name .rl-scope, .rl-base-name .rl-protect-now, .rl-base-name .rl-protect-note { display: block; font-family: var(--font-sans); font-weight: var(--fw-normal); white-space: normal; margin-top: 0.2rem; }
+.rl-base-name .rl-protect-note { margin-bottom: 0; max-width: var(--measure); }
+.rl-was-inline { font-family: var(--font-mono); font-size: var(--text-2xs); color: var(--text-secondary); }
+
+/* Activity tables at narrow widths: the secondary columns fold into a second line under the
+   subject rather than squeezing the table or scrolling it sideways. The line is display:none on
+   wide screens and the columns are display:none on narrow ones, so each reader gets one copy. */
+.rl-narrow-line { display: none; }
+@media (max-width: 48rem) {
+  .t-rl-usage, .t-rl-adaptive, .t-rl-refusals { min-width: 0; }
+  .t-rl-usage .rl-wide-col, .t-rl-adaptive .rl-wide-col { display: none; }
+  .rl-narrow-line { display: block; font-family: var(--font-mono); font-size: var(--text-2xs); color: var(--text-secondary); margin-top: 0.2rem; white-space: normal; overflow-wrap: anywhere; }
+  .t-rl-usage th.num { width: 5.9rem; }
+  .t-rl-usage th, .t-rl-refusals th { letter-spacing: 0; padding-left: 0.4rem; padding-right: 0.4rem; }
+  .t-rl-usage th.cell-actions { width: 2.75rem; }
+  .t-rl-usage .rl-scope { white-space: normal; overflow-wrap: anywhere; }
+  .t-rl-usage .row-actions { flex-direction: column; gap: 0.15rem; }
+  .t-rl-usage td, .t-rl-refusals td { overflow-wrap: anywhere; }
+  .t-rl-usage .rl-subject, .t-rl-refusals .rl-subject { white-space: normal; overflow-wrap: anywhere; }
+  .t-rl-refusals th:first-child { width: 55%; }
+}
+.rl-sum-warn { flex: 1 1 100%; margin: 0; }
+@media (max-width: 80rem) { .rl-traffic-note { display: none; } }
+
+/* A visually-hidden span is position:absolute; inside a scroller with no positioned ancestor it is
+   laid out against the page, escapes the scroller's clip, and widens the document at narrow widths. */
+.rl-page .table-wrap, .rl-chips { position: relative; }
+
+/* Phone width: a subject's name needs the whole line, so each Activity row becomes two — the
+   subject (with its second line) above, its counts and actions below. The header row is kept for
+   assistive tech and the counts carry their own word. `:not(.rl-wide-col)` matters: those cells are
+   display:none from the block above and a blanket display:block would bring them back. */
+.rl-xs-label { display: none; }
+@media (max-width: 30rem) {
+  .t-rl-usage, .t-rl-usage tbody { display: block; }
+  .t-rl-usage thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  .t-rl-usage tr { display: grid; grid-template-columns: auto auto minmax(0, 1fr); align-items: center; column-gap: var(--space-4); row-gap: 0.3rem; padding: 0.65rem 0.75rem; border-bottom: 1px solid var(--border); }
+  .t-rl-usage tr:last-child { border-bottom: none; }
+  .t-rl-usage td:not(.rl-wide-col) { display: block; padding: 0; border-bottom: none; width: auto; text-align: left; }
+  .t-rl-usage td:first-child { grid-column: 1 / -1; }
+  .t-rl-usage td.cell-actions { justify-self: end; }
+  .t-rl-usage .row-actions { flex-direction: row; }
+  .rl-xs-label { display: inline; font-family: var(--font-sans); color: var(--text-secondary); }
+}
+
+/* ---- Rate limits: per-limit activity, trend, tracker completeness, history ---- */
+.rl-act-sub { display: block; font-size: var(--text-xs); color: var(--text-muted); font-variant-numeric: tabular-nums; white-space: normal; }
+.rl-act-bar { margin-top: 3px; min-width: 4rem; }
+.rl-rules-table td.rl-act-near > span:first-of-type + span { font-weight: 600; }
+.rl-protect-act { display: block; margin-top: var(--space-1); font-size: var(--text-sm); font-weight: 400; }
+.rl-protect-act .rl-act-sub { display: inline; margin-left: var(--space-2); }
+.rl-tracker-note { margin: var(--space-2) 0; }
+.rl-trend { display: flex; align-items: center; gap: var(--space-3); margin-top: var(--space-2); min-width: 0; }
+.rl-trend-svg { flex: none; width: 14rem; max-width: 100%; height: 2rem; overflow: visible; }
+.rl-trend.in-drawer { margin: var(--space-2) 0; }
+.rl-trend.in-drawer .rl-trend-svg { width: 100%; max-width: 20rem; height: 2.75rem; }
+.rl-trend.in-drawer { flex-direction: column; align-items: stretch; gap: var(--space-1); }
+.rl-trend.in-drawer .rl-trend-text { overflow-wrap: anywhere; }
+.rl-trend-text .ms-label { display: inline; white-space: normal; }
+.rl-trend.in-drawer, .rl-trend.in-drawer .rl-trend-text { max-width: 100%; min-width: 0; }
+.rl-trend-text .hint { display: block; }
+.rl-trend-text { min-width: 0; font-size: var(--text-xs); color: var(--text-muted); }
+.rl-trend-all { stroke: var(--text-secondary); stroke-width: 1.25; }
+.rl-trend-refused { stroke: var(--error); }
+.rl-trend-refused-fill { fill: var(--error); opacity: .14; }
+.rl-trend-key i { display: inline-block; width: .65rem; height: 2px; margin: 0 .25rem 0 .5rem; vertical-align: middle; background: var(--text-secondary); }
+.rl-trend-key i.refused { background: var(--error); }
+.rl-limit-act { margin-bottom: var(--space-3); }
+.rl-h5 { margin: 0 0 var(--space-1); font-size: var(--text-sm); font-weight: 600; }
+.rl-limit-act-head { margin: 0; }
+.rl-limit-act-head .rl-act-sub { display: inline; margin-left: var(--space-2); }
+.rl-limit-defs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-2) var(--space-3); margin: var(--space-2) 0; }
+.rl-limit-defs dt { font-size: var(--text-xs); color: var(--text-muted); }
+.rl-limit-defs dd { margin: 0; font-variant-numeric: tabular-nums; font-weight: 600; }
+.rl-rule-hist, .rl-hist, .rl-hist-changes { list-style: none; margin: 0; padding: 0; }
+.rl-rule-hist li { padding: var(--space-1) 0; font-size: var(--text-sm); }
+.rl-rule-hist .hint { display: block; }
+.rl-hist-toggle { display: inline-flex; align-items: center; gap: var(--space-1); padding: 0; border: 0; background: none; font: inherit; color: inherit; cursor: pointer; }
+.rl-hist-toggle .icon { transition: transform var(--dur-fast); }
+.rl-hist-toggle[aria-expanded="true"] .icon { transform: rotate(90deg); }
+.rl-hist-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--r-sm); }
+.rl-hist-entry { padding: var(--space-2) 0; border-top: 1px solid var(--border); }
+.rl-hist-entry:first-child { border-top: 0; }
+.rl-hist-entry.refused .rl-hist-head b { color: var(--error); }
+.rl-hist-head .hint { display: block; }
+.rl-hist-changes { margin-top: var(--space-1); font-size: var(--text-sm); }
+.rl-hist-changes li { padding: 2px 0; overflow-wrap: anywhere; }
+@media (max-width: 48rem) {
+  .rl-trend { flex-direction: column; align-items: flex-start; gap: var(--space-1); }
+  .rl-limit-defs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

@@ -280,15 +280,18 @@ test('picking a window loads it', async t => {
     app.apiJson = async url => { urls.push(url); return report({ windowMinutes: 15 }); };
     app.setRateLimitUsageMinutes(15);
     await new Promise(resolve => setImmediate(resolve));
-    assert.equal(urls.length, 1);
-    assert.match(urls[0], /minutes=15&take=200/);
+    // One report, and the trend read from the same counters for the same window.
+    const usage = urls.filter(u => !/timeseries/.test(u));
+    assert.equal(usage.length, 1);
+    assert.match(usage[0], /minutes=15&take=200/);
+    assert.deepEqual(urls.filter(u => /timeseries/.test(u)), ['/admin/api/rate-limits/usage/timeseries?minutes=15&bucketMinutes=1']);
     assert.equal(app.rateLimitUsage.windowMinutes, 15);
   });
 
   await t.test('the segmented control goes through the same path', async () => {
     const app = loadedApp();
     let calls = 0;
-    app.apiJson = async () => { calls++; return report({ windowMinutes: 180 }); };
+    app.apiJson = async url => { if (!/timeseries/.test(url)) calls++; return report({ windowMinutes: 180 }); };
     app.rlActivityView.windowRows.find(w => w.key === 180).select();
     await new Promise(resolve => setImmediate(resolve));
     assert.equal(calls, 1);
@@ -324,7 +327,9 @@ test('a failed refresh never blanks what is already known', async t => {
     assert.equal(app.rlRuleUsageView('model', 'gpt-4').stale, true);
     // The join still answers from the kept report.
     assert.equal(app.rlRefusalsFor('model', 'gpt-4').hits, 9);
-    assert.match(HTML, /x-show="rlActivityView\.stale" role="alert">.*Retry<\/button>/);
+    // role="status", not "alert": the background poll retries every 30 s, and an assertive region
+    // would interrupt a screen-reader user each time it failed again.
+    assert.match(HTML, /x-show="rlActivityView\.stale" role="status">.*Retry<\/button>/);
   });
 
   await t.test('a later success clears the stale mark', async () => {
@@ -355,5 +360,78 @@ test('a failed refresh never blanks what is already known', async t => {
     await app.loadRateLimitUsage();
     assert.equal(app.rlActivityView.unavailable, true);
     assert.equal(app.rlActivityView.failedEmpty, false);
+  });
+});
+
+test('activity refreshes itself while the page is open, and says how old it is', async t => {
+  const onPage = () => {
+    const app = loadedApp();
+    app.tab = 'settings';
+    app.settingsSubTab = 'limits';
+    return app;
+  };
+
+  await t.test('due every 15th poll tick (30 s) on this page only', () => {
+    const app = onPage();
+    assert.equal(app.rateLimitActivityPollDue(15), true);
+    assert.equal(app.rateLimitActivityPollDue(30), true);
+    assert.equal(app.rateLimitActivityPollDue(0), false, 'entering the page already loaded it');
+    assert.equal(app.rateLimitActivityPollDue(14), false);
+    app.settingsSubTab = 'cors';
+    assert.equal(app.rateLimitActivityPollDue(15), false);
+    app.settingsSubTab = 'limits';
+    app.tab = 'dashboard';
+    assert.equal(app.rateLimitActivityPollDue(15), false);
+  });
+
+  await t.test('never doubles a request that is already out, and respects the switch', () => {
+    const app = onPage();
+    app.rateLimitUsageLoading = true;
+    assert.equal(app.rateLimitActivityPollDue(15), false);
+    app.rateLimitUsageLoading = false;
+    app.rlUsageAutoRefresh = false;
+    assert.equal(app.rateLimitActivityPollDue(15), false);
+  });
+
+  await t.test('a gateway without a tracker is not asked again every 30 seconds', async () => {
+    const app = onPage();
+    app.apiJson = async () => { throw Object.assign(new Error('not enabled'), { status: 503 }); };
+    await app.loadRateLimitUsage();
+    assert.equal(app.rateLimitActivityPollDue(15), false);
+  });
+
+  await t.test('a poll refresh leaves an edited draft exactly as it was', async () => {
+    const app = onPage();
+    app.rlDraft.rules[0].rpm = 123;
+    const draft = JSON.stringify(app.rlDraft);
+    app.apiJson = async () => report({ windowMinutes: 60 });
+    await app.loadRateLimitUsage();
+    assert.equal(JSON.stringify(app.rlDraft), draft);
+    assert.equal(app.rateLimitsDirty, true);
+  });
+
+  await t.test('the age is stated, grows with the clock, and a failed refresh says the figures are old', async () => {
+    const app = onPage();
+    app.rateLimitUsageLoadedAt = 1_000_000;
+    app._nowTick = 1_000_000 + 2_000;
+    assert.match(app.rlActivityFreshView.text, /^Activity updated just now · refreshing every 30 s$/);
+    app._nowTick = 1_000_000 + 42_000;
+    assert.match(app.rlActivityFreshView.text, /updated 42 s ago/);
+    assert.equal(app.rlActivityFreshView.short, '42 s ago');
+    app._nowTick = 1_000_000 + 5 * 60_000;
+    assert.match(app.rlActivityFreshView.text, /updated 5 min ago/);
+
+    app.apiJson = async () => { throw Object.assign(new Error('HTTP 500'), { status: 500 }); };
+    await app.loadRateLimitUsage();
+    assert.equal(app.rlActivityFreshView.stale, true);
+    assert.match(app.rlActivityFreshView.text, /the last refresh failed, showing the previous result/);
+    assert.match(app.rlActivityFreshView.short, /^stale · /);
+    app.rlUsageAutoRefresh = false;
+  });
+
+  await t.test('the age sits where the numbers are used: the Activity header and the Refused column', () => {
+    assert.match(HTML, /x-text="rlActivityFreshView\.text"/);
+    assert.match(HTML, /class="rl-th-sub rl-th-age" x-show="rlActivityFreshView\.short"/);
+    assert.match(HTML, /x-model="mdl\.rlUsageAutoRefresh" \/> Auto-refresh/);
   });
 });

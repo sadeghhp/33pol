@@ -100,6 +100,49 @@ public sealed class FileAuditLogReaderTests : IDisposable
         result.ParseErrors.Should().Be(0);
     }
 
+    [Fact]
+    public async Task ReadRecent_WithAPrefix_ReturnsOnlyMatchingActions_AndSaysWhetherMoreExist()
+    {
+        using var logger = CreateLogger();
+        for (var i = 0; i < 3; i++)
+        {
+            logger.LogAdminAction("rate_limits.update", new AuditLogEntry("t", "k", new { Version = i }));
+            logger.LogAdminAction("api_key.create", new AuditLogEntry("t", "k", null));
+        }
+
+        var reader = new FileAuditLogReader(logger);
+        var page = await reader.ReadRecentAsync(new AuditLogQuery(2, "rate_limits."));
+        var all = await reader.ReadRecentAsync(new AuditLogQuery(10, "rate_limits."));
+
+        page.Entries.Should().HaveCount(2).And.OnlyContain(e => e.Action == "rate_limits.update");
+        page.HasMore.Should().BeTrue();
+        all.Entries.Should().HaveCount(3);
+        all.HasMore.Should().BeFalse();
+        all.ScanLimitReached.Should().BeFalse();
+    }
+
+    /// <summary>
+    /// The trail is shared with every other admin action, so a filter that matches little must not
+    /// be allowed to read all of it. Stopping early is reported, because "nothing older" and "did
+    /// not look further" are different answers.
+    /// </summary>
+    [Fact]
+    public async Task ReadRecent_StopsAtTheScanCeiling_AndSaysSo()
+    {
+        using var logger = CreateLogger();
+        logger.LogAdminAction("rate_limits.update", new AuditLogEntry("t", "k", null));
+        for (var i = 0; i < 20; i++)
+        {
+            logger.LogAdminAction("api_key.create", new AuditLogEntry("t", "k", null));
+        }
+
+        var result = await new FileAuditLogReader(logger)
+            .ReadRecentAsync(new AuditLogQuery(5, "rate_limits.", MaxScanned: 10));
+
+        result.Entries.Should().BeEmpty();
+        result.ScanLimitReached.Should().BeTrue();
+    }
+
     public void Dispose()
     {
         try

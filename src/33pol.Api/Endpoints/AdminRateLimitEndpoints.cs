@@ -21,6 +21,8 @@ public static class AdminRateLimitEndpoints
         group.MapGet("/", GetAsync);
         group.MapPut("/", PutAsync);
         group.MapGet("/usage", GetUsageAsync);
+        group.MapGet("/usage/timeseries", GetUsageSeries);
+        group.MapGet("/history", GetHistoryAsync);
         group.MapGet("/schedule", GetSchedule);
         group.MapPost("/schedule/preview", PreviewSchedule);
         group.MapPost("/windows/preview", PreviewWindow);
@@ -254,6 +256,92 @@ public static class AdminRateLimitEndpoints
         return Results.Json(tracker.BuildReport(minutes ?? 60, take ?? 25, now));
     }
 
+    /// <summary>
+    /// Per-minute history from the usage counters: gateway-wide, or for one configured limit.
+    /// </summary>
+    /// <remarks>
+    /// <c>minutes</c> is 1–180 (default 60) and <c>bucketMinutes</c> 1–60 (default 1); out-of-range
+    /// values are refused rather than clamped, because a chart drawn over a different range than the
+    /// one asked for is wrong in a way nobody would notice. <c>limitId</c> is a limit id from the
+    /// usage report; <c>anonymousBucket=true</c> selects a model rule's anonymous bucket. An unknown
+    /// limit is 404, which is different from a known one with no traffic (200, zeros).
+    /// </remarks>
+    private static IResult GetUsageSeries(
+        IRateLimitUsageTracker? tracker,
+        TimeProvider? timeProvider,
+        [FromQuery] int? minutes,
+        [FromQuery] int? bucketMinutes,
+        [FromQuery] string? limitId,
+        [FromQuery] bool? anonymousBucket)
+    {
+        if (tracker is null)
+        {
+            return Results.Json(
+                new { message = "Rate-limit usage tracking is not enabled in this deployment." },
+                statusCode: 503);
+        }
+
+        var window = minutes ?? 60;
+        var width = bucketMinutes ?? 1;
+        if (window is < 1 or > 180)
+        {
+            return Results.BadRequest(new { message = "minutes must be between 1 and 180." });
+        }
+
+        if (width is < 1 or > 60)
+        {
+            return Results.BadRequest(new { message = "bucketMinutes must be between 1 and 60." });
+        }
+
+        if (limitId is { Length: > 512 })
+        {
+            return Results.BadRequest(new { message = "limitId is too long." });
+        }
+
+        var now = (timeProvider ?? TimeProvider.System).GetUtcNow();
+        var id = string.IsNullOrWhiteSpace(limitId) ? null : limitId.Trim();
+        var series = tracker.BuildSeries(window, width, id, anonymousBucket ?? false, now);
+
+        return series is null
+            ? Results.NotFound(new { message = "No activity has been recorded for that limit." })
+            : Results.Json(series);
+    }
+
+    /// <summary>
+    /// Rate-limit changes and refused attempts from the admin audit trail, newest first.
+    /// </summary>
+    /// <remarks>
+    /// <c>take</c> is 1–100 (default 20). <c>before</c> pages backwards: pass the previous page's
+    /// <c>nextBefore</c>. Read from the same file every other admin action is recorded in — this is
+    /// a filtered view of it, not a second history.
+    /// </remarks>
+    private static async Task<IResult> GetHistoryAsync(
+        IAuditLogReader? reader,
+        [FromQuery] int? take,
+        [FromQuery] DateTimeOffset? before,
+        CancellationToken cancellationToken)
+    {
+        if (reader is null || !reader.IsAvailable)
+        {
+            return Results.Json(new AdminRateLimitHistoryDto { Available = false });
+        }
+
+        var limit = Math.Clamp(take ?? 20, 1, 100);
+        var read = await reader
+            .ReadRecentAsync(new AuditLogQuery(limit, "rate_limits.", before), cancellationToken)
+            .ConfigureAwait(false);
+
+        var entries = read.Entries.Select(AdminRateLimitHistoryEntryDto.FromAudit).ToArray();
+        return Results.Json(new AdminRateLimitHistoryDto
+        {
+            Available = true,
+            Entries = entries,
+            HasMore = read.HasMore,
+            NextBefore = read.HasMore && entries.Length > 0 ? entries[^1].TimestampUtc : null,
+            ScanLimitReached = read.ScanLimitReached,
+        });
+    }
+
     /// <remarks>
     /// The configuration version goes out as a weak <c>ETag</c>. A client that sends it back as
     /// <c>If-Match</c> on the PUT is telling the gateway which version its change is based on, which is
@@ -267,7 +355,11 @@ public static class AdminRateLimitEndpoints
         _ = cancellationToken;
         var current = service.GetCurrent();
         httpContext.Response.Headers.ETag = FormatETag(current.Version);
-        return Task.FromResult(Results.Json(ToDto(current)));
+        var dto = ToDto(current);
+        var availability = service.GetWriteAvailability();
+        dto.Writable = availability.Writable;
+        dto.ReadOnlyReason = availability.ReasonCode;
+        return Task.FromResult(Results.Json(dto));
     }
 
     /// <summary>Weak, because the body is a JSON projection rather than a byte-exact resource.</summary>
@@ -336,7 +428,9 @@ public static class AdminRateLimitEndpoints
         // audit entry used to carry only counts, and because a rule set is replaced wholesale an
         // unchanged count says nothing about whether anything changed — so "why was this tenant
         // unlimited last Tuesday" had no answer in the trail.
-        var changes = DescribeChanges(service.GetCurrent().Rules, rules);
+        var stored = service.GetCurrent();
+        var changes = DescribeChanges(stored.Rules, rules);
+        var changedRules = changes?.Select(static c => c.Item).ToArray();
 
         var result = await service
             .UpdateAsync(
@@ -358,7 +452,10 @@ public static class AdminRateLimitEndpoints
             // control, and a trail that records only what succeeded cannot show one.
             audit.LogAdminAction(
                 "rate_limits.update_refused",
-                new AuditLogEntry(tenantId, apiKeyId, new { result.StatusCode, result.Message }));
+                new AuditLogEntry(
+                    tenantId,
+                    apiKeyId,
+                    new { result.StatusCode, result.Message, BasedOnVersion = expectedVersion }));
 
             return Results.Json(new { message = result.Message }, statusCode: result.StatusCode);
         }
@@ -378,7 +475,11 @@ public static class AdminRateLimitEndpoints
                     PlanCount = request.Plans.Count,
                     RuleCount = rules?.Length,
                     WindowCount = rules?.Sum(static r => r.Windows.Count),
-                    Changes = changes,
+                    Changes = changes?.Select(static c => c.Text).ToArray(),
+                    ChangedRules = changedRules,
+                    result.Version,
+                    BasedOnVersion = expectedVersion,
+                    PreviousVersion = stored.Version,
                 }));
 
         // The version the write produced, in both places a client looks. Without it the only way
@@ -402,7 +503,7 @@ public static class AdminRateLimitEndpoints
     /// not a change. Window counts are reported rather than the windows themselves: a schedule diff
     /// would dominate the entry, and the rule's identity is what an investigation starts from.
     /// </remarks>
-    private static IReadOnlyList<string>? DescribeChanges(
+    private static IReadOnlyList<(string Text, AdminRateLimitRuleChangeDto Item)>? DescribeChanges(
         IReadOnlyList<RateLimitRuleDefinition> stored,
         IReadOnlyList<RateLimitRuleDefinition>? submitted)
     {
@@ -417,17 +518,29 @@ public static class AdminRateLimitEndpoints
             .GroupBy(static r => r.Identity, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(static g => g.Key, static g => g.First(), StringComparer.OrdinalIgnoreCase);
 
-        var changes = new List<string>();
+        var changes = new List<(string Text, AdminRateLimitRuleChangeDto Item)>();
+
+        // The same fact twice on purpose. The sentence is what someone grepping the file reads and
+        // what existing queries match; the record is what the console joins to a rule by id, so it
+        // never has to take a sentence apart to find out which rule it was about.
+        void Add(string text, string kind, string identity, RateLimitRuleDefinition? old, RateLimitRuleDefinition? rule) =>
+            changes.Add((text, new AdminRateLimitRuleChangeDto
+            {
+                Kind = kind,
+                RuleId = identity.ToLowerInvariant(),
+                Before = old is null ? null : Describe(old),
+                After = rule is null ? null : Describe(rule),
+            }));
 
         foreach (var (identity, rule) in after)
         {
             if (!before.TryGetValue(identity, out var old))
             {
-                changes.Add($"added {identity} = {Describe(rule)}");
+                Add($"added {identity} = {Describe(rule)}", "added", identity, null, rule);
             }
             else if (!SameTier(old, rule) || old.Windows.Count != rule.Windows.Count)
             {
-                changes.Add($"changed {identity}: {Describe(old)} -> {Describe(rule)}");
+                Add($"changed {identity}: {Describe(old)} -> {Describe(rule)}", "changed", identity, old, rule);
             }
         }
 
@@ -435,20 +548,23 @@ public static class AdminRateLimitEndpoints
         {
             if (!after.ContainsKey(identity))
             {
-                changes.Add($"removed {identity} (was {Describe(old)})");
+                Add($"removed {identity} (was {Describe(old)})", "removed", identity, old, null);
             }
         }
 
-        changes.Sort(StringComparer.Ordinal);
+        changes.Sort(static (a, b) => string.CompareOrdinal(a.Text, b.Text));
         return changes;
     }
 
     private static bool SameTier(RateLimitRuleDefinition a, RateLimitRuleDefinition b) =>
-        a.Rpm == b.Rpm && a.Burst == b.Burst && a.MaxConcurrentStreams == b.MaxConcurrentStreams;
+        a.Rpm == b.Rpm && a.Burst == b.Burst && a.MaxConcurrentStreams == b.MaxConcurrentStreams
+        // Switching a rule off stops it being enforced, which is as much a change as any number.
+        && a.Enabled == b.Enabled;
 
     private static string Describe(RateLimitRuleDefinition rule) =>
         $"{rule.Rpm}rpm+{rule.Burst}burst/{rule.MaxConcurrentStreams}streams"
-        + (rule.Windows.Count > 0 ? $" +{rule.Windows.Count}w" : string.Empty);
+        + (rule.Windows.Count > 0 ? $" +{rule.Windows.Count}w" : string.Empty)
+        + (rule.Enabled ? string.Empty : " off");
 
     private static AdminRateLimitsDto ToDto(Core.Configuration.RateLimitAdminConfig config) =>
         new()

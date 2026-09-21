@@ -294,9 +294,60 @@ public sealed class ModelRouterRateLimitTests
         });
     }
 
+    /// <summary>
+    /// The per-limit report hears about stream slots from the one place they are taken: a start
+    /// under every cap when the stream is admitted, and the bucket that was full when it is not.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task InvokeAsync_WithAPlan_ReportsTheStreamDecisionPerLimit(bool admitted)
+    {
+        await WithSingleModelRegistryAsync(async registry =>
+        {
+            var usage = new RecordingUsageTracker();
+            RateLimitRule[] rules =
+            [
+                new(RateLimitScope.Tenant, "t:acme", new RateLimitPolicy(100, 0, 4)) { LimitId = "plan:pro", StreamLimitId = "tenant:acme" },
+                new(RateLimitScope.Model, "m:m1", new RateLimitPolicy(100, 0, 2)) { LimitId = "model:m1", StreamLimitId = "model:m1" },
+            ];
+
+            var planResolver = Substitute.For<IRateLimitPlanResolver>();
+            planResolver.IsEnabled().Returns(true);
+            planResolver.Resolve(Arg.Any<RateLimitSubject>(), Arg.Any<string?>()).Returns(new RateLimitPlan(rules, 1));
+
+            // The real store: a span cannot be matched by a substitute. For the refusal, the model's
+            // two slots are taken up front so the request finds the cap full.
+            var store = new Pol33.Policy.RateLimiting.InMemoryDistributedRateLimitStore();
+            if (!admitted)
+            {
+                store.TryAcquireStreamSlot("m:m1", rules[1].Policy);
+                store.TryAcquireStreamSlot("m:m1", rules[1].Policy);
+            }
+
+            var middleware = ModelRouterMiddlewareTests.CreateMiddlewareForRateLimitTests(
+                registry: registry,
+                forwarder: CreateForwarderReturning(ForwarderError.None),
+                rateLimitStore: store,
+                rateLimitUsage: usage,
+                rateLimitPlanResolver: planResolver);
+
+            await middleware.InvokeAsync(CreateContext("""{"model":"m1","stream":true}"""));
+
+            var stage = usage.StreamStages.Should().ContainSingle().Subject;
+            stage.LimitIds.Should().Equal("tenant:acme", "model:m1");
+            stage.RefusedPartitionKey.Should().Be(admitted ? null : "m:m1");
+        });
+    }
+
     private sealed class RecordingUsageTracker : IRateLimitUsageTracker
     {
         public List<RateLimitUsageEvent> Events { get; } = [];
+
+        public List<(string?[] LimitIds, string? RefusedPartitionKey)> StreamStages { get; } = [];
+
+        public void RecordStreamStage(ReadOnlySpan<RateLimitRule> rules, string? refusedPartitionKey = null) =>
+            StreamStages.Add((rules.ToArray().Select(static r => r.StreamLimitId).ToArray(), refusedPartitionKey));
 
         public void Record(in RateLimitUsageEvent usageEvent) => Events.Add(usageEvent);
 
