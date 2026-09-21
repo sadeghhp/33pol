@@ -118,6 +118,11 @@ public sealed class GatewayConfigStore(
             }
         }
 
+        var rateLimitVersion = await dbContext.ConfigVersions
+            .AsNoTracking()
+            .FirstOrDefaultAsync(c => c.Id == ConfigVersionRows.RateLimits, cancellationToken)
+            .ConfigureAwait(false);
+
         return new RateLimitsConfigSection
         {
             // No defaults row (database-less or pre-seed) means enforce, matching prior behavior.
@@ -140,6 +145,7 @@ public sealed class GatewayConfigStore(
             Anonymous = Single(byScope, RateLimitScopeNames.Anonymous),
             Schedules = schedules,
             DisabledRules = disabled,
+            Version = rateLimitVersion?.Version ?? 0,
         };
     }
 

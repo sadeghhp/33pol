@@ -1,5 +1,6 @@
 using System.Net;
 using Pol33.Core.Configuration;
+using Pol33.Core.RateLimiting;
 using Pol33.Integration.Tests.Support;
 
 namespace Pol33.Integration.Tests.Admin;
@@ -85,6 +86,25 @@ public sealed class AdminConsoleRateLimitSafetyTests
         html.Should().Contain("max=\"10000\" x-model.number=\"mdl.rlTier.maxConcurrentStreams\"");
         html.Should().Contain("max=\"10000\" x-model.number=\"mdl.rlWindow.maxConcurrentStreams\"");
         html.Should().Contain("max=\"10000\" x-model.number=\"mdl.rlNewRule.maxConcurrentStreams\"");
+    }
+
+    /// <summary>
+    /// The console refuses in its forms what the server would refuse at Save, from one table of
+    /// limits. Built from the server's constants, so changing one without the other fails here
+    /// instead of surfacing as a form that accepts what a save then rejects.
+    /// </summary>
+    [Fact]
+    public async Task ConsoleLimits_MirrorTheServerConstants()
+    {
+        var js = await GetAssetAsync("/admin/admin-app.js");
+
+        js.Should().Contain(
+            $"return {{ maxRpm: {RateLimitConfigValidation.MaxRpm}, maxBurst: {RateLimitConfigValidation.MaxBurst}, "
+            + $"maxStreams: {RateLimitConfigValidation.MaxMaxConcurrentStreams}, "
+            + $"maxPlanSlugLength: {RateLimitConfigValidation.MaxPlanSlugLength}, "
+            + $"maxTargetLength: {RateLimitConfigValidation.MaxTargetKeyLength} }};");
+        RateLimitScopeNames.IsRateOnly(RateLimitScopeNames.AuthFailure).Should().BeTrue();
+        js.Should().Contain("singleton: true, rateOnly: true }");
     }
 
     /// <summary>

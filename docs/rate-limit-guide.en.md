@@ -368,9 +368,9 @@ Pick from the list. An API key is found by its name, prefix or id and has to exi
 
 ### How much?
 
-The base tier for this rule. The summary below states what this scope enforces today, so you can see whether the number you are entering is tighter. A number no tighter than what is already in force does nothing but is allowed.
+The base tier for this rule. The summary below states what this scope enforces today, so you can see whether the number you are entering is tighter. On an ordinary rule a number no tighter than what is already in force never binds: it does nothing but is allowed. The two protective limits (failed sign-ins, anonymous callers) are different: a configured tier replaces the default-tier fallback instead of adding to it, so a higher number loosens that budget.
 
-> *Example:* The gateway ceiling is 5,000 rpm. A model rule of 6,000 rpm changes nothing; one of 600 rpm does.
+> *Example:* The gateway ceiling is 5,000 rpm. A model rule of 6,000 rpm changes nothing; one of 600 rpm does. The default tier is 60 rpm: a failed-sign-ins limit of 600 rpm raises that budget to 600.
 
 ### What is the base tier?
 

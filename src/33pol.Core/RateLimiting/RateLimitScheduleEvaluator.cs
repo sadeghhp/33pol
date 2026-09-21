@@ -154,12 +154,30 @@ public static class RateLimitScheduleEvaluator
             return "a weekly window needs at least one day";
         }
 
-        foreach (var day in window.Days)
+        // Bounded before anything walks the list. The days are client-supplied, the overlap check
+        // compares every span of one window with every span of another, and a list that repeats a
+        // day says nothing a shorter one does not — so a week's worth is the ceiling, and past it
+        // the answer is known without reading a single entry.
+        if (window.Days.Count > DayNames.Length)
         {
-            if (!TryParseDay(day, out _))
+            return $"a weekly window lists each day at most once, so at most {DayNames.Length} days";
+        }
+
+        var seenDays = 0;
+        foreach (var label in window.Days)
+        {
+            if (!TryParseDay(label, out var day))
             {
-                return $"'{day}' is not a day; use {string.Join(", ", DayNames)}";
+                return $"'{label}' is not a day; use {string.Join(", ", DayNames)}";
             }
+
+            var bit = 1 << (int)day;
+            if ((seenDays & bit) != 0)
+            {
+                return $"'{label.Trim()}' is listed more than once; a weekly window lists each day at most once";
+            }
+
+            seenDays |= bit;
         }
 
         if (!TryParseTime(window.Start, out var start) || start == EndOfDay)

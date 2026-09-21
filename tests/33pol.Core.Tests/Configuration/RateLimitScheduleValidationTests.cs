@@ -56,6 +56,88 @@ public sealed class RateLimitScheduleValidationTests
         new(name, RateLimitWindowKinds.Once, 3000, 500, 120, From: from, Until: until, ValidUntil: validUntil);
 
     [Fact]
+    public void Validate_WeeklyWindowWithMoreThanSevenDays_IsRefused()
+    {
+        var rule = Rule(Weekly("all", ["mon", "tue", "wed", "thu", "fri", "sat", "sun", "mon"], "01:00", "02:00"));
+
+        RateLimitConfigValidation.TryValidateRules([rule], out var error).Should().BeFalse();
+        error.Should().Contain("at most 7 days");
+    }
+
+    [Theory]
+    [InlineData("mon", "mon")]
+    [InlineData("mon", "MON")]
+    [InlineData("sat", " sat ")]
+    public void Validate_WeeklyWindowWithADuplicateDay_IsRefused(string first, string second)
+    {
+        var rule = Rule(Weekly("twice", [first, "wed", second], "01:00", "02:00"));
+
+        RateLimitConfigValidation.TryValidateRules([rule], out var error).Should().BeFalse();
+        error.Should().Contain("more than once");
+    }
+
+    [Fact]
+    public void Validate_WeeklyWindowWithAnUnknownDay_StillNamesTheDay()
+    {
+        var rule = Rule(Weekly("odd", ["mon", "funday"], "01:00", "02:00"));
+
+        RateLimitConfigValidation.TryValidateRules([rule], out var error).Should().BeFalse();
+        error.Should().Contain("'funday' is not a day");
+    }
+
+    [Theory]
+    [InlineData("mon")]
+    [InlineData("sat,sun")]
+    [InlineData("mon,wed,fri")]
+    [InlineData("mon,tue,wed,thu,fri,sat,sun")]
+    [InlineData("sun,sat,fri,thu,wed,tue,mon")]
+    public void Validate_WeeklyWindowWithUniqueDays_IsAccepted(string days)
+    {
+        var rule = Rule(Weekly("ok", days.Split(','), "01:00", "02:00"));
+
+        RateLimitConfigValidation.TryValidateRules([rule], out var error).Should().BeTrue(error);
+    }
+
+    /// <summary>
+    /// The days list is client-supplied and was unbounded, and the overlap check compares every span
+    /// of one window with every span of another while re-parsing the inner window per outer span:
+    /// two windows of 20,000 repeated days cost 95 seconds of uncancellable CPU and were then
+    /// accepted. The refusal is now decided from the count alone, before any pair is compared, on
+    /// the save path and on the overlap scan the previews run for a rule that is already invalid.
+    /// </summary>
+    [Fact]
+    public void Validate_HugeRepeatedDayLists_AreRefusedWithoutComparingSpans()
+    {
+        var mondays = Enumerable.Repeat("mon", 200_000).ToArray();
+        var wednesdays = Enumerable.Repeat("wed", 200_000).ToArray();
+        var windows = Enumerable.Range(0, RateLimitConfigValidation.MaxWindowsPerRule)
+            .Select(i => Weekly("w" + i, i % 2 == 0 ? mondays : wednesdays, "01:00", "02:00"))
+            .ToArray();
+        var rule = Rule(windows);
+
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var valid = RateLimitConfigValidation.TryValidateRules([rule], out var error);
+        var overlaps = RateLimitConfigValidation.FindWindowOverlaps(windows);
+        watch.Stop();
+
+        valid.Should().BeFalse();
+        error.Should().Contain("at most 7 days");
+        overlaps.Should().BeEmpty("a window that is not well formed is never compared");
+        watch.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(2), "the old path needed minutes for a tenth of this input");
+    }
+
+    /// <summary>Seven days against seven days, wrapping midnight and the week: the materialised inner list must still see every span.</summary>
+    [Fact]
+    public void Validate_FullWeekWindowsThatWrapTheWeek_StillOverlap()
+    {
+        string[] week = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+        var windows = new[] { Weekly("late", week, "23:00", "01:00"), Weekly("early", ["mon"], "00:30", "00:45") };
+
+        RateLimitConfigValidation.FindWindowOverlaps(windows).Should().ContainSingle()
+            .Which.Should().Be(("late", "early"));
+    }
+
+    [Fact]
     public void Validate_OverlappingWeeklyWindows_WithTheSamePriority_AreRefused()
     {
         var rule = Rule(

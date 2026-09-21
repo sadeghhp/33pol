@@ -28,8 +28,8 @@
   <script defer src="admin-icons.js?v=12"></script>
   <script defer src="admin-errors.js?v=8"></script>
   <script defer src="admin-store.js?v=12"></script>
-  <script defer src="admin-rate-limit-help.js?v=3"></script>
-  <script defer src="admin-app.js?v=49"></script>
+  <script defer src="admin-rate-limit-help.js?v=4"></script>
+  <script defer src="admin-app.js?v=51"></script>
   <script defer src="vendor/alpine-csp-3.14.9.min.js"></script>
 </head>
 <body x-data="adminApp" x-cloak @keydown.window="onModalKeydown">
@@ -2189,7 +2189,7 @@
                   <span class="spacer"></span>
                   <button type="button" class="action ghost" @click="discardRateLimitChanges" :disabled="loadingSettings">Discard</button>
                   <button type="button" class="action secondary" @click="toggleRateLimitReview" :disabled="loadingSettings">Review changes</button>
-                  <button type="button" class="action rl-primary" @click="saveRateLimits" :disabled="rateLimitsLocked">Save</button>
+                  <button type="button" class="action rl-primary" @click="onSaveRateLimitsClick" :disabled="rateLimitsSaveDisabled">Save</button>
                 </div>
                 <div class="card rl-review" x-show="rlReviewOpen">
                   <ul>
@@ -2568,7 +2568,7 @@
             <div class="rl-bignums">
               <label class="rl-bignum">RPM<input type="number" min="0" max="1000000" x-model.number="mdl.rlRule.rpm" :disabled="rateLimitsLocked" title="Sustained requests per minute. 0 = this rule does not limit the rate." /></label>
               <label class="rl-bignum">Burst<input type="number" min="0" max="1000000" x-model.number="mdl.rlRule.burst" :disabled="rateLimitsLocked" title="Extra requests allowed at once after a quiet spell, on top of RPM." /></label>
-              <label class="rl-bignum">Streams<input type="number" min="0" max="10000" x-model.number="mdl.rlRule.maxConcurrentStreams" :disabled="rateLimitsLocked" title="Concurrent streaming responses. 0 = unlimited." /></label>
+              <label class="rl-bignum" x-show="rlRuleDrawerView.showStreams">Streams<input type="number" min="0" max="10000" x-model.number="mdl.rlRule.maxConcurrentStreams" :disabled="rateLimitsLocked" title="Concurrent streaming responses. 0 = unlimited." /></label>
             </div>
             <p class="hint">Sustained requests a minute, the extra allowed at once after a quiet spell, and how many streaming responses may be open together. 0 streams means unlimited.</p>
 <div class="rl-help-row">
@@ -2937,7 +2937,7 @@
         <div class="rl-bignums">
           <label class="rl-bignum">RPM<input type="number" min="0" max="1000000" x-model.number="mdl.rlNewRule.rpm" :aria-invalid="rlNewRuleView.tierInvalid" title="Sustained requests per minute. 0 = this rule does not limit the rate." /></label>
           <label class="rl-bignum">Burst<input type="number" min="0" max="1000000" x-model.number="mdl.rlNewRule.burst" :aria-invalid="rlNewRuleView.tierInvalid" title="Extra requests allowed at once after a quiet spell, on top of RPM." /></label>
-          <label class="rl-bignum">Streams<input type="number" min="0" max="10000" x-model.number="mdl.rlNewRule.maxConcurrentStreams" :aria-invalid="rlNewRuleView.tierInvalid" title="Concurrent streaming responses. 0 = unlimited." /></label>
+          <label class="rl-bignum" x-show="rlNewRuleView.showStreams">Streams<input type="number" min="0" max="10000" x-model.number="mdl.rlNewRule.maxConcurrentStreams" :aria-invalid="rlNewRuleView.tierInvalid" title="Concurrent streaming responses. 0 = unlimited." /></label>
         </div>
         <p class="field-error" id="rl-new-tier-error" x-show="rlNewRuleView.tierError" x-text="rlNewRuleView.tierError" role="alert"></p>
         <p class="hint" x-show="rlNewRuleView.isTenant">A tenant rule with RPM 0 keeps the plan&rsquo;s rate and only caps streams.</p>

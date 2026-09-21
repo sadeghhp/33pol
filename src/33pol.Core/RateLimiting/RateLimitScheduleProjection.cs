@@ -62,7 +62,15 @@ public static class RateLimitScheduleProjection
         DateTimeOffset now,
         ref DateTimeOffset? next)
     {
-        if (!stored.Schedules.TryGetValue(Identity(scope, RateLimitScopeNames.SingletonTarget), out var windows))
+        var identity = Identity(scope, RateLimitScopeNames.SingletonTarget);
+
+        // A switched-off rule keeps its windows in Schedules so that switching it back on does not
+        // cost the schedule, and the map scopes never see them: Map only walks the enabled base
+        // policies. A singleton has no map to be absent from, so without this check the windows of
+        // a disabled global, anonymous or auth_failure rule were evaluated over an empty base tier
+        // and the active window's numbers became the live limit of a rule shown as off.
+        if (stored.DisabledRules.ContainsKey(identity)
+            || !stored.Schedules.TryGetValue(identity, out var windows))
         {
             return basePolicy;
         }

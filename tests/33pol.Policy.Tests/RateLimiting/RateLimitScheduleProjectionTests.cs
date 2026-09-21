@@ -107,6 +107,120 @@ public sealed class RateLimitScheduleProjectionTests
         tier.Rpm.Should().Be(1000);
     }
 
+    private static RateLimitsConfigSection WithSingleton(
+        RateLimitsConfigSection section, string scope, RateLimitPolicy tier) => scope switch
+    {
+        RateLimitScopeNames.Global => section with { Global = tier },
+        RateLimitScopeNames.Anonymous => section with { Anonymous = tier },
+        _ => section with { AuthFailure = tier },
+    };
+
+    private static RateLimitPolicy Singleton(RateLimitsConfigSection section, string scope) => scope switch
+    {
+        RateLimitScopeNames.Global => section.Global,
+        RateLimitScopeNames.Anonymous => section.Anonymous,
+        _ => section.AuthFailure,
+    };
+
+    /// <summary>The section as the store loads a switched-off singleton: no base tier, the tier in the side-car, the windows kept.</summary>
+    private static RateLimitsConfigSection DisabledSingleton(string scope, RateLimitWindowDefinition window) =>
+        WithSingleton(Stored((scope + ":*", window)), scope, RateLimitPolicy.Unlimited) with
+        {
+            DisabledRules = new Dictionary<string, RateLimitPolicy>(StringComparer.OrdinalIgnoreCase)
+            {
+                [scope + ":*"] = new(9000, 0, 0),
+            },
+        };
+
+    [Theory]
+    [InlineData(RateLimitScopeNames.Global)]
+    [InlineData(RateLimitScopeNames.Anonymous)]
+    [InlineData(RateLimitScopeNames.AuthFailure)]
+    public void Project_EnabledSingletonWithAnActiveWindow_TakesTheWindowTier(string scope)
+    {
+        var stored = WithSingleton(Stored((scope + ":*", Active())), scope, new RateLimitPolicy(9000, 0, 0));
+
+        var (effective, next) = RateLimitScheduleProjection.Project(stored, Now, 1);
+
+        Singleton(effective, scope).Rpm.Should().Be(3000);
+        next.Should().Be(Now.AddHours(1));
+    }
+
+    /// <summary>
+    /// A disabled rule enforces nothing, windows included. The store keeps a switched-off rule's
+    /// windows so the schedule survives the pause; the map scopes never project them because only
+    /// enabled base policies are walked, but a singleton was looked up by identity alone and the
+    /// active window became the live tier of a rule the console showed as off.
+    /// </summary>
+    [Theory]
+    [InlineData(RateLimitScopeNames.Global)]
+    [InlineData(RateLimitScopeNames.Anonymous)]
+    [InlineData(RateLimitScopeNames.AuthFailure)]
+    public void Project_DisabledSingletonWithAnActiveWindow_EnforcesNothing(string scope)
+    {
+        var stored = DisabledSingleton(scope, Active());
+
+        var (effective, next) = RateLimitScheduleProjection.Project(stored, Now, 1);
+
+        Singleton(effective, scope).EnforcesNothing.Should().BeTrue();
+        next.Should().BeNull("a rule that is off has no transition worth re-projecting for");
+    }
+
+    [Theory]
+    [InlineData(RateLimitScopeNames.Global)]
+    [InlineData(RateLimitScopeNames.Anonymous)]
+    [InlineData(RateLimitScopeNames.AuthFailure)]
+    public void Project_DisabledSingletonWithAnUpcomingWindow_EnforcesNothingAndSchedulesNothing(string scope)
+    {
+        var upcoming = Active() with { From = Now.AddHours(2), Until = Now.AddHours(3) };
+        var stored = DisabledSingleton(scope, upcoming);
+
+        var (effective, next) = RateLimitScheduleProjection.Project(stored, Now, 1);
+
+        Singleton(effective, scope).EnforcesNothing.Should().BeTrue();
+        next.Should().BeNull();
+    }
+
+    [Fact]
+    public void Project_DisabledAuthFailureWithAnActiveWindow_FallsBackToTheDefaultTier()
+    {
+        var stored = DisabledSingleton(RateLimitScopeNames.AuthFailure, Active());
+
+        var (effective, _) = RateLimitScheduleProjection.Project(stored, Now, 1);
+
+        var tier = ResolverOver(effective).ResolveAuthFailure();
+        tier.Rpm.Should().Be(1000, "with the rule off the credential-guessing budget is the default tier, not the window");
+    }
+
+    [Fact]
+    public void Project_EnabledAuthFailureWithAnActiveWindow_ResolvesToTheWindowTier()
+    {
+        var stored = Stored(("auth_failure:*", Active())) with { AuthFailure = new RateLimitPolicy(60, 20, 0) };
+
+        var (effective, _) = RateLimitScheduleProjection.Project(stored, Now, 1);
+
+        ResolverOver(effective).ResolveAuthFailure().Rpm.Should().Be(3000);
+    }
+
+    [Fact]
+    public void Project_DisabledAnonymousWithAnActiveWindow_ResolvesToTheDefaultTier()
+    {
+        var stored = DisabledSingleton(RateLimitScopeNames.Anonymous, Active());
+
+        var (effective, _) = RateLimitScheduleProjection.Project(stored, Now, 1);
+
+        ResolverOver(effective).ResolveAnonymous().Rpm.Should().Be(1000);
+    }
+
+    private static RateLimitPolicyResolver ResolverOver(RateLimitsConfigSection effective) => new(
+        new StubConfigProvider(new GatewayConfigSnapshot { RateLimits = effective }),
+        new AuthenticationRequired());
+
+    private sealed class AuthenticationRequired : IGatewayAuthenticationState
+    {
+        public bool IsAuthenticationRequired => true;
+    }
+
     private sealed class StubConfigProvider(GatewayConfigSnapshot snapshot) : IGatewayConfigProvider
     {
         public GatewayConfigSnapshot Current { get; } = snapshot;

@@ -30,7 +30,7 @@ public sealed class RateLimitConfigAdminService(
         var rateLimits = StoredRateLimits;
         return new RateLimitAdminConfig
         {
-            Version = configProvider.Current.Version,
+            Version = rateLimits.Version,
             Enabled = rateLimits.Enabled,
             AdaptiveEnabled = rateLimits.AdaptiveEnabled,
             Default = ToTierOptions(rateLimits.Default),
@@ -221,7 +221,7 @@ public sealed class RateLimitConfigAdminService(
                 static p => ToPolicy(p.Value),
                 StringComparer.OrdinalIgnoreCase);
 
-            await repository
+            var newVersion = await repository
                 .SaveAsync(
                     enabled,
                     adaptiveEnabled,
@@ -246,7 +246,8 @@ public sealed class RateLimitConfigAdminService(
                 effectiveRules.Count,
                 effectiveRules.Sum(static r => r.Windows.Count));
             return RateLimitConfigUpdateResult.Ok(
-                enabled ? "Rate limits updated." : "Rate limits updated. Rate limiting is now disabled.");
+                enabled ? "Rate limits updated." : "Rate limits updated. Rate limiting is now disabled.",
+                newVersion);
         }
         catch (RateLimitVersionConflictException ex)
         {
@@ -259,8 +260,8 @@ public sealed class RateLimitConfigAdminService(
                 ex.ActualVersion);
 
             return RateLimitConfigUpdateResult.Fail(
-                "Rate limits were changed by someone else since this page was loaded. Reload to see the "
-                + "current configuration, then reapply your change.",
+                "Rate limits were changed by someone else since this page was loaded. Review the current "
+                + "configuration against your change before saving again.",
                 statusCode: 409);
         }
         catch (Exception ex)

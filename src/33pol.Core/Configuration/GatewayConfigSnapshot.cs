@@ -153,6 +153,13 @@ public sealed record RateLimitsConfigSection
     /// </summary>
     public long EffectiveVersion { get; init; }
 
+    /// <summary>
+    /// The version of the rate-limit configuration alone, which is what its ETag names. Separate from
+    /// <see cref="GatewayConfigSnapshot.Version"/>, which every configuration write moves: a CORS
+    /// save is not a reason to refuse a rate-limit write as stale.
+    /// </summary>
+    public long Version { get; init; }
+
     /// <summary>The stored section: this one, or the one this projection came from.</summary>
     public RateLimitsConfigSection StoredOrSelf => Stored ?? this;
 

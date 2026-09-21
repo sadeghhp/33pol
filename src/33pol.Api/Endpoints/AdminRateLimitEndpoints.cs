@@ -381,7 +381,15 @@ public static class AdminRateLimitEndpoints
                     Changes = changes,
                 }));
 
-        return Results.Json(new { message = result.Message });
+        // The version the write produced, in both places a client looks. Without it the only way
+        // to learn what to base the next write on was a second request, and when that request
+        // failed the client's next save conflicted with its own previous one.
+        if (result.Version is long version)
+        {
+            httpContext.Response.Headers.ETag = FormatETag(version);
+        }
+
+        return Results.Json(new { message = result.Message, version = result.Version });
     }
 
     /// <summary>

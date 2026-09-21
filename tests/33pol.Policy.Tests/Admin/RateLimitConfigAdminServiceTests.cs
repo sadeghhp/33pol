@@ -73,6 +73,7 @@ public sealed class RateLimitConfigAdminServiceTests
 
         result.Success.Should().BeTrue();
         repo.SavedExpectedVersion.Should().Be(7);
+        result.Version.Should().Be(8, "the caller bases its next write on the version this one produced");
     }
 
     /// <summary>No precondition is an unconditional write, which is what an older client sends.</summary>

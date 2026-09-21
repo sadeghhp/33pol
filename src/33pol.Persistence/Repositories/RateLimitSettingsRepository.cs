@@ -10,7 +10,6 @@ namespace Pol33.Persistence.Repositories;
 public sealed class RateLimitSettingsRepository(GatewayDbContext dbContext) : IRateLimitSettingsRepository
 {
     private const int DefaultsRowId = 1;
-    private const int ConfigVersionRowId = 1;
 
     public async Task<long> SaveAsync(
         bool enabled,
@@ -59,7 +58,7 @@ public sealed class RateLimitSettingsRepository(GatewayDbContext dbContext) : IR
         // Read and checked before anything is staged, so a conflict costs no work and leaves nothing
         // half-written.
         var version = await dbContext.ConfigVersions
-            .FirstOrDefaultAsync(c => c.Id == ConfigVersionRowId, cancellationToken)
+            .FirstOrDefaultAsync(c => c.Id == ConfigVersionRows.RateLimits, cancellationToken)
             .ConfigureAwait(false);
 
         var currentVersion = version?.Version ?? 0;
@@ -136,12 +135,27 @@ public sealed class RateLimitSettingsRepository(GatewayDbContext dbContext) : IR
         // Bumped in the same SaveChanges so the change and its version signal commit atomically.
         if (version is null)
         {
-            version = new ConfigVersionEntity { Id = ConfigVersionRowId, Version = currentVersion };
+            version = new ConfigVersionEntity { Id = ConfigVersionRows.RateLimits, Version = currentVersion };
             dbContext.ConfigVersions.Add(version);
         }
 
         version.Version = currentVersion + 1;
         version.UpdatedAt = now;
+
+        // The general version moves too, but is never compared here. It is the reload signal: the
+        // other instances poll it to learn that the snapshot — which carries these rules — is out of
+        // date. Only the rate-limit row decides whether this write was based on a stale read.
+        var general = await dbContext.ConfigVersions
+            .FirstOrDefaultAsync(c => c.Id == ConfigVersionRows.General, cancellationToken)
+            .ConfigureAwait(false);
+        if (general is null)
+        {
+            general = new ConfigVersionEntity { Id = ConfigVersionRows.General, Version = 0 };
+            dbContext.ConfigVersions.Add(general);
+        }
+
+        general.Version += 1;
+        general.UpdatedAt = now;
 
         await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
         return version.Version;

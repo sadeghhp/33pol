@@ -92,6 +92,98 @@ public sealed class AdminRateLimitEndpointTests
         json.RootElement.GetProperty("plans").GetProperty("pro").GetProperty("rpm").GetInt32().Should().Be(200);
     }
 
+    private static HttpRequestMessage PutWithIfMatch(string etag, int rpm)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Put, "/admin/api/rate-limits")
+        {
+            Content = JsonContent.Create(new
+            {
+                @default = new { rpm, burst = 0, maxConcurrentStreams = 0 },
+                plans = new Dictionary<string, object>(),
+            }),
+        };
+        request.Headers.TryAddWithoutValidation("If-Match", etag);
+        return request;
+    }
+
+    /// <summary>
+    /// The write answers with the version it produced, as an ETag and in the body, so a client can
+    /// base its next write on it without a second request — and that version is the rate-limit
+    /// configuration's own, so saving CORS in between is not a conflict while a genuinely stale write
+    /// still is.
+    /// </summary>
+    [Fact]
+    public async Task PutRateLimits_ReturnsItsVersion_WhichSurvivesACorsSaveAndRefusesAStaleWrite()
+    {
+        await using var factory = CreateFactoryWithWritableAppSettings();
+        await GatewayWebApplicationFactory.EnsureAuthReadyAsync(factory);
+        var client = CreateAuthenticatedClient(factory, AdminKey);
+
+        var read = await client.GetAsync("/admin/api/rate-limits");
+        read.EnsureSuccessStatusCode();
+        var readTag = read.Headers.ETag!.ToString();
+
+        var first = await client.SendAsync(PutWithIfMatch(readTag, 55));
+        first.EnsureSuccessStatusCode();
+        var firstTag = first.Headers.ETag!.ToString();
+        firstTag.Should().NotBe(readTag);
+        using (var body = JsonDocument.Parse(await first.Content.ReadAsStringAsync()))
+        {
+            firstTag.Should().Be($"W/\"{body.RootElement.GetProperty("version").GetInt64()}\"");
+        }
+
+        (await client.GetAsync("/admin/api/rate-limits")).Headers.ETag!.ToString().Should().Be(firstTag);
+
+        (await client.PutAsJsonAsync("/admin/api/cors", new { allowedOrigins = new[] { "https://console.example" } }))
+            .EnsureSuccessStatusCode();
+
+        var afterCors = await client.SendAsync(PutWithIfMatch(firstTag, 66));
+        afterCors.StatusCode.Should().Be(HttpStatusCode.OK, "a CORS save is not a rate-limit change");
+
+        var stale = await client.SendAsync(PutWithIfMatch(firstTag, 77));
+        stale.StatusCode.Should().Be(HttpStatusCode.Conflict);
+
+        using var current = JsonDocument.Parse(await (await client.GetAsync("/admin/api/rate-limits")).Content.ReadAsStringAsync());
+        current.RootElement.GetProperty("default").GetProperty("rpm").GetInt32().Should().Be(66);
+    }
+
+    /// <summary>A days list past a week's worth is answered 400 from its length, before any span is compared.</summary>
+    [Fact]
+    public async Task PutRateLimits_WeeklyWindowWithRepeatedDays_Returns400Promptly()
+    {
+        await using var factory = CreateFactoryWithWritableAppSettings();
+        await GatewayWebApplicationFactory.EnsureAuthReadyAsync(factory);
+        var client = CreateAuthenticatedClient(factory, AdminKey);
+
+        object Window(string name, string day) => new
+        {
+            name, kind = "weekly", rpm = 10, burst = 0, maxConcurrentStreams = 0,
+            days = Enumerable.Repeat(day, 20_000).ToArray(), start = "01:00", end = "02:00", timeZone = "UTC",
+        };
+
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var response = await client.PutAsJsonAsync(
+            "/admin/api/rate-limits",
+            new
+            {
+                @default = new { rpm = 55, burst = 0, maxConcurrentStreams = 0 },
+                plans = new Dictionary<string, object>(),
+                rules = new[]
+                {
+                    new
+                    {
+                        scope = "model", target = "gpt-4", rpm = 60, burst = 0, maxConcurrentStreams = 0,
+                        schedule = new[] { Window("a", "mon"), Window("b", "wed") },
+                    },
+                },
+            });
+        watch.Stop();
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await response.Content.ReadAsStringAsync()).Should().Contain("at most 7 days");
+        watch.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(10));
+    }
+
     [Fact]
     public async Task PutRateLimits_ReducesDefaultRpm_EnforcedOnInference()
     {

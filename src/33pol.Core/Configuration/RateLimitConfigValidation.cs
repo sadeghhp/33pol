@@ -371,9 +371,14 @@ public static partial class RateLimitConfigValidation
         // Zones are equal by construction on a saved rule (TryValidateSchedule enforces it), so
         // minute-of-week intervals are comparable directly. Across different zones the answer is
         // computed conservatively in the same local frame.
+        // Materialised once. MinuteOfWeekSpans is an iterator that re-parses the window on every
+        // enumeration, and enumerating the inner one afresh for each outer span made that parse
+        // quadratic. Both lists are small by construction: a well-formed window has at most seven
+        // days, so at most fourteen spans.
+        var spansOfB = MinuteOfWeekSpans(b).ToArray();
         foreach (var x in MinuteOfWeekSpans(a))
         {
-            foreach (var y in MinuteOfWeekSpans(b))
+            foreach (var y in spansOfB)
             {
                 if (x.Start < y.End && y.Start < x.End)
                 {

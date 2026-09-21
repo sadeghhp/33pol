@@ -4,6 +4,35 @@ All notable changes to this project are documented here. Version tags follow [Se
 
 ## [Unreleased]
 
+### Rate limits — a switched-off rule is off, and a draft is never lost
+
+- **A disabled `global`, `anonymous` or `auth_failure` rule no longer enforces its schedule windows.**
+  A switched-off rule keeps its windows so the schedule survives the pause; the singleton scopes
+  looked them up by identity alone, so an active window's tier became the live limit of a rule the
+  console showed as off.
+- **A weekly window lists each day at most once** (so at most seven). The list was unbounded and the
+  overlap check quadratic in it: a 250 KB request cost minutes of CPU and was then accepted.
+  **Note:** a stored window with a repeated day is now reported as invalid and its base tier applies
+  until it is saved again.
+- **Rate limits have their own configuration version.** They shared one with CORS, so saving a CORS
+  origin made a pending rate-limit save fail as "changed by someone else". `PUT /admin/api/rate-limits`
+  now answers with the version it produced (`ETag` and `version`).
+- **The console never discards a draft on its own.** One save at a time; a save or a refresh that
+  lands after a newer edit leaves that edit in place; on a `409` the draft is kept, the baseline is
+  refreshed and the change list opens so saving again is a reviewed decision. What a refused save
+  means is read from its HTTP status — a validation message quoting a key id containing "403" no
+  longer locks the page read-only — and "unsaved" has one definition, which ignores plan and rule
+  order.
+- **Forms refuse what the server would refuse:** rpm 0 with a burst in every scope, a failed-sign-ins
+  rule with no rate or a stream cap (the Streams input is gone there), `|` in a model id, over-long
+  targets and plan slugs. An emptied numeric field is an error, not a zero.
+- **The protective-limit warning describes replacement.** A configured `auth_failure` or `anonymous`
+  tier replaces the default-tier fallback, so a higher number loosens it; the form said it "would not
+  change what this scope allows". The "How much?" explainer (EN and FA) says the same.
+- A refused save no longer surfaces as an Alpine expression error and a page error: the Save button
+  consumes the rejection the page has already explained; `saveRateLimits` still rejects for callers
+  that await it, and an unclassified error still surfaces.
+
 ### Admin console — rate limits explained, in English and Persian
 
 - **The Rate limits page now carries its own help.** A guide drawer (ten sections: what rate

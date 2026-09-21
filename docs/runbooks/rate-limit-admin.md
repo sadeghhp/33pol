@@ -290,8 +290,17 @@ no longer current is refused with `409` instead of going through. That matters b
 replaced **wholesale** — a partial update would give no way to delete a rule — so a save based on a
 stale read does not merge with whatever landed in between, it erases it. Two operators with the page
 open would each save their own complete set and the second would silently win, including for
-`auth_failure` and `anonymous`. The console sends the header and offers a reload on `409`; a client
-that sends no `If-Match` (or `*`) still gets an unconditional write.
+`auth_failure` and `anonymous`. A client that sends no `If-Match` (or `*`) still gets an unconditional
+write.
+
+The version is the rate-limit configuration's own: saving CORS or the route table does not move it, so
+it is not a reason for a `409`. A successful `PUT` answers with the version it produced, as `ETag` and
+as `version` in the body, so the next write can be based on it without another `GET`.
+
+On `409` the console keeps the operator's draft, fetches the current configuration as the new
+baseline, and opens the change list so the draft is reviewed against what somebody else saved; Save
+then goes through on the refreshed version, and Discard drops the draft instead. It never reloads over
+unsaved work.
 
 <a id="partition-ceiling"></a>
 ## Partition ceiling

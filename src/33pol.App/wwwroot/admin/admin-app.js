@@ -1485,6 +1485,8 @@ function adminApp() {
       if (this._rlScheduleTimer) { clearTimeout(this._rlScheduleTimer); this._rlScheduleTimer = null; }
       if (this._rlPreviewTimer) { clearTimeout(this._rlPreviewTimer); this._rlPreviewTimer = null; }
       this.closeRateLimitDrawers();
+      // A configuration request still in flight belongs to the session that is ending.
+      this._rlFetchSeq = (this._rlFetchSeq || 0) + 1;
       this.rateLimits = null;
       this.rlDraft = null;
       this.rlSchedule = null;
@@ -2957,7 +2959,7 @@ function adminApp() {
         { id: 'tenant_model', name: 'A tenant on one model', short: 'Tenant & model', desc: 'One customer’s share of one model.' },
         { id: 'api_key_model', name: 'An API key on one model', short: 'Key & model', desc: 'One credential on one model; nothing else is counted.' },
         { id: 'anonymous', name: 'Anonymous callers', short: 'Anonymous', desc: 'Per client address, on public models.', singleton: true },
-        { id: 'auth_failure', name: 'Failed sign-ins', short: 'Failed sign-ins', desc: 'Credential guessing, per address. The failed-auth budget.', singleton: true }
+        { id: 'auth_failure', name: 'Failed sign-ins', short: 'Failed sign-ins', desc: 'Credential guessing, per address. The failed-auth budget.', singleton: true, rateOnly: true }
       ];
     },
 
@@ -3060,7 +3062,34 @@ function adminApp() {
       return value == null ? value : JSON.parse(JSON.stringify(value));
     },
 
-    applyRateLimitsData(data) {
+    /**
+     * The configuration as one comparable string: the payload a save would send, with the two
+     * collections whose order means nothing put in a fixed order. Plans are a map and rules are a
+     * set keyed by identity, so renaming a plan and renaming it back, or deleting a rule and creating
+     * it again, moves an entry without changing the configuration. Everything that asks "is the
+     * draft different" asks this, so the answers cannot disagree.
+     */
+    rlCanonical(source) {
+      if (!source) return '';
+      const payload = this.buildRateLimitsPayload(source);
+      const byKey = (a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0);
+      return JSON.stringify({
+        ...payload,
+        plans: Object.entries(payload.plans).sort(byKey),
+        rules: payload.rules
+          .map(r => [this.rlIdentity(r.scope, r.target), r])
+          .sort(byKey)
+      });
+    },
+
+    /**
+     * Replaces the saved baseline (and with it the version the next save is based on), and the draft
+     * too unless told to leave it alone. Every call moves the fetch sequence on: a response that was
+     * requested against the old baseline describes a configuration this page no longer holds, and
+     * must not land on top of the new one.
+     */
+    applyRateLimitsData(data, keepDraft) {
+      this._rlFetchSeq = (this._rlFetchSeq || 0) + 1;
       const normalized = this.normalizeRateLimitsPayload(data);
       if (!normalized) {
         this.rateLimits = null;
@@ -3068,27 +3097,49 @@ function adminApp() {
         return;
       }
       this.rateLimits = normalized;
-      this.rlDraft = this.rlClone(normalized);
-      this.rateLimitFieldError = '';
+      if (!keepDraft || !this.rlDraft) this.rlDraft = this.rlClone(normalized);
       this.rateLimitsLoadError = '';
-      // The read-only reason is learnt from a refused write, so only a successful write clears it;
-      // a successful read says nothing about whether the gateway can persist.
+      if (!keepDraft) this.rateLimitFieldError = '';
+      // The read-only reason is learnt from a refused write, so a successful read does not clear
+      // it; a successful write and an explicit Reload do.
     },
 
     /**
      * Fetches the saved configuration. A dirty draft is kept unless `force` says otherwise: the
      * Settings tab reloads every section whenever it is entered, and an operator who stepped out
-     * to look something up must not come back to an empty draft. Reload and Save ask for a
-     * replacement explicitly.
+     * to look something up must not come back to an empty draft.
+     *
+     * The draft is judged again when the answer arrives, not only when the question is asked. The
+     * page stays interactive while the request is out, so an edit made in that gap is newer than
+     * the response, and applying the response would erase it with no trace. The rule is one
+     * sentence: a response replaces the draft only if the draft is still what it was when the
+     * request left — and, without `force`, was clean then. A dropped response changes nothing,
+     * version included, so a save of the surviving draft is still checked against what it was
+     * actually based on.
+     *
+     * Calls made while an unforced request is out share it, so a caller that needs the load to
+     * have happened (see limitRateForKey) can wait for the one already in flight.
      */
-    async fetchRateLimits(force) {
+    fetchRateLimits(force) {
+      if (!force && this._rlFetchInFlight) return this._rlFetchInFlight;
       if (!force && this.rlDraft && this.rateLimitsDirty) {
         void this.loadRateLimitSchedule();
-        return;
+        return Promise.resolve();
       }
-      const data = await this.apiJson('/admin/api/rate-limits');
-      this.applyRateLimitsData(data);
-      void this.loadRateLimitSchedule();
+      const seq = this._rlFetchSeq = (this._rlFetchSeq || 0) + 1;
+      const draftAtStart = this.rlCanonical(this.rlDraft);
+      const request = (async () => {
+        const data = await this.apiJson('/admin/api/rate-limits');
+        // Superseded by a newer fetch, a save or a conflict refresh; or edited meanwhile.
+        if (seq !== this._rlFetchSeq || this.rlCanonical(this.rlDraft) !== draftAtStart) return;
+        this.applyRateLimitsData(data);
+        void this.loadRateLimitSchedule();
+      })();
+      const tracked = request.finally(() => {
+        if (this._rlFetchInFlight === tracked) this._rlFetchInFlight = null;
+      });
+      this._rlFetchInFlight = tracked;
+      return tracked;
     },
 
     async loadRateLimits(force) {
@@ -3102,10 +3153,11 @@ function adminApp() {
           this.rateLimits = null;
           this.rlDraft = null;
         }
-        if (String(e.title || '').startsWith('404') || e.message?.includes('404') || /not found/i.test(e.message || '')) {
+        // By status, never by looking for the number in the message: see rlSaveFailed.
+        if (e.status === 404) {
           this.rateLimitsLoadError =
             'Rate limit API is not available on this gateway (rebuild/restart the server with the latest image).';
-        } else if (e.title === 'Authentication failed' || e.message?.includes('401') || e.message?.includes('403')) {
+        } else if (e.status === 401 || e.status === 403) {
           this.rateLimitsLoadError = 'Connect with an Admin API key to load rate limits.';
         } else {
           this.rateLimitsLoadError = e.message || 'Could not load rate limits.';
@@ -3115,15 +3167,21 @@ function adminApp() {
 
     /** Reload from the server. A dirty draft is thrown away only after the operator agrees. */
     reloadRateLimits() {
+      const reload = () => this.runApi('settings', 'Reloading rate limits…', async () => {
+        await this.loadRateLimits(true);
+        // "Read-only" is a conclusion drawn from one refused write. An operator who asks for a
+        // fresh start gets one; if the gateway still cannot persist, the next save says so again.
+        if (!this.rateLimitsLoadError) this.rlReadOnlyReason = '';
+      });
       if (!this.rateLimitsDirty) {
-        void this.runApi('settings', 'Reloading rate limits…', () => this.loadRateLimits(true));
+        void reload();
         return;
       }
       this.openConfirm({
         title: 'Reload and discard changes?',
         message: 'Reloading fetches the saved configuration and throws away your unsaved edits.',
         confirmLabel: 'Reload',
-        onConfirm: () => this.runApi('settings', 'Reloading rate limits…', () => this.loadRateLimits(true))
+        onConfirm: reload
       });
     },
 
@@ -3216,12 +3274,77 @@ function adminApp() {
       this.setRateLimitHelpLang(this.rlHelpLang === 'fa' ? 'en' : 'fa');
     },
 
+    /** A tier that is already configuration — the draft, the baseline — as the numbers it holds. */
     rlTierPayload(t) {
       return {
         rpm: Number(t?.rpm) || 0,
         burst: Number(t?.burst) || 0,
         maxConcurrentStreams: Number(t?.maxConcurrentStreams) || 0
       };
+    },
+
+    /**
+     * A tier as an operator typed it into a form, where an empty field is null and not zero. Zero
+     * is a statement in every one of these fields — rpm 0 is "this rule does not limit the rate",
+     * streams 0 is "unlimited" — so reading a cleared box as 0 turned a slip of the keyboard into
+     * the removal of a rate limit, applied without a word. Forms validate this; only a tier that
+     * passed becomes configuration, and rlTierPayload is for configuration.
+     */
+    rlTierForm(t) {
+      const read = (v) => (v === '' || v === null || v === undefined ? null : Number(v));
+      return { rpm: read(t?.rpm), burst: read(t?.burst), maxConcurrentStreams: read(t?.maxConcurrentStreams) };
+    },
+
+    /** The first tier field a form left empty, as its label; '' when all three hold a number. */
+    rlBlankTierField(tier) {
+      const blank = [['rpm', 'RPM'], ['burst', 'Burst'], ['maxConcurrentStreams', 'Streams']].find(f => tier[f[0]] === null);
+      return blank ? blank[1] + ' is empty. Enter a number — 0 if you mean zero; an empty field is not read as one.' : '';
+    },
+
+    /**
+     * The tier a rule form holds. A rate-only scope has no Streams input — the number would mean
+     * nothing and the server refuses anything but zero — so there it is zero by construction
+     * rather than whatever a hidden field was left holding by an earlier choice of scope.
+     */
+    rlRuleTierForm(scope, form) {
+      const tier = this.rlTierForm(form);
+      return this.rlScopeInfo(scope).rateOnly ? { ...tier, maxConcurrentStreams: 0 } : tier;
+    },
+
+    /**
+     * The server's limits, mirrored so a mistake is refused in the form that made it instead of at
+     * Save, when the form has closed and the whole configuration is refused with it. One place, and
+     * pinned against RateLimitConfigValidation by AdminConsoleRateLimitSafetyTests so the two cannot
+     * drift apart unnoticed. The server remains the authority.
+     */
+    rlLimits() {
+      return { maxRpm: 1000000, maxBurst: 1000000, maxStreams: 10000, maxPlanSlugLength: 64, maxTargetLength: 256 };
+    },
+
+    /**
+     * Why the server would refuse this tier on a rule of this scope, or ''. The counterpart of
+     * RateLimitConfigValidation.TryValidateTierShape, which applies to every scope; mirroring it
+     * for the tenant scope alone let every other rule through to a refused Save.
+     */
+    rlRuleTierError(scope, tier) {
+      const blank = this.rlBlankTierField(tier);
+      if (blank) return blank;
+      if (tier.rpm === 0 && tier.maxConcurrentStreams === 0) {
+        return 'A rule must limit something: set rpm or streams above zero.';
+      }
+      const bounds = this.rlTierBoundsError(tier, false);
+      if (bounds) return bounds;
+      if (tier.rpm === 0 && tier.burst !== 0) {
+        return scope === 'tenant'
+          ? 'A tenant rule with rpm 0 keeps the plan rate; set burst to 0 as well.'
+          : 'With rpm 0 this rule does not limit the rate, so a burst has no rate to refill it; set burst to 0 as well.';
+      }
+      if (this.rlScopeInfo(scope).rateOnly) {
+        const name = this.rlScopeInfo(scope).name;
+        if (tier.rpm === 0) return name + ' limits the request rate only; set rpm above zero.';
+        if (tier.maxConcurrentStreams !== 0) return name + ' limits the request rate only; streams has no effect there and must be 0.';
+      }
+      return '';
     },
 
     /**
@@ -3236,14 +3359,15 @@ function adminApp() {
      */
     rlTierBoundsError(tier, floorRpm) {
       const minRpm = floorRpm ? 1 : 0;
-      if (!Number.isInteger(tier.rpm) || tier.rpm < minRpm || tier.rpm > 1000000) {
-        return 'RPM must be a whole number between ' + minRpm + ' and 1,000,000.';
+      const max = this.rlLimits();
+      if (!Number.isInteger(tier.rpm) || tier.rpm < minRpm || tier.rpm > max.maxRpm) {
+        return 'RPM must be a whole number between ' + minRpm + ' and ' + this.formatNum(max.maxRpm) + '.';
       }
-      if (!Number.isInteger(tier.burst) || tier.burst < 0 || tier.burst > 1000000) {
-        return 'Burst must be a whole number between 0 and 1,000,000.';
+      if (!Number.isInteger(tier.burst) || tier.burst < 0 || tier.burst > max.maxBurst) {
+        return 'Burst must be a whole number between 0 and ' + this.formatNum(max.maxBurst) + '.';
       }
-      if (!Number.isInteger(tier.maxConcurrentStreams) || tier.maxConcurrentStreams < 0 || tier.maxConcurrentStreams > 10000) {
-        return 'Streams must be a whole number between 0 and 10,000.';
+      if (!Number.isInteger(tier.maxConcurrentStreams) || tier.maxConcurrentStreams < 0 || tier.maxConcurrentStreams > max.maxStreams) {
+        return 'Streams must be a whole number between 0 and ' + this.formatNum(max.maxStreams) + '.';
       }
       return '';
     },
@@ -3350,8 +3474,28 @@ function adminApp() {
       return null;
     },
 
+    /**
+     * The Save button. saveRateLimits rejects when the save is refused, which is its contract with
+     * anything that awaits it; a click has nobody awaiting it, so Alpine reported the rejection as an
+     * expression error and rethrew it as a page error — for a refusal the page had already explained
+     * beside the button. Consumed here, at the event boundary, and only when it is an error
+     * admin-store classified (an HTTP or network failure, which rlSaveFailed has put on the page).
+     * Anything else is a bug and still surfaces.
+     */
+    async onSaveRateLimitsClick() {
+      try {
+        await this.saveRateLimits();
+      } catch (e) {
+        if (e && (e.title || e.global !== undefined)) return;
+        throw e;
+      }
+    },
+
     async saveRateLimits() {
-      if (!this.rlDraft) return;
+      // One save at a time. A second click while the first is out would send the same If-Match
+      // twice: the first wins, the second is refused as stale, and the operator is told somebody
+      // else changed the configuration they have just saved.
+      if (!this.rlDraft || this.rlSaving) return;
 
       // Refused here rather than filtered out of the payload. A rule set is saved wholesale, so a row
       // the payload leaves out is a row the save deletes — and the operator would have been told the
@@ -3365,41 +3509,108 @@ function adminApp() {
         return;
       }
 
+      this.rlSaving = true;
       this.closeRateLimitDrawers();
-      await this.runApi('settings', 'Saving rate limits…', async () => {
-        this.rateLimitFieldError = '';
-        this.rlSaving = true;
-        try {
-          const body = await this.apiJson('/admin/api/rate-limits', {
-            method: 'PUT',
-            headers: this.rlIfMatchHeaders(),
-            body: JSON.stringify(this.buildRateLimitsPayload())
-          });
-          this.toast(body?.message || 'Rate limits saved.');
-          this.rlReadOnlyReason = '';
-          await this.loadRateLimits(true);
-        } catch (e) {
-          const status = String(e.title || '') + ' ' + String(e.message || '');
-          if (e.status === 409) {
-            // Somebody else saved first. The draft is deliberately kept: it is the operator's work,
-            // and reloading over it is what the confirm on Reload exists to prevent.
-            this.rateLimitFieldError =
-              'Rate limits were changed by someone else since this page was loaded. '
-              + 'Reload to see the current configuration, then reapply your change.';
-            this.toast('Someone else changed rate limits — reload before saving.');
+      // What this request says, fixed before it leaves. The page stays editable while it is out, so
+      // when the answer comes back the draft may have moved on: the answer is about `sent`, and the
+      // draft is touched only if it still is `sent`.
+      const payload = this.buildRateLimitsPayload();
+      const sent = this.rlCanonical(this.rlDraft);
+      const headers = this.rlIfMatchHeaders();
+      try {
+        await this.runApi('settings', 'Saving rate limits…', async () => {
+          this.rateLimitFieldError = '';
+          try {
+            const body = await this.apiJson('/admin/api/rate-limits', { method: 'PUT', headers, body: JSON.stringify(payload) });
+            this.toast(body?.message || 'Rate limits saved.');
+            this.rlReadOnlyReason = '';
+            this.rlAdoptSaved(payload, sent, body?.version ?? body?.Version ?? null);
+          } catch (e) {
+            await this.rlSaveFailed(e);
             throw e;
           }
-          if (/503/.test(status) || /configured database/i.test(status)) {
-            this.rlReadOnlyReason = 'This gateway has no database, so rate limits are read-only here.';
-          } else if (/403/.test(status)) {
-            this.rlReadOnlyReason = 'This key may view rate limits but not change them.';
-          }
-          this.rateLimitFieldError = e.message || 'Failed to save rate limits.';
-          throw e;
-        } finally {
-          this.rlSaving = false;
-        }
-      }, { localOnly: true });
+        }, { localOnly: true });
+      } finally {
+        this.rlSaving = false;
+      }
+    },
+
+    /**
+     * After a successful save: what was sent is now what is saved, at the version the server
+     * answered with. The draft is reset to it only when it still equals what was sent; edits made
+     * while the request was out stay, and read as unsaved against the new baseline — which is what
+     * they are.
+     */
+    rlAdoptSaved(payload, sent, version) {
+      const unchanged = this.rlCanonical(this.rlDraft) === sent;
+      this.applyRateLimitsData({ ...payload, version }, true);
+      if (unchanged) this.rlDraft = this.rlClone(this.rateLimits);
+      this.rateLimitFieldError = '';
+      this.rlReviewOpen = false;
+      // The server's own rendering of what was saved. Unforced, so it is skipped outright when
+      // edits were made meanwhile and dropped if one is made before it lands; nothing depends on
+      // it succeeding. A gateway that reports no version is asked for one, without the draft being
+      // offered up to get it.
+      if (version !== null) void this.loadRateLimits();
+      else if (this.rateLimitsDirty) void this.rlRefreshBaseline().catch(() => {});
+      else void this.loadRateLimits(true);
+    },
+
+    /**
+     * Fetches the saved configuration into the baseline only — the version and the side of the
+     * comparison the draft is measured against — and leaves the draft alone. False when a newer
+     * fetch or save made the answer obsolete before it arrived.
+     */
+    async rlRefreshBaseline() {
+      const seq = this._rlFetchSeq = (this._rlFetchSeq || 0) + 1;
+      const data = await this.apiJson('/admin/api/rate-limits');
+      if (seq !== this._rlFetchSeq) return false;
+      this.applyRateLimitsData(data, true);
+      return true;
+    },
+
+    /**
+     * A refused save, read from the HTTP status and nothing else. The message is operator-facing
+     * text that quotes rule identities — key ids, model names — so a number found in it says
+     * nothing about what the server answered.
+     */
+    async rlSaveFailed(e) {
+      if (e.status === 409) {
+        await this.rlRecoverFromConflict();
+        return;
+      }
+      if (e.status === 503) {
+        this.rlReadOnlyReason = 'This gateway has no database, so rate limits are read-only here.';
+      } else if (e.status === 403) {
+        this.rlReadOnlyReason = 'This key may view rate limits but not change them.';
+      }
+      this.rateLimitFieldError = e.message || 'Failed to save rate limits.';
+    },
+
+    /**
+     * Somebody else saved first. The draft is the operator's work and is never the thing that gives
+     * way: only the baseline is refreshed, so the change list now compares the draft with what is
+     * actually saved, and the next save is based on the current version. Saving again is then a
+     * decision made with the other change in view, rather than an overwrite nobody saw — and if
+     * the refresh itself fails, the old version stays, so the next save is refused again instead
+     * of going through blind.
+     */
+    async rlRecoverFromConflict() {
+      try {
+        if (!await this.rlRefreshBaseline()) return;
+        this.rlReviewOpen = true;
+        this.rateLimitFieldError =
+          'Rate limits were changed by someone else while you were editing. Your edits are kept. '
+          + 'The change list now compares them with the current configuration: review it, then save '
+          + 'again to apply them over it, or discard them.';
+        this.toast('Someone else changed rate limits — review your changes, then save again.');
+        this.queueRateLimitScheduleRefresh();
+      } catch {
+        this.rateLimitFieldError =
+          'Rate limits were changed by someone else, and the current configuration could not be '
+          + 'loaded to compare. Your edits are kept; try saving again in a moment.';
+        this.toast('Someone else changed rate limits — could not load their change.');
+      }
     },
 
     /** Rows asked for per section. The endpoint caps at 1000; 200 keeps the rule-list join honest. */
@@ -3804,7 +4015,12 @@ function adminApp() {
     applyRateLimitTier() {
       if (!this.rateLimitsEditable) return;
       const t = this.rlTier;
-      const tier = this.rlTierPayload(t);
+      const tier = this.rlTierForm(t);
+      const blank = this.rlBlankTierField(tier);
+      if (blank) {
+        this.rlTierError = blank;
+        return;
+      }
       // The "needs a rate" messages come first: they say why zero is refused, which a range cannot.
       if (tier.rpm < 1) {
         this.rlTierError = t.kind === 'default'
@@ -3821,6 +4037,10 @@ function adminApp() {
         const slug = String(t.slug || '').trim();
         if (!/^[A-Za-z][A-Za-z0-9_-]*$/.test(slug)) {
           this.rlTierError = 'Plan slug: letters, digits, hyphen or underscore, starting with a letter.';
+          return;
+        }
+        if (slug.length > this.rlLimits().maxPlanSlugLength) {
+          this.rlTierError = 'A plan slug can be at most ' + this.rlLimits().maxPlanSlugLength + ' characters.';
           return;
         }
         const clash = Object.keys(this.rlDraft.plans).find(k => k.toLowerCase() === slug.toLowerCase() && k !== t.originalSlug);
@@ -3895,18 +4115,10 @@ function adminApp() {
       if (!this.rateLimitsEditable) return;
       const rule = this.rlFindDraftRule(this.rlRule.identity);
       if (!rule) return;
-      const tier = this.rlTierPayload(this.rlRule);
-      if (tier.rpm === 0 && tier.maxConcurrentStreams === 0) {
-        this.rlRuleError = 'A rule must limit something: set rpm or streams above zero.';
-        return;
-      }
-      const bounds = this.rlTierBoundsError(tier, false);
-      if (bounds) {
-        this.rlRuleError = bounds;
-        return;
-      }
-      if (rule.scope === 'tenant' && tier.rpm === 0 && tier.burst !== 0) {
-        this.rlRuleError = 'A tenant rule with rpm 0 keeps the plan rate; set burst to 0 as well.';
+      const tier = this.rlRuleTierForm(rule.scope, this.rlRule);
+      const shape = this.rlRuleTierError(rule.scope, tier);
+      if (shape) {
+        this.rlRuleError = shape;
         return;
       }
       Object.assign(rule, tier, {
@@ -4082,6 +4294,12 @@ function adminApp() {
       if (w.kind === 'once' && w.until && w.until <= w.from) return 'Until must be after From. Leave Until empty for a change that stays in force.';
       if (w.kind === 'weekly' && !w.days.length) return 'Pick at least one day.';
       if (w.kind === 'weekly' && (!w.start || !w.end)) return 'Set a start and an end time.';
+      // Asked of the form, not of `w`: by the time the form has become a window an empty field has
+      // become a zero, and zero means something (see rlTierForm).
+      if (!w.suspend && this.rlWindow) {
+        const blank = this.rlBlankTierField(this.rlTierForm(this.rlWindow));
+        if (blank) return blank;
+      }
       if (!w.suspend && w.rpm <= 0 && w.maxConcurrentStreams <= 0) return 'Set rpm or streams above zero, or pause the rule instead.';
       // A suspending window ignores its numbers, so only a tier-bearing one is range-checked.
       if (!w.suspend) {
@@ -4251,7 +4469,11 @@ function adminApp() {
     async limitRateForKey(key) {
       this.setTab('settings');
       this.setSettingsSubTab('limits');
-      if (!this.rlDraft) await this.loadRateLimits();
+      // Entering Settings has just asked for the configuration. The form opens after that answer,
+      // not during it: a rule created in the gap would be newer than the response, and although
+      // the response would then be dropped, the operator would be building on a page that is
+      // about to be told it is out of date. Joins the request already in flight.
+      await this.loadRateLimits();
       if (!this.rateLimitsEditable) {
         this.toast(this.rateLimitsReadOnlyText || this.rateLimitsLoadError || 'Rate limits cannot be edited right now.', 'error');
         return;
@@ -4338,8 +4560,11 @@ function adminApp() {
       const parts = [];
       if (hasSubject) parts.push(key ? String(key.id) : subjectText);
       if (hasModel) parts.push(canon.id);
-      const tier = this.rlTierPayload(n);
-      const rule = { scope, target: parts.length ? parts.join('|') : '*', ...tier, enabled: true, schedule: [] };
+      // Validated as typed, where an empty field is empty. The rule the rest of the form describes
+      // carries plain numbers so every view can do arithmetic on it; it only becomes configuration
+      // once `error` is empty, and then the two are the same numbers.
+      const tier = this.rlRuleTierForm(scope, n);
+      const rule = { scope, target: parts.length ? parts.join('|') : '*', ...this.rlTierPayload(tier), enabled: true, schedule: [] };
 
       let error = '';
       // Which control the message belongs under; '' for one that is about the rule as a whole.
@@ -4356,18 +4581,20 @@ function adminApp() {
       } else if (hasModel && !canon.id) {
         error = 'Choose a model, or switch to “All models”.';
         errorField = 'model';
+      } else if (hasModel && canon.id.includes('|')) {
+        error = 'A model id cannot contain “|”: it is what separates the two halves of a stored target.';
+        errorField = 'model';
+      } else if (rule.target.length > this.rlLimits().maxTargetLength) {
+        error = 'This target is ' + this.formatNum(rule.target.length) + ' characters long; a rule target can be at most '
+          + this.rlLimits().maxTargetLength + '.';
+        errorField = hasModel ? 'model' : 'subject';
       } else if (this.rlFindDraftRule(this.rlIdentity(rule.scope, rule.target))) {
         error = 'A rule for exactly this already exists; open it from the list instead.';
-      } else if (tier.rpm === 0 && tier.maxConcurrentStreams === 0) {
-        error = scope === 'global'
-          ? 'Name the ceiling: set rpm above zero. There is no default that is right for every gateway.'
-          : 'A rule must limit something: set rpm or streams above zero.';
+      } else if (scope === 'global' && !(tier.rpm > 0) && !(tier.maxConcurrentStreams > 0)) {
+        error = 'Name the ceiling: set rpm above zero. There is no default that is right for every gateway.';
         errorField = 'tier';
-      } else if (this.rlTierBoundsError(tier, false)) {
-        error = this.rlTierBoundsError(tier, false);
-        errorField = 'tier';
-      } else if (scope === 'tenant' && tier.rpm === 0 && tier.burst !== 0) {
-        error = 'A tenant rule with rpm 0 keeps the plan rate; set burst to 0 as well.';
+      } else if (this.rlRuleTierError(scope, tier)) {
+        error = this.rlRuleTierError(scope, tier);
         errorField = 'tier';
       }
       return { rule, intent, hasSubject, hasModel, key, canon, error, errorField };
@@ -7489,11 +7716,19 @@ function adminApp() {
       };
     },
 
+    /**
+     * The one definition of "unsaved". The save bar, the leave-page guard, the refresh suppression,
+     * the reload confirmation and the tab badge all read this, and it ignores order where order
+     * means nothing (see rlCanonical) — so there is no state in which the page holds changes it
+     * shows no way to save or discard.
+     */
     get rateLimitsDirty() {
       if (!this.rateLimits || !this.rlDraft) return false;
-      return JSON.stringify(this.buildRateLimitsPayload(this.rlDraft)) !==
-        JSON.stringify(this.buildRateLimitsPayload(this.rateLimits));
+      return this.rlCanonical(this.rlDraft) !== this.rlCanonical(this.rateLimits);
     },
+
+    /** Save is refused while read-only and while a save is already out. */
+    get rateLimitsSaveDisabled() { return this.rateLimitsLocked || this.rlSaving; },
 
     /**
      * The tier, rule, window and new-rule editors all work on a copy that reaches the draft only
@@ -7587,9 +7822,11 @@ function adminApp() {
       }
       const count = items.length;
       return {
-        show: count > 0,
+        // Shown whenever the draft is dirty, by the same test everything else uses; the itemised
+        // list describes the difference but does not get to decide whether there is one.
+        show: this.rateLimitsDirty,
         count,
-        countText: count + ' unsaved change' + (count === 1 ? '' : 's'),
+        countText: count > 0 ? count + ' unsaved change' + (count === 1 ? '' : 's') : 'Unsaved changes',
         detail: items.slice(0, 4).join(' · ') + (count > 4 ? ' · …' : ''),
         items: items.map((text, i) => ({ key: i, text }))
       };
@@ -8142,7 +8379,9 @@ function adminApp() {
         usage,
         readOnly: !this.rateLimitsEditable,
         editable: this.rateLimitsEditable,
-        error: this.rlRuleError || ''
+        error: this.rlRuleError || '',
+        // A rate-only scope (failed sign-ins) has no stream cap to set.
+        showStreams: !info.rateOnly
       };
     },
 
@@ -8408,14 +8647,55 @@ function adminApp() {
      * scope — creation refuses a duplicate — so the honest answer is the default tier.
      */
     rlProtectiveBaselineFor(scope) {
-      const fallback = Number(this.rlDraft?.default?.rpm) || 0;
+      const d = this.rlTierPayload(this.rlDraft?.default);
+      const fallback = d.rpm;
       if (scope === 'auth_failure') {
-        return { rpm: fallback, text: 'Failed sign-ins currently fall back to the default tier, ' + this.formatNum(fallback) + ' rpm per client address.' };
+        // Failed sign-ins open no streams, so the default tier's stream cap is not part of what
+        // they fall back to.
+        return { rpm: fallback, burst: d.burst, streams: 0, text: 'Failed sign-ins currently fall back to the default tier, ' + this.formatNum(fallback) + ' rpm per client address.' };
       }
       if (scope === 'anonymous') {
-        return { rpm: fallback, text: 'Anonymous callers currently fall back to the default tier, ' + this.formatNum(fallback) + ' rpm per client address.' };
+        return { rpm: fallback, burst: d.burst, streams: d.maxConcurrentStreams, text: 'Anonymous callers currently fall back to the default tier, ' + this.formatNum(fallback) + ' rpm per client address.' };
       }
-      return { rpm: 0, text: '' };
+      return { rpm: 0, burst: 0, streams: 0, text: '' };
+    },
+
+    /**
+     * What creating this protective rule would loosen, as a warning; '' when it loosens nothing.
+     *
+     * A protective tier is not one more limit a request must also pass, which is what every other
+     * rule is: once configured it *replaces* the default-tier fallback the scope runs on until then
+     * (RateLimitPolicyResolver.ResolveAuthFailureTier; Compose for the anonymous tier, where rpm 0
+     * keeps the default's rate and replaces only the stream cap). So a number above the fallback is
+     * not "no tighter, therefore harmless" — it is the new, looser budget, on the two scopes that
+     * exist to bound credential guessing and unauthenticated traffic. Each dimension is compared
+     * on its own, because the replacement carries burst and streams with it: the same rpm with a
+     * larger burst is a looser budget too. A rule that only tightens is what the form is for, and
+     * one that changes nothing has nothing to be warned about; both say nothing.
+     */
+    rlProtectiveLoosening(rule) {
+      if (!this.rlIsProtective(rule.scope)) return '';
+      const base = this.rlProtectiveBaselineFor(rule.scope);
+      if (!(base.rpm > 0)) return '';
+      const keepsRate = rule.scope === 'anonymous' && !(rule.rpm > 0);
+      const next = {
+        rpm: keepsRate ? base.rpm : rule.rpm,
+        burst: keepsRate ? base.burst : rule.burst,
+        streams: rule.scope === 'anonymous' ? rule.maxConcurrentStreams : 0
+      };
+      if (!(next.rpm > 0)) return '';
+      const looser = [];
+      if (next.rpm > base.rpm) looser.push('the rate from ' + this.formatNum(base.rpm) + ' to ' + this.formatNum(next.rpm) + ' rpm');
+      if (next.burst > base.burst) looser.push('the burst from ' + this.formatNum(base.burst) + ' to ' + this.formatNum(next.burst));
+      // Streams: 0 is unlimited, so it is the loosest value rather than the tightest.
+      if (base.streams > 0 && (next.streams === 0 || next.streams > base.streams)) {
+        looser.push('concurrent streams from ' + this.formatNum(base.streams) + ' to '
+          + (next.streams === 0 ? 'unlimited' : this.formatNum(next.streams)));
+      }
+      if (!looser.length) return '';
+      return 'A limit configured here replaces the default-tier fallback; it is not added on top of it. This one would loosen what '
+        + this.rlScopeInfo(rule.scope).name.toLowerCase() + ' are held to: it raises '
+        + looser.join(', and ') + '.';
     },
 
     /**
@@ -8624,10 +8904,7 @@ function adminApp() {
       const looserWarning = under
         ? 'At ' + this.formatNum(rule.rpm) + ' rpm this rule’s rate is no tighter than the ' + under.source
           + ' (' + this.formatNum(under.band.rpmMax) + ' rpm), which these requests must pass as well — so this rate would never be the one that refuses a request.'
-        : protective.rpm > 0 && rule.rpm > 0 && rule.rpm >= protective.rpm
-          ? 'At ' + this.formatNum(rule.rpm) + ' rpm this rule is no tighter than the '
-            + this.formatNum(protective.rpm) + ' rpm already in force, so it would not change what this scope allows.'
-          : '';
+        : this.rlProtectiveLoosening(rule);
       const limitRows = limits.rows.map(r => ({
         key: r.id, label: r.label,
         numbers: this.rlBandText(r.band) + (r.streams > 0 ? ' · ' + this.formatNum(r.streams) + ' streams' : ''),
@@ -8679,6 +8956,7 @@ function adminApp() {
         subjectInvalid: liveError && built.errorField === 'subject' ? 'true' : 'false',
         modelInvalid: liveError && built.errorField === 'model' ? 'true' : 'false',
         tierInvalid: liveError && built.errorField === 'tier' ? 'true' : 'false',
+        showStreams: !this.rlScopeInfo(built.rule.scope).rateOnly,
         keysLoading: isKeys && this.rlKeysState === 'loading',
         keysFailed: isKeys && this.rlKeysState === 'failed',
         keysEmpty: isKeys && keysReady && !(this.keys || []).some(k => !k.isRevoked && !k.isArchived),

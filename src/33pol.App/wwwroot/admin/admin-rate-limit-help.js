@@ -95,8 +95,8 @@
       },
       limit: {
         title: 'How much?',
-        text: 'The base tier for this rule. The summary below states what this scope enforces today, so you can see whether the number you are entering is tighter. A number no tighter than what is already in force does nothing but is allowed.',
-        example: 'The gateway ceiling is 5,000 rpm. A model rule of 6,000 rpm changes nothing; one of 600 rpm does.',
+        text: 'The base tier for this rule. The summary below states what this scope enforces today, so you can see whether the number you are entering is tighter. On an ordinary rule a number no tighter than what is already in force never binds: it does nothing but is allowed. The two protective limits (failed sign-ins, anonymous callers) are different: a configured tier replaces the default-tier fallback instead of adding to it, so a higher number loosens that budget.',
+        example: 'The gateway ceiling is 5,000 rpm. A model rule of 6,000 rpm changes nothing; one of 600 rpm does. The default tier is 60 rpm: a failed-sign-ins limit of 600 rpm raises that budget to 600.',
         topic: 'numbers'
       },
       baseTier: {
@@ -423,8 +423,8 @@
       },
       limit: {
         title: 'چقدر؟',
-        text: 'سطح پایهٴ این قاعده. خلاصهٴ زیر می‌گوید این دامنه امروز چه چیزی را اعمال می‌کند، تا ببینید عددی که وارد می‌کنید سخت‌گیرانه‌تر است یا نه. عددی که سخت‌گیرانه‌تر از وضع فعلی نباشد کاری نمی‌کند، اما مجاز است.',
-        example: 'سقف گیت‌وی ۵٬۰۰۰ RPM است. قاعدهٴ مدل با ۶٬۰۰۰ RPM هیچ‌چیز را تغییر نمی‌دهد؛ ۶۰۰ RPM تغییر می‌دهد.',
+        text: 'سطح پایهٴ این قاعده. خلاصهٴ زیر می‌گوید این دامنه امروز چه چیزی را اعمال می‌کند، تا ببینید عددی که وارد می‌کنید سخت‌گیرانه‌تر است یا نه. در یک قاعدهٴ معمولی، عددی که سخت‌گیرانه‌تر از وضع فعلی نباشد هرگز محدودکننده نمی‌شود: کاری نمی‌کند، اما مجاز است. دو محدودیت حفاظتی (ورودهای ناموفق و درخواست‌دهندگان ناشناس) متفاوت‌اند: سطحی که تنظیم می‌کنید جایگزینِ سطح پیش‌فرض می‌شود و به آن افزوده نمی‌شود؛ پس عدد بزرگ‌تر آن بودجه را آزادتر می‌کند.',
+        example: 'سقف گیت‌وی ۵٬۰۰۰ RPM است. قاعدهٴ مدل با ۶٬۰۰۰ RPM هیچ‌چیز را تغییر نمی‌دهد؛ ۶۰۰ RPM تغییر می‌دهد. سطح پیش‌فرض ۶۰ RPM است: محدودیت ورودهای ناموفق با ۶۰۰ RPM آن بودجه را به ۶۰۰ می‌رساند.',
         topic: 'numbers'
       },
       baseTier: {

@@ -65,6 +65,57 @@ public sealed class GatewayConfigStoreTests
         snapshot.Version.Should().Be(1); // save bumped the config version
     }
 
+    private static Task<long> SaveRateLimitsAsync(Pol33.Persistence.GatewayDbContext db, int rpm, long? expectedVersion) =>
+        new RateLimitSettingsRepository(db).SaveAsync(
+            enabled: true,
+            adaptiveEnabled: false,
+            new RateLimitPolicy(rpm, 0, 0),
+            new Dictionary<string, RateLimitPolicy>(StringComparer.OrdinalIgnoreCase),
+            [],
+            expectedVersion);
+
+    /// <summary>
+    /// Rate limits shared the general version row with CORS, so a CORS save made a pending rate-limit
+    /// write look stale although nobody had touched a rule. They have their own row now; the general
+    /// one still moves on every write because it is the reload signal the other instances poll.
+    /// </summary>
+    [Fact]
+    public async Task RateLimits_SaveAfterAnUnrelatedCorsSave_IsNotAConflict()
+    {
+        await using var db = PersistenceTestDbContextFactory.CreateInMemory(
+            nameof(RateLimits_SaveAfterAnUnrelatedCorsSave_IsNotAConflict));
+
+        var read = await SaveRateLimitsAsync(db, 50, expectedVersion: null);
+        await new CorsSettingsRepository(db).SaveAllowedOriginsAsync(["https://console.example"]);
+
+        var written = await SaveRateLimitsAsync(db, 60, expectedVersion: read);
+
+        written.Should().Be(read + 1);
+        var snapshot = await new GatewayConfigStore(db).LoadSnapshotAsync();
+        snapshot.RateLimits.Default.Rpm.Should().Be(60);
+        snapshot.RateLimits.Version.Should().Be(written, "the ETag is the rate-limit version, not the general one");
+        snapshot.Version.Should().Be(3, "two rate-limit writes and one CORS write each moved the reload signal");
+    }
+
+    [Fact]
+    public async Task RateLimits_SaveBasedOnAStaleRateLimitVersion_IsRefusedAndWritesNothing()
+    {
+        await using var db = PersistenceTestDbContextFactory.CreateInMemory(
+            nameof(RateLimits_SaveBasedOnAStaleRateLimitVersion_IsRefusedAndWritesNothing));
+
+        var read = await SaveRateLimitsAsync(db, 50, expectedVersion: null);
+        await SaveRateLimitsAsync(db, 60, expectedVersion: read);
+
+        var stale = () => SaveRateLimitsAsync(db, 70, expectedVersion: read);
+
+        (await stale.Should().ThrowAsync<RateLimitVersionConflictException>())
+            .Which.ActualVersion.Should().Be(read + 1);
+        db.ChangeTracker.Clear();
+        var snapshot = await new GatewayConfigStore(db).LoadSnapshotAsync();
+        snapshot.RateLimits.Default.Rpm.Should().Be(60);
+        snapshot.RateLimits.Version.Should().Be(read + 1);
+    }
+
     /// <summary>The anonymous tier is one <c>anonymous</c>/<c>*</c> row, loaded like the auth-failure one.</summary>
     [Fact]
     public async Task RateLimits_AnonymousRule_LoadsIntoTheAnonymousTier()
