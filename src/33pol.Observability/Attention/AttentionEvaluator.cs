@@ -40,6 +40,7 @@ public sealed class AttentionEvaluator(IOptions<GatewayOptions>? options = null)
         EvaluatePipeline(inputs, now, active);
         EvaluateFinOps(inputs, now, active);
         EvaluatePolicy(inputs, active);
+        EvaluateRateLimits(inputs, active);
         EvaluateControlPlane(inputs, now, active);
         EvaluateTenants(inputs, active);
 
@@ -368,6 +369,92 @@ public sealed class AttentionEvaluator(IOptions<GatewayOptions>? options = null)
                 TenantId = q.PartitionKey,
                 Link = Link("settings", ("sub", "limits")),
             }, TimeSpan.Zero);
+        }
+    }
+
+    /// <summary>
+    /// Rate limiting. Everything is read from the Overview section, which the background refresher
+    /// rebuilds every TTL, so these conditions lag by up to that memo like the other slow sections.
+    /// </summary>
+    private void EvaluateRateLimits(AttentionInputs inputs, Dictionary<string, Candidate> active)
+    {
+        var r = inputs.RateLimits;
+        if (r is null)
+        {
+            return;
+        }
+
+        var link = Link("settings", ("sub", "limits"));
+        var five = r.LastFiveMinutes;
+        if (five.Decisions >= _options.RateLimitRefusalMinDecisions && five.RefusalShare >= _options.RateLimitRefusalShareWarn)
+        {
+            Add(active, "rate_limit_refusing", new AttentionItem
+            {
+                Severity = AttentionItem.SeverityWarning,
+                Code = "rate_limit_refusing",
+                Title = $"Rate limits are refusing {Pct(five.RefusalShare, 1)} of requests",
+                Detail = $"{five.Refused:N0} of {five.Decisions:N0} decisions over the last 5 minutes were refused; the threshold is {Pct(_options.RateLimitRefusalShareWarn)}.",
+                Link = link,
+            }, TimeSpan.FromSeconds(_options.RateLimitRefusalForSeconds));
+        }
+
+        // Strictly greater, as the Prometheus rule is written (`> 0.8`).
+        if (r.Store.Ratio > _options.RateLimitPartitionsNearCeilingRatio)
+        {
+            Add(active, "rate_limit_partitions_near_ceiling", new AttentionItem
+            {
+                Severity = AttentionItem.SeverityWarning,
+                Code = "rate_limit_partitions_near_ceiling",
+                Title = $"Rate-limit partition table at {Pct(r.Store.Ratio)} of its ceiling",
+                Detail = $"{Math.Max(r.Store.RequestPartitions, r.Store.StreamPartitions):N0} of {r.Store.MaxPartitions:N0} partitions. At the ceiling, buckets are evicted and those callers stop being limited.",
+                Link = link,
+            }, TimeSpan.FromSeconds(_options.RateLimitPartitionsNearCeilingForSeconds));
+        }
+
+        if (r.Tracker.IsSaturated)
+        {
+            Add(active, "rate_limit_tracker_saturated", new AttentionItem
+            {
+                Severity = AttentionItem.SeverityInfo,
+                Code = "rate_limit_tracker_saturated",
+                Title = "Rate-limit activity is incomplete",
+                Detail = $"{r.Tracker.DroppedDecisions:N0} decisions were not counted because the tracker holds at most {r.Tracker.MaxKeysPerDimension:N0} keys per dimension. Enforcement is unaffected.",
+                Link = link,
+            }, TimeSpan.Zero);
+        }
+
+        if (r.Adaptive.Shedding)
+        {
+            var lowest = r.Adaptive.LowestFactor is { } f ? " (lowest ×" + f.ToString("0.##", CultureInfo.InvariantCulture) + " on " + r.Adaptive.LowestFactorModelId + ")" : string.Empty;
+            Add(active, "rate_limit_adaptive_shedding", new AttentionItem
+            {
+                Severity = AttentionItem.SeverityInfo,
+                Code = "rate_limit_adaptive_shedding",
+                Title = r.Adaptive.ModelsReduced == 1
+                    ? "Adaptive load shedding is reducing 1 model"
+                    : $"Adaptive load shedding is reducing {r.Adaptive.ModelsReduced} models",
+                Detail = $"Those models are enforced below their configured rate{lowest}.",
+                ModelId = r.Adaptive.LowestFactorModelId,
+                Link = link,
+            }, TimeSpan.Zero);
+        }
+
+        // Rules exist and the master switch is off. Not judged while a reload is being applied, and
+        // held for a short `for` so a save still settling is not reported as a state. Never inferred
+        // from an absence of refusals.
+        if (!r.Enforced && r.RuleCount > r.DisabledRuleCount && !r.ConfigReloadInProgress)
+        {
+            var enabled = r.RuleCount - r.DisabledRuleCount;
+            Add(active, "rate_limit_not_enforced", new AttentionItem
+            {
+                Severity = AttentionItem.SeverityInfo,
+                Code = "rate_limit_not_enforced",
+                Title = "Rate limits are switched off",
+                Detail = enabled == 1
+                    ? "1 rule is configured but nothing is rate limited. Quotas and budgets still apply."
+                    : $"{enabled:N0} rules are configured but nothing is rate limited. Quotas and budgets still apply.",
+                Link = link,
+            }, TimeSpan.FromSeconds(_options.RateLimitNotEnforcedForSeconds));
         }
     }
 

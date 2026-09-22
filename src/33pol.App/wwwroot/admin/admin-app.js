@@ -121,8 +121,13 @@ function adminApp() {
     overviewControlPlane: null,
     overviewActivity: null,
     overviewTenants: null,
-    /** Per-section load failure text ('' when fine), keyed finops|policy|controlPlane|activity|tenants. */
-    overviewSectionErrors: { finops: '', policy: '', controlPlane: '', activity: '', tenants: '' },
+    /** Rate-limit section (in-memory tracker counters); null until loaded or when the gateway has no tracker (204). */
+    overviewRateLimits: null,
+    /** Per-section load failure text ('' when fine), keyed finops|policy|controlPlane|activity|tenants|rateLimits. */
+    overviewSectionErrors: { finops: '', policy: '', controlPlane: '', activity: '', tenants: '', rateLimits: '' },
+    /** A rule (scope:target) or rate-limits section id an Overview link asked Settings → Rate limits to open once loaded. */
+    rlPendingRule: '',
+    rlPendingSection: '',
     overviewSlowLoadedAt: null,
     /** Wallboard mode: chrome hidden, type scaled to room-reading size (`#dashboard?wall=1`). */
     wallboard: false,
@@ -2024,16 +2029,18 @@ function adminApp() {
      * Which database-backed sections are worth fetching. The wallboard keeps only the policy card,
      * so the other four queries would otherwise run every 30s, for ever, against cards that are
      * display:none — on a screen left up for weeks that is the bulk of what the console costs the
-     * gateway. Leaving the mode re-runs the full set (restoreFromWallboard).
+     * gateway. Leaving the mode re-runs the full set (restoreFromWallboard). Rate limits stay: the
+     * board shows that card's headline, and the section is an in-memory read, not a query.
      */
     overviewSlowLoaders() {
-      if (this.wallboard) return [() => this.loadOverviewPolicy()];
+      if (this.wallboard) return [() => this.loadOverviewPolicy(), () => this.loadOverviewRateLimits()];
       return [
         () => this.loadOverviewFinops(),
         () => this.loadOverviewPolicy(),
         () => this.loadOverviewControlPlane(),
         () => this.loadOverviewActivity(),
-        () => this.loadOverviewTenants()
+        () => this.loadOverviewTenants(),
+        () => this.loadOverviewRateLimits()
       ];
     },
 
@@ -2074,6 +2081,9 @@ function adminApp() {
     },
     loadOverviewTenants() {
       return this._loadOverviewSection('tenants', '/admin/api/overview/tenants', '_tenantsSeq', body => { this.overviewTenants = body; });
+    },
+    loadOverviewRateLimits() {
+      return this._loadOverviewSection('rateLimits', '/admin/api/overview/rate-limits', '_rlOverviewSeq', body => { this.overviewRateLimits = body; });
     },
 
     // ---- live push stream (Overview) ----
@@ -3189,6 +3199,7 @@ function adminApp() {
         if (seq !== this._rlFetchSeq || this.rlCanonical(this.rlDraft) !== draftAtStart) return;
         this.applyRateLimitsData(data);
         void this.loadRateLimitSchedule();
+        this.openPendingRateLimitRule();
       })();
       const tracked = request.finally(() => {
         if (this._rlFetchInFlight === tracked) this._rlFetchInFlight = null;
@@ -5909,6 +5920,10 @@ function adminApp() {
           if (p('apiKeyId')) this.usageFilterApiKeyId = p('apiKeyId');
           break;
         case 'settings':
+          // A rule is named by its stable scope:target identity, never by display text; it is
+          // opened once the rate limits have loaded (openPendingRateLimitRule).
+          this.rlPendingRule = p('sub') === 'limits' ? p('rule').toLowerCase() : '';
+          this.rlPendingSection = p('sub') === 'limits' ? p('section') : '';
           this.setSettingsSubTab(p('sub') || 'runtime');
           break;
         case 'keys':
@@ -5925,6 +5940,31 @@ function adminApp() {
           break;
       }
       this.applyTab(link.tab, this.routingSubTab, true);
+      // Already loaded (a return visit): nothing will fetch, so hand the rule over now.
+      if (link.tab === 'settings' && this.rlDraft) this.openPendingRateLimitRule();
+    },
+
+    /**
+     * Opens the rule an Overview link asked for, by identity. A limit that is not a rule in the list
+     * (a plan tier, the default tier) lands on the section that edits it; a rule that no longer
+     * exists lands on the list filtered to its target. Runs once per link.
+     */
+    openPendingRateLimitRule() {
+      const identity = this.rlPendingRule;
+      const section = this.rlPendingSection;
+      if (!identity && !section) return;
+      this.rlPendingRule = '';
+      this.rlPendingSection = '';
+      if (identity && this.rlFindDraftRule(identity)) {
+        this.openRateLimitRule(identity);
+        return;
+      }
+      if (identity) {
+        this.showRateLimitRulesFor(identity.slice(identity.indexOf(':') + 1));
+        return;
+      }
+      // The panel may still be mounting; the scroll is a courtesy, not state.
+      setTimeout(() => this.scrollToRateLimitSection(section), 60);
     },
 
     openBackends() { this.openLink({ tab: 'routing', params: { sub: 'backends' } }); },
@@ -6095,6 +6135,185 @@ function adminApp() {
     // ---- tenants card ----
 
     get hasTenants() { return !!this.overviewTenants; },
+    // ---- overview · rate limits ----
+    // Everything below reads /admin/api/overview/rate-limits as served. Nothing is derived from the
+    // per-subject utilisation (last writer wins), and a percentage of a limit appears only where the
+    // server sent peakUtilization — i.e. where one bucket was drained. Zero traffic is a real zero.
+
+    openRateLimitsSettings() { this.openLink({ tab: 'settings', params: { sub: 'limits' } }); },
+
+    /**
+     * `Model gpt-4`, `Key & model prod-bot · gpt-4`, `Plan pro`, `Default tier`: a readable name for a
+     * limit. Display only — navigation always uses the limit's ruleId.
+     */
+    rlOverviewLimitLabel(l) {
+      if (l.scope === 'default') return 'Default tier';
+      if (l.scope === 'plan') return 'Plan ' + l.target;
+      const scope = this.rlScopeInfo(l.scope).short || l.scope;
+      const target = l.target === '*' || !l.target ? '' : this.rlTargetDisplay(l.scope, l.target);
+      return (target ? scope + ' ' + target : scope) + (l.anonymousBucket ? ' (anonymous callers)' : '');
+    },
+
+    get hasRateLimits() { return !!this.overviewRateLimits; },
+    get rateLimitsError() { return this.overviewSectionErrors.rateLimits || ''; },
+    get hasRateLimitsError() { return !!this.overviewSectionErrors.rateLimits; },
+    /** The card shows with data, or with only its error when the first load failed; a 204 hides it. */
+    get showRateLimitsCard() { return this.hasRateLimits || this.hasRateLimitsError; },
+
+    get rateLimitsOverviewView() {
+      const r = this.overviewRateLimits;
+      const has = !!r;
+      const hour = (has && r.lastHour) || {};
+      const decisions = Number(hour.decisions ?? 0);
+      const refused = Number(hour.refused ?? 0);
+      const share = Number(hour.refusalShare ?? 0);
+      const pct = (share * 100).toFixed(share > 0 && share < 0.1 ? 1 : 0) + '%';
+      const enforced = !has || r.enforced !== false;
+      const rules = has ? Number(r.ruleCount ?? 0) : 0;
+      const sched = (has && r.schedule) || { available: false };
+      const next = sched.available && sched.nextChangeAtUtc ? sched.nextChangeAtUtc : null;
+      const tenants = has ? Number(r.refusedTenantCount ?? 0) : 0;
+      const keys = has ? Number(r.refusedKeyCount ?? 0) : 0;
+      const plus = has && r.refusedSubjectsTruncated ? '+' : '';
+      const plural = (n, word) => this.formatNum(n) + plus + ' ' + word + (n === 1 ? '' : 's');
+      const tracker = (has && r.tracker) || {};
+      const saturated = tracker.isSaturated === true;
+      const full = Array.isArray(tracker.atCapacity) ? tracker.atCapacity : [];
+      const retention = (has && r.retention) || {};
+      const hours = Math.max(1, Math.round(Number(retention.historyMinutes || 180) / 60));
+      const adaptive = (has && r.adaptive) || {};
+      const store = (has && r.store) || {};
+
+      const maxOf = rows => Math.max(1, ...rows.map(s => Number(s.refused ?? 0)));
+      const subjectRow = (s, max, open) => ({
+        key: s.key,
+        label: s.label || s.key,
+        sub: s.tenantSlug && s.tenantSlug !== s.label ? s.tenantSlug : '',
+        countText: this.formatNum(s.refused ?? 0),
+        style: 'width:' + Math.max(2, Math.round((Number(s.refused ?? 0) / max) * 100)) + '%',
+        title: (s.label || s.key) + ' · ' + this.formatNum(s.refused ?? 0) + ' of ' + this.formatNum(s.decisions ?? 0) + ' decisions refused in the last hour',
+        open
+      });
+      const tenantList = has && Array.isArray(r.topRefusedTenants) ? r.topRefusedTenants : [];
+      const keyList = has && Array.isArray(r.topRefusedKeys) ? r.topRefusedKeys : [];
+      const tenantMax = maxOf(tenantList);
+      const keyMax = maxOf(keyList);
+
+      const limitRows = (has && Array.isArray(r.limits) ? r.limits : []).map(l => {
+        const u = typeof l.peakUtilization === 'number' ? l.peakUtilization : null;
+        const label = this.rlOverviewLimitLabel(l);
+        const refusedN = Number(l.refused ?? 0);
+        return {
+          key: l.limitId + (l.anonymousBucket ? '|anon' : ''),
+          limitId: l.limitId,
+          ruleId: l.ruleId || '',
+          label,
+          countText: refusedN > 0 ? this.formatNum(refusedN) + ' refused' : 'near limit',
+          countCls: refusedN > 0 ? 'tag level-warning' : 'tag muted',
+          hasMeter: u !== null,
+          meterStyle: u !== null ? 'width:' + Math.min(100, Math.round(u * 100)) + '%' : '',
+          meterCls: 'load-fill' + (u !== null && u >= 1 ? ' is-over' : u !== null && u >= 0.8 ? ' is-hot' : ''),
+          peakText: u !== null ? Math.round(u * 100) + '% peak' : '',
+          title: label + ' · ' + this.formatNum(refusedN) + ' refused of ' + this.formatNum(l.evaluations ?? 0) + ' evaluations in the last hour'
+            + (u !== null
+              ? '. Peak is the busiest minute against the ' + this.formatNum(l.effectiveRpm ?? 0) + ' rpm enforced; it can pass 100% because a bucket also holds burst.'
+              : l.singleBucket ? '' : '. Every caller under this limit has its own bucket, so no percentage of the limit is shown.'),
+          open: () => this.openLink({ tab: 'settings', params: { sub: 'limits', rule: l.ruleId || '', section: l.ruleId ? '' : 'rl-baselines' } })
+        };
+      });
+
+      const prot = has && Array.isArray(r.protective) ? r.protective : [];
+      const auth = prot.find(p => p.scope === 'auth_failure');
+      const anon = prot.find(p => p.scope === 'anonymous');
+
+      let title;
+      if (!has) title = 'Rate limits';
+      else if (!enforced) title = 'Not enforced' + (rules > 0 ? ' — ' + this.formatNum(rules) + ' rule' + (rules === 1 ? '' : 's') + ' configured' : '');
+      else if (decisions === 0) title = 'Enforced · no decisions in the last hour';
+      else if (refused === 0) title = 'Enforced · nothing refused in the last hour';
+      else title = 'Enforced · refusing ' + pct + ' of decisions in the last hour';
+
+      const windowsText = sched.available ? this.formatNum(sched.windowsActiveNow ?? 0) : '—';
+      const nextText = !sched.available ? '—' : next ? this.rlRelative(next) : 'none';
+      const refusedText = refused > 0 ? this.formatNum(refused) + ' · ' + pct : '0';
+
+      return {
+        has,
+        title,
+        enforced,
+        notEnforced: has && !enforced,
+        notEnforcedText: rules > 0
+          ? 'Rate limiting is switched off: ' + this.formatNum(rules) + ' rule' + (rules === 1 ? ' is' : 's are') + ' configured but nothing is rate limited. Quotas and budgets still apply.'
+          : 'Rate limiting is switched off. Quotas and budgets still apply.',
+        refusing: refused > 0,
+        refusedText,
+        refusedTitle: this.formatNum(refused) + ' of ' + this.formatNum(decisions) + ' rate-limit decisions refused in the last hour'
+          + (has ? ' (' + this.formatNum(r.lastFiveMinutes?.refused ?? 0) + ' of ' + this.formatNum(r.lastFiveMinutes?.decisions ?? 0) + ' in the last 5 minutes)' : ''),
+        fiveMinText: has ? this.formatNum(r.lastFiveMinutes?.refused ?? 0) + ' refused of ' + this.formatNum(r.lastFiveMinutes?.decisions ?? 0) + ' · last 5 min' : '',
+        subjectsRefused: tenants + keys > 0,
+        subjectsText: tenants + keys === 0 ? 'none' : plural(tenants, 'tenant') + ' · ' + plural(keys, 'key'),
+        subjectsTitle: 'Tenants and API keys with at least one refusal in the last hour' + (plus ? '; the lists were capped, so these are lower bounds' : ''),
+        limitsRefusing: has && Number(r.refusingLimitCount ?? 0) > 0,
+        limitsRefusingText: has ? this.formatNum(r.refusingLimitCount ?? 0) : '0',
+        windowsText,
+        nextText,
+        scheduleTitle: sched.available
+          ? this.formatNum(sched.scheduledRuleCount ?? 0) + ' rule' + (sched.scheduledRuleCount === 1 ? '' : 's') + ' with a schedule; ' + windowsText + ' with a window in force now'
+          : 'The schedule could not be read, so this is unknown rather than zero',
+        nextTitle: next
+          ? 'Next scheduled change ' + this.rlFmtShort(next) + (sched.nextChangeRuleId ? ' · ' + sched.nextChangeRuleId : '') + (sched.nextChangeWindow ? ' (window “' + sched.nextChangeWindow + '” starts)' : '')
+          : sched.available ? 'No scheduled change is coming up' : 'The schedule could not be read',
+        limitRows,
+        hasLimitRows: limitRows.length > 0,
+        tenantRows: tenantList.map(s => subjectRow(s, tenantMax, () => {})),
+        hasTenantRows: tenantList.length > 0,
+        keyRows: keyList.map(s => subjectRow(s, keyMax, () => this.openLink({ tab: 'keys', params: { q: s.label || s.key } }))),
+        hasKeyRows: keyList.length > 0,
+        protectiveText: has
+          ? 'Protective budgets · last hour: failed credentials ' + this.formatNum(auth?.refused ?? 0) + ' refused'
+            + ', anonymous callers ' + this.formatNum(anon?.refused ?? 0) + ' refused.'
+          : '',
+        adaptiveText: !has ? '' : !adaptive.enabled ? 'Adaptive load shedding is off.'
+          : Number(adaptive.modelsReduced ?? 0) > 0
+            ? 'Adaptive load shedding is reducing ' + this.formatNum(adaptive.modelsReduced) + ' model' + (adaptive.modelsReduced === 1 ? '' : 's')
+              + (typeof adaptive.lowestFactor === 'number' ? ' (lowest ×' + Number(adaptive.lowestFactor).toFixed(2).replace(/\.?0+$/, '') + ' on ' + adaptive.lowestFactorModelId + ')' : '') + '.'
+            : 'Adaptive load shedding is on; no model is reduced.',
+        adaptiveShedding: has && adaptive.enabled === true && Number(adaptive.modelsReduced ?? 0) > 0,
+        adaptiveCls: has && adaptive.enabled === true && Number(adaptive.modelsReduced ?? 0) > 0 ? 'hint wb-hide rl-ov-warn' : 'hint wb-hide',
+        hasStore: has && Number(store.maxPartitions ?? 0) > 0,
+        storeText: has && Number(store.maxPartitions ?? 0) > 0
+          ? 'Partition table ' + this.formatNum(Math.max(store.requestPartitions ?? 0, store.streamPartitions ?? 0)) + ' of ' + this.formatNum(store.maxPartitions)
+            + ' (' + Math.round(Number(store.ratio ?? 0) * 100) + '%).'
+          : '',
+        storeHot: has && Number(store.ratio ?? 0) > 0.8,
+        saturated,
+        saturatedText: saturated
+          ? 'Activity is incomplete: ' + this.formatNum(tracker.droppedDecisions ?? 0) + ' decision' + (tracker.droppedDecisions === 1 ? ' was' : 's were')
+            + ' not counted because the tracker holds at most ' + this.formatNum(tracker.maxKeysPerDimension ?? 0) + ' keys per dimension'
+            + (full.length ? ' (full: ' + full.join(', ') + ')' : '') + '. Rows shown are exact and the totals are exact; a missing row is unknown, not zero.'
+          : '',
+        trackerFull: !saturated && full.length > 0,
+        trackerFullText: !saturated && full.length
+          ? 'The tracker is holding as many ' + full.join(', ') + ' as it can; nothing has been missed yet.'
+          : '',
+        retentionText: has
+          ? 'Counted in this gateway process' + (retention.trackingSinceUtc ? ' since ' + this.rlFmtShort(retention.trackingSinceUtc) : '')
+            + ', about ' + hours + ' h kept. Not durable: counts restart with the gateway and are not shared between replicas.'
+          : '',
+        quiet: has && enforced && refused === 0 && limitRows.length === 0,
+        quietText: decisions === 0 ? 'No rate-limit decisions in the last hour.' : 'Nothing refused in the last hour.',
+        glanceHint: !has ? '' : !enforced ? 'Rate limits are switched off.'
+          : saturated ? 'Counts are incomplete — some decisions were not counted.'
+          : decisions === 0 ? 'No rate-limit decisions in the last hour.'
+          : refused === 0 ? 'Nothing refused in the last hour.' : '',
+        headStats: [
+          { key: 'refused', label: 'Refused · 1h', value: refusedText, cls: 'mini-stat' + (refused > 0 ? ' warn' : ''), title: 'Rate-limit refusals in the last hour' },
+          { key: 'windows', label: 'Windows active', value: windowsText, cls: 'mini-stat', title: sched.available ? 'Rules with a schedule window in force now' : 'The schedule could not be read' },
+          { key: 'next', label: 'Next change', value: nextText, cls: 'mini-stat', title: next ? 'Next scheduled change ' + this.rlFmtShort(next) : 'No scheduled change is coming up' }
+        ]
+      };
+    },
+
     get tenantsError() { return this.overviewSectionErrors.tenants || ''; },
     get hasTenantsError() { return !!this.overviewSectionErrors.tenants && !this.overviewTenants; },
     get tenantsSummaryText() {
@@ -6736,6 +6955,25 @@ function adminApp() {
             { key: 'budgets', label: 'Budgets near limit', value: this.formatNum(budgetsHot), cls: budgetsHot > 0 ? 'is-warn' : '' }
           ],
           hint: rejections + unknown + denials + quotasHot + budgetsHot === 0 ? 'Nothing is being refused right now.' : ''
+        });
+      }
+
+      const rl = this.rateLimitsOverviewView;
+      if (rl.has) {
+        push({
+          key: 'rateLimits',
+          eyebrow: 'Policy',
+          title: 'Rate limits',
+          openTitle: 'Open Rate limits',
+          open: () => this.openRateLimitsSettings(),
+          stats: [
+            { key: 'refused', label: 'Refused · 1h', value: rl.refusedText, cls: rl.refusing ? 'is-warn' : '', title: rl.refusedTitle },
+            { key: 'subjects', label: 'Refused subjects', value: rl.subjectsText, cls: rl.subjectsRefused ? 'is-warn' : '', title: rl.subjectsTitle },
+            { key: 'limits', label: 'Limits refusing', value: rl.limitsRefusingText, cls: rl.limitsRefusing ? 'is-warn' : '', title: 'Configured limits that refused at least once in the last hour' },
+            { key: 'windows', label: 'Windows active', value: rl.windowsText, title: rl.scheduleTitle },
+            { key: 'next', label: 'Next change', value: rl.nextText, title: rl.nextTitle }
+          ],
+          hint: rl.glanceHint
         });
       }
 
@@ -8467,7 +8705,14 @@ function adminApp() {
       const reduced = has ? (u.adaptive?.models || []).filter(m => Number(m.factor) < 1).length : 0;
       const evaluated = has && u.adaptive?.lastEvaluatedUtc && u.generatedUtc
         ? Math.max(0, Math.round((new Date(u.generatedUtc).getTime() - new Date(u.adaptive.lastEvaluatedUtc).getTime()) / 1000)) : null;
-      const stat = (key, label, value, sub, cls, title, go) => ({ key, label, value, sub, hasSub: !!sub, cls: 'mini-stat rl-sum-stat' + (cls ? ' ' + cls : ''), title, ariaLabel: label + ': ' + value + (sub ? ', ' + sub : '') + '. ' + title, go });
+      // `label` is the whole phrase (its time basis included) for assistive tech; the tile draws
+      // the two halves on separate lines so the figures line up across tiles.
+      const stat = (key, label, value, sub, cls, title, go) => {
+        const dot = label.indexOf(' · ');
+        const head = dot < 0 ? label : label.slice(0, dot);
+        const basis = dot < 0 ? '' : label.slice(dot + 3);
+        return { key, label, head, basis, hasBasis: !!basis, value, sub, hasSub: !!sub, cls: 'mini-stat rl-sum-stat' + (cls ? ' ' + cls : ''), title, ariaLabel: label + ': ' + value + (sub ? ', ' + sub : '') + '. ' + title, go };
+      };
       const window = 'last ' + minutes + ' min';
       const stats = [];
       if (has) {
@@ -8825,6 +9070,8 @@ function adminApp() {
         was, hasWas: !!was,
         enforcing,
         enfText: enforcing.text, enfTags: enforcing.tags, enfSub: enforcing.sub, hasEnfSub: !!enforcing.sub,
+        // The same text in pieces: the cell wraps between figures ("600 rpm" · "60 burst"), never inside one.
+        enfParts: String(enforcing.text || '').split(' · ').map((text, i) => ({ key: i + ':' + text, text })),
         enfTitle: enforcing.title || '',
         enfKind: enforcing.kind,
         windowActive: enforcing.kind === 'window' || enforcing.kind === 'paused',

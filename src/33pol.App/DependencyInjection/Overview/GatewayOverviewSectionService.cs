@@ -40,7 +40,9 @@ internal sealed partial class GatewayOverviewSectionService(
     IConfigReload? configReload = null,
     FileUpstreamSecretStore? secretStore = null,
     IAuditLogReader? auditReader = null,
-    GatewayRuntimeState? runtimeState = null)
+    GatewayRuntimeState? runtimeState = null,
+    IRateLimitUsageTracker? rateLimitTracker = null,
+    IRateLimitConfigAdminService? rateLimitAdmin = null)
     : IOverviewSectionService, IOverviewSlowSectionCache, IOverviewHotSectionSource
 {
     private readonly Section<FinOpsOverview> _finops = new();
@@ -48,6 +50,7 @@ internal sealed partial class GatewayOverviewSectionService(
     private readonly Section<ControlPlaneOverview> _controlPlane = new();
     private readonly Section<ActivityOverview> _activity = new();
     private readonly Section<TenantsOverview> _tenants = new();
+    private readonly Section<RateLimitOverview> _rateLimits = new();
 
     private TimeSpan Ttl => TimeSpan.FromSeconds(Math.Max(1, gatewayOptions.Value.Overview.SlowSectionTtlSeconds));
 
@@ -60,6 +63,8 @@ internal sealed partial class GatewayOverviewSectionService(
     public ControlPlaneOverview? ControlPlane => _controlPlane.Last;
 
     public TenantsOverview? Tenants => _tenants.Last;
+
+    public RateLimitOverview? RateLimits => _rateLimits.Last;
 
     // ---- IOverviewHotSectionSource ----
 
@@ -137,6 +142,9 @@ internal sealed partial class GatewayOverviewSectionService(
     public Task<TenantsOverview?> GetTenantsAsync(bool refresh, CancellationToken cancellationToken) =>
         _tenants.GetAsync(refresh, Ttl, timeProvider, BuildTenantsAsync, "tenants", logger, cancellationToken);
 
+    public Task<RateLimitOverview?> GetRateLimitsAsync(bool refresh, CancellationToken cancellationToken) =>
+        _rateLimits.GetAsync(refresh, Ttl, timeProvider, BuildRateLimitsAsync, "rate-limits", logger, cancellationToken);
+
     /// <summary>Rebuilds every section; used by the background refresher to keep the cache warm.</summary>
     public async Task RefreshAllAsync(CancellationToken cancellationToken)
     {
@@ -144,6 +152,7 @@ internal sealed partial class GatewayOverviewSectionService(
         await GetPolicyAsync(refresh: false, cancellationToken).ConfigureAwait(false);
         await GetControlPlaneAsync(refresh: false, cancellationToken).ConfigureAwait(false);
         await GetTenantsAsync(refresh: false, cancellationToken).ConfigureAwait(false);
+        await GetRateLimitsAsync(refresh: false, cancellationToken).ConfigureAwait(false);
     }
 
     // ---- FinOps ----

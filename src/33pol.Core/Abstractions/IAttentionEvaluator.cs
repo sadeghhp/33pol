@@ -27,5 +27,7 @@ public sealed record AttentionInputs
 
     public TenantsOverview? Tenants { get; init; }
 
+    public RateLimitOverview? RateLimits { get; init; }
+
     public bool DatabaseConfigured { get; init; }
 }

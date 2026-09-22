@@ -25,6 +25,7 @@ public sealed class AdminOverviewSectionsIntegrationTests
     [InlineData("/admin/api/overview/control-plane")]
     [InlineData("/admin/api/overview/activity")]
     [InlineData("/admin/api/overview/tenants")]
+    [InlineData("/admin/api/overview/rate-limits")]
     public async Task OverviewSections_WithoutAdminKey_AreUnauthorized(string path)
     {
         await using var factory = GatewayWebApplicationFactory.CreateWithInMemoryDatabase();

@@ -239,4 +239,207 @@ public sealed class AttentionEvaluatorTests
         items.Select(i => i.Code).Should().Equal("circuit_open", "backend_unhealthy", "backend_unhealthy");
         items[0].SinceUtc.Should().Be(Now);
     }
+
+    // ---- rate limits ----
+
+    private static RateLimitOverview RateLimits(
+        long decisions5m = 0,
+        long refused5m = 0,
+        bool enforced = true,
+        int rules = 0,
+        int disabledRules = 0,
+        bool reloading = false,
+        bool saturated = false,
+        int modelsReduced = 0,
+        bool adaptiveEnabled = true,
+        int partitions = 0,
+        int maxPartitions = 50_000) => new()
+    {
+        Enforced = enforced,
+        RuleCount = rules,
+        DisabledRuleCount = disabledRules,
+        ConfigReloadInProgress = reloading,
+        LastFiveMinutes = new RateLimitRefusalWindow(5, decisions5m, decisions5m - refused5m, refused5m, refused5m, 0,
+            decisions5m == 0 ? 0 : (double)refused5m / decisions5m),
+        Tracker = new RateLimitTrackerOverview(saturated, saturated ? 12 : 0, null, 500),
+        Adaptive = new RateLimitAdaptiveOverview(adaptiveEnabled, modelsReduced, modelsReduced > 0 ? 0.5 : null, modelsReduced > 0 ? "gpt-4o" : null),
+        Store = new RateLimitStoreOverview(partitions, 0, maxPartitions, (double)partitions / Math.Max(maxPartitions, 1)),
+    };
+
+    private static IReadOnlyList<AttentionItem> EvaluateRateLimits(AttentionEvaluator sut, RateLimitOverview r, DateTimeOffset? at = null) =>
+        sut.Evaluate(new AttentionInputs { Now = at ?? Now, RateLimits = r });
+
+    [Fact]
+    public void RateLimits_Quiet_RaisesNothing()
+    {
+        var sut = Create(o => o.RateLimitRefusalForSeconds = 0);
+
+        EvaluateRateLimits(sut, RateLimits(decisions5m: 0, rules: 3)).Should().BeEmpty("zero traffic is not a condition");
+        EvaluateRateLimits(sut, RateLimits(decisions5m: 500, refused5m: 0, rules: 3)).Should().BeEmpty();
+    }
+
+    [Fact]
+    public void RateLimitRefusing_BelowThreshold_IsNotListed()
+    {
+        var sut = Create(o => o.RateLimitRefusalForSeconds = 0);
+
+        EvaluateRateLimits(sut, RateLimits(decisions5m: 100, refused5m: 9)).Should().BeEmpty("9% is below the 10% default");
+    }
+
+    [Fact]
+    public void RateLimitRefusing_TooFewDecisions_IsNotJudged()
+    {
+        var sut = Create(o => o.RateLimitRefusalForSeconds = 0);
+
+        EvaluateRateLimits(sut, RateLimits(decisions5m: 19, refused5m: 19)).Should().BeEmpty("fewer than 20 decisions");
+    }
+
+    [Fact]
+    public void RateLimitRefusing_AtThresholdAndMinimum_IsListedOnlyAfterItsHold()
+    {
+        var sut = Create();
+        var inputs = RateLimits(decisions5m: 20, refused5m: 2);
+
+        EvaluateRateLimits(sut, inputs).Should().BeEmpty("the default hold is 300 seconds");
+        EvaluateRateLimits(sut, inputs, Now.AddSeconds(299)).Should().BeEmpty();
+        var item = EvaluateRateLimits(sut, inputs, Now.AddSeconds(300)).Should().ContainSingle().Subject;
+
+        item.Code.Should().Be("rate_limit_refusing");
+        item.Severity.Should().Be(AttentionItem.SeverityWarning);
+        item.SinceUtc.Should().Be(Now);
+        item.Title.Should().Contain("10.0%");
+        item.Link!.Tab.Should().Be("settings");
+        item.Link.Params!["sub"].Should().Be("limits");
+    }
+
+    [Fact]
+    public void RateLimitRefusing_ClearsAndRestartsItsHold()
+    {
+        var sut = Create();
+        EvaluateRateLimits(sut, RateLimits(decisions5m: 100, refused5m: 50));
+        EvaluateRateLimits(sut, RateLimits(decisions5m: 100, refused5m: 0), Now.AddSeconds(200));
+
+        EvaluateRateLimits(sut, RateLimits(decisions5m: 100, refused5m: 50), Now.AddSeconds(301)).Should().BeEmpty();
+    }
+
+    [Fact]
+    public void RateLimitTrackerSaturated_IsInfoWhileSaturated()
+    {
+        var sut = Create();
+
+        var item = EvaluateRateLimits(sut, RateLimits(saturated: true)).Should().ContainSingle().Subject;
+        item.Code.Should().Be("rate_limit_tracker_saturated");
+        item.Severity.Should().Be(AttentionItem.SeverityInfo);
+        EvaluateRateLimits(sut, RateLimits(saturated: false)).Should().BeEmpty();
+    }
+
+    [Fact]
+    public void RateLimitAdaptiveShedding_IsInfoOnlyWhileAModelIsReduced()
+    {
+        var sut = Create();
+
+        var item = EvaluateRateLimits(sut, RateLimits(modelsReduced: 2)).Should().ContainSingle().Subject;
+        item.Code.Should().Be("rate_limit_adaptive_shedding");
+        item.Severity.Should().Be(AttentionItem.SeverityInfo);
+        item.ModelId.Should().Be("gpt-4o");
+        EvaluateRateLimits(sut, RateLimits(modelsReduced: 0)).Should().BeEmpty("enabled but not reducing anything");
+        EvaluateRateLimits(sut, RateLimits(modelsReduced: 2, adaptiveEnabled: false)).Should().BeEmpty();
+    }
+
+    [Fact]
+    public void RateLimitNotEnforced_WithRules_IsInfoAfterItsHold()
+    {
+        var sut = Create();
+        var off = RateLimits(enforced: false, rules: 3);
+
+        EvaluateRateLimits(sut, off).Should().BeEmpty("a save may still be settling");
+        var item = EvaluateRateLimits(sut, off, Now.AddSeconds(60)).Should().ContainSingle().Subject;
+
+        item.Code.Should().Be("rate_limit_not_enforced");
+        item.Severity.Should().Be(AttentionItem.SeverityInfo);
+        item.Link!.Params!["sub"].Should().Be("limits");
+    }
+
+    [Fact]
+    public void RateLimitNotEnforced_NotRaisedWithoutEnabledRulesOrFromMissingRefusals()
+    {
+        var sut = Create(o => o.RateLimitNotEnforcedForSeconds = 0);
+
+        EvaluateRateLimits(sut, RateLimits(enforced: false, rules: 0)).Should().BeEmpty("no rules configured");
+        EvaluateRateLimits(sut, RateLimits(enforced: false, rules: 2, disabledRules: 2)).Should().BeEmpty("every rule is switched off anyway");
+        EvaluateRateLimits(sut, RateLimits(enforced: true, rules: 5, decisions5m: 0)).Should().BeEmpty("no refusals is not \"not enforced\"");
+    }
+
+    [Fact]
+    public void RateLimitNotEnforced_SuppressedDuringAReload()
+    {
+        var sut = Create(o => o.RateLimitNotEnforcedForSeconds = 0);
+
+        EvaluateRateLimits(sut, RateLimits(enforced: false, rules: 3, reloading: true)).Should().BeEmpty();
+        EvaluateRateLimits(sut, RateLimits(enforced: false, rules: 3, reloading: false), Now.AddSeconds(1))
+            .Should().ContainSingle(i => i.Code == "rate_limit_not_enforced");
+    }
+
+    [Fact]
+    public void RateLimitPartitionsNearCeiling_StrictlyAboveRatio_AfterTenMinutes()
+    {
+        var sut = Create();
+
+        EvaluateRateLimits(sut, RateLimits(partitions: 40_000)).Should().BeEmpty("exactly 0.8 is not above 0.8");
+        EvaluateRateLimits(sut, RateLimits(partitions: 40_001), Now.AddSeconds(1)).Should().BeEmpty("just observed");
+        var item = EvaluateRateLimits(sut, RateLimits(partitions: 40_001), Now.AddSeconds(601)).Should().ContainSingle().Subject;
+
+        item.Code.Should().Be("rate_limit_partitions_near_ceiling");
+        item.Severity.Should().Be(AttentionItem.SeverityWarning);
+        item.SinceUtc.Should().Be(Now.AddSeconds(1));
+    }
+
+    /// <summary>
+    /// The in-app rule and the shipped Prometheus rule must say the same thing. The alert is written on
+    /// the exported ceiling, so only the ratio and the hold can drift — both are read from the YAML.
+    /// </summary>
+    [Fact]
+    public void RateLimitPartitionsNearCeiling_MatchesThePrometheusRule()
+    {
+        var yaml = File.ReadAllText(Path.Combine(FindRepoRoot(), "deploy", "prometheus", "alerts", "33pol.yml"));
+        var start = yaml.IndexOf("- alert: GatewayRateLimitPartitionsNearCeiling", StringComparison.Ordinal);
+        start.Should().BeGreaterThanOrEqualTo(0);
+        var next = yaml.IndexOf("- alert:", start + 1, StringComparison.Ordinal);
+        var rule = next < 0 ? yaml[start..] : yaml[start..next];
+
+        var threshold = System.Text.RegularExpressions.Regex.Match(rule, @"\)\s*>\s*([0-9.]+)");
+        var hold = System.Text.RegularExpressions.Regex.Match(rule, @"for:\s*(\d+)m");
+        threshold.Success.Should().BeTrue();
+        hold.Success.Should().BeTrue();
+        rule.Should().Contain("max(gateway_rate_limit_partitions{dimension!=\"ceiling\"})")
+            .And.Contain("clamp_min(max(gateway_rate_limit_partitions{dimension=\"ceiling\"}), 1)");
+
+        var defaults = new OverviewAttentionOptions();
+        double.Parse(threshold.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture)
+            .Should().Be(defaults.RateLimitPartitionsNearCeilingRatio);
+        (int.Parse(hold.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture) * 60)
+            .Should().Be(defaults.RateLimitPartitionsNearCeilingForSeconds);
+    }
+
+    [Fact]
+    public void RateLimits_AbsentSection_RaisesNothing()
+    {
+        Create().Evaluate(new AttentionInputs { Now = Now, RateLimits = null }).Should().BeEmpty();
+    }
+
+    private static string FindRepoRoot()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null)
+        {
+            if (File.Exists(Path.Combine(dir.FullName, "33pol.sln")))
+            {
+                return dir.FullName;
+            }
+
+            dir = dir.Parent;
+        }
+
+        throw new InvalidOperationException("Could not locate repository root.");
+    }
 }

@@ -75,6 +75,7 @@ public sealed class GatewayAdminSummaryReader(
                 Policy = slowSections?.Policy,
                 ControlPlane = slowSections?.ControlPlane,
                 Tenants = slowSections?.Tenants,
+                RateLimits = slowSections?.RateLimits,
                 DatabaseConfigured = slowSections?.ControlPlane?.Database.Configured ?? false,
             });
         }

@@ -60,4 +60,27 @@ public sealed class OverviewAttentionOptions
     public int KeyIdleAfterDays { get; set; } = 30;
 
     public int BackupStaleAfterDays { get; set; } = 7;
+
+    /// <summary>Share of rate-limit decisions refused over the last 5 minutes that raises a warning (0.10 = 10%).</summary>
+    public double RateLimitRefusalShareWarn { get; set; } = 0.10;
+
+    /// <summary>Minimum rate-limit decisions in the 5-minute window before the refusal share is judged at all.</summary>
+    public int RateLimitRefusalMinDecisions { get; set; } = 20;
+
+    public int RateLimitRefusalForSeconds { get; set; } = 300;
+
+    /// <summary>
+    /// Partition-table fill over its ceiling above which a warning is raised. Must match the threshold in
+    /// the Prometheus rule <c>GatewayRateLimitPartitionsNearCeiling</c> (a test holds the two together).
+    /// </summary>
+    public double RateLimitPartitionsNearCeilingRatio { get; set; } = 0.8;
+
+    /// <summary>The same rule's <c>for</c> (10m).</summary>
+    public int RateLimitPartitionsNearCeilingForSeconds { get; set; } = 600;
+
+    /// <summary>
+    /// How long rules must exist with enforcement switched off before it is listed, so a save or reload
+    /// that is still being applied is not reported as a settled state.
+    /// </summary>
+    public int RateLimitNotEnforcedForSeconds { get; set; } = 60;
 }

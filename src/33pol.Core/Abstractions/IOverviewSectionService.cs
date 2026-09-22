@@ -18,4 +18,10 @@ public interface IOverviewSectionService
     Task<ActivityOverview?> GetActivityAsync(int limit, bool refresh, CancellationToken cancellationToken);
 
     Task<TenantsOverview?> GetTenantsAsync(bool refresh, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Rate limiting at a glance. Null only when the gateway has no usage tracker; with one and no
+    /// traffic the section is returned with zeros.
+    /// </summary>
+    Task<RateLimitOverview?> GetRateLimitsAsync(bool refresh, CancellationToken cancellationToken);
 }

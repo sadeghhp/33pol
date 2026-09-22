@@ -186,6 +186,13 @@ The admin Overview evaluates the same conditions in-process and lists them under
 | — | `secrets_undecryptable` | critical | stored upstream credentials that no longer decrypt |
 | — | `backup_stale` / `backup_failed` | info / warning | no verified backup in 7 d / last attempt failed |
 | — | `key_expiring` / `key_idle` | info | keys expiring within 7 d / unused for 30 d |
+| — | `rate_limit_refusing` | warning | ≥ 10 % of rate-limit decisions refused over 5 m, ≥ 20 decisions, for 5 m |
+| `GatewayRateLimitPartitionsNearCeiling` | `rate_limit_partitions_near_ceiling` | warning | fuller partition table / ceiling (floored at 1) > 0.8, for 10 m — the rule's own expression |
+| — | `rate_limit_tracker_saturated` | info | the usage tracker dropped at least one decision (a dimension was full); while it lasts |
+| — | `rate_limit_adaptive_shedding` | info | adaptive load shedding holding at least one model below its configured rate; while it lasts |
+| — | `rate_limit_not_enforced` | info | rules configured (and switched on) but the rate-limit master switch is off, for 60 s; not judged while a config reload is in progress |
+
+The rate-limit items are read from the Overview's rate-limit section (`GET /admin/api/overview/rate-limits`), which is rebuilt every `Gateway:Overview:SlowSectionTtlSeconds` (15 s) even with no console open, so they can lag by up to that. The section's counters come from the in-memory usage tracker. It is process-local, keeps about 3 hours of per-minute counts, restarts with the gateway and is not shared between replicas, so these items describe this instance only. Prometheus remains the durable record. `rate_limit_partitions_near_ceiling` mirrors `GatewayRateLimitPartitionsNearCeiling` exactly: the same ratio, the same strict `> 0.8`, and the same 10-minute hold. Its defaults (`RateLimitPartitionsNearCeilingRatio`, `RateLimitPartitionsNearCeilingForSeconds`) are held to the YAML rule by a test, so a change to one without the other fails the build. The other rate-limit alerts (`GatewayRateLimitsNotEnforced` on forced evictions, `GatewayCredentialGuessing`, `GatewayControlPlaneThrottled`) have no in-app counterpart yet. `rate_limit_not_enforced` is a different condition from `GatewayRateLimitsNotEnforced`: it is the master switch, not partition evictions.
 
 ## Traces
 
@@ -197,6 +204,7 @@ Sample OpenTelemetry Collector config: [deploy/otel-collector/config.yaml](../de
 |----------|---------|
 | `GET /admin/api/summary` | Operational snapshot |
 | `GET /admin/api/backends` | Registry + health |
+| `GET /admin/api/overview/rate-limits` | Overview rate-limit section: 1 h / 5 m refusals, refusing limits, refused subjects, tracker/adaptive/store state, schedule (`204` without a usage tracker) |
 | `GET /admin/api/requests?limit=` | Recent requests ring buffer |
 | `GET /admin/api/logs?limit=&level=&search=` | In-memory diagnostic tail (warning and above) |
 | `DELETE /admin/api/logs` | Empty the diagnostic tail (audited) |

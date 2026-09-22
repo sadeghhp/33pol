@@ -1416,7 +1416,9 @@ tr.request-detail-row td { background: var(--bg-inset); padding-top: 0.75rem; }
   .rail-nav { flex-direction: row; flex-wrap: wrap; gap: 2px; }
   .rail-nav button.active::before { display: none; }
   .rail-nav button span:not(.icon) { display: none; }
-  .rail-nav button { padding: 0.5rem; }
+  /* The desktop rule makes each tab full-width; in a row that stacks them into a 250px-tall
+     sticky bar over every page. */
+  .rail-nav button { padding: 0.5rem; width: auto; }
   .rail-foot { flex-direction: row; margin: 0; padding: 0; border: none; margin-left: auto; }
   .theme-switch { border: 1px solid var(--border); }
 }
@@ -1594,6 +1596,24 @@ tr.request-detail-row td { background: var(--bg-inset); padding-top: 0.75rem; }
 .policy-section { margin-top: var(--space-3); }
 .policy-section .eyebrow { display: block; margin-bottom: var(--space-1); }
 .policy-columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr)); gap: var(--space-3); }
+
+/* Rate limits card (Overview). Every cell has a fixed column so a row without a meter (a tier that
+   sums many buckets has no percentage) keeps its count in the same place as a row with one. */
+.rl-ov-limits { display: flex; flex-direction: column; gap: var(--space-1); }
+.rl-ov-limit {
+  display: grid; align-items: center; gap: var(--space-2);
+  grid-template-columns: minmax(7rem, 1.4fr) minmax(4rem, 1fr) auto auto;
+  width: 100%; text-align: left; padding: 0.35rem var(--space-2);
+  border: 1px solid transparent; border-radius: var(--r-md); background: transparent;
+  color: var(--text-primary); font: inherit; font-size: var(--text-xs); cursor: pointer;
+}
+.rl-ov-limit:hover { background: var(--bg-sunken); border-color: var(--border); }
+.rl-ov-limit-label { grid-column: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rl-ov-limit .load-track { grid-column: 2; }
+.rl-ov-peak { grid-column: 3; font-family: var(--font-mono); font-size: var(--text-2xs); color: var(--text-secondary); white-space: nowrap; }
+.rl-ov-limit .tag { grid-column: 4; justify-self: end; white-space: nowrap; }
+.rl-ov-warn { color: var(--warn); }
+.rl-ov-retention { color: var(--text-tertiary); }
 .quota-rows { display: flex; flex-direction: column; gap: var(--space-1); }
 
 /* Control-plane strip: mini-stats rendered as buttons. */
@@ -1905,14 +1925,14 @@ html.wallboard .page-content { animation: wallboard-shift 900s steps(1) infinite
    ================================================================ */
 
 .rl-page { display: flex; flex-direction: column; }
-.rl-section { margin-top: var(--space-6); }
-.rl-section-head { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--space-3); margin-bottom: var(--space-3); flex-wrap: wrap; }
+.rl-section { margin-top: var(--space-7); }
+.rl-section-head { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--space-3); margin-bottom: var(--space-4); flex-wrap: wrap; }
 .rl-section-head h3 { margin: 0; font-family: var(--font-display); font-size: var(--text-lg); font-weight: var(--fw-semi); letter-spacing: -0.01em; }
 .rl-section-head .sub { margin: 0.15rem 0 0; font-size: var(--text-xs); color: var(--text-secondary); max-width: var(--measure); }
 .rl-h4 { margin: 0 0 0.25rem; font-size: var(--text-sm); font-weight: var(--fw-semi); display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
 .rl-h4 .muted { font-weight: var(--fw-normal); }
 .rl-sep { color: var(--text-tertiary); margin: 0 0.35rem; }
-.rl-link { border: none; background: none; padding: 0.25rem 0; min-height: 24px; font: inherit; font-size: var(--text-xs); color: var(--accent-text); cursor: pointer; text-decoration: none; }
+.rl-link { border: none; background: none; padding: 0.25rem 0; min-height: 24px; font: inherit; font-size: var(--text-xs); color: var(--accent-text); cursor: pointer; text-decoration: none; border-radius: var(--r-xs); }
 .rl-link:hover { text-decoration: underline; }
 .rl-link:disabled { opacity: 0.5; cursor: not-allowed; }
 
@@ -1924,11 +1944,11 @@ html.wallboard .page-content { animation: wallboard-shift 900s steps(1) infinite
 .rl-dot.accent { background: var(--accent); }
 
 /* Status band */
-.rl-status { display: flex; align-items: center; gap: var(--space-5); flex-wrap: wrap; }
+.rl-status { display: flex; align-items: center; gap: var(--space-4) var(--space-5); flex-wrap: wrap; }
 .rl-status-text { min-width: 0; }
-.rl-status-title { font-weight: var(--fw-semi); font-size: var(--text-base); }
+.rl-status-title { font-family: var(--font-display); font-weight: var(--fw-semi); font-size: var(--text-md); letter-spacing: -0.01em; line-height: var(--leading-tight); }
 .rl-status-title.off { color: var(--error-text); }
-.rl-status-sub { display: flex; align-items: center; flex-wrap: wrap; font-size: var(--text-xs); color: var(--text-secondary); margin-top: 0.15rem; }
+.rl-status-sub { display: flex; align-items: center; flex-wrap: wrap; row-gap: 0.15rem; font-size: var(--text-xs); color: var(--text-secondary); margin-top: 0.3rem; }
 .rl-stats { display: flex; gap: var(--space-6); margin-left: auto; flex-wrap: wrap; }
 /* Page-level actions sit on their own line under the switch and the stats, so the card reads
    state first, actions second, and wraps cleanly on a phone. */
@@ -1969,14 +1989,19 @@ html.wallboard .page-content { animation: wallboard-shift 900s steps(1) infinite
 /* Fixed layout, like every other console table: widths come from the columns, so a long key name
    or model id ellipsizes in its own cell instead of pushing Limit and Refused off the card. */
 .rl-rules-table { table-layout: fixed; }
-.rl-rules-table thead th { position: static; background: transparent; padding: 0.55rem 0.75rem; vertical-align: bottom; }
-.rl-rules-table td { padding: 0.65rem 0.75rem; vertical-align: middle; cursor: pointer; }
+.rl-rules-table thead th { position: static; background: var(--bg-sunken); padding: 0.6rem 0.75rem; vertical-align: bottom; }
+.rl-rules-table td { padding: 0.75rem 0.75rem; vertical-align: middle; cursor: pointer; }
 .rl-col-on { width: 3.25rem; }
-.rl-col-who { width: 21%; } .rl-col-model { width: 13%; } .rl-col-limit { width: 12.75rem; } .rl-col-refused { width: 6rem; }
-.rl-col-chev { width: 3rem; text-align: right; }
+/* Shares chosen so the Enforcing cell keeps whole figures on a line at the console's narrowest
+   full-table width; Who and Model ellipsize, the figures never do. */
+.rl-col-who { width: 17%; } .rl-col-model { width: 9%; } .rl-col-limit { width: 11.75rem; } .rl-col-refused { width: 6.5rem; }
+.rl-rules-table th.rl-col-refused { padding-left: 0.5rem; padding-right: 0.5rem; }
+.rl-rules-table th.num .rl-th-sub { white-space: normal; }
+.rl-col-chev { width: 2.5rem; text-align: right; }
 .rl-rules-table td.rl-col-on, .rl-rules-table td.rl-col-chev { cursor: default; }
 .rl-rules-table td.rl-col-on { padding-right: 0; }
 .rl-row:hover td { background: var(--bg-hover); }
+.rl-row:hover .rl-col-chev .icon-btn { color: var(--accent-text); }
 .rl-row.changed td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
 /* A switched-off rule is still readable — it is a rule an operator is coming back to, not a
    tombstone. Its numbers step down to secondary text (never an opacity, which took the small
@@ -1987,22 +2012,28 @@ html.wallboard .page-content { animation: wallboard-shift 900s steps(1) infinite
 .rl-model { display: block; font-family: var(--font-mono); font-size: var(--text-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rl-model.muted { font-family: var(--font-sans); color: var(--text-secondary); }
 /* Three right-aligned columns that line up down the list, so rpm compares with rpm at a glance. */
-.rl-limit-nums, .rl-limit-units { display: grid; grid-template-columns: 4.5rem 3.25rem 3.75rem; justify-items: end; column-gap: 0.25rem; }
+.rl-limit-nums, .rl-limit-units { display: grid; grid-template-columns: 4rem 2.75rem 3rem; justify-items: end; column-gap: 0.25rem; }
 .rl-limit-nums b { font-family: var(--font-mono); font-size: var(--text-sm); font-weight: var(--fw-semi); font-variant-numeric: tabular-nums; }
 .rl-limit-nums i { display: none; font-style: normal; font-size: var(--text-2xs); color: var(--text-secondary); margin-left: 0.2rem; }
 .rl-limit-units { font-size: var(--text-2xs); font-weight: var(--fw-normal); text-transform: none; letter-spacing: 0; color: var(--text-secondary); margin-top: 0.1rem; }
 .rl-th-sub { display: block; font-size: var(--text-2xs); font-weight: var(--fw-normal); text-transform: none; letter-spacing: 0; color: var(--text-secondary); margin-top: 0.1rem; }
 .rl-cell-label { display: none; }
-.rl-rules-foot { margin: var(--space-2) 0 0; }
+.rl-rules-foot { margin: 0; }
+.rl-help.rl-rules-help { margin: var(--space-3) 0 0; max-width: none; }
 /* Draft beside production. The Limit cell is what Save would store; "was …" is the stored tier it
    replaces; the Enforcing cell is production and is never restyled by an unsaved edit. */
 .rl-was { display: block; text-align: right; font-family: var(--font-mono); font-size: var(--text-2xs); color: var(--text-secondary); font-variant-numeric: tabular-nums; margin-top: 0.15rem; }
 .rl-draft-tag { vertical-align: 0.1em; margin-inline-start: 0.25rem; }
-.rl-col-who .rl-target { display: inline-block; max-width: calc(100% - 4.5rem); vertical-align: bottom; }
-.rl-enf-text { font-family: var(--font-mono); font-size: var(--text-xs); font-variant-numeric: tabular-nums; margin-inline-end: 0.35rem; }
-.rl-col-now .tag { margin-inline-end: 0.25rem; }
+.rl-col-who .rl-target { display: inline-block; max-width: 100%; vertical-align: bottom; }
+.rl-enf-text { display: flex; flex-wrap: wrap; column-gap: 0.35em; font-family: var(--font-mono); font-size: var(--text-xs); font-variant-numeric: tabular-nums; }
+/* Figures are pieces ("600 rpm", "60 burst"): a line may break between them, never inside one. */
+.rl-enf-part { white-space: nowrap; }
+.rl-enf-part + .rl-enf-part::before { content: '·'; color: var(--text-tertiary); margin-inline-end: 0.35em; }
+.rl-col-now .tag { margin: 0.25rem 0.25rem 0 0; }
 .rl-th-age { font-family: var(--font-mono); }
-.rl-col-traffic { width: 12rem; font-size: var(--text-2xs); color: var(--text-secondary); white-space: nowrap; }
+.rl-col-traffic { width: 15.5rem; font-size: var(--text-2xs); color: var(--text-secondary); line-height: 1.4; }
+/* Outranks td.num's nowrap: these two short lines wrap rather than clip. */
+.rl-rules-table td.rl-col-traffic { white-space: normal; }
 .rl-rule-count { margin: 0 0 0 auto; white-space: nowrap; }
 /* The page header is sticky, so a section scrolled to by its link must stop below it. */
 .rl-section { scroll-margin-top: 4.5rem; }
@@ -2010,17 +2041,25 @@ html.wallboard .page-content { animation: wallboard-shift 900s steps(1) infinite
 .rl-more { margin: var(--space-3) 0 0; justify-content: center; }
 
 /* Summary strip and section links */
-.rl-opsum { flex: 1 1 100%; margin: 0; padding-top: var(--space-3); border-top: 1px solid var(--border); gap: var(--space-2); }
-.rl-sum-stat { flex: 1 1 10rem; flex-direction: column; align-items: flex-start; gap: 0.1rem; font: inherit; font-size: var(--text-xs); color: var(--text-primary); cursor: pointer; text-align: left; }
-.rl-sum-stat:hover { border-color: var(--border-strong); background: var(--bg-hover); }
-.rl-sum-stat:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.rl-sum-stat .ms-value { font-size: var(--text-md); }
-.rl-sum-stat .ms-foot { font-size: var(--text-2xs); color: var(--text-secondary); font-family: var(--font-mono); }
+.rl-opsum { flex: 1 1 100%; display: grid; grid-template-columns: repeat(auto-fit, minmax(10.5rem, 1fr)); gap: var(--space-2); margin: 0; padding-top: var(--space-4); border-top: 1px solid var(--border); }
+/* One tile per figure. Four fixed rows — name, time basis, figure, footnote — so the figures sit on
+   one line across the strip whether or not a tile has a footnote or a two-line name. */
+.rl-sum-stat { display: grid; grid-template-rows: auto auto minmax(1.9rem, 1fr) 1rem; align-items: end; gap: 0.1rem; min-width: 0; padding: 0.65rem 0.85rem 0.6rem; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--bg-surface); font: inherit; font-size: var(--text-xs); color: var(--text-primary); cursor: pointer; text-align: left; transition: border-color var(--dur-fast), background var(--dur-fast), box-shadow var(--dur-fast); }
+.rl-sum-stat:hover { border-color: var(--border-strong); background: var(--bg-hover); box-shadow: var(--shadow-sm); }
+.rl-sum-stat:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--bg-surface), 0 0 0 4px var(--accent); }
+.rl-sum-stat .ms-label { align-self: start; white-space: normal; line-height: 1.3; }
+.rl-sum-stat .ms-basis { align-self: start; grid-row: 2; font-size: var(--text-2xs); color: var(--text-tertiary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rl-sum-stat .ms-value { grid-row: 3; font-family: var(--font-display); font-size: var(--text-lg); letter-spacing: -0.01em; line-height: 1.15; overflow-wrap: anywhere; }
+.rl-sum-stat .ms-foot { grid-row: 4; font-size: var(--text-2xs); color: var(--text-secondary); font-family: var(--font-mono); font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rl-sum-stat.live .ms-value { color: var(--live-text); }
 .rl-health { font-weight: var(--fw-normal); color: var(--text-secondary); }
 .rl-health.warn { color: var(--warn); }
-.rl-fresh { flex: 1 1 100%; margin: 0; font-size: var(--text-2xs); font-family: var(--font-mono); color: var(--text-secondary); min-height: 1rem; }
-.rl-anchors { display: flex; flex-wrap: wrap; gap: var(--space-4); margin: var(--space-3) 0 0; }
+.rl-fresh { flex: 1 1 100%; margin: 0; font-size: var(--text-2xs); font-family: var(--font-mono); color: var(--text-tertiary); min-height: 1rem; }
+/* Section links under the summary: a quiet pill row, closed by a rule so the lede reads as page copy. */
+.rl-anchors { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1); margin: var(--space-4) 0 0; padding-bottom: var(--space-3); border-bottom: 1px solid var(--border); }
+.rl-anchors-label { font-family: var(--font-mono); font-size: var(--text-2xs); text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-tertiary); margin-right: var(--space-2); }
+.rl-anchors .rl-link { padding: 0.3rem 0.75rem; border-radius: var(--r-full); font-weight: var(--fw-medium); color: var(--text-secondary); }
+.rl-anchors .rl-link:hover { background: var(--bg-hover); color: var(--text-primary); text-decoration: none; }
 .rl-protect-now { font-size: var(--text-xs); }
 .rl-protect-note { margin: var(--space-2) 0 0; }
 .rl-force-label { text-transform: uppercase; letter-spacing: 0.06em; font-family: var(--font-mono); font-size: var(--text-2xs); }
@@ -2236,7 +2275,8 @@ th.num .th-sort { flex-direction: row-reverse; }
 .rl-cumulative .table-wrap { box-shadow: none; }
 .rl-activity-foot { margin: var(--space-4) 0 0; }
 .t-rl-usage { min-width: 52rem; }
-.t-rl-usage th.num { width: 7.5rem; }
+.t-rl-usage th.num { width: 7.75rem; white-space: normal; }
+.t-rl-usage th.num:nth-last-child(2) { width: 9rem; }
 .t-rl-usage th.cell-actions { width: 5.5rem; }
 .t-rl-usage th:first-child { width: auto; }
 .t-rl-refusals { min-width: 24rem; }
@@ -2293,7 +2333,7 @@ th.num .th-sort { flex-direction: row-reverse; }
   .rl-rule-count { margin-left: 0; flex: 1 1 100%; }
   .rl-was { text-align: left; }
   .rl-status-actions { margin-left: 0; }
-  .rl-sum-stat { flex: 1 1 calc(50% - var(--space-2)); }
+  .rl-opsum { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .rl-col-load .load-track { display: none; }
   .rl-col-load { width: auto; }
   .rl-status-actions .action { flex: 0 1 auto; }
@@ -2358,12 +2398,19 @@ th.num .th-sort { flex-direction: row-reverse; }
    rule drawer at every width. Declared here rather than beside the other column rules because it
    must follow the narrow-width card layout above, which sets every cell to display:block — the
    cell has no grid area there and would otherwise be auto-placed into the card. */
-@media (max-width: 80rem) { .rl-rules-table td.rl-col-traffic, .rl-rules-table th.rl-col-traffic { display: none; } }
+@media (max-width: 80rem) {
+  .rl-rules-table td.rl-col-traffic, .rl-rules-table th.rl-col-traffic { display: none; }
+  /* Its width goes to Model and to the Enforcing cell; the Refused header wraps "since restart"
+     onto two lines rather than clip. */
+  .rl-col-who { width: 16%; } .rl-col-model { width: 12%; } .rl-col-refused { width: 5.5rem; }
+}
 
 /* Baselines: tiers and protective limits as compact tables (same cells as the rules list). */
 .t-rl-tiers { min-width: 24rem; }
 .t-rl-protect { min-width: 30rem; }
 .t-rl-tiers th.num, .t-rl-protect th.num { width: 5.5rem; }
+.t-rl-tiers th.rl-wide-col { width: 15.5rem; }
+.t-rl-tiers td.rl-wide-col { font-size: var(--text-xs); font-weight: var(--fw-medium); line-height: 1.4; }
 .t-rl-tiers th.cell-actions { width: 3.5rem; }
 .t-rl-protect th.cell-actions { width: 7rem; }
 .t-rl-protect th.rl-col-on { width: 3.5rem; }
@@ -2382,6 +2429,19 @@ tbody tr:last-child th.rl-base-name { border-bottom: none; }
 .rl-narrow-line { display: none; }
 @media (max-width: 48rem) {
   .t-rl-usage, .t-rl-adaptive, .t-rl-refusals { min-width: 0; }
+  /* Baseline tables on a phone: fixed widths that summed past the table's minimum left the name
+     columns a few pixels wide, wrapping one word per line. The tiers drop their activity column
+     (the drawer has it); the protective rows drop the three number cells, whose values the row's
+     own "Enforcing now" line already states. */
+  .t-rl-tiers, .t-rl-protect { min-width: 0; }
+  .t-rl-tiers .rl-wide-col, .t-rl-tiers thead th:nth-child(2), .t-rl-tiers tbody td:nth-child(2) { display: none; }
+  .t-rl-tiers th.num { width: 4.25rem; }
+  .t-rl-tiers th.cell-actions { width: 2.5rem; }
+  .t-rl-protect th.num, .t-rl-protect td.num { display: none; }
+  .t-rl-protect th.rl-col-on { width: 2.75rem; }
+  .t-rl-protect th.cell-actions { width: 5.75rem; }
+  .t-rl-protect th.rl-base-name, .t-rl-tiers th.rl-base-name { padding-left: 0.5rem; padding-right: 0.5rem; }
+  .t-rl-tiers td, .t-rl-protect td { padding-left: 0.4rem; padding-right: 0.4rem; }
   .t-rl-usage .rl-wide-col, .t-rl-adaptive .rl-wide-col { display: none; }
   .rl-narrow-line { display: block; font-family: var(--font-mono); font-size: var(--text-2xs); color: var(--text-secondary); margin-top: 0.2rem; white-space: normal; overflow-wrap: anywhere; }
   .t-rl-usage th.num { width: 5.9rem; }
@@ -2415,18 +2475,21 @@ tbody tr:last-child th.rl-base-name { border-bottom: none; }
   .t-rl-usage td.cell-actions { justify-self: end; }
   .t-rl-usage .row-actions { flex-direction: row; }
   .rl-xs-label { display: inline; font-family: var(--font-sans); color: var(--text-secondary); }
+  /* Seven day labels do not fit a phone-wide calendar track; every other one reads the week.
+     (The x-for template is the axis's first child, so the labels are its even children.) */
+  .rl-tl-axis span:nth-child(odd) { display: none; }
 }
 
 /* ---- Rate limits: per-limit activity, trend, tracker completeness, history ---- */
-.rl-act-sub { display: block; font-size: var(--text-xs); color: var(--text-secondary); font-variant-numeric: tabular-nums; white-space: normal; }
-.rl-act-bar { margin-top: 3px; min-width: 4rem; }
+.rl-act-sub { display: block; font-size: var(--text-2xs); color: var(--text-secondary); font-variant-numeric: tabular-nums; white-space: normal; }
+.rl-act-bar { margin-top: 5px; min-width: 4rem; height: 4px; border: none; background: var(--border); }
 .rl-rules-table td.rl-act-near > span:first-of-type + span { font-weight: 600; }
-.rl-protect-act { display: block; margin-top: var(--space-1); font-size: var(--text-sm); font-weight: 400; }
-.rl-protect-act .rl-act-sub { display: inline; margin-left: var(--space-2); }
+.rl-protect-act { display: block; margin-top: 0.3rem; font-family: var(--font-sans); font-size: var(--text-xs); font-weight: 400; color: var(--text-primary); line-height: 1.5; }
+.rl-protect-act .rl-act-sub { display: inline; margin-left: var(--space-2); font-family: var(--font-mono); }
 .rl-tracker-note { margin: var(--space-2) 0; }
-.rl-trend { display: flex; align-items: center; gap: var(--space-3); margin-top: var(--space-2); min-width: 0; }
-.rl-trend-svg { flex: none; width: 14rem; max-width: 100%; height: 2rem; overflow: visible; }
-.rl-trend.in-drawer { margin: var(--space-2) 0; }
+.rl-trend { flex: 1 1 100%; display: grid; grid-template-columns: minmax(0, 1fr) minmax(14rem, 24rem); align-items: center; gap: var(--space-3) var(--space-5); margin: 0; padding: var(--space-3) var(--space-4); min-width: 0; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--bg-sunken); }
+.rl-trend-svg { display: block; width: 100%; height: 2.75rem; overflow: visible; }
+.rl-trend.in-drawer { display: flex; margin: var(--space-2) 0; padding: 0; border: none; background: transparent; }
 .rl-trend.in-drawer .rl-trend-svg { width: 100%; max-width: 20rem; height: 2.75rem; }
 .rl-trend.in-drawer { flex-direction: column; align-items: stretch; gap: var(--space-1); }
 .rl-trend.in-drawer .rl-trend-text { overflow-wrap: anywhere; }
@@ -2453,13 +2516,16 @@ tbody tr:last-child th.rl-base-name { border-bottom: none; }
 .rl-hist-toggle .icon { transition: transform var(--dur-fast); }
 .rl-hist-toggle[aria-expanded="true"] .icon { transform: rotate(90deg); }
 .rl-hist-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--r-sm); }
-.rl-hist-entry { padding: var(--space-2) 0; border-top: 1px solid var(--border); }
+.rl-hist { border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--bg-surface); box-shadow: var(--shadow-sm); padding: 0 var(--space-4); }
+/* The list holds an x-for template even when there are no entries, so :empty never matches. */
+.rl-hist:not(:has(li)) { display: none; }
+.rl-hist-entry { padding: var(--space-3) 0; border-top: 1px solid var(--border); }
 .rl-hist-entry:first-child { border-top: 0; }
 .rl-hist-entry.refused .rl-hist-head b { color: var(--error); }
 .rl-hist-head .hint { display: block; }
 .rl-hist-changes { margin-top: var(--space-1); font-size: var(--text-sm); }
 .rl-hist-changes li { padding: 2px 0; overflow-wrap: anywhere; }
 @media (max-width: 48rem) {
-  .rl-trend { flex-direction: column; align-items: flex-start; gap: var(--space-1); }
+  .rl-trend { grid-template-columns: minmax(0, 1fr); gap: var(--space-2); }
   .rl-limit-defs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }

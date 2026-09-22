@@ -23,6 +23,7 @@ public static class AdminOverviewEndpoints
         group.MapGet("/control-plane", GetControlPlane);
         group.MapGet("/activity", GetActivity);
         group.MapGet("/tenants", GetTenants);
+        group.MapGet("/rate-limits", GetRateLimits);
 
         return endpoints;
     }
@@ -41,6 +42,9 @@ public static class AdminOverviewEndpoints
 
     private static async Task<IResult> GetTenants(IOverviewSectionService sections, bool? refresh, CancellationToken cancellationToken) =>
         Section(await sections.GetTenantsAsync(refresh == true, cancellationToken).ConfigureAwait(false));
+
+    private static async Task<IResult> GetRateLimits(IOverviewSectionService sections, bool? refresh, CancellationToken cancellationToken) =>
+        Section(await sections.GetRateLimitsAsync(refresh == true, cancellationToken).ConfigureAwait(false));
 
     private static IResult Section<T>(T? value) where T : class =>
         value is null ? Results.NoContent() : Results.Json(value);

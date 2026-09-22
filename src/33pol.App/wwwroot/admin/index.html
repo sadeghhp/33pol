@@ -24,12 +24,12 @@
   <link rel="preload" as="font" type="font/woff2" href="vendor/fonts/IBMPlexSans-400.woff2" crossorigin />
   <link rel="preload" as="font" type="font/woff2" href="vendor/fonts/IBMPlexSans-500.woff2" crossorigin />
   <link rel="stylesheet" href="vendor/fonts.css?v=1" />
-  <link rel="stylesheet" href="admin.css?v=35" />
+  <link rel="stylesheet" href="admin.css?v=36" />
   <script defer src="admin-icons.js?v=12"></script>
   <script defer src="admin-errors.js?v=8"></script>
   <script defer src="admin-store.js?v=12"></script>
   <script defer src="admin-rate-limit-help.js?v=4"></script>
-  <script defer src="admin-app.js?v=55"></script>
+  <script defer src="admin-app.js?v=56"></script>
   <script defer src="vendor/alpine-csp-3.14.9.min.js"></script>
 </head>
 <body x-data="adminApp" x-cloak @keydown.window="onModalKeydown">
@@ -574,6 +574,76 @@
               </div>
               <p class="hint healthy" x-show="policyQuiet">No rejections in the last hour and every quota has headroom.</p>
               <p class="notice warn" x-show="hasPolicyError" x-text="policyError"></p>
+            </div>
+
+            <!-- Rate limits: what the limits themselves refused, from the in-memory usage tracker
+                 (/overview/rate-limits). Process-local, about three hours kept — never durable
+                 history. A percentage of a limit is shown only where the server sent one (a single
+                 bucket). A 204 (no tracker) hides the card; zero traffic is a quiet card. On a
+                 wallboard only the headline travels: every list is .wb-hide. -->
+            <div class="card rate-limits-card" x-show="showRateLimitsCard">
+              <div class="card-title-row">
+                <div><span class="eyebrow">Policy · rate limits</span><h3 x-text="rateLimitsOverviewView.title"></h3></div>
+                <span class="mini-stats policy-totals" x-show="hasRateLimits">
+                  <template x-for="m in rateLimitsOverviewView.headStats" :key="m.key">
+                    <span :class="m.cls" :title="m.title"><span class="ms-label" x-text="m.label"></span><span class="ms-value" x-text="m.value"></span></span>
+                  </template>
+                </span>
+              </div>
+              <div class="rl-ov-body" x-show="hasRateLimits">
+                <p class="notice warn" x-show="rateLimitsOverviewView.notEnforced" x-text="rateLimitsOverviewView.notEnforcedText"></p>
+                <p class="notice warn" x-show="rateLimitsOverviewView.saturated" x-text="rateLimitsOverviewView.saturatedText"></p>
+                <div class="policy-section wb-hide" x-show="rateLimitsOverviewView.hasLimitRows">
+                  <span class="eyebrow">Refusing or near their limit · last hour</span>
+                  <div class="rl-ov-limits">
+                    <template x-for="l in rateLimitsOverviewView.limitRows" :key="l.key">
+                      <button type="button" class="rl-ov-limit" @click="l.open" :title="l.title">
+                        <span class="rl-ov-limit-label" x-text="l.label"></span>
+                        <span class="load-track" x-show="l.hasMeter"><span :class="l.meterCls" :style="l.meterStyle"></span></span>
+                        <span class="rl-ov-peak" x-show="l.hasMeter" x-text="l.peakText"></span>
+                        <span :class="l.countCls" x-text="l.countText"></span>
+                      </button>
+                    </template>
+                  </div>
+                </div>
+                <div class="policy-columns wb-hide">
+                  <div class="policy-section" x-show="rateLimitsOverviewView.hasTenantRows">
+                    <span class="eyebrow">Refused tenants</span>
+                    <div class="hbars">
+                      <template x-for="row in rateLimitsOverviewView.tenantRows" :key="row.key">
+                        <div class="hbar is-error" :title="row.title">
+                          <span class="hbar-label" x-text="row.label"></span>
+                          <span class="hbar-track"><span class="hbar-fill" :style="row.style"></span></span>
+                          <span class="hbar-value" x-text="row.countText"></span>
+                        </div>
+                      </template>
+                    </div>
+                  </div>
+                  <div class="policy-section" x-show="rateLimitsOverviewView.hasKeyRows">
+                    <span class="eyebrow">Refused API keys</span>
+                    <div class="hbars">
+                      <template x-for="row in rateLimitsOverviewView.keyRows" :key="row.key">
+                        <button type="button" class="hbar is-error is-clickable" @click="row.open" :title="row.title">
+                          <span class="hbar-label" x-text="row.label"></span>
+                          <span class="hbar-track"><span class="hbar-fill" :style="row.style"></span></span>
+                          <span class="hbar-value" x-text="row.countText"></span>
+                        </button>
+                      </template>
+                    </div>
+                  </div>
+                </div>
+                <p class="hint wb-hide" x-show="rateLimitsOverviewView.refusing" x-text="rateLimitsOverviewView.fiveMinText"></p>
+                <p class="hint wb-hide" x-text="rateLimitsOverviewView.protectiveText"></p>
+                <p class="hint wb-hide" :class="rateLimitsOverviewView.adaptiveCls" x-text="rateLimitsOverviewView.adaptiveText"></p>
+                <p class="hint wb-hide" x-show="rateLimitsOverviewView.hasStore" x-text="rateLimitsOverviewView.storeText"></p>
+                <p class="hint wb-hide" x-show="rateLimitsOverviewView.trackerFull" x-text="rateLimitsOverviewView.trackerFullText"></p>
+                <p class="hint healthy" x-show="rateLimitsOverviewView.quiet" x-text="rateLimitsOverviewView.quietText"></p>
+                <p class="hint rl-ov-retention wb-hide" x-text="rateLimitsOverviewView.retentionText"></p>
+                <div class="card-foot-actions wb-hide">
+                  <button type="button" class="action secondary" @click="openRateLimitsSettings"><span class="icon" x-html="icons.settings"></span> Rate limits</button>
+                </div>
+              </div>
+              <p class="notice warn" x-show="hasRateLimitsError" x-text="rateLimitsError"></p>
             </div>
           </div>
 
@@ -1832,7 +1902,7 @@
                   </div>
                   <div class="mini-stats rl-opsum" :title="rlStatusView.scheduleError">
                     <template x-for="m in rlSummaryView.stats" :key="m.key">
-                      <button type="button" :class="m.cls" @click="m.go" :title="m.title" :aria-label="m.ariaLabel"><span class="ms-label" x-text="m.label"></span><span class="ms-value" x-text="m.value"></span><span class="ms-foot" x-show="m.hasSub" x-text="m.sub"></span></button>
+                      <button type="button" :class="m.cls" @click="m.go" :title="m.title" :aria-label="m.ariaLabel"><span class="ms-label" x-text="m.head"></span><span class="ms-basis" x-show="m.hasBasis" x-text="m.basis"></span><span class="ms-value" x-text="m.value"></span><span class="ms-foot" x-show="m.hasSub" x-text="m.sub"></span></button>
                     </template>
                   </div>
                   <p class="hint rl-sum-warn" x-show="rlStatusView.scheduleError" role="status"><span class="tag level-error">schedule unavailable</span> Windows active now and the next change are unknown: <span x-text="rlStatusView.scheduleError"></span> <button type="button" class="rl-link" @click="loadRateLimitSchedule">Retry</button></p>
@@ -1846,6 +1916,7 @@
                   <p class="rl-fresh" role="status"><span x-show="rlActivityFreshView.has" x-text="rlActivityFreshView.text"></span> <span class="tag warn" x-show="rlActivityFreshView.stale">stale</span> <span class="tag warn" x-show="rlTrackerView.saturated">activity incomplete</span></p>
                 </div>
                 <nav class="rl-anchors" aria-label="Rate limits sections">
+                  <span class="rl-anchors-label" aria-hidden="true">Jump to</span>
                   <template x-for="n in rlSummaryView.nav" :key="n.key"><button type="button" class="rl-link" @click="n.go" x-text="n.label"></button></template>
                 </nav>
                 <p class="notice error" x-show="rateLimitsSavedDisabled" role="status">Rate limiting is disabled — clients can send unlimited requests. Quotas and budgets still apply. Schedules are paused, not deleted.</p>
@@ -1941,7 +2012,7 @@
                             </td>
                             <td class="rl-col-now" @click="r.open" :title="r.enfTitle">
                               <span class="rl-cell-label" aria-hidden="true">Enforcing now </span>
-                              <span class="rl-enf-text" x-text="r.enfText"></span>
+                              <span class="rl-enf-text"><template x-for="p in r.enfParts" :key="p.key"><span class="rl-enf-part" x-text="p.text"></span></template></span>
                               <template x-for="g in r.enfTags" :key="g.key"><span :class="g.cls" x-text="g.text"></span></template>
                               <span class="rl-until" x-show="r.hasEnfSub" x-text="r.enfSub"></span>
                             </td>
@@ -1956,7 +2027,12 @@
                   <div class="toolbar rl-more" x-show="rlRuleCountView.hasMore">
                     <button type="button" class="action secondary" @click="showMoreRateLimitRules" x-text="rlRuleCountView.moreLabel"></button>
                   </div>
-                  <p class="hint rl-rules-foot" x-show="rlHasMatchingRules"><b>Limit</b> is what Save would store; <b>Enforcing now</b> is what the gateway applies at this moment and never reflects unsaved edits. <b>Refused</b> counts requests this limit itself refused since the gateway last started; when several limits apply, only the first to refuse is counted. <span aria-hidden="true">†</span> For a tenant it is the tenant&rsquo;s whole allowance &mdash; plan tier and rule together. &ldquo;&mdash;&rdquo; means unknown, not zero; open the rule to see why. <span class="rl-traffic-note"><b>Limit activity</b> is what this limit itself decided in the activity window, as the gateway reports it per limit: <b>passed</b> means the request cleared every rate limit and this one kept its token; <b>refused</b> means this limit answered 429. The peak and its percentage appear only where a limit counts a single bucket; &ldquo;unknown&rdquo; means the gateway&rsquo;s counters were full, not that nothing happened. Traffic by subject is a different figure and stays in Activity.</span></p>
+                  <details class="rl-help rl-rules-help" x-show="rlHasMatchingRules">
+                    <summary><span class="icon" x-html="icons.help-circle"></span><span>How to read this table</span></summary>
+                    <div class="rl-help-body">
+                    <p class="hint rl-rules-foot"><b>Limit</b> is what Save would store; <b>Enforcing now</b> is what the gateway applies at this moment and never reflects unsaved edits. <b>Refused</b> counts requests this limit itself refused since the gateway last started; when several limits apply, only the first to refuse is counted. <span aria-hidden="true">†</span> For a tenant it is the tenant&rsquo;s whole allowance &mdash; plan tier and rule together. &ldquo;&mdash;&rdquo; means unknown, not zero; open the rule to see why. <span class="rl-traffic-note"><b>Limit activity</b> is what this limit itself decided in the activity window, as the gateway reports it per limit: <b>passed</b> means the request cleared every rate limit and this one kept its token; <b>refused</b> means this limit answered 429. The peak and its percentage appear only where a limit counts a single bucket; &ldquo;unknown&rdquo; means the gateway&rsquo;s counters were full, not that nothing happened. Traffic by subject is a different figure and stays in Activity.</span></p>
+                    </div>
+                  </details>
                 </div>
 
                 <!-- Rate-limit activity. Three time bases share this card and each block names its own:
@@ -2206,7 +2282,7 @@
                       <tbody>
                         <template x-for="t in rlTierCards" :key="t.key">
                           <tr class="rl-base-row">
-                            <th scope="row" class="rl-base-name" @click="t.edit"><span x-text="t.name"></span></th>
+                            <th scope="row" class="rl-base-name" @click="t.edit"><span x-text="t.name"></span><span class="rl-narrow-line" x-text="t.who"></span></th>
                             <td @click="t.edit" x-text="t.who"></td>
                             <td class="num" @click="t.edit" x-text="t.rpm"></td>
                             <td class="num" @click="t.edit" x-text="t.burst"></td>

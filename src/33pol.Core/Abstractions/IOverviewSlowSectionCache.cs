@@ -16,4 +16,6 @@ public interface IOverviewSlowSectionCache
     ControlPlaneOverview? ControlPlane { get; }
 
     TenantsOverview? Tenants { get; }
+
+    RateLimitOverview? RateLimits => null;
 }

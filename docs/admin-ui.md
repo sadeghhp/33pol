@@ -198,7 +198,7 @@ GET requests retry once on network failure. Usage export uses `downloadBlob` wit
 
 | Section | Endpoints |
 |---------|-----------|
-| Overview | `GET /admin/api/live?limit=25` (SSE; falls back to `GET /admin/api/summary` + `GET /admin/api/requests?limit=25`), `GET /health/live`, `GET /health/ready`; slow sections every 30s: `GET /admin/api/overview/finops`, `/policy`, `/control-plane`, `/activity?limit=20`, `/tenants` (all Operator; `?refresh=true` bypasses the 15s server memo; `204` when the gateway has no such data) |
+| Overview | `GET /admin/api/live?limit=25` (SSE; falls back to `GET /admin/api/summary` + `GET /admin/api/requests?limit=25`), `GET /health/live`, `GET /health/ready`; slow sections every 30s: `GET /admin/api/overview/finops`, `/policy`, `/control-plane`, `/activity?limit=20`, `/tenants`, `/rate-limits` (all Operator; `?refresh=true` bypasses the 15s server memo; `204` when the gateway has no such data — for `/rate-limits`, only when it has no usage tracker) |
 | Usage | `GET /admin/api/usage?costCenter=`, `/usage/events?apiKeyId=&costCenter=`, `/usage/forecast`, `GET /usage/export` |
 | Routing — Models | `GET/POST/PATCH/DELETE /admin/api/models` (write body: `{ model, apiKey?, clearApiKey? }`; GET returns `{ model, hasUpstreamCredential }`), `POST /admin/api/models/{id}/stop` and `/start` (take a route out of service / put it back), `POST /admin/api/models/{id}/test` (type-specific health check) |
 | Routing — Backends | `GET /admin/api/backends` |
@@ -447,8 +447,23 @@ The banner under the header lists conditions the gateway itself judges worth an 
 | Models | summary `windows[].perModel` | requests, share, error rate, p95, TTFT p95 and priced cost per model in the selected window |
 | Recent activity | `/overview/activity` | the audit trail's last admin actions (who, what, when) |
 | Tenants & keys | `/overview/tenants` | top consumers this month, keys expiring soon, idle keys, anonymous share |
+| Rate limits | `/overview/rate-limits` | whether limits are enforced, refusals in the last hour (and last 5 minutes), the limits that refused or ran near their rate, refused tenants and keys, protective budgets, adaptive load shedding, partition-table fill, tracker completeness, windows in force and the next scheduled change |
 
 FinOps and tenant figures are **gateway-wide** (every tenant, anonymous included); the Usage page stays tenant-scoped.
+
+### Rate limits
+
+The **Rate limits** card sits beside Policy → Pressure, with a matching tile in the glance grid (Refused · 1h, Refused subjects, Limits refusing, Windows active, Next change). Pressure counts rejections by *reason*; this card says which *limit* refused and whom.
+
+- **Two clocks.** Headline figures are the last **hour**. The last **5 minutes** is shown under the lists and is what the `rate_limit_refusing` Attention rule judges. Neither is durable history.
+- **Process-local, about 3 hours.** The counters come from the in-memory usage tracker: per-minute rings holding 180 minutes, in this gateway process only. They restart with the process (or a stats reset) and are not shared between replicas. The card says when counting began.
+- **Refusing limits.** A limit is listed when it refused in the last hour, or when its busiest minute reached 80 % of its rate. Attribution is the tracker's own: only the first limit to refuse a request is counted. A **percentage is shown only when the gateway sends `peakUtilization`**, which it does only for a limit that drains a single bucket (a rule naming one key, model, tenant or pair, or the global rule). Plan tiers and the default tier give every caller its own bucket, so they carry a refused count and no percentage. The console never computes a percentage itself, and never uses the per-subject `utilization`, which only reflects whichever limit was tightest on that subject's latest request.
+- **Opening a limit.** A rule row opens **Settings → Rate limits** with that rule's drawer, found by its stable `scope:target` identity (`limitId`), never by the name shown. A plan-tier or default-tier row opens the Baselines section. If the rule has since been deleted, the list is filtered to its target.
+- **Refused subjects.** The tenants and API keys with at least one refusal in the last hour, top five each. Tenants are shown by slug, keys by label (or public prefix), and anonymous callers as "anonymous". A count followed by `+` means the report hit its row cap, so it is a lower bound.
+- **Tracker saturation.** The tracker holds at most `RateLimiting:UsageReportMaxKeys` keys per dimension (default 500). Once a decision about a new key is dropped, the card raises "Activity is incomplete" with the gateway's own count. Totals stay exact, but a missing row is unknown, not zero. Enforcement is unaffected.
+- **Adaptive shedding, store, protective budgets.** One line each: how many models the governor is holding below their configured rate (and the lowest factor); the partition table's fill against its ceiling, calculated exactly as the Prometheus alert calculates it; and refusals by the failed-credential and anonymous budgets.
+- **Schedule.** "Windows active" and "Next change" come from the same schedule report as the rate-limits calendar (`IRateLimitConfigAdminService.GetSchedule`). If that report cannot be read they show "—" (unknown), not 0.
+- **States.** A gateway without the usage tracker answers `204` and both the card and the tile are hidden. Zero traffic is a quiet card ("No rate-limit decisions in the last hour"). Traffic with no refusals says "Nothing refused in the last hour". Rules configured with enforcement switched off say so in the title and in a notice. A failed refresh keeps the last result on screen with the error beneath it. A failed first load shows the card with only the error.
 
 ### Live tail
 
@@ -458,7 +473,7 @@ Filters (model, tenant, status class, slow, errors only) compose. **Pause** free
 
 `#/dashboard?wall=1`, or the **Wallboard** button. Meant for a NOC panel: read from three to eight metres, unattended, for weeks.
 
-**What it shows.** The attention banner, the five vitals, "running now", backends & health, policy pressure (totals and rejections by reason), the per-model table (top eight) and ten rows of the live tail. Its own header bar carries the gateway, backend health, the trailing window, the live badge and a clock.
+**What it shows.** The attention banner, the five vitals, "running now", backends & health, policy pressure (totals and rejections by reason), the rate-limits headline (title, refused in the last hour, windows active, next change — no lists, labels or tenant/key names), the per-model table (top eight) and ten rows of the live tail. Its own header bar carries the gateway, backend health, the trailing window, the live badge and a clock.
 
 **What it drops.** Everything that can only be acted on at a keyboard: the rail, the page header and its actions, tail filters, per-row actions and pins, request detail, and anything destructive (**Clear errors**). The FinOps, recent-activity and tenants cards go too — they move on a scale of days. The policy card keeps its totals and reason bars and drops the per-tenant, quota and unknown-model detail. The live tail keeps six of twelve columns: time, model, status, tokens, cost, duration.
 
@@ -470,7 +485,7 @@ Filters (model, tenant, status class, slow, errors only) compose. **Pause** free
 
 **Staying up.** The button takes fullscreen (the API needs a user gesture, so a board entered from `?wall=1` on load stays windowed and offers a button) and holds a Screen Wake Lock, re-taken on every `visibilitychange`. The corner hint reports whether the lock took; Firefox and pre-16.4 Safari have no `wakeLock` and it says so. The cursor and the two remaining buttons fade after 8s of stillness, and the content shifts a pixel or two between four positions over fifteen minutes for burn-in — off under `prefers-reduced-motion`.
 
-**Cost.** Only the policy section is polled while the board is up (the other four database-backed queries are for hidden cards); the full set is refetched on exit. The tail asks for twelve rows instead of twenty-five. The push stream sizes its own frames, so the ten-row trim is enforced in CSS as well.
+**Cost.** Only the policy and rate-limits sections are polled while the board is up (the other four database-backed queries are for hidden cards; rate limits is an in-memory read), at the same 30s cadence; the full set is refetched on exit. The tail asks for twelve rows instead of twenty-five. The push stream sizes its own frames, so the ten-row trim is enforced in CSS as well.
 
 `Esc` exits, behind every dialog — a confirm opened over a board closes on the first press and the board drops on the second.
 
@@ -492,8 +507,13 @@ A gateway that has never routed a request shows a curl snippet (with **Copy curl
 - Pause the tail, filter it to one model, then enter the wallboard: the feed resumes with a toast and the header bar declares the filter.
 - Stop the gateway process with a wallboard up: within 20s the figures grey out and a **STALE** band gives the age. Restart it and the band clears on the next frame.
 - Trigger a critical attention item on a wallboard: the screen gains a red border and the banner is expanded even if it was collapsed — and stays visible even if that item was dismissed this session.
-- On a wallboard, `/admin/api/overview/{finops,activity,tenants,control-plane}` stop being requested and `/policy` continues; leaving re-requests all five.
+- On a wallboard, `/admin/api/overview/{finops,activity,tenants,control-plane}` stop being requested and `/policy` and `/rate-limits` continue; leaving re-requests all six.
 - A fresh database shows the onboarding curl; **Copy curl** copies; one request replaces it with the dashboard.
+- Hammer a key past its RPM: within 30s the Rate limits card lists that rule with its refused count (and a peak % because it is a single bucket), the key appears under "Refused API keys" by label, the glance tile turns amber, and after 5 minutes at ≥ 10 % refused (≥ 20 decisions) `rate_limit_refusing` appears under Attention. **Open** on the item, or clicking the row, lands on Settings → Rate limits. Clicking the row also opens that rule's drawer.
+- A plan tier refusing is listed with a count and no percentage. Clicking it lands on Baselines.
+- Switch enforcement off with rules configured: the card title reads "Not enforced — N rules configured" and, after 60s, `rate_limit_not_enforced` is listed. Switch it back on and both clear.
+- Restart the gateway: the Rate limits card starts from zero, with "Counted in this gateway process since …" showing the new start time.
+- On a wallboard the Rate limits card shows only its title and three head figures.
 - Every changed asset URL carries a bumped `?v=`.
 
 ## Deferred (post-GA)
