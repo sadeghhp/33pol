@@ -33,6 +33,11 @@ public sealed class FileAuditLogReader(FileAuditLogger logger) : IAuditLogReader
         var hasMore = false;
         var scanLimitReached = false;
 
+        // Records sharing the cursor's timestamp that this page has already handed out. They are
+        // contiguous in the walk, so skipping the first `Skip` of them resumes exactly where the
+        // previous page stopped — without losing the rest of the group or repeating it.
+        var skippedAtCursor = 0;
+
         foreach (var path in new[] { logger.AuditLogPath, logger.AuditLogPath + ".1" })
         {
             if (hasMore || scanLimitReached)
@@ -62,9 +67,18 @@ public sealed class FileAuditLogReader(FileAuditLogger logger) : IAuditLogReader
                     continue;
                 }
 
-                if (query.BeforeUtc is { } before && entry.TimestampUtc >= before)
+                if (query.Cursor is { } cursor)
                 {
-                    continue;
+                    if (entry.TimestampUtc > cursor.TimestampUtc)
+                    {
+                        continue;
+                    }
+
+                    if (entry.TimestampUtc == cursor.TimestampUtc && skippedAtCursor < cursor.Skip)
+                    {
+                        skippedAtCursor++;
+                        continue;
+                    }
                 }
 
                 // One past the page is read only to learn that it exists.
@@ -83,7 +97,19 @@ public sealed class FileAuditLogReader(FileAuditLogger logger) : IAuditLogReader
             {
                 HasMore = hasMore,
                 ScanLimitReached = scanLimitReached,
+                NextCursor = hasMore && entries.Count > 0 ? NextCursor(query, entries) : null,
             });
+    }
+
+    /// <summary>Where this page ended, counting the boundary group it may have split.</summary>
+    private static AuditLogCursor NextCursor(AuditLogQuery query, List<AuditLogEntryView> entries)
+    {
+        var last = entries[^1].TimestampUtc;
+        var inThisPage = entries.Count(entry => entry.TimestampUtc == last);
+
+        // A page that neither started nor ended the group carries the earlier page's count forward.
+        var alreadySkipped = query.Cursor is { } cursor && cursor.TimestampUtc == last ? cursor.Skip : 0;
+        return new AuditLogCursor(last, inThisPage + alreadySkipped);
     }
 
     private static bool TryParse(string line, out AuditLogEntryView entry)

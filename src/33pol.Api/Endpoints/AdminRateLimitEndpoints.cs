@@ -262,9 +262,15 @@ public static class AdminRateLimitEndpoints
     /// <remarks>
     /// <c>minutes</c> is 1–180 (default 60) and <c>bucketMinutes</c> 1–60 (default 1); out-of-range
     /// values are refused rather than clamped, because a chart drawn over a different range than the
-    /// one asked for is wrong in a way nobody would notice. <c>limitId</c> is a limit id from the
-    /// usage report; <c>anonymousBucket=true</c> selects a model rule's anonymous bucket. An unknown
-    /// limit is 404, which is different from a known one with no traffic (200, zeros).
+    /// one asked for is wrong in a way nobody would notice. (<c>take</c> on the history route is
+    /// clamped instead: a page size the caller did not quite get is not a different answer, a
+    /// different time range is.) <c>limitId</c> is a limit id from the usage report;
+    /// <c>anonymousBucket=true</c> selects a model rule's anonymous bucket.
+    ///
+    /// A limit the tracker holds nothing for is 404. That covers a limit that does not exist and a
+    /// configured one that has simply not been evaluated since the gateway started — counters are
+    /// created on first use, so the two are indistinguishable from here, and claiming otherwise
+    /// would mean inventing a zero series for any string a caller sent.
     /// </remarks>
     private static IResult GetUsageSeries(
         IRateLimitUsageTracker? tracker,
@@ -312,13 +318,14 @@ public static class AdminRateLimitEndpoints
     /// </summary>
     /// <remarks>
     /// <c>take</c> is 1–100 (default 20). <c>before</c> pages backwards: pass the previous page's
-    /// <c>nextBefore</c>. Read from the same file every other admin action is recorded in — this is
-    /// a filtered view of it, not a second history.
+    /// <c>nextBefore</c> back unchanged — it is an opaque cursor, not just a timestamp, because two
+    /// records can share one. Read from the same file every other admin action is recorded in —
+    /// this is a filtered view of it, not a second history.
     /// </remarks>
     private static async Task<IResult> GetHistoryAsync(
         IAuditLogReader? reader,
         [FromQuery] int? take,
-        [FromQuery] DateTimeOffset? before,
+        [FromQuery] string? before,
         CancellationToken cancellationToken)
     {
         if (reader is null || !reader.IsAvailable)
@@ -326,9 +333,14 @@ public static class AdminRateLimitEndpoints
             return Results.Json(new AdminRateLimitHistoryDto { Available = false });
         }
 
+        if (!AuditLogCursor.TryParse(before, out var cursor))
+        {
+            return Results.BadRequest(new { message = "before must be the nextBefore value from a previous page." });
+        }
+
         var limit = Math.Clamp(take ?? 20, 1, 100);
         var read = await reader
-            .ReadRecentAsync(new AuditLogQuery(limit, "rate_limits.", before), cancellationToken)
+            .ReadRecentAsync(new AuditLogQuery(limit, "rate_limits.", cursor), cancellationToken)
             .ConfigureAwait(false);
 
         var entries = read.Entries.Select(AdminRateLimitHistoryEntryDto.FromAudit).ToArray();
@@ -337,7 +349,7 @@ public static class AdminRateLimitEndpoints
             Available = true,
             Entries = entries,
             HasMore = read.HasMore,
-            NextBefore = read.HasMore && entries.Length > 0 ? entries[^1].TimestampUtc : null,
+            NextBefore = read.NextCursor?.ToString(),
             ScanLimitReached = read.ScanLimitReached,
         });
     }
@@ -430,7 +442,7 @@ public static class AdminRateLimitEndpoints
         // unlimited last Tuesday" had no answer in the trail.
         var stored = service.GetCurrent();
         var changes = DescribeChanges(stored.Rules, rules);
-        var changedRules = changes?.Select(static c => c.Item).ToArray();
+        var changedRules = changes?.Select(static c => c.Item).ToList();
 
         var result = await service
             .UpdateAsync(
@@ -475,8 +487,14 @@ public static class AdminRateLimitEndpoints
                     PlanCount = request.Plans.Count,
                     RuleCount = rules?.Length,
                     WindowCount = rules?.Sum(static r => r.Windows.Count),
-                    Changes = changes?.Select(static c => c.Text).ToArray(),
-                    ChangedRules = changedRules,
+                    // Both lists are capped: a rule set may hold RateLimitConfigValidation.MaxRules
+                    // entries, so replacing one wholesale can describe thousands of changes, and an
+                    // audit record is a single line in a size-capped file shared with every other
+                    // admin action. The true total is recorded beside them so nothing reads as
+                    // fewer changes than there were.
+                    Changes = changes?.Take(AdminRateLimitHistoryEntryDto.MaxChanges).Select(static c => c.Text).ToArray(),
+                    ChangedRules = changedRules?.Take(AdminRateLimitHistoryEntryDto.MaxChanges).ToArray(),
+                    ChangeCount = changes?.Count,
                     result.Version,
                     BasedOnVersion = expectedVersion,
                     PreviousVersion = stored.Version,

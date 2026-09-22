@@ -16,8 +16,12 @@ public sealed class AdminRateLimitHistoryDto
     /// <summary>Whether an older matching entry exists.</summary>
     public bool HasMore { get; set; }
 
-    /// <summary>Pass as <c>before</c> for the next page. Null on the last page.</summary>
-    public DateTimeOffset? NextBefore { get; set; }
+    /// <summary>
+    /// Pass back unchanged as <c>before</c> for the next page; null on the last page. Opaque: it
+    /// carries a position, not just a timestamp, so a page boundary inside a group of records
+    /// written in the same tick neither loses them nor repeats them.
+    /// </summary>
+    public string? NextBefore { get; set; }
 
     /// <summary>
     /// The read stopped at its scan ceiling before the end of the trail: older entries may exist
@@ -29,7 +33,10 @@ public sealed class AdminRateLimitHistoryDto
 /// <summary>One save, or one refused attempt.</summary>
 public sealed class AdminRateLimitHistoryEntryDto
 {
-    /// <summary>Most rule changes returned per entry; the rest are counted, not listed.</summary>
+    /// <summary>
+    /// Most rule changes carried per entry, at both ends: the writer records no more than this and
+    /// the reader returns no more than this. The rest are counted, not listed.
+    /// </summary>
     public const int MaxChanges = 200;
 
     public DateTimeOffset TimestampUtc { get; set; }
@@ -168,9 +175,11 @@ public sealed class AdminRateLimitHistoryEntryDto
             }
         }
 
+        // The writer caps what it records and stores the true total beside it, so an entry that
+        // described thousands of changes still reports how many there were.
         dto.Changes = changes;
-        dto.ChangeCount = total;
-        dto.ChangesTruncated = total > changes.Count;
+        dto.ChangeCount = Math.Max(Int(details, "changeCount") ?? 0, total);
+        dto.ChangesTruncated = dto.ChangeCount > changes.Count;
     }
 
     private static string? Text(JsonElement parent, string name) =>

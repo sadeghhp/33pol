@@ -1280,7 +1280,9 @@ an id are different rules and get different ids (the target it was *found under*
 #### B2 — time series · Done
 
 - `GET /admin/api/rate-limits/usage/timeseries?minutes=1..180&bucketMinutes=1..60[&limitId=…&anonymousBucket=true]`.
-  Out-of-range → 400 (not clamped). Unknown limit → 404; known-but-quiet → 200 with zeros.
+  Out-of-range → 400 (not clamped). A limit the tracker holds nothing for → 404; counters are
+  created on first use, so a limit that does not exist and a configured one that has simply been
+  idle are indistinguishable here and are both reported as "no activity recorded".
 - Buckets are aligned to the Unix epoch in UTC and whole: the range is rounded outwards to cover what
   was asked, never beyond the 180-minute ring. ≤180 points, contiguous, oldest first, each with an
   explicit `startUtc`. `covered: false` marks a bucket that ended before counting began (restart or
@@ -1335,4 +1337,68 @@ threads. `BuildReport` with 500 limits ≈ 25–80 ms; a 180-point series ≈ 2�
   master-switch/tier-only saves appear as "no rule changed".
 - A stream refusal still counts one admitted *and* one refused decision in the gateway totals
   (pre-existing: the rate stage admits before the router refuses). Per-limit counters do not mix them.
+
+### 20.3 Verification pass (2026-09-21, after 416eb93)
+
+A review pass over the committed diff, a clean full .NET run, the Node suite, and the browser
+sweep. Eleven defects were found and fixed; the working tree holds those fixes, uncommitted.
+
+**Hot path — the one that mattered.** `RingFor` checked the limits ceiling with
+`ConcurrentDictionary.Count`, which takes every bucket lock. Once the limits dimension is full —
+the state §20.2 says to expect with 2,000 rules and the default ceiling of 500 — every request
+naming an untracked limit took all of them. Measured at six limits per request: **28 µs**
+single-threaded and **261 µs at 8 threads**, against ~1 µs and ~3 µs unsaturated. The same pattern
+was already in `UsageDimension.Add` (four per request, pre-existing) and in `RecordViolation`. All
+three now keep an interlocked count beside the dictionary, which is what `RateLimitPlanResolver`
+already does and documents. After: **0.5 µs / 2.7 µs**, below the unsaturated cost because the
+early return skips the ring. `Reset()` clears the counters with the dictionaries, and a test covers
+that — a counter left set would leave the tracker permanently full while reporting nothing tracked.
+
+**Audit paging lost records.** `/history` used the last entry's timestamp as the cursor and
+excluded `>= before`, so a page boundary inside a group of records written in the same tick dropped
+the whole group, silently. Two records can share a timestamp (coarse platform clocks, a fixed
+`TimeProvider` in tests, replicas appending to one file). `nextBefore` is now an opaque cursor
+carrying the timestamp *and* how many records with it were already returned; a plain timestamp is
+still accepted. Covered by a test that writes five records from a frozen clock and pages through
+them.
+
+**Audit records were unbounded at the write side.** A full rule-set replacement could describe
+`MaxRules` × 2 changes — roughly 4,000 items, ~0.7 MB — on one line of a size-capped file shared
+with every other admin action. Both lists are now capped at 200 with the true total recorded
+beside them, which is the cap the read side already applied.
+
+**Frontend.** `--text-muted` was used three times and defined nowhere, so those rules fell back to
+`inherit` and the `<dl>` labels in the drawer rendered the same colour as their values (now
+`--text-secondary`, verified in-browser). The drawer's trend was cleared on every 30-second
+activity refresh, replacing the chart with "Loading trend…" for as long as the drawer stayed open;
+it now clears only when a different rule is opened. A failed series load kept the previous window's
+points under the new window's caption. "Limit activity" sorted ascending on first click while every
+other count column starts with the largest. The History anchor scrolled to a collapsed section. The
+rules list still did a per-subject traffic lookup per row for fields nothing binds, and
+`rlProtectiveActivityView` rebuilt the whole Activity view six times per render of a two-row table.
+
+**The read path could newly fail.** `GET /` resolved `IRateLimitSettingsRepository` to answer
+`writable`, which constructs a `DbContext` on every read of the page and made a failure to
+construct one fail the *read* — on the endpoint whose purpose under B4 is to stay inspectable when
+writes cannot happen. It now asks the container whether the repository is registered
+(`IServiceProviderIsService`), which is the condition that actually differs between deployments,
+with the old resolve kept as a fallback for a container without that feature. A registered store
+that cannot be built still reports writable, and the save reports the failure. Covered by a test
+that registers a throwing repository and asserts the configuration still loads.
+
+**Documentation corrected.** The series endpoint's 404 was documented as "unknown limit, unlike a
+known one with no traffic"; counters are created on first use, so an idle configured limit is 404
+too. Both the XML doc and §20.2 now say so. A comment in `rlRuleHasFlag` still claimed there is
+deliberately no near-limit filter.
+
+**Assets** bumped to `admin.css?v=35`, `admin-app.js?v=55`.
+
+**Checked and found clean:** limit-id collisions (tier ids cannot collide with rule ids — no scope
+is named `plan` or `default`, and both sides lower-case); stage-one refund attribution; stream
+accounting kept separate from rate; `RateLimitRule` is never used in equality or as a key, so the
+three new fields are safe (56 B, 336 B for the six-rule stack buffer); ring rollover (the lock is
+taken only to roll a slot, counters are zeroed before the minute is published, and readers hold the
+same lock); series bucket arithmetic at both edges; API additivity and PUT ignoring response-only
+fields; audit field-by-field projection (no blob pass-through, and the `rate_limits.` prefix cannot
+be spoofed because every action name is a compile-time literal).
 

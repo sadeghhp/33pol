@@ -163,15 +163,32 @@ public sealed class RateLimitConfigAdminService(
     }
 
     /// <remarks>
-    /// Resolves the repository exactly as <see cref="UpdateAsync"/> does, so the two cannot disagree:
-    /// the one precondition a save has beyond validation is that a database is configured.
+    /// <para>Asks the same question <see cref="UpdateAsync"/> asks — is a settings repository
+    /// there? — because that is the one precondition a save has beyond validation, and it is what
+    /// differs between a deployment with a database and one without.</para>
+    ///
+    /// <para>Asked of the container rather than by resolving the service, which would construct a
+    /// repository and with it a <c>DbContext</c> on every read of this page. Registration is the
+    /// thing being tested; building an instance to find out both costs a context per request and
+    /// makes a failure to construct one fail the <em>read</em>. This endpoint is how an operator
+    /// looks at limits they cannot change, so it has to keep working in exactly the conditions that
+    /// stop a write. A repository that is registered but cannot be built is still reported as
+    /// writable here, and the save that follows reports the failure — which is where it belongs.</para>
     /// </remarks>
     public RateLimitWriteAvailability GetWriteAvailability()
     {
         using var scope = scopeFactory.CreateScope();
-        return scope.ServiceProvider.GetService<IRateLimitSettingsRepository>() is null
-            ? new RateLimitWriteAvailability(false, RateLimitWriteAvailability.StoreUnavailable)
-            : RateLimitWriteAvailability.Available;
+        var container = scope.ServiceProvider.GetService<IServiceProviderIsService>();
+
+        // No such feature on this container (a hand-built one in a test): fall back to resolving,
+        // which is what this used to do unconditionally.
+        var registered = container is not null
+            ? container.IsService(typeof(IRateLimitSettingsRepository))
+            : scope.ServiceProvider.GetService<IRateLimitSettingsRepository>() is not null;
+
+        return registered
+            ? RateLimitWriteAvailability.Available
+            : new RateLimitWriteAvailability(false, RateLimitWriteAvailability.StoreUnavailable);
     }
 
     public async Task<RateLimitConfigUpdateResult> UpdateAsync(

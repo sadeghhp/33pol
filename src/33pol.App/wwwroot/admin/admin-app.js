@@ -4206,7 +4206,7 @@ function adminApp() {
         return;
       }
       this.rlSortKey = key;
-      this.rlSortDir = key === 'refused' ? -1 : 1;
+      this.rlSortDir = key === 'refused' || key === 'activity' ? -1 : 1;
       this.rlRuleLimit = 100;
     },
 
@@ -8497,7 +8497,15 @@ function adminApp() {
           ['rl-schedule', 'Calendar'],
           ['rl-baselines', 'Baselines'],
           ['rl-history', 'History']
-        ].map(([id, label]) => ({ key: id, label, go: () => this.scrollToRateLimitSection(id) }))
+        ].map(([id, label]) => ({
+          key: id,
+          label,
+          go: () => {
+            // Nothing to look at under a collapsed heading: the anchor opens it on the way.
+            if (id === 'rl-history' && !this.rlHistoryOpen) this.toggleRateLimitHistory();
+            this.scrollToRateLimitSection(id);
+          }
+        }))
       };
     },
 
@@ -8574,9 +8582,11 @@ function adminApp() {
 
     /**
      * The status flags a rule can be filtered by. Every one is backed by data the page really has:
-     * the draft (scheduled, off, unsaved), the saved schedule report (window active) and the
-     * cumulative refusal counters (refused). There is deliberately no "near its limit": the usage
-     * report cannot attribute a rate to a rule.
+     * the draft (scheduled, off, unsaved), the saved schedule report (window active), the
+     * cumulative refusal counters (refused) and the gateway's per-limit report (near limit). None
+     * of them is a figure this page worked out for itself — "near limit" in particular is the
+     * gateway's own busiest minute against the rate that limit enforced, and it is offered only
+     * for a limit that counts a single bucket.
      */
     rlRuleHasFlag(rule, id) {
       if (id === 'scheduled') return (rule.schedule || []).length > 0;
@@ -8595,6 +8605,8 @@ function adminApp() {
         const r = this.rlRefusalsFor(rule.scope, rule.target);
         return r.state === 'ok' && r.hits > 0;
       }
+      // "Near limit" is the gateway's own peak against the rate it enforced, for a limit that
+      // counts one bucket — never a rate this page attributed to a rule itself.
       if (id === 'near') return this.rlLimitActivityFor(this.rlIdentity(rule.scope, rule.target)).near === true;
       return true;
     },
@@ -8787,14 +8799,8 @@ function adminApp() {
 
       const refusals = this.rlRefusalsView(rule.scope, rule.target);
       const tenantRate = rule.scope === 'tenant' && !(rule.rpm > 0);
-      // Subject-level context, never the rule's own utilisation: every decision about this tenant,
-      // key or model in the window, whichever limit made it.
-      const traffic = this.rlSubjectTrafficFor(rule.scope, rule.target);
-      const trafficText = traffic.state === 'ok' && traffic.row
-        ? (traffic.row.requestsPerMinute ?? 0).toFixed(1) + '/min · ' + this.formatNum(traffic.row.rejected ?? 0) + ' refused'
-        : traffic.state === 'quiet' || traffic.state === 'absent' ? 'no decisions'
-        : traffic.state === 'nosection' ? '' : '—';
-      // This rule's own counters, joined by its identity.
+      // This rule's own counters, joined by its identity. Subject-level traffic is a different
+      // figure and lives in Activity and in the drawer — the list does not look it up per row.
       const act = this.rlLimitActivityView(identity);
       return {
         key: identity + ':' + index,
@@ -8822,7 +8828,6 @@ function adminApp() {
         enfTitle: enforcing.title || '',
         enfKind: enforcing.kind,
         windowActive: enforcing.kind === 'window' || enforcing.kind === 'paused',
-        trafficText, trafficTitle: traffic.state === 'ok' ? 'Every decision about this subject in the selected window, whichever limit made it' : '',
         actText: act.text, actSub: act.sub, hasActSub: !!act.sub, actTitle: act.title,
         actUnknown: act.unknown, actSr: act.sr, hasActBar: act.hasBar, actBarStyle: act.barStyle, actBarCls: act.barCls,
         actCls: 'rl-col-traffic num' + (act.unknown ? ' muted' : '') + (act.near ? ' rl-act-near' : ''),
@@ -10337,9 +10342,10 @@ function adminApp() {
      */
     rlProtectiveActivityView(scope) {
       const u = this.rateLimitUsage;
-      const windowText = this.rlActivityView.windowText;
       const none = (text) => ({ known: false, text, sub: '', note: '', refused: 0, refusedSome: false });
       if (!u || !u.totals) return none('Activity is unavailable.');
+      // The same words the Activity card uses, without building that whole view per call.
+      const windowText = 'last ' + this.rlIndex().windowMinutes + ' min';
       if (!Array.isArray(u.protective)) return none('This gateway does not report activity for protective limits.');
       const row = this.rlIndex().protective.get(scope);
       if (!row) return none('Not reported.');
@@ -10420,6 +10426,9 @@ function adminApp() {
         this.rlSeriesError = '';
       } catch (e) {
         if (seq !== this._rlSeriesSeq) return;
+        // The caption names the window the operator picked, so keeping points from the previous
+        // one would draw the wrong minutes under the right label.
+        this.rlSeries = null;
         // An older gateway has no such route. The trend is an extra; its absence is not an error
         // worth a banner, and the last series is kept.
         this.rlSeriesError = e?.status === 404 ? '' : (e?.message || 'Could not load the refusal trend.');
@@ -10431,10 +10440,14 @@ function adminApp() {
       const id = String(limitId || '').toLowerCase();
       const seq = (this._rlLimitSeriesSeq || 0) + 1;
       this._rlLimitSeriesSeq = seq;
+      // Only a different rule clears what is on screen. Activity refreshes this every 30 seconds
+      // for the open drawer, and blanking it each time replaced the chart with "Loading trend…"
+      // forever — the same reason the usage report keeps its previous answer while refreshing.
+      const switched = id !== this.rlLimitSeriesFor;
       this.rlLimitSeriesFor = id;
-      this.rlLimitSeries = null;
+      if (switched) this.rlLimitSeries = null;
       if (!id) { this.rlLimitSeriesState = 'idle'; return; }
-      this.rlLimitSeriesState = 'loading';
+      if (switched || this.rlLimitSeriesState !== 'ok') this.rlLimitSeriesState = 'loading';
       try {
         const minutes = Number(this.rateLimitUsageMinutes) || 60;
         const series = await this.apiJson('/admin/api/rate-limits/usage/timeseries?minutes=' + minutes

@@ -143,6 +143,60 @@ public sealed class FileAuditLogReaderTests : IDisposable
         result.ScanLimitReached.Should().BeTrue();
     }
 
+    /// <summary>
+    /// Paging must not lose a record just because it shares a clock tick with the one before it.
+    /// The trail is written from whatever <see cref="TimeProvider"/> the host has — coarse on some
+    /// platforms, fixed in tests, and shared between replicas appending to one file — so equal
+    /// timestamps at a page boundary are a question of when, not whether.
+    /// </summary>
+    [Fact]
+    public async Task ReadRecent_PagingAcrossRecordsThatShareATimestamp_LosesNothing()
+    {
+        using var logger = new FileAuditLogger(
+            Options.Create(new GatewaySecurityOptions
+            {
+                AuditLogPath = Path.Combine(_directory, "audit-log.jsonl"),
+                AuditLogMaxBytes = 8 * 1024 * 1024,
+            }),
+            NullLogger<FileAuditLogger>.Instance,
+            new FrozenTimeProvider(new DateTimeOffset(2026, 9, 21, 12, 0, 0, TimeSpan.Zero)));
+
+        for (var i = 0; i < 5; i++)
+        {
+            logger.LogAdminAction("rate_limits.update", new AuditLogEntry("t", "k", new { Version = i }));
+        }
+
+        var reader = new FileAuditLogReader(logger);
+        var seen = new List<string>();
+        AuditLogCursor? cursor = null;
+
+        for (var page = 0; page < 5; page++)
+        {
+            var result = await reader.ReadRecentAsync(new AuditLogQuery(2, "rate_limits.", cursor));
+            seen.AddRange(result.Entries.Select(e => e.Details ?? string.Empty));
+            if (!result.HasMore)
+            {
+                break;
+            }
+
+            cursor = result.NextCursor;
+            cursor.Should().NotBeNull("a page that reports more must say where to resume");
+        }
+
+        // Every record exactly once, newest first, even though all five share one timestamp.
+        seen.Should().Equal(
+            """{"version":4}""",
+            """{"version":3}""",
+            """{"version":2}""",
+            """{"version":1}""",
+            """{"version":0}""");
+    }
+
+    private sealed class FrozenTimeProvider(DateTimeOffset now) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => now;
+    }
+
     public void Dispose()
     {
         try

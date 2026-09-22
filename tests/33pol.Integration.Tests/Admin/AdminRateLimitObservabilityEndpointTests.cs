@@ -54,6 +54,38 @@ public sealed class AdminRateLimitObservabilityEndpointTests
         put.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
     }
 
+    /// <summary>
+    /// The page an operator opens to look at limits they cannot change must not be the page that
+    /// fails when the database is unhappy. Registration is what this reports, so it is asked of the
+    /// container — resolving the repository would build a DbContext on every read, and a failure to
+    /// build one would turn a look at the configuration into a 500.
+    /// </summary>
+    [Fact]
+    public async Task Get_WhenTheSettingsStoreCannotBeConstructed_StillLoadsTheConfiguration()
+    {
+        await using var factory = CreateFactory().WithWebHostBuilder(builder =>
+            builder.ConfigureTestServices(services =>
+            {
+                services.RemoveAll<IRateLimitSettingsRepository>();
+                services.AddScoped<IRateLimitSettingsRepository>(
+                    _ => throw new InvalidOperationException("the database is not reachable"));
+            }));
+        var client = await ClientAsync(factory);
+
+        var response = await client.GetAsync("/admin/api/rate-limits");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync()).RootElement;
+        json.GetProperty("default").GetProperty("rpm").GetInt32().Should().BeGreaterThan(0);
+        json.GetProperty("rules").ValueKind.Should().Be(JsonValueKind.Array);
+
+        // Registered, so it is reported as writable; the save is where the failure belongs and is
+        // reported, rather than being guessed at from a read.
+        json.GetProperty("writable").GetBoolean().Should().BeTrue();
+        ((int)(await client.PutAsJsonAsync("/admin/api/rate-limits", ValidBody())).StatusCode)
+            .Should().BeGreaterThanOrEqualTo(500, "the save is where a broken store shows up, not the read");
+    }
+
     [Fact]
     public async Task Put_IgnoresWritableEchoedBackInTheBody()
     {
@@ -144,8 +176,13 @@ public sealed class AdminRateLimitObservabilityEndpointTests
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }
 
+    /// <summary>
+    /// 404 means "nothing recorded for that limit" — which is a limit that does not exist and an
+    /// idle one alike, because the counters are created on first use. The console words it that way
+    /// rather than drawing a zero line for a string the gateway never saw.
+    /// </summary>
     [Fact]
-    public async Task Timeseries_ForAnUnknownLimit_Is404_AndForAKnownOneIsItsOwnSeries()
+    public async Task Timeseries_WithNothingRecorded_Is404_AndForALimitWithTrafficIsItsOwnSeries()
     {
         await using var factory = CreateFactory();
         var client = await ClientAsync(factory);
@@ -265,8 +302,12 @@ public sealed class AdminRateLimitObservabilityEndpointTests
         second.GetProperty("entries").GetArrayLength().Should().Be(3);
         second.GetProperty("hasMore").GetBoolean().Should().BeFalse();
         second.GetProperty("nextBefore").ValueKind.Should().Be(JsonValueKind.Null);
-        second.GetProperty("entries").EnumerateArray()
-            .Should().OnlyContain(e => e.GetProperty("timestampUtc").GetDateTimeOffset() < DateTimeOffset.Parse(next!));
+        // The cursor is opaque — it carries a position, not just a timestamp — so the assertion is
+        // that the two pages partition the saves, not that the cursor parses as a date.
+        var firstIds = first.GetProperty("entries").EnumerateArray().Select(Stamp).ToArray();
+        var secondIds = second.GetProperty("entries").EnumerateArray().Select(Stamp).ToArray();
+        secondIds.Should().NotIntersectWith(firstIds);
+        firstIds.Concat(secondIds).Should().OnlyHaveUniqueItems().And.HaveCount(5);
     }
 
     /// <summary>The endpoint publishes named fields only, so nothing else in an audit record can leak through it.</summary>
@@ -323,6 +364,9 @@ public sealed class AdminRateLimitObservabilityEndpointTests
         var response = await client.PutAsJsonAsync("/admin/api/rate-limits", ValidBody(rules));
         response.StatusCode.Should().Be(HttpStatusCode.OK, await response.Content.ReadAsStringAsync());
     }
+
+    private static string Stamp(JsonElement entry) =>
+        entry.GetProperty("timestampUtc").GetDateTimeOffset().ToString("O") + "/" + entry.GetProperty("version").GetInt64();
 
     private static string[] Changes(JsonElement entry) =>
         [.. entry.GetProperty("changes").EnumerateArray().Select(c =>

@@ -2008,8 +2008,6 @@ html.wallboard .page-content { animation: wallboard-shift 900s steps(1) infinite
 .rl-section { scroll-margin-top: 4.5rem; }
 .rl-sort-select { display: none; }
 .rl-more { margin: var(--space-3) 0 0; justify-content: center; }
-/* The per-subject context column is the first to go: it is in the rule drawer too. */
-@media (max-width: 80rem) { .rl-rules-table th.rl-col-traffic, .rl-rules-table td.rl-col-traffic { display: none; } }
 
 /* Summary strip and section links */
 .rl-opsum { flex: 1 1 100%; margin: 0; padding-top: var(--space-3); border-top: 1px solid var(--border); gap: var(--space-2); }
@@ -2356,8 +2354,10 @@ th.num .th-sort { flex-direction: row-reverse; }
 /* The language toggle keeps its own script per button, whichever way the block around it runs. */
 .rl-lang button[lang="en"] { font-family: var(--font-sans); }
 
-/* Must follow the narrow-width card layout above, which sets every cell to display:block: the
-   subject-traffic cell has no grid area there and would otherwise be auto-placed into the card. */
+/* The limit-activity column is the first to go when width runs out: the same figures are in the
+   rule drawer at every width. Declared here rather than beside the other column rules because it
+   must follow the narrow-width card layout above, which sets every cell to display:block — the
+   cell has no grid area there and would otherwise be auto-placed into the card. */
 @media (max-width: 80rem) { .rl-rules-table td.rl-col-traffic, .rl-rules-table th.rl-col-traffic { display: none; } }
 
 /* Baselines: tiers and protective limits as compact tables (same cells as the rules list). */
@@ -2418,7 +2418,7 @@ tbody tr:last-child th.rl-base-name { border-bottom: none; }
 }
 
 /* ---- Rate limits: per-limit activity, trend, tracker completeness, history ---- */
-.rl-act-sub { display: block; font-size: var(--text-xs); color: var(--text-muted); font-variant-numeric: tabular-nums; white-space: normal; }
+.rl-act-sub { display: block; font-size: var(--text-xs); color: var(--text-secondary); font-variant-numeric: tabular-nums; white-space: normal; }
 .rl-act-bar { margin-top: 3px; min-width: 4rem; }
 .rl-rules-table td.rl-act-near > span:first-of-type + span { font-weight: 600; }
 .rl-protect-act { display: block; margin-top: var(--space-1); font-size: var(--text-sm); font-weight: 400; }
@@ -2433,7 +2433,7 @@ tbody tr:last-child th.rl-base-name { border-bottom: none; }
 .rl-trend-text .ms-label { display: inline; white-space: normal; }
 .rl-trend.in-drawer, .rl-trend.in-drawer .rl-trend-text { max-width: 100%; min-width: 0; }
 .rl-trend-text .hint { display: block; }
-.rl-trend-text { min-width: 0; font-size: var(--text-xs); color: var(--text-muted); }
+.rl-trend-text { min-width: 0; font-size: var(--text-xs); color: var(--text-secondary); }
 .rl-trend-all { stroke: var(--text-secondary); stroke-width: 1.25; }
 .rl-trend-refused { stroke: var(--error); }
 .rl-trend-refused-fill { fill: var(--error); opacity: .14; }
@@ -2444,7 +2444,7 @@ tbody tr:last-child th.rl-base-name { border-bottom: none; }
 .rl-limit-act-head { margin: 0; }
 .rl-limit-act-head .rl-act-sub { display: inline; margin-left: var(--space-2); }
 .rl-limit-defs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-2) var(--space-3); margin: var(--space-2) 0; }
-.rl-limit-defs dt { font-size: var(--text-xs); color: var(--text-muted); }
+.rl-limit-defs dt { font-size: var(--text-xs); color: var(--text-secondary); }
 .rl-limit-defs dd { margin: 0; font-variant-numeric: tabular-nums; font-weight: 600; }
 .rl-rule-hist, .rl-hist, .rl-hist-changes { list-style: none; margin: 0; padding: 0; }
 .rl-rule-hist li { padding: var(--space-1) 0; font-size: var(--text-sm); }

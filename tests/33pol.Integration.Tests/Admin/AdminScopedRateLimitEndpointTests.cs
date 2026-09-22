@@ -273,6 +273,80 @@ public sealed class AdminScopedRateLimitEndpointTests
             v.GetProperty("key").GetString() == "local-mock");
     }
 
+    /// <summary>
+    /// The per-limit section, end to end through the real limiter: which configured control was
+    /// asked, which one refused, and which one had to give its token back.
+    /// </summary>
+    /// <remarks>
+    /// The seam this covers is the one the unit tests cannot: the middleware records against a real
+    /// tracker, and the ids it stamps have to be the same strings the admin API reports rules under.
+    /// A join that works on a recording fake but not on the real report would look exactly like a
+    /// page with no activity.
+    /// </remarks>
+    [Fact]
+    public async Task GetUsage_AfterTraffic_AttributesEachDecisionToTheLimitThatMadeIt()
+    {
+        var handler = new MockUpstreamHandler();
+        await using var factory = CreateFactory(handler);
+        await GatewayWebApplicationFactory.EnsureAuthReadyAsync(factory);
+        var admin = CreateAuthenticatedClient(factory, AdminKey);
+
+        await admin.PutAsJsonAsync(
+            "/admin/api/rate-limits",
+            new
+            {
+                enabled = true,
+                @default = new { rpm = 10_000, burst = 0, maxConcurrentStreams = 100 },
+                plans = new Dictionary<string, object>(),
+                rules = new[]
+                {
+                    new { scope = "model", target = "local-mock", rpm = 1, burst = 0, maxConcurrentStreams = 0 },
+                },
+            });
+
+        var client = await CreateInferenceClientAsync(factory, admin);
+        for (var i = 0; i < 4; i++)
+        {
+            await PostChatAsync(client);
+        }
+
+        using var json = JsonDocument.Parse(
+            await (await admin.GetAsync("/admin/api/rate-limits/usage?minutes=60&take=25")).Content.ReadAsStringAsync());
+        var limits = json.RootElement.GetProperty("limits").EnumerateArray().ToArray();
+
+        // Every row, whatever it saw: a limit that is asked either keeps its token, is the one that
+        // refused, or gives it back. No fourth case, and nothing counted twice.
+        limits.Should().NotBeEmpty().And.OnlyContain(l =>
+            l.GetProperty("evaluations").GetInt64()
+                == l.GetProperty("charged").GetInt64()
+                   + l.GetProperty("refusedByRate").GetInt64()
+                   + l.GetProperty("passedThenRefunded").GetInt64());
+
+        // The model rule is the one that refused, and it is reported under the identity the rules
+        // API stores it as — scope:target, which is what the console joins a row by.
+        var model = limits.Single(l => l.GetProperty("limitId").GetString() == "model:local-mock");
+        model.GetProperty("scope").GetString().Should().Be("model");
+        model.GetProperty("target").GetString().Should().Be("local-mock");
+        model.GetProperty("charged").GetInt64().Should().Be(1);
+        model.GetProperty("refusedByRate").GetInt64().Should().Be(3);
+        model.GetProperty("passedThenRefunded").GetInt64().Should().Be(0);
+        model.GetProperty("singleBucket").GetBoolean().Should().BeTrue();
+        model.GetProperty("effectiveRpm").GetInt32().Should().Be(1);
+
+        // The tenant scope admitted all four — it is nowhere near its own tier — and handed three
+        // tokens back when the model limit refused. Counting those as charged would show load the
+        // tenant's bucket never carried.
+        var tier = limits.Single(l => l.GetProperty("scope").GetString() is "default" or "plan");
+        tier.GetProperty("evaluations").GetInt64().Should().Be(4);
+        tier.GetProperty("charged").GetInt64().Should().Be(1);
+        tier.GetProperty("refusedByRate").GetInt64().Should().Be(0);
+        tier.GetProperty("passedThenRefunded").GetInt64().Should().Be(3);
+        tier.GetProperty("singleBucket").GetBoolean().Should().BeFalse("a tier gives every tenant a bucket of its own");
+        tier.GetProperty("peakUtilization").ValueKind.Should().Be(JsonValueKind.Null);
+
+        json.RootElement.GetProperty("tracker").GetProperty("isSaturated").GetBoolean().Should().BeFalse();
+    }
+
     [Fact]
     public async Task GetUsage_WithoutAuth_Returns401()
     {

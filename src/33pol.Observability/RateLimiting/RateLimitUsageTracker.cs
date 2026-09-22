@@ -44,6 +44,7 @@ public sealed class RateLimitUsageTracker : IRateLimitUsageTracker
     private readonly UsageDimension _byApiKey;
     private readonly ConcurrentDictionary<ViolationKey, Counter> _violations = new();
     private readonly DropCounter _violationDrops = new();
+    private int _violationCount;
 
     /// <summary>
     /// Every decision, in a ring no key ceiling applies to. The totals and the gateway-wide series
@@ -54,6 +55,13 @@ public sealed class RateLimitUsageTracker : IRateLimitUsageTracker
     /// <summary>Per configured limit, keyed by control id rather than by bucket.</summary>
     private readonly ConcurrentDictionary<LimitKey, LimitRing> _limits = new();
     private readonly DropCounter _limitDrops = new();
+
+    // Counted alongside the dictionary rather than read from it, for the reason the plan resolver
+    // and the store keep their own counters: ConcurrentDictionary.Count takes every bucket lock to
+    // produce an exact number. The ceiling is checked on every miss, and once the table is full
+    // every request whose limits are not tracked misses — so reading Count here turned the
+    // saturated state into a process-wide lock convoy on the request path.
+    private int _limitCount;
 
     // Reserved, outside the key ceiling: two rows that must never read as a false zero.
     private readonly LimitRing _authFailure = new();
@@ -164,13 +172,18 @@ public sealed class RateLimitUsageTracker : IRateLimitUsageTracker
         var key = new ViolationKey(scope, subject, control);
         if (!_violations.TryGetValue(key, out var counter))
         {
-            if (_violations.Count >= _maxKeys)
+            if (Volatile.Read(ref _violationCount) >= _maxKeys)
             {
                 _violationDrops.Record(now);
                 return;
             }
 
-            counter = _violations.GetOrAdd(key, static _ => new Counter());
+            var created = new Counter();
+            counter = _violations.GetOrAdd(key, created);
+            if (ReferenceEquals(counter, created))
+            {
+                Interlocked.Increment(ref _violationCount);
+            }
         }
 
         counter.Increment();
@@ -396,13 +409,22 @@ public sealed class RateLimitUsageTracker : IRateLimitUsageTracker
             return ring;
         }
 
-        if (_limits.Count >= _maxKeys)
+        if (Volatile.Read(ref _limitCount) >= _maxKeys)
         {
             _limitDrops.Record(now);
             return null;
         }
 
-        return _limits.GetOrAdd(key, static _ => new LimitRing());
+        // Check-then-act, so a burst of concurrent misses can seat a few keys past the ceiling.
+        // That is the same tolerance the plan cache has, and the alternative costs a lock here.
+        var created = new LimitRing();
+        var seated = _limits.GetOrAdd(key, created);
+        if (ReferenceEquals(seated, created))
+        {
+            Interlocked.Increment(ref _limitCount);
+        }
+
+        return seated;
     }
 
     private IReadOnlyList<RateLimitLimitUsageRow> BuildLimitRows(long oldest, long newest, int window)
@@ -493,8 +515,10 @@ public sealed class RateLimitUsageTracker : IRateLimitUsageTracker
         _byModel.Clear();
         _byApiKey.Clear();
         _violations.Clear();
+        Interlocked.Exchange(ref _violationCount, 0);
         _violationDrops.Clear();
         _limits.Clear();
+        Interlocked.Exchange(ref _limitCount, 0);
         _limitDrops.Clear();
         _totals.Clear();
         _authFailure.Clear();
@@ -777,7 +801,8 @@ public sealed class RateLimitUsageTracker : IRateLimitUsageTracker
         private readonly ConcurrentDictionary<string, Ring> _keys = new(StringComparer.Ordinal);
         private readonly DropCounter _drops = new();
 
-        public bool IsEmpty => _keys.IsEmpty;
+        /// <summary>See <see cref="_limitCount"/>: the ceiling is checked on the request path.</summary>
+        private int _count;
 
         public RateLimitTrackerDimension Describe(string name) => _drops.Describe(name, _keys.Count, maxKeys);
 
@@ -792,13 +817,18 @@ public sealed class RateLimitUsageTracker : IRateLimitUsageTracker
         {
             if (!_keys.TryGetValue(key, out var ring))
             {
-                if (_keys.Count >= maxKeys)
+                if (Volatile.Read(ref _count) >= maxKeys)
                 {
                     _drops.Record(now);
                     return;
                 }
 
-                ring = _keys.GetOrAdd(key, static _ => new Ring());
+                var created = new Ring();
+                ring = _keys.GetOrAdd(key, created);
+                if (ReferenceEquals(ring, created))
+                {
+                    Interlocked.Increment(ref _count);
+                }
             }
 
             ring.Add(minute, admitted, concurrencyRejection, configuredRpm, effectiveRpm);
@@ -864,6 +894,7 @@ public sealed class RateLimitUsageTracker : IRateLimitUsageTracker
         public void Clear()
         {
             _keys.Clear();
+            Interlocked.Exchange(ref _count, 0);
             _drops.Clear();
         }
 

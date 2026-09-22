@@ -219,11 +219,17 @@ test('per-limit activity', async t => {
     assert.match(v.limit.lines[3].title, /got it back because another limit refused/);
   });
 
-  await t.test('sorting by activity puts measured utilisation first, then volume, then nothing', () => {
+  await t.test('sorting by activity starts with the busiest, like every other count column', () => {
     const app = page();
     app.setRateLimitSort('activity');
-    app.setRateLimitSort('activity');
+    // One press, not two: a count column that opened on its quietest rows would bury the thing an
+    // operator sorted by activity to find.
+    assert.equal(app.rlSortView.activity.ariaSort, 'descending');
+    // Measured utilisation outranks raw volume, and a rule the gateway reported nothing for is last.
     assert.deepEqual(app.rlRuleRows.map(r => r.identity), ['tenant:acme', 'model:gpt-4', 'model:llama']);
+    app.setRateLimitSort('activity');
+    assert.equal(app.rlSortView.activity.ariaSort, 'ascending');
+    assert.deepEqual(app.rlRuleRows.map(r => r.identity), ['model:llama', 'model:gpt-4', 'tenant:acme']);
   });
 
   await t.test('no report, or a gateway without the section: a dash with its reason, never a zero', () => {
@@ -310,6 +316,45 @@ test('trend', async t => {
     assert.equal(app.rlLimitSeriesFor, 'model:gpt-4');
     assert.equal(app.rlLimitSeriesView('tenant:acme').show, false);
     assert.equal(app.rlLimitSeriesView('model:gpt-4').show, true);
+  });
+
+  await t.test('refreshing activity does not blank the open drawer’s trend', async () => {
+    const app = page();
+    app.apiJson = async () => series([point(1), point(2), point(3)]);
+    await app.loadRateLimitLimitSeries('tenant:acme');
+    assert.equal(app.rlLimitSeriesView('tenant:acme').show, true);
+
+    // Activity auto-refreshes every 30 s and re-reads the open rule's trend with it. Clearing the
+    // points first replaced the chart with "Loading trend…" on every poll, for as long as the
+    // drawer stayed open — the same trap the usage report avoids by keeping its previous answer.
+    let resolve;
+    app.apiJson = () => new Promise(r => { resolve = () => r(series([point(4), point(5), point(6)])); });
+    const refresh = app.loadRateLimitLimitSeries('tenant:acme');
+    assert.equal(app.rlLimitSeriesView('tenant:acme').show, true, 'the chart stays up while it refreshes');
+    assert.equal(app.rlLimitSeriesView('tenant:acme').note, '');
+    resolve();
+    await refresh;
+    assert.equal(app.rlLimitSeriesView('tenant:acme').show, true);
+
+    // Opening a different rule is a different question, so that one does clear.
+    app.apiJson = () => new Promise(() => {});
+    void app.loadRateLimitLimitSeries('model:gpt-4');
+    assert.equal(app.rlLimitSeriesView('model:gpt-4').show, false);
+    assert.equal(app.rlLimitSeriesView('model:gpt-4').note, 'Loading trend…');
+  });
+
+  await t.test('a failed refresh drops the points rather than drawing them under the new window', async () => {
+    const app = page();
+    app.rateLimitUsageMinutes = 60;
+    app.apiJson = async () => series([point(1), point(2)]);
+    await app.loadRateLimitSeries();
+    assert.equal(app.rlSeriesView.show, true);
+
+    app.rateLimitUsageMinutes = 15;
+    app.apiJson = async () => { throw new Error('gateway went away'); };
+    await app.loadRateLimitSeries();
+    assert.equal(app.rlSeriesView.show, false, 'the 60-minute points must not be drawn under a 15-minute caption');
+    assert.equal(app.rlSeriesError, 'gateway went away');
   });
 
   await t.test('the charts are hidden from assistive tech and summarised in text', () => {

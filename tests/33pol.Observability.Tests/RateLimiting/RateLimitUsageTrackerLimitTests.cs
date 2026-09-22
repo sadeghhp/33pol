@@ -121,6 +121,71 @@ public sealed class RateLimitUsageTrackerLimitTests
         report.Dimensions.Should().OnlyContain(d => d.TrackedKeys == 0 && d.DroppedDecisions == 0);
     }
 
+    /// <summary>
+    /// The ceiling is counted alongside each dictionary rather than read from it, because
+    /// ConcurrentDictionary.Count locks every bucket and the check sits on the request path. A
+    /// counter that is not cleared with its dictionary would leave the tracker permanently full —
+    /// silently dropping everything while reporting nothing tracked.
+    /// </summary>
+    [Fact]
+    public void Reset_FreesTheKeyCeiling_SoCountingStartsAgain()
+    {
+        var (tracker, _) = Create(maxKeys: 10);
+        for (var i = 0; i < 40; i++)
+        {
+            Admit(tracker, "t" + i);
+            tracker.RecordRateStage([Rule(RateLimitScope.ApiKey, "k:" + i, "api_key:k" + i)], RateLimitStageOutcome.Charged);
+            tracker.Record(new RateLimitUsageEvent("t" + i, null, null, false, RateLimitScope.Tenant, RateLimitControl.Rate, 100, 100));
+        }
+
+        tracker.Reset();
+
+        Admit(tracker, "after-reset");
+        tracker.RecordRateStage([Rule(RateLimitScope.ApiKey, "k:after", "api_key:after")], RateLimitStageOutcome.Charged);
+        tracker.Record(new RateLimitUsageEvent("after-reset", null, null, false, RateLimitScope.Tenant, RateLimitControl.Rate, 100, 100));
+
+        var report = tracker.BuildReport(60, 25, Now);
+        report.ByTenant.Should().ContainSingle().Which.Key.Should().Be("after-reset");
+        report.Limits.Should().ContainSingle().Which.LimitId.Should().Be("api_key:after");
+        report.Violations.Should().ContainSingle().Which.Key.Should().Be("after-reset");
+        report.Tracker.IsSaturated.Should().BeFalse();
+    }
+
+    /// <summary>
+    /// The four rate counters partition the evaluations exactly, whatever mix of outcomes a limit
+    /// saw. A limit that is asked for a token either keeps it, is the one that refused, or gives it
+    /// back — there is no fourth case, and none of them may be counted twice.
+    /// </summary>
+    [Fact]
+    public void Limit_Counters_PartitionEveryEvaluationExactlyOnce()
+    {
+        var (tracker, _) = Create();
+        RateLimitRule[] pair = [Rule(RateLimitScope.Global, "g", "global:*"), Rule(RateLimitScope.Tenant, "t:acme", "tenant:acme")];
+
+        for (var i = 0; i < 5; i++)
+        {
+            tracker.RecordRateStage(pair, RateLimitStageOutcome.Charged);
+        }
+
+        for (var i = 0; i < 3; i++)
+        {
+            tracker.RecordRateStage(pair, RateLimitStageOutcome.Refused, refusedPartitionKey: "t:acme");
+        }
+
+        tracker.RecordRateStage(pair, RateLimitStageOutcome.RefundedByLaterStage);
+
+        var limits = tracker.BuildReport(60, 25, Now).Limits;
+        limits.Should().HaveCount(2);
+        limits.Should().OnlyContain(l => l.Evaluations == l.Charged + l.RefusedByRate + l.PassedThenRefunded);
+
+        // And the split itself: the global rule passed every time and gave its token back four
+        // times; the tenant rule is the one that refused.
+        var global = limits.Single(l => l.LimitId == "global:*");
+        global.Should().Match<RateLimitLimitUsageRow>(l => l.Evaluations == 9 && l.Charged == 5 && l.RefusedByRate == 0 && l.PassedThenRefunded == 4);
+        var tenant = limits.Single(l => l.LimitId == "tenant:acme");
+        tenant.Should().Match<RateLimitLimitUsageRow>(l => l.Evaluations == 9 && l.Charged == 5 && l.RefusedByRate == 3 && l.PassedThenRefunded == 1);
+    }
+
     [Fact]
     public void LimitsDimension_SaturatesOnItsOwn()
     {
