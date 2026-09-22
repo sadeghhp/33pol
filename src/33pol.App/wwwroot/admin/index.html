@@ -29,7 +29,7 @@
   <script defer src="admin-errors.js?v=8"></script>
   <script defer src="admin-store.js?v=12"></script>
   <script defer src="admin-rate-limit-help.js?v=4"></script>
-  <script defer src="admin-app.js?v=56"></script>
+  <script defer src="admin-app.js?v=57"></script>
   <script defer src="vendor/alpine-csp-3.14.9.min.js"></script>
 </head>
 <body x-data="adminApp" x-cloak @keydown.window="onModalKeydown">
@@ -594,7 +594,7 @@
                 <p class="notice warn" x-show="rateLimitsOverviewView.notEnforced" x-text="rateLimitsOverviewView.notEnforcedText"></p>
                 <p class="notice warn" x-show="rateLimitsOverviewView.saturated" x-text="rateLimitsOverviewView.saturatedText"></p>
                 <div class="policy-section wb-hide" x-show="rateLimitsOverviewView.hasLimitRows">
-                  <span class="eyebrow">Refusing or near their limit · last hour</span>
+                  <span class="eyebrow">Limits that refused, or ran near their rate without refusing · last hour</span>
                   <div class="rl-ov-limits">
                     <template x-for="l in rateLimitsOverviewView.limitRows" :key="l.key">
                       <button type="button" class="rl-ov-limit" @click="l.open" :title="l.title">

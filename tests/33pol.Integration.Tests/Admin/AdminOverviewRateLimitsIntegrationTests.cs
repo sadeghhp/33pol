@@ -185,6 +185,19 @@ public sealed class AdminOverviewRateLimitsIntegrationTests
         tracker.RecordRateStage([planTier], RateLimitStageOutcome.Refused, planTier.PartitionKey);
         tracker.RecordAuthFailure(RateLimitAuthFailureStep.Refused, 30);
 
+        // A key-scoped rule on a known key, one on a key that no longer exists, and a rule that ran at
+        // its rate without refusing anything.
+        var keyRule = new RateLimitRule(RateLimitScope.ApiKey, "k:" + keyId, new RateLimitPolicy(10, 0, 0)) { LimitId = "api_key:" + keyId };
+        var goneKey = Guid.NewGuid();
+        var goneRule = new RateLimitRule(RateLimitScope.ApiKeyModel, "km:" + goneKey, new RateLimitPolicy(10, 0, 0)) { LimitId = "api_key_model:" + goneKey + "|local-mock" };
+        var busyRule = new RateLimitRule(RateLimitScope.Model, "m:busy", new RateLimitPolicy(10, 0, 0)) { LimitId = "model:busy" };
+        tracker.RecordRateStage([keyRule], RateLimitStageOutcome.Refused, keyRule.PartitionKey);
+        tracker.RecordRateStage([goneRule], RateLimitStageOutcome.Refused, goneRule.PartitionKey);
+        for (var i = 0; i < 10; i++)
+        {
+            tracker.RecordRateStage([busyRule], RateLimitStageOutcome.Charged);
+        }
+
         var json = await client.GetFromJsonAsync<JsonElement>(Path);
 
         // Windows
@@ -197,18 +210,35 @@ public sealed class AdminOverviewRateLimitsIntegrationTests
         five.GetProperty("refusalShare").GetDouble().Should().BeApproximately(0.15, 1e-9);
 
         // Limits: stable rule identity, and a peak only where one bucket was drained
-        json.GetProperty("refusingLimitCount").GetInt32().Should().Be(2);
+        json.GetProperty("refusingLimitCount").GetInt32().Should().Be(4, "the near-limit rule refused nothing and is not counted");
         var limits = json.GetProperty("limits").EnumerateArray().ToArray();
-        limits.Select(l => l.GetProperty("limitId").GetString()).Should().Equal("model:local-mock", "plan:pro");
+        limits.Select(l => l.GetProperty("limitId").GetString()).Should().BeEquivalentTo(
+            "model:local-mock", "plan:pro", "api_key:" + keyId.ToString().ToLowerInvariant(), "api_key_model:" + goneKey.ToString().ToLowerInvariant() + "|local-mock", "model:busy");
+        limits[0].GetProperty("limitId").GetString().Should().Be("model:local-mock", "most refused first");
+        limits[^1].GetProperty("limitId").GetString().Should().Be("model:busy", "near-limit rows follow every refusing row");
         var rule = limits[0];
         rule.GetProperty("ruleId").GetString().Should().Be("model:local-mock");
         rule.GetProperty("refused").GetInt64().Should().Be(2);
         rule.GetProperty("singleBucket").GetBoolean().Should().BeTrue();
         rule.GetProperty("peakUtilization").GetDouble().Should().BeGreaterThan(0).And.BeLessThanOrEqualTo(0.5);
-        var plan = limits[1];
+        var plan = limits.Single(l => l.GetProperty("limitId").GetString() == "plan:pro");
         plan.GetProperty("ruleId").ValueKind.Should().Be(JsonValueKind.Null, "a plan tier is not a rule in the list");
         plan.GetProperty("singleBucket").GetBoolean().Should().BeFalse();
         plan.GetProperty("peakUtilization").ValueKind.Should().Be(JsonValueKind.Null, "a tier sums many buckets");
+        plan.GetProperty("nearLimit").GetBoolean().Should().BeFalse();
+        rule.GetProperty("nearLimit").GetBoolean().Should().BeFalse("it refused");
+        var near = limits.Single(l => l.GetProperty("limitId").GetString() == "model:busy");
+        near.GetProperty("refused").GetInt64().Should().Be(0);
+        near.GetProperty("nearLimit").GetBoolean().Should().BeTrue();
+        near.GetProperty("peakUtilization").GetDouble().Should().BeGreaterThanOrEqualTo(0.8);
+
+        // Key-scoped limits are named by label or prefix, never by key id; navigation keeps the id.
+        var keyLimit = limits.Single(l => l.GetProperty("scope").GetString() == "api_key");
+        keyLimit.GetProperty("targetLabel").GetString().Should().Be(keyLabel);
+        keyLimit.GetProperty("ruleId").GetString().Should().Be("api_key:" + keyId.ToString().ToLowerInvariant());
+        var goneLimit = limits.Single(l => l.GetProperty("scope").GetString() == "api_key_model");
+        goneLimit.GetProperty("targetLabel").GetString().Should().Be("unknown key · local-mock");
+        rule.GetProperty("targetLabel").ValueKind.Should().Be(JsonValueKind.Null, "a model target is already readable");
 
         // Subjects, with labels
         json.GetProperty("refusedTenantCount").GetInt32().Should().Be(2);
@@ -219,6 +249,8 @@ public sealed class AdminOverviewRateLimitsIntegrationTests
         tenants[0].GetProperty("refused").GetInt64().Should().Be(6);
         tenants[1].GetProperty("anonymous").GetBoolean().Should().BeTrue();
         tenants[1].GetProperty("label").GetString().Should().Be("anonymous");
+        tenants[1].GetProperty("key").GetString().Should().Be("anonymous:1");
+        json.GetRawText().Should().NotContain("203.0.113", "an anonymous caller's address block is not part of this section");
         var key = json.GetProperty("topRefusedKeys").EnumerateArray().Single();
         key.GetProperty("key").GetString().Should().Be(keyId.ToString());
         key.GetProperty("label").GetString().Should().Be(keyLabel);

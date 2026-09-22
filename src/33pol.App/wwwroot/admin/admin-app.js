@@ -6150,7 +6150,13 @@ function adminApp() {
       if (l.scope === 'default') return 'Default tier';
       if (l.scope === 'plan') return 'Plan ' + l.target;
       const scope = this.rlScopeInfo(l.scope).short || l.scope;
-      const target = l.target === '*' || !l.target ? '' : this.rlTargetDisplay(l.scope, l.target);
+      // Key-scoped targets are named by the server (label or public prefix, else "unknown key"); a
+      // key id is never shown. Older gateways without targetLabel fall back to the loaded key list.
+      const keyScope = l.scope === 'api_key' || l.scope === 'api_key_model';
+      let target = '';
+      if (l.targetLabel) target = l.targetLabel;
+      else if (keyScope) target = this.rlRuleKey(l.scope, l.target) ? this.rlTargetDisplay(l.scope, l.target) : ['unknown key', ...String(l.target || '').split('|').slice(1)].join(' · ');
+      else if (l.target && l.target !== '*') target = this.rlTargetDisplay(l.scope, l.target);
       return (target ? scope + ' ' + target : scope) + (l.anonymousBucket ? ' (anonymous callers)' : '');
     },
 
@@ -6185,13 +6191,14 @@ function adminApp() {
       const store = (has && r.store) || {};
 
       const maxOf = rows => Math.max(1, ...rows.map(s => Number(s.refused ?? 0)));
-      const subjectRow = (s, max, open) => ({
+      // An unresolved subject is named "unknown …", never by its id; the id stays only as the row key.
+      const subjectRow = (s, max, open, unknown) => ({
         key: s.key,
-        label: s.label || s.key,
+        label: s.label || unknown,
         sub: s.tenantSlug && s.tenantSlug !== s.label ? s.tenantSlug : '',
         countText: this.formatNum(s.refused ?? 0),
         style: 'width:' + Math.max(2, Math.round((Number(s.refused ?? 0) / max) * 100)) + '%',
-        title: (s.label || s.key) + ' · ' + this.formatNum(s.refused ?? 0) + ' of ' + this.formatNum(s.decisions ?? 0) + ' decisions refused in the last hour',
+        title: (s.label || unknown) + ' · ' + this.formatNum(s.refused ?? 0) + ' of ' + this.formatNum(s.decisions ?? 0) + ' decisions refused in the last hour',
         open
       });
       const tenantList = has && Array.isArray(r.topRefusedTenants) ? r.topRefusedTenants : [];
@@ -6208,13 +6215,14 @@ function adminApp() {
           limitId: l.limitId,
           ruleId: l.ruleId || '',
           label,
-          countText: refusedN > 0 ? this.formatNum(refusedN) + ' refused' : 'near limit',
+          // A near-limit row refused nothing, and says so: it is listed for its peak, not for refusals.
+          countText: refusedN > 0 ? this.formatNum(refusedN) + ' refused' : 'near limit · 0 refused',
           countCls: refusedN > 0 ? 'tag level-warning' : 'tag muted',
           hasMeter: u !== null,
           meterStyle: u !== null ? 'width:' + Math.min(100, Math.round(u * 100)) + '%' : '',
           meterCls: 'load-fill' + (u !== null && u >= 1 ? ' is-over' : u !== null && u >= 0.8 ? ' is-hot' : ''),
           peakText: u !== null ? Math.round(u * 100) + '% peak' : '',
-          title: label + ' · ' + this.formatNum(refusedN) + ' refused of ' + this.formatNum(l.evaluations ?? 0) + ' evaluations in the last hour'
+          title: (refusedN > 0 ? '' : 'Near limit — nothing refused. ') + label + ' · ' + this.formatNum(refusedN) + ' refused of ' + this.formatNum(l.evaluations ?? 0) + ' evaluations in the last hour'
             + (u !== null
               ? '. Peak is the busiest minute against the ' + this.formatNum(l.effectiveRpm ?? 0) + ' rpm enforced; it can pass 100% because a bucket also holds burst.'
               : l.singleBucket ? '' : '. Every caller under this limit has its own bucket, so no percentage of the limit is shown.'),
@@ -6265,9 +6273,9 @@ function adminApp() {
           : sched.available ? 'No scheduled change is coming up' : 'The schedule could not be read',
         limitRows,
         hasLimitRows: limitRows.length > 0,
-        tenantRows: tenantList.map(s => subjectRow(s, tenantMax, () => {})),
+        tenantRows: tenantList.map(s => subjectRow(s, tenantMax, () => {}, 'unknown tenant')),
         hasTenantRows: tenantList.length > 0,
-        keyRows: keyList.map(s => subjectRow(s, keyMax, () => this.openLink({ tab: 'keys', params: { q: s.label || s.key } }))),
+        keyRows: keyList.map(s => subjectRow(s, keyMax, s.label ? () => this.openLink({ tab: 'keys', params: { q: s.label } }) : () => {}, 'unknown key')),
         hasKeyRows: keyList.length > 0,
         protectiveText: has
           ? 'Protective budgets · last hour: failed credentials ' + this.formatNum(auth?.refused ?? 0) + ' refused'

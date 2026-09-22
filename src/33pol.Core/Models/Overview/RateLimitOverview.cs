@@ -52,7 +52,12 @@ public sealed record RateLimitOverview
     /// <summary>Configured limits that refused at least once in the last hour.</summary>
     public int RefusingLimitCount { get; init; }
 
-    /// <summary>Limits that refused, then limits near their rate, most refused first; at most six.</summary>
+    /// <summary>
+    /// Limits that refused in the last hour, most refused first, then limits that refused nothing but
+    /// whose busiest minute reached <see cref="RateLimitOverviewLimits.NearRatio"/> of their rate
+    /// (<see cref="RateLimitLimitOverview.NearLimit"/>); at most six. Near-limit rows are not refusals
+    /// and are not counted in <see cref="RefusingLimitCount"/>.
+    /// </summary>
     public IReadOnlyList<RateLimitLimitOverview> Limits { get; init; } = [];
 
     /// <summary>The two protective budgets, <c>auth_failure</c> then <c>anonymous</c>; always both.</summary>
@@ -101,7 +106,10 @@ public sealed record RateLimitScheduleOverview(
 }
 
 /// <summary>One tenant or API key refused in the last hour.</summary>
-/// <param name="Key">The tracker's key: a tenant id, the anonymous partition, or an API key id.</param>
+/// <param name="Key">
+/// A tenant id or an API key id. Anonymous callers are keyed <c>anonymous:1</c>, <c>anonymous:2</c>… —
+/// their client address block is not carried in this section.
+/// </param>
 /// <param name="Label">Tenant slug or key label (else its public prefix); null when it could not be resolved.</param>
 /// <param name="TenantSlug">For a key, the tenant that owns it, when known.</param>
 /// <param name="Anonymous">True for an unauthenticated caller's partition.</param>
@@ -139,7 +147,27 @@ public sealed record RateLimitLimitOverview(
     int ConfiguredRpm,
     int EffectiveRpm,
     double? PeakUtilization,
-    DateTimeOffset? LastDecisionUtc);
+    DateTimeOffset? LastDecisionUtc)
+{
+    /// <summary>
+    /// Refused nothing, but the busiest minute reached <see cref="RateLimitOverviewLimits.NearRatio"/>
+    /// of the enforced rate. Only possible where <see cref="PeakUtilization"/> exists (a single bucket).
+    /// </summary>
+    public bool NearLimit => Refused == 0 && PeakUtilization >= RateLimitOverviewLimits.NearRatio;
+
+    /// <summary>
+    /// Display name for a key-scoped limit's target — the key's label or public prefix (then the model
+    /// for a pair), or "unknown key". Null for other scopes, whose target is already readable. Display
+    /// only: navigate by <see cref="RuleId"/>.
+    /// </summary>
+    public string? TargetLabel { get; init; }
+}
+
+public static class RateLimitOverviewLimits
+{
+    /// <summary>Share of its rate at which a limit that has not refused is listed as near its limit.</summary>
+    public const double NearRatio = 0.8;
+}
 
 /// <param name="Scope"><c>auth_failure</c> or <c>anonymous</c>.</param>
 public sealed record RateLimitProtectiveOverview(

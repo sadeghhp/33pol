@@ -225,7 +225,9 @@ test('card: utilisation meters appear only where the server sent peakUtilization
 
   const near = rows.find(r => r.limitId === 'tenant_model:acme|llama');
   assert.equal(near.meterCls, 'load-fill is-hot');
-  assert.equal(near.countText, 'near limit');
+  assert.equal(near.countText, 'near limit · 0 refused', 'a near-limit row says it refused nothing');
+  assert.match(near.title, /^Near limit — nothing refused\. /);
+  assert.doesNotMatch(rule.title, /^Near limit/);
   assert.match(near.label, /acme · llama$/);
 });
 
@@ -424,4 +426,44 @@ test('asset versions were bumped for this change', () => {
   assert.match(HTML, /admin-app\.js\?v=(\d+)/);
   assert.ok(Number(/admin-app\.js\?v=(\d+)/.exec(HTML)[1]) >= 56);
   assert.ok(Number(/admin\.css\?v=(\d+)/.exec(HTML)[1]) >= 36);
+});
+
+// --- names: labels for display, identities for navigation ---------------------------------------
+
+test('key-scoped limits are named by the server\'s label; a key id is never shown', () => {
+  const app = createApp();
+  const r = refusing();
+  const id = '0b9f6c1e-1111-4222-8333-444455556666';
+  r.limits = [
+    limit({ limitId: 'api_key_model:' + id + '|gpt-4', ruleId: 'api_key_model:' + id + '|gpt-4', scope: 'api_key_model', target: id + '|gpt-4', targetLabel: 'prod-bot · gpt-4' }),
+    limit({ limitId: 'api_key:' + id, ruleId: 'api_key:' + id, scope: 'api_key', target: id, targetLabel: null }),
+  ];
+  app.overviewRateLimits = r;
+  const rows = app.rateLimitsOverviewView.limitRows;
+
+  assert.match(rows[0].label, /prod-bot · gpt-4$/);
+  assert.match(rows[1].label, /unknown key$/, 'no label from the server and no key list: not the id');
+  for (const row of rows) assert.ok(!row.label.includes(id) && !row.title.includes(id), 'id not displayed');
+  assert.equal(rows[0].ruleId, 'api_key_model:' + id + '|gpt-4', 'navigation keeps the stable identity');
+});
+
+test('unresolved subjects are "unknown …", not their ids, and an unknown key is not a Keys search', () => {
+  const app = createApp();
+  const r = refusing();
+  r.topRefusedTenants = [{ key: 'a1b2c3', label: null, tenantSlug: null, anonymous: false, decisions: 5, refused: 5 }];
+  r.topRefusedKeys = [{ key: 'k-secret-id', label: null, tenantSlug: null, anonymous: false, decisions: 5, refused: 5 }];
+  app.overviewRateLimits = r;
+  const v = app.rateLimitsOverviewView;
+
+  assert.equal(v.tenantRows[0].label, 'unknown tenant');
+  assert.equal(v.keyRows[0].label, 'unknown key');
+  assert.ok(!v.keyRows[0].title.includes('k-secret-id'));
+  let opened = null;
+  app.openLink = link => { opened = link; };
+  v.keyRows[0].open();
+  assert.equal(opened, null);
+});
+
+test('markup: the list heading separates refusals from near-limit rows', () => {
+  assert.match(HTML, /Limits that refused, or ran near their rate without refusing · last hour/);
 });

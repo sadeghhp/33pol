@@ -17,9 +17,6 @@ internal sealed partial class GatewayOverviewSectionService
 
     private const int RateLimitTopLimits = 6;
 
-    /// <summary>A limit that has not refused is still listed once its busiest minute reached this share of its rate.</summary>
-    private const double RateLimitNearRatio = 0.8;
-
     // ---- Rate limits ----
 
     /// <summary>
@@ -45,10 +42,6 @@ internal sealed partial class GatewayOverviewSectionService
 
         var refusedTenants = hour.ByTenant.Where(static r => r.Rejected > 0).OrderByDescending(static r => r.Rejected).ToArray();
         var refusedKeys = hour.ByApiKey.Where(static r => r.Rejected > 0).OrderByDescending(static r => r.Rejected).ToArray();
-        var (tenantLabels, keyLabels) = await ResolveRateLimitSubjectsAsync(
-            refusedTenants.Take(RateLimitTopSubjects).Select(static r => r.Key),
-            refusedKeys.Take(RateLimitTopSubjects).Select(static r => r.Key),
-            cancellationToken).ConfigureAwait(false);
 
         var limits = hour.Limits
             .Select(static row => new RateLimitLimitOverview(
@@ -68,6 +61,21 @@ internal sealed partial class GatewayOverviewSectionService
                 row.SingleBucket ? row.PeakUtilization : null,
                 row.LastDecisionUtc))
             .ToArray();
+        var topLimits = limits
+            .Where(static l => l.Refused > 0 || l.PeakUtilization >= RateLimitOverviewLimits.NearRatio)
+            .OrderByDescending(static l => l.Refused)
+            .ThenByDescending(static l => l.PeakUtilization ?? -1)
+            .ThenByDescending(static l => l.Evaluations)
+            .ThenBy(static l => l.LimitId, StringComparer.Ordinal)
+            .Take(RateLimitTopLimits)
+            .ToArray();
+
+        // One lookup for every label shown: refused subjects, and the keys that key-scoped limits name.
+        var (tenantLabels, keyLabels) = await ResolveRateLimitSubjectsAsync(
+            refusedTenants.Take(RateLimitTopSubjects).Select(static r => r.Key),
+            refusedKeys.Take(RateLimitTopSubjects).Select(static r => r.Key)
+                .Concat(topLimits.Select(static l => KeyOfLimit(l)).OfType<string>()),
+            cancellationToken).ConfigureAwait(false);
 
         var adaptiveReduced = hour.Adaptive.Models.Where(static m => m.Factor < 1).OrderBy(static m => m.Factor).ToArray();
         var store = hour.Store;
@@ -88,17 +96,10 @@ internal sealed partial class GatewayOverviewSectionService
             RefusedTenantCount = refusedTenants.Length,
             RefusedKeyCount = refusedKeys.Length,
             RefusedSubjectsTruncated = hour.ByTenant.Count >= RateLimitSubjectTake || hour.ByApiKey.Count >= RateLimitSubjectTake,
-            TopRefusedTenants = refusedTenants.Take(RateLimitTopSubjects).Select(r => Tenant(r, tenantLabels)).ToArray(),
+            TopRefusedTenants = TenantRows(refusedTenants.Take(RateLimitTopSubjects), tenantLabels),
             TopRefusedKeys = refusedKeys.Take(RateLimitTopSubjects).Select(r => Key(r, keyLabels)).ToArray(),
             RefusingLimitCount = limits.Count(static l => l.Refused > 0),
-            Limits = limits
-                .Where(static l => l.Refused > 0 || l.PeakUtilization >= RateLimitNearRatio)
-                .OrderByDescending(static l => l.Refused)
-                .ThenByDescending(static l => l.PeakUtilization ?? -1)
-                .ThenByDescending(static l => l.Evaluations)
-                .ThenBy(static l => l.LimitId, StringComparer.Ordinal)
-                .Take(RateLimitTopLimits)
-                .ToArray(),
+            Limits = topLimits.Select(l => l with { TargetLabel = TargetLabel(l, keyLabels) }).ToArray(),
             Protective = hour.Protective
                 .Select(static p => new RateLimitProtectiveOverview(p.Scope, p.Checked, p.Refused + p.RefusedByStreams, p.EnforcedRpm, p.LastDecisionUtc))
                 .ToArray(),
@@ -224,11 +225,49 @@ internal sealed partial class GatewayOverviewSectionService
 
     private static Guid? ParseGuid(string key) => Guid.TryParse(key, out var id) ? id : null;
 
-    private static RateLimitRefusedSubject Tenant(RateLimitUsageRow row, IReadOnlyDictionary<Guid, string> labels)
+    /// <summary>
+    /// Tenant rows. An anonymous caller's tracker key is its client address block, which this card
+    /// never shows; the row is keyed <c>anonymous:1</c>, <c>anonymous:2</c>… instead so the address
+    /// does not leave the gateway through this section.
+    /// </summary>
+    private static RateLimitRefusedSubject[] TenantRows(IEnumerable<RateLimitUsageRow> rows, IReadOnlyDictionary<Guid, string> labels)
     {
-        var anonymous = row.Key.StartsWith(RateLimitPartition.AnonymousPrefix, StringComparison.Ordinal);
-        var label = anonymous ? "anonymous" : ParseGuid(row.Key) is { } id && labels.TryGetValue(id, out var slug) ? slug : null;
-        return new RateLimitRefusedSubject(row.Key, label, anonymous ? null : label, anonymous, row.Requests, row.Rejected);
+        var anonymousSeen = 0;
+        var result = new List<RateLimitRefusedSubject>();
+        foreach (var row in rows)
+        {
+            if (row.Key.StartsWith(RateLimitPartition.AnonymousPrefix, StringComparison.Ordinal))
+            {
+                result.Add(new RateLimitRefusedSubject("anonymous:" + ++anonymousSeen, "anonymous", null, true, row.Requests, row.Rejected));
+                continue;
+            }
+
+            var label = ParseGuid(row.Key) is { } id && labels.TryGetValue(id, out var slug) ? slug : null;
+            result.Add(new RateLimitRefusedSubject(row.Key, label, label, false, row.Requests, row.Rejected));
+        }
+
+        return [.. result];
+    }
+
+    /// <summary>The key a key-scoped limit names (<c>api_key:&lt;id&gt;</c>, <c>api_key_model:&lt;id&gt;|model</c>).</summary>
+    private static string? KeyOfLimit(RateLimitLimitOverview l) =>
+        l.Scope is RateLimitScopeNames.ApiKey or RateLimitScopeNames.ApiKeyModel ? l.Target.Split('|')[0] : null;
+
+    /// <summary>
+    /// A display name for a key-scoped limit's target: the key's label or public prefix, then the
+    /// model for a pair. A key the lookup could not find is "unknown key", never its id. Other scopes
+    /// already name their target readably and get null.
+    /// </summary>
+    private static string? TargetLabel(RateLimitLimitOverview l, IReadOnlyDictionary<Guid, (string Label, string? TenantSlug)> keys)
+    {
+        if (KeyOfLimit(l) is not { } key)
+        {
+            return null;
+        }
+
+        var name = ParseGuid(key) is { } id && keys.TryGetValue(id, out var k) ? k.Label : "unknown key";
+        var bar = l.Target.IndexOf('|', StringComparison.Ordinal);
+        return bar < 0 ? name : name + " · " + l.Target[(bar + 1)..];
     }
 
     private static RateLimitRefusedSubject Key(RateLimitUsageRow row, IReadOnlyDictionary<Guid, (string Label, string? TenantSlug)> labels)
