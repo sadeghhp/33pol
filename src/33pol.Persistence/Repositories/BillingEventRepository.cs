@@ -217,6 +217,12 @@ public sealed class BillingEventRepository(GatewayDbContext dbContext) : IBillin
                 : dbQuery.Where(e => e.CostCenter != null && e.CostCenter.ToLower() == costCenter.ToLower());
         }
 
+        if (!string.IsNullOrWhiteSpace(query.ModelId))
+        {
+            var modelId = query.ModelId.Trim();
+            dbQuery = dbQuery.Where(e => e.ModelId == modelId);
+        }
+
         if (query.FromDate is not null)
         {
             var from = query.FromDate.Value.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
@@ -309,6 +315,46 @@ public sealed class BillingEventRepository(GatewayDbContext dbContext) : IBillin
                     CompletionTokens = group.Sum(row => row.CompletionTokens),
                     TotalCost = group.Sum(row => row.TotalCost ?? 0m),
                 });
+    }
+
+    public async Task<IReadOnlyList<ApiKeyUsageTotal>> AggregateByKeyAsync(
+        BillingEventQuery filter,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(filter);
+        if (filter.FromDate is not null && filter.ToDate is not null && filter.ToDate < filter.FromDate)
+        {
+            return [];
+        }
+
+        // Streamed and summed in memory for the same reason as GetUsageSummariesAsync: a SQLite
+        // SUM() over the TEXT-stored decimals would add them as doubles.
+        var rows = ApplyFilter(dbContext.BillingEvents.AsNoTracking(), filter with { Cursor = null })
+            .Select(e => new { e.ApiKeyId, e.PromptTokens, e.CompletionTokens, e.TotalCost })
+            .AsAsyncEnumerable();
+
+        // Keyed by Guid.Empty for rows without a key: Dictionary rejects a null key, and no issued
+        // key has the empty id.
+        var totals = new Dictionary<Guid, (int Count, long Prompt, long Completion, decimal Cost)>();
+        await foreach (var row in rows.WithCancellation(cancellationToken).ConfigureAwait(false))
+        {
+            var key = row.ApiKeyId ?? Guid.Empty;
+            var current = totals.GetValueOrDefault(key);
+            totals[key] = (
+                current.Count + 1,
+                current.Prompt + row.PromptTokens,
+                current.Completion + row.CompletionTokens,
+                current.Cost + (row.TotalCost ?? 0m));
+        }
+
+        return totals
+            .Select(pair => new ApiKeyUsageTotal(
+                pair.Key == Guid.Empty ? null : pair.Key,
+                pair.Value.Count,
+                pair.Value.Prompt,
+                pair.Value.Completion,
+                pair.Value.Cost))
+            .ToList();
     }
 
     public async Task<IReadOnlyList<DailyUsageRollupRecord>> GetDailyTotalsAsync(

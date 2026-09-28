@@ -4,6 +4,16 @@ All notable changes to this project are documented here. Version tags follow [Se
 
 ## [Unreleased]
 
+### Usage & cost — filter by model, see each key's share
+
+- **Model filter.** Usage & cost has a **Model** picker, and every usage endpoint (`/admin/api/usage`,
+  `/events`, `/forecast`, `/export`) accepts `modelId` (exact match). Tiles, chart, rollups, ledger,
+  forecast and exports all follow it.
+- **Load by API key.** A new table shows, for the current filters, each key's requests, tokens and
+  cost with its percentage of the total — pick a model to see which keys drive it. Requests sent
+  without a key appear as one "anonymous" row. Backed by `GET /admin/api/usage/keys`, aggregated from
+  the billing ledger.
+
 ### Rate limits — a switched-off rule is off, and a draft is never lost
 
 - **A disabled `global`, `anonymous` or `auth_failure` rule no longer enforces its schedule windows.**

@@ -25,4 +25,9 @@ public interface IBillingUsageService
     Task<BillingEventsPage> QueryEventsAsync(
         BillingEventQuery query,
         CancellationToken cancellationToken = default);
+
+    /// <summary>Each API key's share of the requests, tokens and cost matching <paramref name="query"/>.</summary>
+    Task<UsageKeySharesResponse> GetKeySharesAsync(
+        BillingEventQuery query,
+        CancellationToken cancellationToken = default);
 }

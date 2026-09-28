@@ -260,6 +260,100 @@ public sealed class BillingUsageServiceTests
     }
 
     [Fact]
+    public async Task GetUsageReportAsync_FiltersByModel()
+    {
+        var tenantId = Guid.NewGuid();
+        var rollupRecords = new[]
+        {
+            new DailyUsageRollupRecord(new DateOnly(2026, 5, 26), tenantId, "gpt-4o", "eng", 100, 50, 0.15m, 2),
+            new DailyUsageRollupRecord(new DateOnly(2026, 5, 26), tenantId, "gpt-4o-mini", "eng", 200, 100, 0.25m, 3),
+        };
+
+        _rollups
+            .GetScopedRollupsAsync(Arg.Any<UsageScope>(), null, null, Arg.Any<CancellationToken>())
+            .Returns(rollupRecords);
+
+        var report = await _service.GetUsageReportAsync(new UsageReportRequest { ModelId = " gpt-4o-mini " });
+
+        report.Rollups.Should().ContainSingle().Which.ModelId.Should().Be("gpt-4o-mini");
+        report.Summary.TotalRequests.Should().Be(3);
+    }
+
+    [Fact]
+    public async Task GetUsageReportAsync_WithApiKeyAndModel_PassesModelToLedger()
+    {
+        var keyId = Guid.NewGuid();
+        _events
+            .AggregateDailyAsync(Arg.Any<BillingEventQuery>(), Arg.Any<CancellationToken>())
+            .Returns(Array.Empty<DailyUsageRollupRecord>());
+
+        await _service.GetUsageReportAsync(new UsageReportRequest { ApiKeyId = keyId, ModelId = "gpt-4o" });
+
+        await _events.Received(1).AggregateDailyAsync(
+            Arg.Is<BillingEventQuery>(q => q.ApiKeyId == keyId && q.ModelId == "gpt-4o"),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task GetKeySharesAsync_ComputesEachKeysShareAndLabelsKeys()
+    {
+        var tenantId = Guid.NewGuid();
+        var heavy = Guid.NewGuid();
+        var light = Guid.NewGuid();
+        var query = new BillingEventQuery(TenantId: tenantId, IncludeAnonymous: true, ModelId: "gpt-4o");
+        _events.AggregateByKeyAsync(query, Arg.Any<CancellationToken>()).Returns(new[]
+        {
+            new ApiKeyUsageTotal(light, 1, 10, 10, 0.25m),
+            new ApiKeyUsageTotal(heavy, 6, 300, 120, 0.50m),
+            new ApiKeyUsageTotal(null, 1, 30, 30, 0.25m),
+        });
+        _apiKeys.GetByIdsAsync(Arg.Any<IReadOnlyCollection<Guid>>(), Arg.Any<CancellationToken>())
+            .Returns(new[]
+            {
+                new ApiKeyRecord(
+                    heavy, tenantId, "hash", "sk-heavy", ApiKeyRole.Inference, [], null, null,
+                    DateTimeOffset.UnixEpoch, null, Label: "Batch jobs", Assignee: "ana"),
+            });
+
+        var result = await _service.GetKeySharesAsync(query);
+
+        result.ModelId.Should().Be("gpt-4o");
+        result.Currency.Should().Be("EUR");
+        result.TotalRequests.Should().Be(8);
+        result.TotalTokens.Should().Be(500);
+        result.TotalCost.Should().Be(1.00m);
+        result.Keys.Select(k => k.ApiKeyId).Should().Equal(heavy, null, light);
+
+        var top = result.Keys[0];
+        top.Label.Should().Be("Batch jobs");
+        top.KeyPrefix.Should().Be("sk-heavy");
+        top.Assignee.Should().Be("ana");
+        top.RequestShare.Should().BeApproximately(0.75, 1e-9);
+        top.TokenShare.Should().BeApproximately(420 / 500d, 1e-9);
+        top.CostShare.Should().BeApproximately(0.5, 1e-9);
+
+        // A key the repository no longer knows (deleted) still gets its row, just unlabelled.
+        result.Keys[2].KeyPrefix.Should().BeNull();
+        result.Keys.Sum(k => k.RequestShare).Should().BeApproximately(1, 1e-9);
+    }
+
+    [Fact]
+    public async Task GetKeySharesAsync_WhenNothingIsPriced_LeavesCostShareUnset()
+    {
+        var keyId = Guid.NewGuid();
+        _events.AggregateByKeyAsync(Arg.Any<BillingEventQuery>(), Arg.Any<CancellationToken>())
+            .Returns(new[] { new ApiKeyUsageTotal(keyId, 2, 0, 0, 0m) });
+
+        var result = await _service.GetKeySharesAsync(new BillingEventQuery());
+
+        var only = result.Keys.Should().ContainSingle().Subject;
+        only.RequestShare.Should().Be(1);
+        only.TokenShare.Should().Be(0);
+        only.CostShare.Should().BeNull();
+        result.ModelId.Should().BeNull();
+    }
+
+    [Fact]
     public async Task QueryEventsAsync_DelegatesToRepository()
     {
         var query = new BillingEventQuery(

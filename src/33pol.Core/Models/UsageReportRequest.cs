@@ -25,5 +25,8 @@ public sealed class UsageReportRequest
     /// </summary>
     public Guid? ApiKeyId { get; init; }
 
+    /// <summary>Exact (ordinal) match on the model id.</summary>
+    public string? ModelId { get; init; }
+
     public UsageScope Scope => new(TenantId, IncludeAnonymous);
 }

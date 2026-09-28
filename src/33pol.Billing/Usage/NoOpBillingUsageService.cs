@@ -40,4 +40,13 @@ public sealed class NoOpBillingUsageService : IBillingUsageService
             Limit = 0,
         });
     }
+
+    public Task<UsageKeySharesResponse> GetKeySharesAsync(
+        BillingEventQuery query,
+        CancellationToken cancellationToken = default) =>
+        Task.FromResult(new UsageKeySharesResponse
+        {
+            ModelId = query.ModelId,
+            Keys = Array.Empty<UsageKeyShare>(),
+        });
 }

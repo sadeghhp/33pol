@@ -36,7 +36,8 @@ public sealed class BillingUsageService(
                         apiKeyId,
                         request.CostCenter,
                         IncludeAnonymous: request.IncludeAnonymous,
-                        NoCostCenter: request.NoCostCenter),
+                        NoCostCenter: request.NoCostCenter,
+                        ModelId: request.ModelId),
                     cancellationToken)
                 .ConfigureAwait(false);
             source = UsageReportSource.Events;
@@ -47,6 +48,7 @@ public sealed class BillingUsageService(
                 .GetScopedRollupsAsync(request.Scope, request.FromDate, request.ToDate, cancellationToken)
                 .ConfigureAwait(false);
             rollupRecords = FilterCostCenter(rollupRecords, request.CostCenter, request.NoCostCenter);
+            rollupRecords = FilterModel(rollupRecords, request.ModelId);
             source = UsageReportSource.Rollups;
         }
 
@@ -155,6 +157,70 @@ public sealed class BillingUsageService(
             HasMore = hasMore,
             NextCursor = hasMore ? BillingEventCursor.After(events, query.Cursor)?.Encode() : null,
         };
+    }
+
+    public async Task<UsageKeySharesResponse> GetKeySharesAsync(
+        BillingEventQuery query,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+
+        var totals = await billingEvents.AggregateByKeyAsync(query, cancellationToken).ConfigureAwait(false);
+
+        var keyIds = totals.Where(t => t.ApiKeyId is not null).Select(t => t.ApiKeyId!.Value).ToArray();
+        var keys = await apiKeys.GetByIdsAsync(keyIds, cancellationToken).ConfigureAwait(false);
+        var keysById = keys.ToDictionary(k => k.Id);
+
+        var totalRequests = totals.Sum(t => t.RequestCount);
+        var totalTokens = totals.Sum(t => t.PromptTokens + t.CompletionTokens);
+        var totalCost = totals.Sum(t => t.TotalCost);
+
+        var shares = totals
+            .Select(t =>
+            {
+                var key = t.ApiKeyId is Guid id ? keysById.GetValueOrDefault(id) : null;
+                return new UsageKeyShare
+                {
+                    ApiKeyId = t.ApiKeyId,
+                    KeyPrefix = key?.KeyPrefix,
+                    Label = key?.Label,
+                    Assignee = key?.Assignee,
+                    Requests = t.RequestCount,
+                    PromptTokens = t.PromptTokens,
+                    CompletionTokens = t.CompletionTokens,
+                    TotalCost = t.TotalCost,
+                    RequestShare = totalRequests == 0 ? 0 : (double)t.RequestCount / totalRequests,
+                    TokenShare = totalTokens == 0 ? 0 : (double)(t.PromptTokens + t.CompletionTokens) / totalTokens,
+                    CostShare = totalCost == 0 ? null : (double)(t.TotalCost / totalCost),
+                };
+            })
+            .OrderByDescending(s => s.Requests)
+            .ThenByDescending(s => s.PromptTokens + s.CompletionTokens)
+            .ThenBy(s => s.ApiKeyId)
+            .ToList();
+
+        return new UsageKeySharesResponse
+        {
+            ModelId = string.IsNullOrWhiteSpace(query.ModelId) ? null : query.ModelId.Trim(),
+            Currency = options.Value.DefaultCurrency,
+            TotalRequests = totalRequests,
+            TotalTokens = totalTokens,
+            TotalCost = totalCost,
+            Keys = shares,
+        };
+    }
+
+    private static IReadOnlyList<DailyUsageRollupRecord> FilterModel(
+        IReadOnlyList<DailyUsageRollupRecord> records,
+        string? modelId)
+    {
+        if (string.IsNullOrWhiteSpace(modelId))
+        {
+            return records;
+        }
+
+        var wanted = modelId.Trim();
+        return records.Where(r => string.Equals(r.ModelId, wanted, StringComparison.Ordinal)).ToList();
     }
 
     private static IReadOnlyList<DailyUsageRollupRecord> FilterCostCenter(

@@ -934,6 +934,10 @@ table { width: 100%; border-collapse: collapse; font-size: var(--text-sm); table
 .t-requests      { min-width: 66rem; }
 .t-usage-rollups { min-width: 44rem; }
 .t-usage-events  { min-width: 44rem; }
+.t-usage-keys    { min-width: 44rem; }
+.share-cell { display: flex; align-items: center; gap: var(--space-2); }
+.share-cell .load-track { flex: 1; min-width: 4rem; }
+.share-pct { font-family: var(--font-mono); font-size: var(--text-xs); font-variant-numeric: tabular-nums; min-width: 3rem; text-align: right; }
 .t-models        { min-width: 62rem; }
 .t-backends      { min-width: 46rem; }
 .t-keys          { min-width: 70rem; }

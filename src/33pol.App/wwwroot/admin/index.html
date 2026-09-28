@@ -1043,6 +1043,14 @@
                   </template>
                 </select>
               </label>
+              <label>Model
+                <select x-model="mdl.usageFilterModelId" @change="applyUsageRange">
+                  <option value="">All models</option>
+                  <template x-for="m in usageModelOptions" :key="m.key">
+                    <option :value="m.value" x-text="m.value"></option>
+                  </template>
+                </select>
+              </label>
             </div>
             <p class="field-error" x-show="usageRangeInvalid" x-text="usageRangeError" role="alert"></p>
             <p class="hint">Dates are UTC calendar days; ledger times below are shown in UTC to match.</p>
@@ -1127,6 +1135,42 @@
                 <span x-text="usageAxisEnd"></span>
               </div>
             </div>
+          </div>
+
+          <!-- Share of the filtered load per API key, from the ledger -->
+          <div class="section-header">
+            <div><span class="eyebrow">Contribution</span><h3 x-text="usageKeySharesTitle"></h3></div>
+            <span class="hint" x-show="hasUsageKeyShares" x-text="usageKeySharesHint" style="margin:0"></span>
+          </div>
+          <div class="table-wrap">
+            <table class="t-usage-keys" x-show="hasUsageKeyShares">
+              <colgroup>
+                <col style="width:20%" /><col style="width:15%" /><col style="width:25%" />
+                <col style="width:14%" /><col style="width:13%" /><col style="width:13%" />
+              </colgroup>
+              <thead><tr><th>Key</th><th>Assignee</th><th>Share of requests</th><th class="num">Requests</th><th class="num">Tokens (share)</th><th class="num">Cost (share)</th></tr></thead>
+              <tbody>
+                <template x-for="k in usageKeyShareRows" :key="k.key">
+                  <tr>
+                    <td><span :class="k.nameClass" :title="k.title" x-text="k.name"></span></td>
+                    <td x-text="k.assignee"></td>
+                    <td>
+                      <div class="share-cell">
+                        <span class="load-track"><span class="load-fill" :style="k.barStyle"></span></span>
+                        <span class="share-pct" x-text="k.requestShareText"></span>
+                      </div>
+                    </td>
+                    <td class="num" x-text="k.requestsText"></td>
+                    <td class="num"><span x-text="k.tokensText"></span> <span class="muted" x-text="k.tokenShareText"></span></td>
+                    <td class="num"><span x-text="k.costText"></span> <span class="muted" x-text="k.costShareText"></span></td>
+                  </tr>
+                </template>
+              </tbody>
+            </table>
+          </div>
+          <div class="empty-state" x-show="usageKeySharesEmpty">
+            <span class="empty-state-icon icon" x-html="icons.key"></span>
+            <p>No keyed usage matches these filters.</p>
           </div>
 
           <div class="section-header">

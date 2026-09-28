@@ -69,6 +69,15 @@ public interface IBillingEventRepository
     Task<IReadOnlyList<DailyUsageRollupRecord>> AggregateDailyAsync(
         BillingEventQuery filter,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Totals of the ledger rows matching <paramref name="filter"/> per API key; rows sent without a
+    /// key share one row with a <see langword="null"/> key. <c>Limit</c> and <c>Cursor</c> are ignored.
+    /// </summary>
+    Task<IReadOnlyList<ApiKeyUsageTotal>> AggregateByKeyAsync(
+        BillingEventQuery filter,
+        CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<ApiKeyUsageTotal>>([]);
 }
 
 /// <summary>

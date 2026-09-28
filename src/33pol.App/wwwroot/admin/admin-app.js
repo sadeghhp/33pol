@@ -188,6 +188,14 @@ function adminApp() {
     keyEdit: { id: '', keyPrefix: '', label: '', assignee: '', description: '', costCenter: '' },
     usageFilterCostCenter: '',
     usageFilterApiKeyId: '',
+    usageFilterModelId: '',
+    /** Per-key share of the filtered load (`/admin/api/usage/keys`). */
+    usageKeyShares: null,
+    /**
+     * Every model id seen in an unfiltered report this session, so the model picker keeps its
+     * options once a model is selected (the filtered report then only names that one model).
+     */
+    usageModelsSeen: [],
     requests: [],
     requestsErrorsOnly: false,
     expandedRequestId: null,
@@ -1070,6 +1078,7 @@ function adminApp() {
         to: this.usageTo,
         costCenter: (this.usageFilterCostCenter || '').trim(),
         apiKeyId: this.usageFilterApiKeyId,
+        modelId: (this.usageFilterModelId || '').trim(),
         includeAnonymous: !!this.usageIncludeAnonymous
       };
     },
@@ -1084,6 +1093,7 @@ function adminApp() {
       if (withRange && snap.to) q.set('to', snap.to);
       if (snap.costCenter) q.set('costCenter', snap.costCenter);
       if (snap.apiKeyId) q.set('apiKeyId', snap.apiKeyId);
+      if (snap.modelId) q.set('modelId', snap.modelId);
       if (snap.includeAnonymous) q.set('includeAnonymous', 'true');
       for (const [k, v] of Object.entries(extra || {})) {
         if (v !== undefined && v !== null && v !== '') q.set(k, String(v));
@@ -1503,6 +1513,8 @@ function adminApp() {
       SEEN_REQUEST_IDS.clear();
       this.usage = null;
       this.usageEvents = null;
+      this.usageKeyShares = null;
+      this.usageModelsSeen = [];
       this.backends = [];
       this.models = [];
       this.keys = [];
@@ -2838,6 +2850,7 @@ function adminApp() {
     clearUsageFilters() {
       this.usageFilterApiKeyId = '';
       this.usageFilterCostCenter = '';
+      this.usageFilterModelId = '';
       if (this.apiKey) this.applyUsageRange().catch(() => {});
     },
 
@@ -5126,6 +5139,11 @@ function adminApp() {
             this.usageLoadedFrom = snap.from;
             this.usageLoadedTo = snap.to;
             this.usageRollupLimit = 100;
+            if (!snap.modelId) this.rememberUsageModels(u?.rollups);
+          }),
+          this.apiJson('/admin/api/usage/keys?' + this.usageParamsFrom(snap)).then(s => {
+            if (!current()) return;
+            this.usageKeyShares = s;
           }),
           this.apiJson('/admin/api/usage/events?' + this.usageParamsFrom(snap, { limit: 50 })).then(page => {
             if (!current()) return;
@@ -5589,6 +5607,7 @@ function adminApp() {
         usageTo: b('usageTo'),
         usageFilterCostCenter: b('usageFilterCostCenter'),
         usageFilterApiKeyId: b('usageFilterApiKeyId'),
+        usageFilterModelId: b('usageFilterModelId'),
         usageIncludeAnonymous: {
           get: () => self.usageIncludeAnonymous,
           set: v => self.setUsageIncludeAnonymous(v)
@@ -5918,6 +5937,7 @@ function adminApp() {
         case 'usage':
           if (p('costCenter')) this.usageFilterCostCenter = p('costCenter');
           if (p('apiKeyId')) this.usageFilterApiKeyId = p('apiKeyId');
+          if (p('modelId')) this.usageFilterModelId = p('modelId');
           break;
         case 'settings':
           // A rule is named by its stable scope:target identity, never by display text; it is
@@ -7550,6 +7570,23 @@ function adminApp() {
       return list;
     },
 
+    rememberUsageModels(rollups) {
+      const seen = new Set(this.usageModelsSeen);
+      const before = seen.size;
+      for (const r of rollups || []) if (r.modelId) seen.add(r.modelId);
+      if (seen.size !== before) this.usageModelsSeen = [...seen];
+    },
+
+    /** Models for the picker: registry models, models seen in reports, and the current selection. */
+    get usageModelOptions() {
+      const set = new Set(this.usageModelsSeen);
+      for (const m of this.models || []) if (m.id) set.add(m.id);
+      for (const r of this.usage?.rollups || []) if (r.modelId) set.add(r.modelId);
+      const selected = (this.usageFilterModelId || '').trim();
+      if (selected) set.add(selected);
+      return [...set].sort((a, b) => a.localeCompare(b)).map(v => ({ key: v, value: v }));
+    },
+
     get usageSelectedKeyLabel() {
       const id = this.usageFilterApiKeyId;
       if (!id) return '';
@@ -7562,6 +7599,8 @@ function adminApp() {
       if (this.usageScopedToKey) parts.push('key ' + this.usageSelectedKeyLabel);
       const cc = (this.usageFilterCostCenter || '').trim();
       if (cc) parts.push(cc === '(none)' ? 'no cost centre' : 'cost centre ' + cc);
+      const model = (this.usageFilterModelId || '').trim();
+      if (model) parts.push('model ' + model);
       if (!this.usageIncludeAnonymous) parts.push('anonymous usage hidden');
       return parts.length ? 'Filtered: ' + parts.join(' · ') : '';
     },
@@ -7717,6 +7756,53 @@ function adminApp() {
         unpriced: ev.totalCost == null,
         costTitle: ev.totalCost == null ? 'Unpriced — no rate card for this model when the request was recorded' : ''
       }));
+    },
+
+    /** One row per key: its share of the filtered requests, tokens and cost. */
+    get usageKeyShareRows() {
+      const data = this.usageKeyShares;
+      const currency = data?.currency || this.usageCurrency;
+      const pct = v => (v == null ? '—' : this.formatSharePct(v));
+      return (data?.keys || []).map(k => {
+        const anonymous = k.apiKeyId == null;
+        const name = anonymous
+          ? 'anonymous'
+          : (k.label || k.keyPrefix || String(k.apiKeyId).slice(0, 8) + '… (deleted)');
+        const share = Math.max(0, Math.min(1, Number(k.requestShare) || 0));
+        return {
+          key: k.apiKeyId || 'anonymous',
+          name,
+          nameClass: anonymous ? 'tag muted' : '',
+          title: anonymous ? 'No API key — public-model request' : (k.keyPrefix || '') + ' · ' + k.apiKeyId,
+          assignee: k.assignee || '—',
+          requestsText: this.formatNum(k.requests ?? 0),
+          requestShareText: pct(k.requestShare),
+          barStyle: 'width:' + (share * 100).toFixed(1) + '%',
+          tokensText: this.formatNum((Number(k.promptTokens) || 0) + (Number(k.completionTokens) || 0)),
+          tokenShareText: pct(k.tokenShare),
+          costText: this.formatCost(k.totalCost, currency),
+          costShareText: pct(k.costShare)
+        };
+      });
+    },
+    get hasUsageKeyShares() { return this.usageKeyShareRows.length > 0; },
+    get usageKeySharesEmpty() { return !this.isLoading('usage') && !!this.usageKeyShares && !this.hasUsageKeyShares; },
+    get usageKeySharesTitle() {
+      const model = this.usageKeyShares?.modelId;
+      return model ? 'Load on ' + model + ' by API key' : 'Load by API key (all models)';
+    },
+    get usageKeySharesHint() {
+      const d = this.usageKeyShares;
+      if (!d) return '';
+      const n = (d.keys || []).length;
+      return this.formatNum(d.totalRequests ?? 0) + ' requests across ' + this.formatNum(n) + (n === 1 ? ' key' : ' keys')
+        + (d.modelId ? '' : ' — pick a model above to see who drives it');
+    },
+    /** 0–1 fraction as a percent; tiny non-zero shares say "<0.1%" rather than rounding to 0. */
+    formatSharePct(v) {
+      const n = Number(v) || 0;
+      if (n > 0 && n < 0.001) return '<0.1%';
+      return (n * 100).toFixed(n >= 0.1 ? 0 : 1) + '%';
     },
 
     get hasUsageEvents() { return this.usageEventRows.length > 0; },

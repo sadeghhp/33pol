@@ -83,14 +83,21 @@ public sealed class BillingForecastService(
                         apiKeyId,
                         request.CostCenter,
                         IncludeAnonymous: request.Scope.IncludeAnonymous,
-                        NoCostCenter: request.NoCostCenter),
+                        NoCostCenter: request.NoCostCenter,
+                        ModelId: request.ModelId),
                     cancellationToken)
                 .ConfigureAwait(false);
         }
 
-        var records = await rollups
+        IReadOnlyList<DailyUsageRollupRecord> records = await rollups
             .GetScopedRollupsAsync(request.Scope, from, to, cancellationToken)
             .ConfigureAwait(false);
+
+        if (!string.IsNullOrWhiteSpace(request.ModelId))
+        {
+            var model = request.ModelId.Trim();
+            records = records.Where(r => string.Equals(r.ModelId, model, StringComparison.Ordinal)).ToList();
+        }
 
         if (request.NoCostCenter)
         {

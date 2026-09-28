@@ -179,7 +179,8 @@ GET requests retry once on network failure. Usage export uses `downloadBlob` wit
 
 - **Scope.** Rollups, ledger, chart, tiles, forecast and exports all honour the same filter: UTC date
   range, cost centre (case-insensitive; `(none)` = rows without one; a datalist offers the known
-  values), API key, and **Include anonymous usage** — requests to public models sent without a key,
+  values), API key, model (exact id; the picker offers registry models and models seen in reports),
+  and **Include anonymous usage** — requests to public models sent without a key,
   which are priced but belong to no tenant. The toggle defaults on and is remembered per browser.
   With a key selected the whole page is aggregated from the ledger for that key.
 - **Presets** are inclusive UTC calendar days ("Last 7 days" = 7 days ending today) and show as
@@ -189,6 +190,10 @@ GET requests retry once on network failure. Usage export uses `downloadBlob` wit
   anonymous. Money renders sub-cent amounts with three significant digits and unpriced as `—`.
 - **Unpriced usage** banner lists models in the range that have no rate card.
 - **Chart** has a y-axis and one column per UTC day in the range, zero days included.
+- **Load by API key** lists each key's requests, tokens and cost under the current filters with its
+  percentage of the total, largest first — select a model to see which keys drive its traffic.
+  Requests without a key form one "anonymous" row; the cost share is `—` when nothing was priced.
+  Aggregated from the ledger (`GET /admin/api/usage/keys`).
 - **Tables.** Rollups are sortable, newest first, 100 at a time; the ledger shows UTC timestamps
   (local time on hover), pages 50 at a time with **Load 50 more**, tags anonymous rows, and dims
   unpriced costs. Exports offer rollups or events, CSV or JSON, capped at 5,000 events with a toast
@@ -199,7 +204,7 @@ GET requests retry once on network failure. Usage export uses `downloadBlob` wit
 | Section | Endpoints |
 |---------|-----------|
 | Overview | `GET /admin/api/live?limit=25` (SSE; falls back to `GET /admin/api/summary` + `GET /admin/api/requests?limit=25`), `GET /health/live`, `GET /health/ready`; slow sections every 30s: `GET /admin/api/overview/finops`, `/policy`, `/control-plane`, `/activity?limit=20`, `/tenants`, `/rate-limits` (all Operator; `?refresh=true` bypasses the 15s server memo; `204` when the gateway has no such data — for `/rate-limits`, only when it has no usage tracker) |
-| Usage | `GET /admin/api/usage?costCenter=`, `/usage/events?apiKeyId=&costCenter=`, `/usage/forecast`, `GET /usage/export` |
+| Usage | `GET /admin/api/usage?costCenter=&modelId=`, `/usage/events?apiKeyId=&costCenter=&modelId=`, `/usage/keys?modelId=` (per-key share), `/usage/forecast`, `GET /usage/export` |
 | Routing — Models | `GET/POST/PATCH/DELETE /admin/api/models` (write body: `{ model, apiKey?, clearApiKey? }`; GET returns `{ model, hasUpstreamCredential }`), `POST /admin/api/models/{id}/stop` and `/start` (take a route out of service / put it back), `POST /admin/api/models/{id}/test` (type-specific health check) |
 | Routing — Backends | `GET /admin/api/backends` |
 | API keys | `GET/POST /admin/api/keys` (`?includeArchived=true` to see filed-away keys), `PATCH …/keys/{id}`, `GET …/keys/{id}/usage`, `GET …/keys/{id}/lifecycle`, `POST …/revoke`, `POST …/keys/{id}/archive` and `/unarchive`, `DELETE …/keys/{id}` (body `{ confirmKeyPrefix }`), `GET/PUT …/keys/{id}/model-grants` |

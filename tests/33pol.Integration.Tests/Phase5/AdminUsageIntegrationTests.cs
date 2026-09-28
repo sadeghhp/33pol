@@ -269,6 +269,62 @@ public sealed class AdminUsageIntegrationTests
     }
 
     [Fact]
+    public async Task GetKeyShares_WithModelFilter_ReturnsEachKeysShareOfThatModel()
+    {
+        await using var factory = GatewayWebApplicationFactory.CreateWithInMemoryDatabase();
+        await GatewayWebApplicationFactory.EnsureAuthReadyAsync(factory);
+
+        var tenantId = await GetBootstrapTenantIdAsync(factory);
+        var keyA = Guid.NewGuid();
+        var keyB = Guid.NewGuid();
+        var now = DateTimeOffset.UtcNow;
+        await SeedBillingEventAsync(factory, tenantId, "a-1", keyA, 0.10m, now);
+        await SeedBillingEventAsync(factory, tenantId, "a-2", keyA, 0.10m, now.AddSeconds(-1));
+        await SeedBillingEventAsync(factory, tenantId, "a-3", keyA, 0.10m, now.AddSeconds(-2));
+        await SeedBillingEventAsync(factory, tenantId, "b-1", keyB, 0.10m, now.AddSeconds(-3));
+        // Another model: must not count toward gpt-4o's shares.
+        await SeedBillingEventAsync(factory, tenantId, "b-2", keyB, 9.00m, now.AddSeconds(-4), modelId: "llama-3");
+
+        var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Add("X-API-Key", "sk-33pol-integration-admin-key");
+
+        var shares = await client.GetFromJsonAsync<KeySharesDto>("/admin/api/usage/keys?modelId=gpt-4o");
+
+        shares!.ModelId.Should().Be("gpt-4o");
+        shares.TotalRequests.Should().Be(4);
+        shares.TotalCost.Should().Be(0.40m);
+        shares.Keys.Select(k => k.ApiKeyId).Should().Equal(keyA, keyB);
+        shares.Keys[0].RequestShare.Should().BeApproximately(0.75, 1e-9);
+        shares.Keys[1].CostShare.Should().BeApproximately(0.25, 1e-9);
+
+        var all = await client.GetFromJsonAsync<KeySharesDto>("/admin/api/usage/keys");
+        all!.ModelId.Should().BeNull();
+        all.TotalRequests.Should().Be(5);
+
+        var events = await client.GetFromJsonAsync<BillingEventsPageDto>("/admin/api/usage/events?modelId=llama-3");
+        events!.Events.Should().ContainSingle().Which.RequestId.Should().Be("b-2");
+    }
+
+    [Fact]
+    public async Task GetUsage_ModelFilter_KeepsOnlyThatModelsRollups()
+    {
+        await using var factory = GatewayWebApplicationFactory.CreateWithInMemoryDatabase();
+        await GatewayWebApplicationFactory.EnsureAuthReadyAsync(factory);
+
+        var tenantId = await GetBootstrapTenantIdAsync(factory);
+        await SeedRollupsAsync(factory, tenantId, modelId: "gpt-4o", requests: 2);
+        await SeedRollupsAsync(factory, tenantId, modelId: "llama-3", requests: 7);
+
+        var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Add("X-API-Key", "sk-33pol-integration-admin-key");
+
+        var report = await client.GetFromJsonAsync<UsageReportDto>("/admin/api/usage?modelId=llama-3");
+
+        report!.Summary!.TotalRequests.Should().Be(7);
+        report.Rollups.Should().ContainSingle();
+    }
+
+    [Fact]
     public async Task GetEvents_Paginates_WithCursor()
     {
         await using var factory = GatewayWebApplicationFactory.CreateWithInMemoryDatabase();
@@ -400,7 +456,8 @@ public sealed class AdminUsageIntegrationTests
         string requestId = "req-seed-events",
         Guid? apiKeyId = null,
         decimal cost = 0.01m,
-        DateTimeOffset? at = null)
+        DateTimeOffset? at = null,
+        string modelId = "gpt-4o")
     {
         await using var scope = factory.Services.CreateAsyncScope();
         var events = scope.ServiceProvider.GetRequiredService<IBillingEventRepository>();
@@ -409,7 +466,7 @@ public sealed class AdminUsageIntegrationTests
             requestId,
             tenantId,
             apiKeyId,
-            "gpt-4o",
+            modelId,
             "eng",
             10,
             5,
@@ -487,6 +544,26 @@ public sealed class AdminUsageIntegrationTests
         public bool HasMore { get; init; }
 
         public string? NextCursor { get; init; }
+    }
+
+    private sealed class KeySharesDto
+    {
+        public string? ModelId { get; init; }
+
+        public int TotalRequests { get; init; }
+
+        public decimal TotalCost { get; init; }
+
+        public List<KeyShareDto> Keys { get; init; } = [];
+    }
+
+    private sealed class KeyShareDto
+    {
+        public Guid? ApiKeyId { get; init; }
+
+        public double RequestShare { get; init; }
+
+        public double? CostShare { get; init; }
     }
 
     private sealed class BillingEventDto

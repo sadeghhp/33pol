@@ -8,6 +8,7 @@ namespace Pol33.Core.Billing;
 /// <param name="CostCenter">Case-insensitive exact match on the cost centre.</param>
 /// <param name="NoCostCenter">Match only rows with no cost centre; wins over <paramref name="CostCenter"/>.</param>
 /// <param name="Cursor">Continue after a previous page; see <see cref="BillingEventCursor"/>.</param>
+/// <param name="ModelId">Exact (ordinal) match on the model id.</param>
 public sealed record BillingEventQuery(
     DateOnly? FromDate = null,
     DateOnly? ToDate = null,
@@ -17,7 +18,8 @@ public sealed record BillingEventQuery(
     int Limit = 500,
     bool IncludeAnonymous = false,
     bool NoCostCenter = false,
-    BillingEventCursor? Cursor = null)
+    BillingEventCursor? Cursor = null,
+    string? ModelId = null)
 {
     public UsageScope Scope => new(TenantId, IncludeAnonymous);
 }

@@ -38,6 +38,7 @@ public static class AdminUsageEndpoints
         group.MapGet("/export", ExportUsage);
         group.MapGet("/forecast", GetForecast);
         group.MapGet("/events", GetEvents);
+        group.MapGet("/keys", GetKeyShares);
 
         return endpoints;
     }
@@ -45,7 +46,7 @@ public static class AdminUsageEndpoints
     /// <summary>The one filter shape every usage endpoint accepts.</summary>
     /// <remarks>
     /// Bound by hand rather than <c>[AsParameters]</c> so the same validation (range order, range
-    /// length, the <c>(none)</c> sentinel) is applied identically on all four routes.
+    /// length, the <c>(none)</c> sentinel) is applied identically on every route.
     /// </remarks>
     private sealed record UsageFilter(
         Guid TenantId,
@@ -54,7 +55,8 @@ public static class AdminUsageEndpoints
         string? CostCenter,
         bool NoCostCenter,
         Guid? ApiKeyId,
-        bool IncludeAnonymous)
+        bool IncludeAnonymous,
+        string? ModelId)
     {
         public UsageScope Scope => new(TenantId, IncludeAnonymous);
 
@@ -67,6 +69,7 @@ public static class AdminUsageEndpoints
             CostCenter = CostCenter,
             NoCostCenter = NoCostCenter,
             ApiKeyId = ApiKeyId,
+            ModelId = ModelId,
         };
 
         public BillingEventQuery ToEventQuery(int limit, BillingEventCursor? cursor) => new(
@@ -78,7 +81,8 @@ public static class AdminUsageEndpoints
             limit,
             IncludeAnonymous,
             NoCostCenter,
-            cursor);
+            cursor,
+            ModelId);
     }
 
     /// <summary>
@@ -98,7 +102,8 @@ public static class AdminUsageEndpoints
         DateOnly? to,
         string? costCenter,
         Guid? apiKeyId,
-        bool? includeAnonymous)
+        bool? includeAnonymous,
+        string? modelId)
     {
         if (!AdminTenantScope.TryResolve(httpContext, out var tenantId))
         {
@@ -137,7 +142,8 @@ public static class AdminUsageEndpoints
             noCostCenter ? null : trimmed,
             noCostCenter,
             apiKeyId,
-            anonymousAllowed), null);
+            anonymousAllowed,
+            string.IsNullOrWhiteSpace(modelId) ? null : modelId.Trim()), null);
     }
 
     private static async Task<IResult> GetUsage(
@@ -149,9 +155,10 @@ public static class AdminUsageEndpoints
         string? costCenter,
         Guid? apiKeyId,
         bool? includeAnonymous,
+        string? modelId,
         CancellationToken cancellationToken)
     {
-        var (filter, error) = await TryBindFilterAsync(httpContext, authorization, from, to, costCenter, apiKeyId, includeAnonymous)
+        var (filter, error) = await TryBindFilterAsync(httpContext, authorization, from, to, costCenter, apiKeyId, includeAnonymous, modelId)
             .ConfigureAwait(false);
         if (filter is null)
         {
@@ -173,11 +180,12 @@ public static class AdminUsageEndpoints
         string? costCenter,
         Guid? apiKeyId,
         bool? includeAnonymous,
+        string? modelId,
         CancellationToken cancellationToken)
     {
         // The forecast has its own window (trailing complete days + month to date), so the report's
         // from/to are deliberately not accepted here; the other filters are shared.
-        var (filter, error) = await TryBindFilterAsync(httpContext, authorization, null, null, costCenter, apiKeyId, includeAnonymous)
+        var (filter, error) = await TryBindFilterAsync(httpContext, authorization, null, null, costCenter, apiKeyId, includeAnonymous, modelId)
             .ConfigureAwait(false);
         if (filter is null)
         {
@@ -192,6 +200,7 @@ public static class AdminUsageEndpoints
                     CostCenter = filter.CostCenter,
                     NoCostCenter = filter.NoCostCenter,
                     ApiKeyId = filter.ApiKeyId,
+                    ModelId = filter.ModelId,
                     TrailingDays = days ?? 7,
                 },
                 cancellationToken)
@@ -209,11 +218,12 @@ public static class AdminUsageEndpoints
         Guid? apiKeyId,
         string? costCenter,
         bool? includeAnonymous,
+        string? modelId,
         int? limit,
         string? cursor,
         CancellationToken cancellationToken)
     {
-        var (filter, error) = await TryBindFilterAsync(httpContext, authorization, from, to, costCenter, apiKeyId, includeAnonymous)
+        var (filter, error) = await TryBindFilterAsync(httpContext, authorization, from, to, costCenter, apiKeyId, includeAnonymous, modelId)
             .ConfigureAwait(false);
         if (filter is null)
         {
@@ -233,6 +243,33 @@ public static class AdminUsageEndpoints
         return Results.Json(page);
     }
 
+    /// <summary>Each key's share of the filtered load; usually read with <c>modelId</c> set.</summary>
+    private static async Task<IResult> GetKeyShares(
+        HttpContext httpContext,
+        IAuthorizationService authorization,
+        IBillingUsageService usageService,
+        DateOnly? from,
+        DateOnly? to,
+        string? costCenter,
+        Guid? apiKeyId,
+        bool? includeAnonymous,
+        string? modelId,
+        CancellationToken cancellationToken)
+    {
+        var (filter, error) = await TryBindFilterAsync(httpContext, authorization, from, to, costCenter, apiKeyId, includeAnonymous, modelId)
+            .ConfigureAwait(false);
+        if (filter is null)
+        {
+            return error!;
+        }
+
+        var shares = await usageService
+            .GetKeySharesAsync(filter.ToEventQuery(UsageExportLimits.MaxEventPageSize, null), cancellationToken)
+            .ConfigureAwait(false);
+
+        return Results.Json(shares);
+    }
+
     private static async Task<IResult> ExportUsage(
         HttpContext httpContext,
         IAuthorizationService authorization,
@@ -242,11 +279,12 @@ public static class AdminUsageEndpoints
         string? costCenter,
         Guid? apiKeyId,
         bool? includeAnonymous,
+        string? modelId,
         string? format,
         string? dataset,
         CancellationToken cancellationToken)
     {
-        var (filter, error) = await TryBindFilterAsync(httpContext, authorization, from, to, costCenter, apiKeyId, includeAnonymous)
+        var (filter, error) = await TryBindFilterAsync(httpContext, authorization, from, to, costCenter, apiKeyId, includeAnonymous, modelId)
             .ConfigureAwait(false);
         if (filter is null)
         {
