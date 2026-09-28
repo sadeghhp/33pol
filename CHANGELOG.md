@@ -4,6 +4,8 @@ All notable changes to this project are documented here. Version tags follow [Se
 
 ## [Unreleased]
 
+## [2.1.0] — 2026-09-28
+
 ### Usage & cost — filter by model, see each key's share
 
 - **Model filter.** Usage & cost has a **Model** picker, and every usage endpoint (`/admin/api/usage`,
