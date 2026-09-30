@@ -394,6 +394,15 @@ git clone https://github.com/sadeghhp/33pol.git && cd 33pol && ./scripts/install
 ./scripts/install-33pol.sh upgrade              # git pull + rebuild
 ```
 
+**Upgrade code on a server as the checkout owner:** Switch to an account that owns the checkout and can access Docker, then run the upgrade from the repository root. Replace `username` and the path as needed.
+This is not the best option. Better way is to convert the install script to a systemd service and run it as a service user. But for quick upgrades, this works:
+
+```bash
+sudo -i -u username
+cd ~/projects/33pol
+./scripts/install-33pol.sh upgrade --install-dir "$PWD"
+```
+
 **Helm (sketch):**
 
 ```bash
