@@ -324,6 +324,7 @@ h1, h2, h3, h4 { font-family: var(--font-display); }
   color: var(--text-tertiary);
   margin-top: 3px;
 }
+.brand-version { letter-spacing: 0; text-transform: none; }
 
 .rail-nav { display: flex; flex-direction: column; gap: 2px; }
 
@@ -1416,7 +1417,6 @@ tr.request-detail-row td { background: var(--bg-inset); padding-top: 0.75rem; }
   }
   .rail-top { flex: 1; flex-direction: row; align-items: center; gap: var(--space-3); flex-wrap: wrap; }
   .brand { padding: 0; margin: 0; border: none; }
-  .brand-sub { display: none; }
   .rail-nav { flex-direction: row; flex-wrap: wrap; gap: 2px; }
   .rail-nav button.active::before { display: none; }
   .rail-nav button span:not(.icon) { display: none; }

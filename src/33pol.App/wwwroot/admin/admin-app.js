@@ -85,6 +85,7 @@ function adminApp() {
 
   return {
     modelTypeCatalog: BOOTSTRAP_MODEL_TYPES,
+    appVersion: '',
     tab: 'dashboard',
     /**
      * Tabs whose panel has been built. A panel enters on first visit and never leaves: unmounting
@@ -438,6 +439,7 @@ function adminApp() {
 
     init() {
       this.applyTheme();
+      this.loadAppVersion();
       const media = window.matchMedia('(prefers-color-scheme: dark)');
       media.addEventListener?.('change', () => { if (this.themeMode === 'system') this.applyTheme(); });
       this.initUsageDates();
@@ -503,6 +505,15 @@ function adminApp() {
         this.store.startConnectionWatch(() => this.editModelUrl());
         this.saveKey();
       }
+    },
+
+    async loadAppVersion() {
+      try {
+        const response = await fetch('/', { cache: 'no-store' });
+        if (!response.ok) return;
+        const { version } = await response.json();
+        if (typeof version === 'string' && version) this.appVersion = 'v' + version;
+      } catch { /* The gateway version is optional while the page is offline. */ }
     },
 
     /** Default window: the last 30 UTC calendar days, today included. */
