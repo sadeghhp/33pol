@@ -7,6 +7,7 @@ using Pol33.Core.Billing;
 using Pol33.Core.Configuration;
 using Pol33.Core.Models;
 using Pol33.Core.Models.Overview;
+using Pol33.Observability.Metrics;
 using Pol33.Observability.Policy;
 using Pol33.Observability.Runtime;
 using Pol33.Registry.Services;
@@ -153,6 +154,78 @@ internal sealed partial class GatewayOverviewSectionService(
         await GetControlPlaneAsync(refresh: false, cancellationToken).ConfigureAwait(false);
         await GetTenantsAsync(refresh: false, cancellationToken).ConfigureAwait(false);
         await GetRateLimitsAsync(refresh: false, cancellationToken).ConfigureAwait(false);
+        await PublishFinOpsMetricsAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Copies the snapshots just refreshed into Prometheus gauges. Key series are the top
+    /// <see cref="BillingMetricLabels.TopKeyLimit"/> by month-to-date cost; a failure to read them
+    /// still publishes the rest. With no database both sections are null and the gauges stay absent.
+    /// </summary>
+    private async Task PublishFinOpsMetricsAsync(CancellationToken cancellationToken)
+    {
+        IReadOnlyList<FinOpsKeyCost> keys = [];
+        try
+        {
+            keys = await LoadKeyCostsAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex, "FinOps key-cost export failed; publishing the rest of the snapshot");
+        }
+
+        GatewayFinOpsMetrics.Publish(GatewayFinOpsMetrics.Build(_finops.Last, _policy.Last, _tenants.Last, keys));
+    }
+
+    private async Task<IReadOnlyList<FinOpsKeyCost>> LoadKeyCostsAsync(CancellationToken cancellationToken)
+    {
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var services = scope.ServiceProvider;
+        var usage = services.GetService<IBillingUsageService>();
+        var keys = services.GetService<IApiKeyRepository>();
+        if (usage is null || keys is null)
+        {
+            return [];
+        }
+
+        var today = DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime);
+        var monthStart = new DateOnly(today.Year, today.Month, 1);
+        var shares = await usage.GetKeySharesAsync(
+            new BillingEventQuery(FromDate: monthStart, ToDate: today, IncludeAnonymous: true),
+            cancellationToken).ConfigureAwait(false);
+
+        var ids = shares.Keys.Where(k => k.ApiKeyId is not null).Select(k => k.ApiKeyId!.Value).ToArray();
+        if (ids.Length == 0)
+        {
+            return [];
+        }
+
+        var records = await keys.GetByIdsAsync(ids, cancellationToken).ConfigureAwait(false);
+        var byId = records.ToDictionary(k => k.Id);
+        var tenants = services.GetService<ITenantRepository>();
+        var slugById = tenants is null
+            ? new Dictionary<Guid, string>()
+            : (await tenants.ListActiveAsync(cancellationToken).ConfigureAwait(false)).ToDictionary(t => t.Id, t => t.Slug);
+
+        var costs = new List<FinOpsKeyCost>(ids.Length);
+        foreach (var share in shares.Keys)
+        {
+            if (share.ApiKeyId is not Guid id || !byId.TryGetValue(id, out var record))
+            {
+                continue;
+            }
+
+            var slug = slugById.TryGetValue(record.TenantId, out var found)
+                ? found
+                : BillingMetricLabels.UnknownTenant;
+            costs.Add(new FinOpsKeyCost(slug, record.Id, share.Label, share.Assignee, share.TotalCost));
+        }
+
+        return costs;
     }
 
     // ---- FinOps ----

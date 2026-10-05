@@ -14,7 +14,7 @@ python3 -c "
 import json, sys
 data = json.load(sys.stdin)
 uids = {d.get('uid') for d in data if d.get('uid')}
-required = {'33pol-gateway', '33pol-gateway-traffic'}
+required = {'33pol-gateway', '33pol-gateway-traffic', '33pol-models', '33pol-platform', '33pol-finops'}
 missing = required - uids
 if missing:
     raise SystemExit(

@@ -132,3 +132,28 @@ groups:
             are refused. The budget is per credential and lives in appsettings
             (RateLimiting:ControlPlane), so it cannot be raised from the console.
             See docs/runbooks/rate-limit-admin.md#control-plane-budget
+      # Hard stop is the critical budget state: the gateway is refusing the tenant. A budget that is
+      # merely near its warning ratio stays on the FinOps dashboard. max() collapses replicas, which
+      # each export the same snapshot.
+      - alert: GatewayBudgetHardStop
+        expr: max by (tenant, budget) (gateway_budget_spend_ratio{hard_stop="true"}) >= 1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: Budget hard stop is refusing a tenant
+          description: >-
+            Budget {{ $labels.budget }} for tenant {{ $labels.tenant }} is exhausted and hard stop
+            is on, so inference for that tenant is refused. See docs/finops.md#budget-hard-stop
+      # The console lists unpriced models as info. Held for an hour here so a model that is about
+      # to receive a rate card does not page, while a model left unpriced keeps costing zero.
+      - alert: GatewayUnpricedModels
+        expr: max(gateway_unpriced_models) > 0
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: Registered models have no rate card
+          description: >-
+            {{ $value }} model(s) record usage at zero cost. Set prices under Routing → Models.
+            See docs/finops.md#model-pricing-rate-cards

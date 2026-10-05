@@ -1,4 +1,5 @@
 using Pol33.Core.Abstractions;
+using Pol33.Core.Billing;
 using Pol33.Core.Models.Overview;
 using Pol33.Observability.Policy;
 using Pol33.Observability.Runtime;
@@ -155,5 +156,28 @@ public sealed class GatewayMetricsCollector(GatewayRuntimeState runtimeState, Po
         // sweep itself stopped, which is why the job also emits a heartbeat.
         GatewayMeters.SetBillingReconciliation(discrepancyCount, absoluteCostDrift);
         GatewayMeters.BillingReconciliationRuns.Add(1);
+    }
+
+    public void RecordBilledCost(string tenantSlug, string modelId, string costCenter, double costDollars)
+    {
+        if (costDollars <= 0 || double.IsNaN(costDollars) || double.IsInfinity(costDollars))
+        {
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(modelId))
+        {
+            return;
+        }
+
+        GatewayMeters.BilledCostDollars.Add(
+            costDollars,
+            new KeyValuePair<string, object?>("tenant", string.IsNullOrWhiteSpace(tenantSlug)
+                ? BillingMetricLabels.UnknownTenant
+                : tenantSlug),
+            new KeyValuePair<string, object?>("model", modelId),
+            new KeyValuePair<string, object?>("cost_center", string.IsNullOrWhiteSpace(costCenter)
+                ? BillingMetricLabels.NoCostCenter
+                : costCenter));
     }
 }

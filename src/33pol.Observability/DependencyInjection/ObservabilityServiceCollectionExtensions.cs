@@ -69,6 +69,7 @@ public static class ObservabilityServiceCollectionExtensions
         services.AddSingleton<IUsageWriterStateSource>(sp => sp.GetRequiredService<ChannelUsageRecorder>());
         services.AddHostedService(sp => sp.GetRequiredService<ChannelUsageRecorder>());
         services.AddHostedService<GatewayBackendHealthMetricsExporter>();
+        services.AddHostedService<GatewayFinOpsMetricsExporter>();
         services.AddHostedService<GatewayCircuitBreakerMetricsExporter>();
         services.AddHostedService<GatewayRateLimitMetricsExporter>();
 

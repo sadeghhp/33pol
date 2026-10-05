@@ -7,6 +7,7 @@ using Pol33.Billing.Usage;
 using Pol33.Core.Abstractions;
 using Pol33.Core.Billing;
 using Pol33.Core.Configuration;
+using Pol33.Core.Identity;
 using Pol33.Core.Models;
 
 namespace Pol33.Billing.Tests.Usage;
@@ -20,7 +21,9 @@ public sealed class BillingUsagePersistenceHandlerTests
         IBudgetRepository? budgets = null,
         IBillingWebhookDispatcher? webhooks = null,
         BillingBudgetWarningTracker? warningTracker = null,
-        IApiKeyLastUsedTracker? lastUsedTracker = null) =>
+        IApiKeyLastUsedTracker? lastUsedTracker = null,
+        IGatewayMetricsCollector? metrics = null,
+        ITenantRepository? tenants = null) =>
         new(
             billingEvents,
             rollups,
@@ -32,7 +35,9 @@ public sealed class BillingUsagePersistenceHandlerTests
             new BillingUnpricedModelTracker(),
             lastUsedTracker ?? Substitute.For<IApiKeyLastUsedTracker>(),
             new BudgetReservationLedger(TimeSpan.FromMinutes(2)),
-            NullLogger<BillingUsagePersistenceHandler>.Instance);
+            NullLogger<BillingUsagePersistenceHandler>.Instance,
+            metrics: metrics,
+            tenants: tenants);
 
     [Fact]
     public async Task PersistAsync_NewEvent_AppendsAndUpsertsRollup()
@@ -461,6 +466,207 @@ public sealed class BillingUsagePersistenceHandlerTests
                 list.Count == 5 && list.All(d => d.RequestCount == 1)),
             Arg.Any<CancellationToken>());
     }
+
+    [Fact]
+    public async Task PersistBatchAsync_RecordsBilledCostForNewPricedEventsOnly()
+    {
+        var tenantId = Guid.NewGuid();
+        var billingEvents = Substitute.For<IBillingEventRepository>();
+        billingEvents.TryAppendAsync(Arg.Any<BillingEventRecord>(), Arg.Any<CancellationToken>())
+            .Returns(call => call.Arg<BillingEventRecord>().RequestId != "dup");
+
+        var rollups = Substitute.For<IDailyUsageRollupRepository>();
+        var rateCards = Substitute.For<IRateCardRepository>();
+        rateCards.GetActiveForModelAsync("gpt-4o", Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>())
+            .Returns(PricedCard("gpt-4o"));
+        rateCards.GetActiveForModelAsync("unpriced", Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>())
+            .Returns((RateCardRecord?)null);
+
+        var tenants = Substitute.For<ITenantRepository>();
+        tenants.GetByIdAsync(tenantId, Arg.Any<CancellationToken>())
+            .Returns(new TenantRecord(tenantId, "acme", "Acme", null, null, true, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow));
+
+        var metrics = Substitute.For<IGatewayMetricsCollector>();
+        var handler = CreateHandler(billingEvents, rollups, rateCards, metrics: metrics, tenants: tenants);
+        var now = DateTimeOffset.UtcNow;
+
+        await handler.PersistBatchAsync([
+            new UsageEvent
+            {
+                RequestId = "priced",
+                TenantId = tenantId.ToString(),
+                ModelId = "gpt-4o",
+                CostCenter = "eng",
+                PromptTokens = 1_000_000,
+                CompletionTokens = 0,
+                DurationMs = 1,
+                TimestampUtc = now,
+            },
+            new UsageEvent
+            {
+                RequestId = "anon",
+                ModelId = "gpt-4o",
+                PromptTokens = 1_000_000,
+                CompletionTokens = 0,
+                DurationMs = 1,
+                TimestampUtc = now,
+            },
+            new UsageEvent
+            {
+                RequestId = "missing-tenant",
+                TenantId = Guid.NewGuid().ToString(),
+                ModelId = "gpt-4o",
+                PromptTokens = 1_000_000,
+                CompletionTokens = 0,
+                DurationMs = 1,
+                TimestampUtc = now,
+            },
+            new UsageEvent
+            {
+                RequestId = "free",
+                TenantId = tenantId.ToString(),
+                ModelId = "unpriced",
+                PromptTokens = 10,
+                CompletionTokens = 10,
+                DurationMs = 1,
+                TimestampUtc = now,
+            },
+            new UsageEvent
+            {
+                RequestId = "dup",
+                TenantId = tenantId.ToString(),
+                ModelId = "gpt-4o",
+                PromptTokens = 1_000_000,
+                CompletionTokens = 0,
+                DurationMs = 1,
+                TimestampUtc = now,
+            },
+        ]);
+
+        metrics.Received(1).RecordBilledCost("acme", "gpt-4o", "eng", Arg.Is<double>(c => Math.Abs(c - 1d) < 1e-9));
+        metrics.Received(1).RecordBilledCost(BillingMetricLabels.AnonymousTenant, "gpt-4o", BillingMetricLabels.NoCostCenter, Arg.Is<double>(c => Math.Abs(c - 1d) < 1e-9));
+        metrics.Received(1).RecordBilledCost(BillingMetricLabels.UnknownTenant, "gpt-4o", BillingMetricLabels.NoCostCenter, Arg.Is<double>(c => Math.Abs(c - 1d) < 1e-9));
+        metrics.DidNotReceive().RecordBilledCost(
+            Arg.Any<string>(),
+            "unpriced",
+            Arg.Any<string>(),
+            Arg.Any<double>());
+        metrics.DidNotReceive().RecordBilledCost(
+            Arg.Is<string>(s => s == tenantId.ToString()),
+            Arg.Any<string>(),
+            Arg.Any<string>(),
+            Arg.Any<double>());
+    }
+
+    /// <summary>
+    /// The slug lookup sits after the ledger insert. If it throws and the exception escapes, the
+    /// retry sees a duplicate, appends nothing, and returns success without writing the rollup.
+    /// </summary>
+    [Fact]
+    public async Task PersistBatchAsync_TenantLookupFailure_StillIncrementsRollups()
+    {
+        var tenantId = Guid.NewGuid();
+        var billingEvents = Substitute.For<IBillingEventRepository>();
+        billingEvents.TryAppendAsync(Arg.Any<BillingEventRecord>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+
+        var rollups = Substitute.For<IDailyUsageRollupRepository>();
+        var rateCards = Substitute.For<IRateCardRepository>();
+        rateCards.GetActiveForModelAsync("gpt-4o", Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>())
+            .Returns(PricedCard("gpt-4o"));
+
+        var tenants = Substitute.For<ITenantRepository>();
+        tenants.GetByIdAsync(tenantId, Arg.Any<CancellationToken>())
+            .Returns<Task<TenantRecord?>>(_ => throw new InvalidOperationException("tenant store unavailable"));
+
+        var metrics = Substitute.For<IGatewayMetricsCollector>();
+        var handler = CreateHandler(billingEvents, rollups, rateCards, metrics: metrics, tenants: tenants);
+
+        var act = () => handler.PersistBatchAsync([
+            new UsageEvent
+            {
+                RequestId = "priced",
+                TenantId = tenantId.ToString(),
+                ModelId = "gpt-4o",
+                CostCenter = "eng",
+                PromptTokens = 1_000_000,
+                CompletionTokens = 0,
+                DurationMs = 1,
+                TimestampUtc = DateTimeOffset.UtcNow,
+            },
+        ]);
+
+        await act.Should().NotThrowAsync();
+        await rollups.Received(1).IncrementRollupsAsync(
+            Arg.Is<IReadOnlyList<DailyUsageRollupDelta>>(list => list.Count == 1 && list[0].TotalCost == 1m),
+            Arg.Any<CancellationToken>());
+        metrics.Received(1).RecordBilledCost(
+            BillingMetricLabels.UnknownTenant,
+            "gpt-4o",
+            "eng",
+            Arg.Is<double>(c => Math.Abs(c - 1d) < 1e-9));
+    }
+
+    [Fact]
+    public async Task PersistBatchAsync_MetricsCollectorFailure_StillIncrementsRollups()
+    {
+        var tenantId = Guid.NewGuid();
+        var billingEvents = Substitute.For<IBillingEventRepository>();
+        billingEvents.TryAppendAsync(Arg.Any<BillingEventRecord>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+
+        var rollups = Substitute.For<IDailyUsageRollupRepository>();
+        var rateCards = Substitute.For<IRateCardRepository>();
+        rateCards.GetActiveForModelAsync("gpt-4o", Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>())
+            .Returns(PricedCard("gpt-4o"));
+
+        var tenants = Substitute.For<ITenantRepository>();
+        tenants.GetByIdAsync(tenantId, Arg.Any<CancellationToken>())
+            .Returns(new TenantRecord(tenantId, "acme", "Acme", null, null, true, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow));
+
+        var metricsThrew = false;
+        var metrics = Substitute.For<IGatewayMetricsCollector>();
+        metrics.When(m => m.RecordBilledCost(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<double>()))
+            .Do(_ =>
+            {
+                metricsThrew = true;
+                throw new InvalidOperationException("metrics exporter down");
+            });
+
+        var handler = CreateHandler(billingEvents, rollups, rateCards, metrics: metrics, tenants: tenants);
+
+        var act = () => handler.PersistBatchAsync([
+            new UsageEvent
+            {
+                RequestId = "priced",
+                TenantId = tenantId.ToString(),
+                ModelId = "gpt-4o",
+                PromptTokens = 1_000_000,
+                CompletionTokens = 0,
+                DurationMs = 1,
+                TimestampUtc = DateTimeOffset.UtcNow,
+            },
+        ]);
+
+        await act.Should().NotThrowAsync();
+        metricsThrew.Should().BeTrue();
+        await rollups.Received(1).IncrementRollupsAsync(Arg.Any<IReadOnlyList<DailyUsageRollupDelta>>(), Arg.Any<CancellationToken>());
+    }
+
+    private static RateCardRecord PricedCard(string modelId) =>
+        new(
+            Guid.NewGuid(),
+            "default",
+            "Default",
+            modelId,
+            1m,
+            2m,
+            "USD",
+            DateTimeOffset.UtcNow.AddDays(-1),
+            null,
+            true,
+            DateTimeOffset.UtcNow,
+            DateTimeOffset.UtcNow);
 
     private static UsageEvent NewEvent(
         string requestId,

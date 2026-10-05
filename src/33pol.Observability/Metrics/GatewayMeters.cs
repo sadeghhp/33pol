@@ -85,6 +85,13 @@ public static class GatewayMeters
     public static readonly Counter<long> BillingReconciliationRuns =
         Meter.CreateCounter<long>("gateway_billing_reconciliation_runs_total");
 
+    /// <summary>
+    /// Priced cost of billing events newly written to the ledger, in the default currency.
+    /// Labels are tenant slug, model, and cost centre. Sum across replicas; do not put an API key on it.
+    /// </summary>
+    public static readonly Counter<double> BilledCostDollars =
+        Meter.CreateCounter<double>("gateway_billed_cost_dollars_total");
+
     private static int _reconciliationDiscrepancies;
     private static double _reconciliationCostDrift;
 

@@ -1,0 +1,764 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      },
+      {
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "enable": true,
+        "expr": "ALERTS{alertname=~\"Gateway.*\",alertstate=\"firing\"}",
+        "hide": false,
+        "iconColor": "red",
+        "name": "Prometheus alerts",
+        "step": "60s",
+        "tagKeys": "alertname,severity",
+        "textFormat": "{{alertname}} on {{instance}}",
+        "titleFormat": "{{alertname}}"
+      }
+    ]
+  },
+  "description": "Per-model health, breaker, queue, latency distribution, and token rate. Companion to the operator and traffic boards.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [
+    {
+      "asDropdown": false,
+      "icon": "external link",
+      "includeVars": true,
+      "keepTime": true,
+      "tags": [],
+      "targetBlank": false,
+      "title": "Operator (RED)",
+      "tooltip": "",
+      "type": "link",
+      "url": "/d/33pol-gateway"
+    },
+    {
+      "asDropdown": false,
+      "icon": "external link",
+      "includeVars": true,
+      "keepTime": true,
+      "tags": [],
+      "targetBlank": false,
+      "title": "Traffic & tokens",
+      "tooltip": "",
+      "type": "link",
+      "url": "/d/33pol-gateway-traffic"
+    },
+    {
+      "asDropdown": false,
+      "icon": "external link",
+      "includeVars": true,
+      "keepTime": true,
+      "tags": [],
+      "targetBlank": false,
+      "title": "Platform",
+      "tooltip": "",
+      "type": "link",
+      "url": "/d/33pol-platform"
+    },
+    {
+      "asDropdown": false,
+      "icon": "external link",
+      "includeVars": true,
+      "keepTime": true,
+      "tags": [],
+      "targetBlank": false,
+      "title": "Cost, tenants & keys",
+      "tooltip": "",
+      "type": "link",
+      "url": "/d/33pol-finops"
+    }
+  ],
+  "panels": [
+    {
+      "id": 100,
+      "type": "row",
+      "title": "Scoreboard",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "panels": []
+    },
+    {
+      "id": 1,
+      "type": "table",
+      "title": "Model scoreboard",
+      "description": "One row per model. Health is up or down. Breaker is closed, half-open, or open. Tokens/s is direction=total so input and output are not added twice.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 1
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Health" },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "0": { "text": "down", "color": "red", "index": 0 },
+                      "1": { "text": "up", "color": "green", "index": 1 }
+                    }
+                  }
+                ]
+              },
+              { "id": "custom.cellOptions", "value": { "type": "color-text" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Breaker" },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "0": { "text": "closed", "color": "green", "index": 0 },
+                      "1": { "text": "half-open", "color": "yellow", "index": 1 },
+                      "2": { "text": "open", "color": "red", "index": 2 }
+                    }
+                  }
+                ]
+              },
+              { "id": "custom.cellOptions", "value": { "type": "color-text" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Error ratio" },
+            "properties": [
+              { "id": "unit", "value": "percentunit" },
+              { "id": "decimals", "value": 1 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "TTFT p95" },
+            "properties": [
+              { "id": "unit", "value": "s" },
+              { "id": "decimals", "value": 2 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Duration p99" },
+            "properties": [
+              { "id": "unit", "value": "s" },
+              { "id": "decimals", "value": 2 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Tokens/s" },
+            "properties": [
+              { "id": "unit", "value": "short" },
+              { "id": "decimals", "value": 1 }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "A",
+          "expr": "max by (model) (gateway_backend_health{model=~\"$model\"})",
+          "legendFormat": "Health",
+          "instant": true,
+          "format": "table"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "B",
+          "expr": "max by (model) (gateway_circuit_breaker_state{model=~\"$model\"})",
+          "legendFormat": "Breaker",
+          "instant": true,
+          "format": "table"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "C",
+          "expr": "sum by (model) (gateway_active_requests{model=~\"$model\"})",
+          "legendFormat": "In flight",
+          "instant": true,
+          "format": "table"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "D",
+          "expr": "sum by (model) (gateway_bulkhead_queued{model=~\"$model\"})",
+          "legendFormat": "Queued",
+          "instant": true,
+          "format": "table"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "E",
+          "expr": "sum by (model) (rate(gateway_inference_errors_total{model=~\"$model\"}[$__rate_interval])) / sum by (model) (rate(gateway_inference_requests_total{model=~\"$model\"}[$__rate_interval]))",
+          "legendFormat": "Error ratio",
+          "instant": true,
+          "format": "table"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "F",
+          "expr": "histogram_quantile(0.95, sum by (le, model) (rate(gateway_time_to_first_token_seconds_bucket{model=~\"$model\"}[$__rate_interval])))",
+          "legendFormat": "TTFT p95",
+          "instant": true,
+          "format": "table"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "G",
+          "expr": "histogram_quantile(0.99, sum by (le, model) (rate(gateway_inference_duration_seconds_bucket{model=~\"$model\"}[$__rate_interval])))",
+          "legendFormat": "Duration p99",
+          "instant": true,
+          "format": "table"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "H",
+          "expr": "sum by (model) (rate(gateway_tokens_total{model=~\"$model\", direction=\"total\"}[$__rate_interval]))",
+          "legendFormat": "Tokens/s",
+          "instant": true,
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "joinByField",
+          "options": {
+            "byField": "model",
+            "mode": "outer"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "Time 1": true,
+              "Time 2": true,
+              "Time 3": true,
+              "Time 4": true,
+              "Time 5": true,
+              "Time 6": true,
+              "Time 7": true,
+              "Time #A": true,
+              "Time #B": true,
+              "Time #C": true,
+              "Time #D": true,
+              "Time #E": true,
+              "Time #F": true,
+              "Time #G": true,
+              "Time #H": true
+            },
+            "renameByName": {
+              "Value": "Health",
+              "Value #A": "Health",
+              "Value A": "Health",
+              "Value 1": "Health",
+              "Value #B": "Breaker",
+              "Value B": "Breaker",
+              "Value 2": "Breaker",
+              "Value #C": "In flight",
+              "Value C": "In flight",
+              "Value 3": "In flight",
+              "Value #D": "Queued",
+              "Value D": "Queued",
+              "Value 4": "Queued",
+              "Value #E": "Error ratio",
+              "Value E": "Error ratio",
+              "Value 5": "Error ratio",
+              "Value #F": "TTFT p95",
+              "Value F": "TTFT p95",
+              "Value 6": "TTFT p95",
+              "Value #G": "Duration p99",
+              "Value G": "Duration p99",
+              "Value 7": "Duration p99",
+              "Value #H": "Tokens/s",
+              "Value H": "Tokens/s",
+              "Value 8": "Tokens/s"
+            },
+            "indexByName": {
+              "model": 0,
+              "Value": 1,
+              "Value #A": 1,
+              "Value A": 1,
+              "Value 1": 1,
+              "Value #B": 2,
+              "Value B": 2,
+              "Value 2": 2,
+              "Value #C": 3,
+              "Value C": 3,
+              "Value 3": 3,
+              "Value #D": 4,
+              "Value D": 4,
+              "Value 4": 4,
+              "Value #E": 5,
+              "Value E": 5,
+              "Value 5": 5,
+              "Value #F": 6,
+              "Value F": 6,
+              "Value 6": 6,
+              "Value #G": 7,
+              "Value G": 7,
+              "Value 7": 7,
+              "Value #H": 8,
+              "Value H": 8,
+              "Value 8": 8
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": 101,
+      "type": "row",
+      "title": "State",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 11
+      },
+      "panels": []
+    },
+    {
+      "id": 2,
+      "type": "state-timeline",
+      "title": "Backend health",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 12
+      },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "down",
+                  "color": "red",
+                  "index": 0
+                },
+                "1": {
+                  "text": "healthy",
+                  "color": "green",
+                  "index": 1
+                }
+              }
+            }
+          ],
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "mergeValues": true,
+        "showValue": "auto",
+        "alignValue": "center",
+        "rowHeight": 0.8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "A",
+          "expr": "max by (model) (gateway_backend_health{model=~\"$model\"})",
+          "legendFormat": "{{model}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "state-timeline",
+      "title": "Circuit breaker",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 12
+      },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "closed",
+                  "color": "green",
+                  "index": 0
+                },
+                "1": {
+                  "text": "half-open",
+                  "color": "yellow",
+                  "index": 1
+                },
+                "2": {
+                  "text": "open",
+                  "color": "red",
+                  "index": 2
+                }
+              }
+            }
+          ],
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "mergeValues": true,
+        "showValue": "auto",
+        "alignValue": "center",
+        "rowHeight": 0.8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "A",
+          "expr": "max by (model) (gateway_circuit_breaker_state{model=~\"$model\"})",
+          "legendFormat": "{{model}}"
+        }
+      ],
+      "description": "0 closed, 1 half-open, 2 open. max across replicas, so an open breaker on any replica shows open."
+    },
+    {
+      "id": 102,
+      "type": "row",
+      "title": "Latency distribution",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 20
+      },
+      "panels": []
+    },
+    {
+      "id": 4,
+      "type": "heatmap",
+      "title": "Request duration",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 21
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "calculate": false,
+        "yAxis": {
+          "unit": "s"
+        },
+        "color": {
+          "mode": "scheme",
+          "scheme": "Oranges",
+          "steps": 64
+        },
+        "cellGap": 1,
+        "tooltip": {
+          "show": true,
+          "yHistogram": false
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "A",
+          "expr": "sum by (le) (rate(gateway_inference_duration_seconds_bucket{model=~\"$model\"}[$__rate_interval]))",
+          "format": "heatmap",
+          "legendFormat": "{{le}}"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "heatmap",
+      "title": "Time to first token",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 21
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "calculate": false,
+        "yAxis": {
+          "unit": "s"
+        },
+        "color": {
+          "mode": "scheme",
+          "scheme": "Oranges",
+          "steps": 64
+        },
+        "cellGap": 1,
+        "tooltip": {
+          "show": true,
+          "yHistogram": false
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "A",
+          "expr": "sum by (le) (rate(gateway_time_to_first_token_seconds_bucket{model=~\"$model\"}[$__rate_interval]))",
+          "format": "heatmap",
+          "legendFormat": "{{le}}"
+        }
+      ]
+    },
+    {
+      "id": 103,
+      "type": "row",
+      "title": "Saturation",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 29
+      },
+      "panels": []
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Bulkhead in-flight and queue",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 30
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 12,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "A",
+          "expr": "sum by (model) (gateway_bulkhead_inflight{model=~\"$model\"})",
+          "legendFormat": "inflight {{model}}"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "B",
+          "expr": "sum by (model) (gateway_bulkhead_queued{model=~\"$model\"})",
+          "legendFormat": "queued {{model}}"
+        }
+      ],
+      "description": "A queue that stays above zero means the model server, or MaxConcurrentForwardsPerModel, is the bottleneck."
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 39,
+  "tags": [
+    "33pol",
+    "models"
+  ],
+  "templating": {
+    "list": [
+      {
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "definition": "label_values(gateway_backend_health, model)",
+        "hide": 0,
+        "includeAll": true,
+        "allValue": ".*",
+        "label": "Model",
+        "multi": true,
+        "name": "model",
+        "options": [],
+        "query": {
+          "query": "label_values(gateway_backend_health, model)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+        },
+        "refresh": 2,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "33pol Models",
+  "uid": "33pol-models",
+  "version": 1,
+  "weekStart": ""
+}

@@ -47,7 +47,7 @@ For **gpu-gateway only**, omit `COMPOSE_PROFILES` in `.env` (or leave it empty),
 | Admin UI       | http://localhost:8080/admin (key from `GATEWAY_ADMIN_API_KEY`) |
 | Mock upstream  | http://localhost:18080       |
 | Prometheus     | http://localhost:9090        |
-| Grafana        | http://localhost:3000 (admin / admin) — folder **33pol**: [33pol Gateway](http://localhost:3000/d/33pol-gateway/33pol-gateway) (RED, backends), [Traffic & tokens](http://localhost:3000/d/33pol-gateway-traffic/33pol-gateway-traffic) — see [observability.md](../../docs/observability.md) |
+| Grafana        | http://localhost:3000 (admin / admin) — folder **33pol**: [33pol Gateway](http://localhost:3000/d/33pol-gateway/33pol-gateway), [Traffic & tokens](http://localhost:3000/d/33pol-gateway-traffic/33pol-gateway-traffic), [Models](http://localhost:3000/d/33pol-models/33pol-models), [Platform](http://localhost:3000/d/33pol-platform/33pol-platform), [Cost, tenants & keys](http://localhost:3000/d/33pol-finops/33pol-finops) — see [observability.md](../../docs/observability.md) |
 | Database       | embedded SQLite at `/data/gateway.db` on the `gateway-data` volume |
 
 All published ports bind to **127.0.0.1** by default (`GATEWAY_BIND`, `MOCK_UPSTREAM_BIND`, `PROMETHEUS_BIND`, `GRAFANA_BIND`); Prometheus and WireMock have no authentication, so set the `*_BIND` variables to `0.0.0.0` only deliberately. Prometheus scrapes `/metrics` with the Bearer token from `GATEWAY_METRICS_SCRAPE_TOKEN` (compose secret → `authorization.credentials_file`); the dev stack also sets `GATEWAY_METRICS_ALLOW_ANONYMOUS=true` so `curl :8080/metrics` works — set it to `false` (and a strong token) for any non-loopback deploy.

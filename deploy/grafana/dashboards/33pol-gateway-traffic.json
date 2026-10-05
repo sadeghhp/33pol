@@ -12,6 +12,21 @@
         "iconColor": "rgba(0, 211, 255, 1)",
         "name": "Annotations & Alerts",
         "type": "dashboard"
+      },
+      {
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "enable": true,
+        "expr": "ALERTS{alertname=~\"Gateway.*\",alertstate=\"firing\"}",
+        "hide": false,
+        "iconColor": "red",
+        "name": "Prometheus alerts",
+        "step": "60s",
+        "tagKeys": "alertname,severity",
+        "textFormat": "{{alertname}} on {{instance}}",
+        "titleFormat": "{{alertname}}"
       }
     ]
   },
@@ -32,6 +47,42 @@
       "tooltip": "",
       "type": "link",
       "url": "/d/33pol-gateway"
+    },
+    {
+      "asDropdown": false,
+      "icon": "external link",
+      "includeVars": true,
+      "keepTime": true,
+      "tags": [],
+      "targetBlank": false,
+      "title": "Models",
+      "tooltip": "",
+      "type": "link",
+      "url": "/d/33pol-models"
+    },
+    {
+      "asDropdown": false,
+      "icon": "external link",
+      "includeVars": true,
+      "keepTime": true,
+      "tags": [],
+      "targetBlank": false,
+      "title": "Platform",
+      "tooltip": "",
+      "type": "link",
+      "url": "/d/33pol-platform"
+    },
+    {
+      "asDropdown": false,
+      "icon": "external link",
+      "includeVars": true,
+      "keepTime": true,
+      "tags": [],
+      "targetBlank": false,
+      "title": "Cost, tenants & keys",
+      "tooltip": "",
+      "type": "link",
+      "url": "/d/33pol-finops"
     }
   ],
   "panels": [
@@ -328,9 +379,27 @@
           "refId": "C",
           "expr": "sum by (model) (rate(gateway_forward_attempts_total{model=~\"$model\", outcome=\"client_canceled\"}[$__rate_interval]))",
           "legendFormat": "client_canceled {{model}}"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "D",
+          "expr": "sum by (model) (rate(gateway_forward_attempts_total{model=~\"$model\", outcome=\"upstream_first_byte_timeout\"}[$__rate_interval]))",
+          "legendFormat": "upstream_first_byte_timeout {{model}}"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "E",
+          "expr": "sum by (model) (rate(gateway_forward_attempts_total{model=~\"$model\", outcome=\"client_write_timeout\"}[$__rate_interval]))",
+          "legendFormat": "client_write_timeout {{model}}"
         }
       ],
-      "description": "upstream_timeout is the only one of the three the circuit breaker counts: headers never arrived, so the backend never answered. Its allowance widens with prompt size, so a long-context workload should not show up here just for being large. stream_idle_timeout and client_canceled both mean the upstream did answer."
+      "description": "Which deadline ended the forward, and whether the circuit breaker counts it. upstream_timeout means headers never arrived. upstream_first_byte_timeout means headers arrived and no response byte ever did; for an SSE backend that is backend ill health and counts against the breaker. stream_idle_timeout means tokens were produced and then the stream went quiet, which is not held against the backend. client_write_timeout is the consumer refusing to read. client_canceled is the caller hanging up. Neither is a breaker failure."
     },
     {
       "id": 102,
@@ -409,7 +478,7 @@
           },
           "refId": "A",
           "expr": "gateway_circuit_breaker_state{model=~\"$model\"}",
-          "legendFormat": "{{model}}"
+          "legendFormat": "{{model}} {{instance}}"
         }
       ],
       "description": "0=closed, 1=half_open, 2=open"
@@ -476,14 +545,14 @@
           },
           "refId": "A",
           "expr": "sum by (model, to_state) (rate(gateway_circuit_breaker_transitions_total{model=~\"$model\"}[$__rate_interval]))",
-          "legendFormat": "{{model}} → {{to_state}}"
+          "legendFormat": "{{model}} \u2192 {{to_state}}"
         }
       ]
     },
     {
       "id": 22,
       "type": "timeseries",
-      "title": "Bulkhead rejections & inflight",
+      "title": "Bulkhead in-flight, queue, and rejections",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -519,7 +588,24 @@
           },
           "unit": "short"
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "C"
+            },
+            "properties": [
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "unit",
+                "value": "reqps"
+              }
+            ]
+          }
+        ]
       },
       "options": {
         "legend": {
@@ -541,8 +627,8 @@
             "uid": "prometheus"
           },
           "refId": "A",
-          "expr": "sum by (model) (rate(gateway_bulkhead_rejections_total{model=~\"$model\"}[$__rate_interval]))",
-          "legendFormat": "reject {{model}}"
+          "expr": "sum by (model) (gateway_bulkhead_inflight{model=~\"$model\"})",
+          "legendFormat": "inflight {{model}}"
         },
         {
           "datasource": {
@@ -550,10 +636,20 @@
             "uid": "prometheus"
           },
           "refId": "B",
-          "expr": "sum by (model) (gateway_bulkhead_inflight{model=~\"$model\"})",
-          "legendFormat": "inflight {{model}}"
+          "expr": "sum by (model) (gateway_bulkhead_queued{model=~\"$model\"})",
+          "legendFormat": "queued {{model}}"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "C",
+          "expr": "sum by (model) (rate(gateway_bulkhead_rejections_total{model=~\"$model\"}[$__rate_interval]))",
+          "legendFormat": "reject {{model}}"
         }
-      ]
+      ],
+      "description": "In-flight and queued share the left axis (concurrency). Rejections per second use the right axis."
     },
     {
       "id": 23,
@@ -862,7 +958,7 @@
           "type": "prometheus",
           "uid": "prometheus"
         },
-        "definition": "label_values(gateway_inference_requests_total, model)",
+        "definition": "label_values(gateway_backend_health, model)",
         "hide": 0,
         "includeAll": true,
         "label": "Model",
@@ -870,14 +966,15 @@
         "name": "model",
         "options": [],
         "query": {
-          "query": "label_values(gateway_inference_requests_total, model)",
+          "query": "label_values(gateway_backend_health, model)",
           "refId": "PrometheusVariableQueryEditor-VariableQuery"
         },
         "refresh": 2,
         "regex": "",
         "skipUrlSync": false,
         "sort": 1,
-        "type": "query"
+        "type": "query",
+        "allValue": ".*"
       }
     ]
   },
@@ -887,8 +984,8 @@
   },
   "timepicker": {},
   "timezone": "",
-  "title": "33pol Gateway — Traffic & tokens",
+  "title": "33pol Gateway \u2014 Traffic & tokens",
   "uid": "33pol-gateway-traffic",
-  "version": 2,
+  "version": 3,
   "weekStart": ""
 }

@@ -23,7 +23,11 @@ public sealed class BillingUsagePersistenceHandler(
     IRecentRequestStore? recentRequests = null,
     // Optional for the same reason; when present, a tenant's cached period spend is discarded once
     // a batch's spend has reached the rollups, before its reservations are released.
-    BudgetSpendCache? spendCache = null) : IUsagePersistenceHandler
+    BudgetSpendCache? spendCache = null,
+    // Optional. When present, each newly persisted priced event increments the billed-cost counter
+    // under the tenant slug (never the id, and never an API key).
+    IGatewayMetricsCollector? metrics = null,
+    ITenantRepository? tenants = null) : IUsagePersistenceHandler
 {
     public async ValueTask PersistAsync(UsageEvent usageEvent, CancellationToken cancellationToken = default)
     {
@@ -87,6 +91,11 @@ public sealed class BillingUsagePersistenceHandler(
         {
             return;
         }
+
+        // Best-effort. The rows are already committed; a slug lookup or collector failure must not
+        // skip the rollup. A thrown error here is retried as a duplicate, the retry appends nothing,
+        // and the batch returns success with the spend missing from daily_usage_rollups.
+        await RecordBilledCostsAsync(usageEvents, records, appended, cancellationToken).ConfigureAwait(false);
 
         // One touch per distinct api key, using its latest timestamp in this batch.
         foreach (var group in appended
@@ -199,6 +208,90 @@ public sealed class BillingUsagePersistenceHandler(
         }
 
         return appended;
+    }
+
+    private async Task RecordBilledCostsAsync(
+        IReadOnlyList<UsageEvent> usageEvents,
+        IReadOnlyList<BillingEventRecord> records,
+        IReadOnlyList<BillingEventRecord> appended,
+        CancellationToken cancellationToken)
+    {
+        if (metrics is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var appendedIds = new HashSet<string>(appended.Select(r => r.RequestId), StringComparer.Ordinal);
+            var slugs = new Dictionary<Guid, string>();
+            if (tenants is not null)
+            {
+                foreach (var id in appended.Where(r => r.TenantId is not null).Select(r => r.TenantId!.Value).Distinct())
+                {
+                    try
+                    {
+                        var tenant = await tenants.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
+                        if (tenant is not null && !string.IsNullOrWhiteSpace(tenant.Slug))
+                        {
+                            slugs[id] = tenant.Slug;
+                        }
+                    }
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                    {
+                        throw;
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogWarning(
+                            ex,
+                            "Tenant slug lookup failed for {TenantId}. Billed cost for this batch uses the unknown tenant label.",
+                            id);
+                    }
+                }
+            }
+
+            for (var i = 0; i < records.Count; i++)
+            {
+                var record = records[i];
+                if (!appendedIds.Contains(record.RequestId) || record.TotalCost is not > 0)
+                {
+                    continue;
+                }
+
+                var usage = usageEvents[i];
+                string tenantSlug;
+                if (string.IsNullOrWhiteSpace(usage.TenantId))
+                {
+                    tenantSlug = BillingMetricLabels.AnonymousTenant;
+                }
+                else if (record.TenantId is { } id && slugs.TryGetValue(id, out var slug))
+                {
+                    tenantSlug = slug;
+                }
+                else
+                {
+                    tenantSlug = BillingMetricLabels.UnknownTenant;
+                }
+
+                var costCenter = string.IsNullOrWhiteSpace(record.CostCenter)
+                    ? BillingMetricLabels.NoCostCenter
+                    : record.CostCenter;
+                metrics.RecordBilledCost(tenantSlug, record.ModelId, costCenter, (double)record.TotalCost.Value);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(
+                ex,
+                "Billed-cost metrics were not recorded for {EventCount} persisted event(s). "
+                + "The ledger rows are already stored and rollups will still be updated.",
+                appended.Count);
+        }
     }
 
     private void InvalidateSpendCache(IReadOnlyList<Guid> tenantIds)

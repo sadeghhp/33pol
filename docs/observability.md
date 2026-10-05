@@ -105,6 +105,19 @@ The error record says which deadline ran out without needing the outcome name: `
 | `gateway_billing_reconciliation_discrepancies` | ObservableGauge | — |
 | `gateway_billing_reconciliation_cost_drift` | ObservableGauge | — |
 | `gateway_billing_reconciliation_runs_total` | Counter | — |
+| `gateway_billed_cost_dollars_total` | Counter | `tenant`, `model`, `cost_center` |
+| `gateway_billing_cost_dollars` | ObservableGauge | `window` (`today`/`mtd`) |
+| `gateway_unpriced_models` | ObservableGauge | — |
+| `gateway_anonymous_request_share` | ObservableGauge | — |
+| `gateway_budget_spend_ratio` | ObservableGauge | `tenant`, `budget`, `hard_stop` (`true`/`false`) |
+| `gateway_quota_used_ratio` | ObservableGauge | `tenant`, `period` |
+| `gateway_tenant_cost_month_to_date_dollars` | ObservableGauge | `tenant` |
+| `gateway_api_key_cost_dollars` | ObservableGauge | `tenant`, `key_label`, `assignee`, `key_id` |
+| `gateway_api_keys` | ObservableGauge | `state` (`active`/`expiring`/`idle`) |
+
+`gateway_billed_cost_dollars_total` increments when a priced billing event is newly inserted. `tenant` is the tenant slug, or `anonymous` for keyless traffic. It is not a tenant id, and it is never an API key. Sum it across replicas. The gauges are a copy of the admin Overview snapshot (the same numbers as `GET /admin/api/overview/finops` and `/tenants`), refreshed on the overview interval. Each replica exports the same snapshot, so read them with `max`, not `sum`. They are absent when the gateway has no database.
+
+`gateway_api_key_cost_dollars` is the top 25 keys by month-to-date cost. The label is the key's label and assignee plus its id. The secret and the key prefix are not labels. The long tail stays on `GET /admin/api/usage/keys`.
 
 `gateway_usage_unsplit_total` counts responses whose upstream reported only a combined token total — their cost is approximated at the dearer rate, so a persistently non-zero value for one model means that upstream's usage reporting needs checking. `gateway_usage_estimated_total` counts responses billed from a streamed-frame estimate rather than authoritative usage; a rise concentrated on one tenant can indicate deliberate disconnect-before-completion.
 
@@ -143,10 +156,19 @@ Docker Compose auto-provisions dashboards under the Grafana folder **33pol**:
 |-----------|-----|--------|
 | **33pol Gateway** (SRE / RED) | http://localhost:3000/d/33pol-gateway/33pol-gateway | [33pol-gateway.json](../deploy/grafana/dashboards/33pol-gateway.json) |
 | **33pol Gateway — Traffic & tokens** | http://localhost:3000/d/33pol-gateway-traffic/33pol-gateway-traffic | [33pol-gateway-traffic.json](../deploy/grafana/dashboards/33pol-gateway-traffic.json) |
+| **33pol Models** | http://localhost:3000/d/33pol-models/33pol-models | [33pol-models.json](../deploy/grafana/dashboards/33pol-models.json) |
+| **33pol Platform** | http://localhost:3000/d/33pol-platform/33pol-platform | [33pol-platform.json](../deploy/grafana/dashboards/33pol-platform.json) |
+| **33pol Cost, tenants & keys** | http://localhost:3000/d/33pol-finops/33pol-finops | [33pol-finops.json](../deploy/grafana/dashboards/33pol-finops.json) |
 
-**Ops dashboard:** overview stats (RPS, error rate, duration p99, TTFT p95, in-flight requests, active streams, healthy backends, billing discrepancies), RED including time-to-first-token percentiles, streaming/policy with the timeout split, FinOps/usage writer/reconciliation, backend health and circuit state.
+**Ops dashboard:** overview stats (RPS, error rate, duration p99, TTFT p95, in-flight requests, active streams, share of backends healthy, billing discrepancies), RED including time-to-first-token percentiles, streaming/policy with the timeout split, FinOps/usage writer/reconciliation, backend health and circuit state.
 
-**Traffic dashboard:** inference route rate by `route`/`stream`, forward outcomes by `outcome` plus the same outcomes as a percentage mix, timeouts and cancellations, resilience policy, in-flight vs streaming, and token rates.
+**Traffic dashboard:** inference route rate by `route`/`stream`, forward outcomes by `outcome` plus the same outcomes as a percentage mix, timeouts and cancellations (including the breaker-counting first-byte timeout), resilience policy, bulkhead in-flight versus queue, and token rates.
+
+**Models dashboard:** one row per model (health, breaker, in-flight, queue, error ratio, TTFT p95, duration p99, tokens/s), state timelines, latency heatmaps, and bulkhead queue.
+
+**Platform dashboard:** scrape `up`, models configured, rate-limit partition fill, forced evictions, adaptive factor, backed-off partitions, and the `dotnet_*` process series (working set, large-object heap, bytes allocated per request, gen2, GC pause, thread-pool queue).
+
+**Cost dashboard:** today's and month-to-date spend, unpriced models, anonymous share, spend by tenant and model, budget and quota ratios, and the top API keys. Tenants are the user dimension. Gauges on this board are empty until a database is configured.
 
 The timeout series are kept apart on purpose: `upstream_timeout` and `upstream_first_byte_timeout` are the ones the circuit breaker counts, so a rise in `stream_idle_timeout` alongside a closed breaker is the expected shape, not a contradiction. Watch TTFT p99 against `Gateway:Resilience:ForwardTimeoutSeconds` — the two panels sit side by side because a TTFT distribution creeping toward the allowance is what precedes `upstream_timeout` outcomes.
 
@@ -157,6 +179,8 @@ After changing the JSON or datasource provisioning, restart Grafana: `docker com
 ## Alerts
 
 `GatewayBillingReconciliationDrift` fires when the billing rollups stop matching the ledger behind them; `GatewayBillingReconciliationStalled` fires when the sweep that checks this stops running. Both are documented in [finops.md](finops.md#reconciliation) — the drift alert is the only signal that billing numbers have gone wrong, because every other symptom of it looks like normal operation.
+
+`GatewayBudgetHardStop` fires when a hard-stop budget's spend ratio reaches 1. `GatewayUnpricedModels` fires when a registered model has had no rate card for an hour. Expiring and idle keys stay on the cost dashboard; they are info in the console and are not paged.
 
 Validate rules:
 

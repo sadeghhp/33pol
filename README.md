@@ -206,7 +206,7 @@ bash perf/ci/verify-compose-health.sh   # profile-aware (skips mock/Grafana when
 | Gateway | http://localhost:8080 |
 | Admin UI | http://localhost:8080/admin |
 | Mock upstream | http://localhost:18080 (`full` profile) |
-| Grafana (folder **33pol**, two dashboards) | http://localhost:3000 — [observability.md](./docs/observability.md) |
+| Grafana (folder **33pol**, five dashboards) | http://localhost:3000 — [observability.md](./docs/observability.md) |
 | Prometheus | http://localhost:9090 |
 
 Details: [deploy/docker/README.md](./deploy/docker/README.md).

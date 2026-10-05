@@ -84,6 +84,15 @@ public interface IGatewayMetricsCollector
     void RecordBillingReconciliation(int discrepancyCount, double absoluteCostDrift);
 
     /// <summary>
+    /// Priced cost of one billing event that was newly persisted. <paramref name="tenantSlug"/> is
+    /// the tenant slug (<c>anonymous</c> for keyless traffic), never a tenant id. The key itself is
+    /// not a label: per-key spend is exported separately, capped, from the ledger.
+    /// </summary>
+    void RecordBilledCost(string tenantSlug, string modelId, string costCenter, double costDollars)
+    {
+    }
+
+    /// <summary>
     /// Usage events the batch writer gave up on (retries exhausted, or the buffer cap was hit during
     /// an outage). Each one is a request that is NOT in the billing ledger; the Observability
     /// implementation counts it on <c>gateway_usage_writer_dropped_total</c>.

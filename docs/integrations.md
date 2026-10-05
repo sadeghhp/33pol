@@ -153,7 +153,7 @@ Full local stack (gateway with embedded SQLite, WireMock upstream, Prometheus, G
 cp .env.example .env && docker compose up -d --build
 ```
 
-Compose auto-provisions Grafana dashboards from `deploy/grafana/dashboards/` (folder **33pol**): **33pol Gateway** and **33pol Gateway — Traffic & tokens**. URLs: [observability.md](./observability.md). See [deploy/docker/README.md](../deploy/docker/README.md).
+Compose auto-provisions Grafana dashboards from `deploy/grafana/dashboards/` (folder **33pol**): **33pol Gateway**, **33pol Gateway — Traffic & tokens**, **33pol Models**, **33pol Platform**, and **33pol Cost, tenants & keys**. URLs: [observability.md](./observability.md). See [deploy/docker/README.md](../deploy/docker/README.md).
 
 ## Helm
 
