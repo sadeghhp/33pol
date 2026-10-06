@@ -1,0 +1,91 @@
+# promtool test rules deploy/prometheus/alerts/tests/33pol-scrape_test.yml
+rule_files:
+  - ../33pol-scrape.yml
+
+evaluation_interval: 1m
+
+tests:
+  - name: a gateway that stops answering
+    interval: 1m
+    input_series:
+      - series: 'up{job="gateway", instance="gateway:8080"}'
+        values: '1 1 1 0x10'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: GatewayDown
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: GatewayDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: gateway
+              instance: gateway:8080
+            exp_annotations:
+              summary: The gateway cannot be scraped
+              description: >-
+                Prometheus has had no successful scrape of the gateway for 2 minutes. Either the
+                gateway is down, or /metrics is refusing the scrape token. No other gateway alert can
+                fire while this lasts. See docs/runbooks/all-backends-down.md
+
+  # No `up` series for the job at all: the target was never scraped, or was removed.
+  - name: a gateway that was never scraped
+    interval: 1m
+    input_series:
+      - series: 'up{job="prometheus", instance="localhost:9090"}'
+        values: '1x10'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: GatewayDown
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: GatewayDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: gateway
+            exp_annotations:
+              summary: The gateway cannot be scraped
+              description: >-
+                Prometheus has had no successful scrape of the gateway for 2 minutes. Either the
+                gateway is down, or /metrics is refusing the scrape token. No other gateway alert can
+                fire while this lasts. See docs/runbooks/all-backends-down.md
+
+  - name: a healthy gateway and no backend targets
+    interval: 1m
+    input_series:
+      - series: 'up{job="gateway", instance="gateway:8080"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: GatewayDown
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: GatewayBackendScrapeDown
+        exp_alerts: []
+
+  - name: one backend of two stops answering
+    interval: 1m
+    input_series:
+      - series: 'up{job="vllm", instance="10.0.0.12:8000", model="chat"}'
+        values: '1 1 0x20'
+      - series: 'up{job="vllm", instance="10.0.0.13:8000", model="embed"}'
+        values: '1x22'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: GatewayBackendScrapeDown
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: GatewayBackendScrapeDown
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: vllm
+              instance: 10.0.0.12:8000
+              model: chat
+            exp_annotations:
+              summary: A model server cannot be scraped
+              description: >-
+                10.0.0.12:8000 (model chat) has not answered a scrape for 5
+                minutes. Its queue and running-request series are stale, and the server itself is
+                probably down or restarting. See docs/runbooks/all-backends-down.md

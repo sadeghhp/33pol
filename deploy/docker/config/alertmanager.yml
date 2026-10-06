@@ -1,0 +1,24 @@
+# Where the gateway's alerts go. Prometheus evaluates the rules in ../prometheus/alerts and sends
+# what fires here; without a receiver below, an alert reaches nobody.
+#
+# Every alert goes to gateway-owner unless a route under `routes:` claims it first. The receiver
+# posts to the webhook URL held in config/alertmanager-receivers/gateway-owner.url, a one-line file
+# that is not committed (the URL usually carries a token). Until that file exists Alertmanager
+# logs a failed notification for each alert and delivers nothing.
+#
+# For a route per team, or a receiver that is not a webhook, copy this file, edit the copy and
+# point ALERTMANAGER_CONFIG at it; alertmanager.teams.yml.example is a starting point.
+
+route:
+  receiver: gateway-owner
+  # One notification per alert and per thing it is about, not one per series.
+  group_by: [alertname, model, reason, tenant]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+
+receivers:
+  - name: gateway-owner
+    webhook_configs:
+      - url_file: /etc/alertmanager/receivers/gateway-owner.url
+        send_resolved: true

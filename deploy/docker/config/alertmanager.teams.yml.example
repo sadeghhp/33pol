@@ -1,0 +1,33 @@
+# A route per consuming team. Copy to alertmanager.local.yml (not committed), edit, and set
+# ALERTMANAGER_CONFIG=./config/alertmanager.local.yml in .env.
+#
+# A rule sends an alert to a team by carrying a `team` label. An alert no route claims stays with
+# gateway-owner, so a new rule is never silently dropped.
+
+route:
+  receiver: gateway-owner
+  group_by: [alertname, model, reason, tenant]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    - matchers: [team = "easy"]
+      receiver: team-easy
+    - matchers: [team = "fanus"]
+      receiver: team-fanus
+      # `continue: true` also keeps the gateway owner informed.
+      continue: true
+
+receivers:
+  - name: gateway-owner
+    webhook_configs:
+      - url_file: /etc/alertmanager/receivers/gateway-owner.url
+        send_resolved: true
+  - name: team-easy
+    webhook_configs:
+      - url_file: /etc/alertmanager/receivers/team-easy.url
+        send_resolved: true
+  - name: team-fanus
+    webhook_configs:
+      - url_file: /etc/alertmanager/receivers/team-fanus.url
+        send_resolved: true

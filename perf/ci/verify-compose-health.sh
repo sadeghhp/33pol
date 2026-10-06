@@ -58,6 +58,15 @@ if [[ "${observability_profile_active}" == true ]]; then
   curl -sf "http://localhost:${PROMETHEUS_PORT:-9090}/-/healthy" >/dev/null
   echo "prometheus OK"
 
+  curl -sf "http://localhost:${ALERTMANAGER_PORT:-9093}/-/healthy" >/dev/null
+  echo "alertmanager OK"
+
+  # Up is not enough: Prometheus must also have Alertmanager as the place it sends alerts.
+  curl -sf "http://localhost:${PROMETHEUS_PORT:-9090}/api/v1/alertmanagers" \
+    | grep -q '"activeAlertmanagers":\[{' \
+    || { echo "prometheus has no active alertmanager" >&2; exit 1; }
+  echo "prometheus -> alertmanager OK"
+
   curl -sf "http://localhost:${GRAFANA_PORT:-3000}/api/health" >/dev/null
   echo "grafana OK"
 

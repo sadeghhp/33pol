@@ -38,14 +38,26 @@ jobs:
         # compose stack uses so the rules are actually validated (no silent skip).
         run: |
           docker run --rm -v "${PWD}/deploy/prometheus/alerts:/alerts:ro" --entrypoint promtool \
-            prom/prometheus:v2.55.1 check rules /alerts/33pol.yml /alerts/33pol-writer.yml
+            prom/prometheus:v2.55.1 check rules /alerts/33pol.yml /alerts/33pol-writer.yml /alerts/33pol-scrape.yml
 
       - name: Test Prometheus alert rules
         # check rules only parses. These evaluate the expressions against synthetic series, which
         # is what catches a rule that is valid and can never fire.
         run: |
           docker run --rm -v "${PWD}/deploy/prometheus/alerts:/alerts:ro" --entrypoint promtool \
-            prom/prometheus:v2.55.1 test rules /alerts/tests/33pol-rate-limit_test.yml
+            prom/prometheus:v2.55.1 test rules /alerts/tests/33pol-rate-limit_test.yml \
+              /alerts/tests/33pol-scrape_test.yml
+
+      - name: Validate the Prometheus and Alertmanager configuration
+        # The observability profile mounts these as they are, so a config that does not load is a
+        # Prometheus that does not start, or one that fires alerts nobody receives.
+        run: |
+          docker run --rm -v "${PWD}/deploy/docker/config:/config:ro" \
+            -v "${PWD}/deploy/prometheus/alerts:/etc/prometheus/alerts:ro" --entrypoint promtool \
+            prom/prometheus:v2.55.1 check config --syntax-only /config/prometheus.yml
+          docker run --rm -v "${PWD}/deploy/docker/config:/config:ro" --entrypoint amtool \
+            prom/alertmanager:v0.27.0 check-config /config/alertmanager.yml \
+            /config/alertmanager.teams.yml.example
 
       - name: Test operator scripts
         run: python3 -m unittest discover -s tests/scripts -p "test_*.py"

@@ -1,0 +1,11 @@
+# The model servers behind the gateway. Copy to vllm.yml (not committed) and list each one;
+# Prometheus picks the file up within a minute, with no restart.
+#
+# `model` is the id the gateway routes to that server, so a backend series lines up with the
+# gateway's own `model` label. vLLM serves Prometheus metrics on /metrics of its API port.
+- targets: ["host.docker.internal:8001"]
+  labels:
+    model: example-chat-model
+- targets: ["10.0.0.12:8000"]
+  labels:
+    model: example-embedding-model

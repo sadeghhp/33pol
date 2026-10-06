@@ -1,0 +1,34 @@
+# Alerts on the scrape itself. Every other rule reads series the gateway exports, so a gateway
+# that is down or unreachable silences them all; these are the two that still fire.
+#
+# They select by the job names in deploy/docker/config/prometheus.yml (`gateway`, `vllm`). A
+# Prometheus that scrapes under other job names needs the selectors changed to match.
+groups:
+  - name: 33pol-scrape
+    rules:
+      # absent() covers a gateway that has never been scraped, or a target dropped from the config:
+      # there is no `up` series to equal zero then.
+      - alert: GatewayDown
+        expr: up{job="gateway"} == 0 or absent(up{job="gateway"})
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: The gateway cannot be scraped
+          description: >-
+            Prometheus has had no successful scrape of the gateway for 2 minutes. Either the
+            gateway is down, or /metrics is refusing the scrape token. No other gateway alert can
+            fire while this lasts. See docs/runbooks/all-backends-down.md
+      # A backend that stops answering /metrics is usually a backend that stopped serving. The
+      # gateway's own breaker reports the same thing only once callers have failed against it.
+      - alert: GatewayBackendScrapeDown
+        expr: up{job="vllm"} == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: A model server cannot be scraped
+          description: >-
+            {{ $labels.instance }} (model {{ $labels.model }}) has not answered a scrape for 5
+            minutes. Its queue and running-request series are stale, and the server itself is
+            probably down or restarting. See docs/runbooks/all-backends-down.md

@@ -1,13 +1,13 @@
 # Docker Compose — local 33pol stack
 
-Runs the **gateway** by default, with an embedded SQLite database persisted on the `gateway-data` volume (no external database service). Optional Compose profile **`full`** adds Prometheus, Grafana, and a WireMock mock upstream.
+Runs the **gateway** by default, with an embedded SQLite database persisted on the `gateway-data` volume (no external database service). Optional Compose profile **`full`** adds Prometheus, Alertmanager, Grafana, and a WireMock mock upstream.
 
 ## Compose profiles
 
 | Profile | `COMPOSE_PROFILES` | Services |
 |---------|----------------------|----------|
 | **gpu-gateway** (default) | empty / unset | `gateway` (embedded SQLite) |
-| **gpu-observability** | `observability` | above + `prometheus`, `grafana` |
+| **gpu-observability** | `observability` | above + `prometheus`, `alertmanager`, `grafana` |
 | **full-stack** (local demo) | `full` | above + `mock-upstream` |
 
 Set in `.env` (see `.env.example`). Use `observability` on GPU servers that need metrics dashboards without WireMock. Use `full` only for local demo stacks with a mock upstream.
@@ -47,10 +47,34 @@ For **gpu-gateway only**, omit `COMPOSE_PROFILES` in `.env` (or leave it empty),
 | Admin UI       | http://localhost:8080/admin (key from `GATEWAY_ADMIN_API_KEY`) |
 | Mock upstream  | http://localhost:18080       |
 | Prometheus     | http://localhost:9090        |
+| Alertmanager   | http://localhost:9093        |
 | Grafana        | http://localhost:3000 (admin / admin) — folder **33pol**: [33pol Gateway](http://localhost:3000/d/33pol-gateway/33pol-gateway), [Traffic & tokens](http://localhost:3000/d/33pol-gateway-traffic/33pol-gateway-traffic), [Models](http://localhost:3000/d/33pol-models/33pol-models), [Platform](http://localhost:3000/d/33pol-platform/33pol-platform), [Cost, tenants & keys](http://localhost:3000/d/33pol-finops/33pol-finops) — see [observability.md](../../docs/observability.md) |
 | Database       | embedded SQLite at `/data/gateway.db` on the `gateway-data` volume |
 
-All published ports bind to **127.0.0.1** by default (`GATEWAY_BIND`, `MOCK_UPSTREAM_BIND`, `PROMETHEUS_BIND`, `GRAFANA_BIND`); Prometheus and WireMock have no authentication, so set the `*_BIND` variables to `0.0.0.0` only deliberately. Prometheus scrapes `/metrics` with the Bearer token from `GATEWAY_METRICS_SCRAPE_TOKEN` (compose secret → `authorization.credentials_file`); the dev stack also sets `GATEWAY_METRICS_ALLOW_ANONYMOUS=true` so `curl :8080/metrics` works — set it to `false` (and a strong token) for any non-loopback deploy.
+All published ports bind to **127.0.0.1** by default (`GATEWAY_BIND`, `MOCK_UPSTREAM_BIND`, `PROMETHEUS_BIND`, `ALERTMANAGER_BIND`, `GRAFANA_BIND`); Prometheus, Alertmanager and WireMock have no authentication, so set the `*_BIND` variables to `0.0.0.0` only deliberately. Prometheus scrapes `/metrics` with the Bearer token from `GATEWAY_METRICS_SCRAPE_TOKEN` (compose secret → `authorization.credentials_file`); the dev stack also sets `GATEWAY_METRICS_ALLOW_ANONYMOUS=true` so `curl :8080/metrics` works — set it to `false` (and a strong token) for any non-loopback deploy.
+
+### Alert delivery
+
+Prometheus evaluates the rules in `../prometheus/alerts/` and hands what fires to Alertmanager, which notifies. Out of the box every alert goes to one receiver, `gateway-owner`, and that receiver has no address until you give it one:
+
+```bash
+printf '%s' 'https://hooks.example.com/services/...' > config/alertmanager-receivers/gateway-owner.url
+```
+
+The file is read on each notification, so it needs no restart. Without it, Alertmanager logs a failed notification for every alert and nobody is told. Prove the path end to end before relying on it:
+
+```bash
+docker compose exec alertmanager amtool alert add DeliveryTest severity=warning \
+  --annotation=summary='Test alert, ignore' --alertmanager.url=http://localhost:9093
+```
+
+It should arrive at the webhook within about 30 seconds (`group_wait`).
+
+For a route per team, or a receiver that is not a webhook (email, Slack, Telegram), copy `config/alertmanager.teams.yml.example` to `config/alertmanager.local.yml`, edit it, set `ALERTMANAGER_CONFIG=./config/alertmanager.local.yml` in `.env` and recreate the `alertmanager` service.
+
+### Model-server metrics
+
+The gateway reports what it forwarded; only the model servers report how full they are. To scrape them, copy `config/prometheus-targets/vllm.yml.example` to `vllm.yml` and list each server with the `model` id the gateway routes to it. Prometheus reads the file within a minute. `GatewayBackendScrapeDown` fires for a listed server that stops answering.
 
 Test the mock:
 
@@ -160,7 +184,11 @@ docker compose up -d --build
 | `config/upstream-secrets.enc.example` | Empty encrypted store template (copy locally; gitignored at runtime) |
 | `config/models.json.example` | Registry template (copy to `models.json` locally) |
 | `config/models.json` | Operator registry (gitignored; volume-mounted into gateway) |
-| `config/prometheus.yml` | Scrape config (gateway job) |
+| `config/prometheus.yml` | Scrape config (gateway job, model-server job) and the Alertmanager address |
+| `config/prometheus-targets/` | Model servers to scrape: copy `vllm.yml.example` to `vllm.yml` (gitignored) |
+| `config/alertmanager.yml` | Where alerts go: every alert to `gateway-owner` |
+| `config/alertmanager.teams.yml.example` | A route per team; copy, edit, and set `ALERTMANAGER_CONFIG` |
+| `config/alertmanager-receivers/` | One `<receiver>.url` file per webhook receiver (gitignored) |
 | `wiremock/` | Mock upstream mappings |
 | `../grafana/` | Provisioning + dashboard JSON (Phase 4+) |
 | `../prometheus/alerts/` | Alert rules for `promtool` / Prometheus |
