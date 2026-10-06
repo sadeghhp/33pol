@@ -61,3 +61,7 @@ deploy/docker/.deploy/
 errors/*
 verify-release-test.log
 src/33pol.Admin.Web/node_modules/
+
+# Python bytecode from the operator scripts and their tests
+__pycache__/
+*.pyc

@@ -1,0 +1,141 @@
+# promtool test rules deploy/prometheus/alerts/tests/33pol-rate-limit_test.yml
+#
+# Lives in a subdirectory so the compose stack's `alerts/*.yml` rule glob does not try to load it.
+# Counters below are written as `start+step x n` at a one-minute interval, so `+60x30` is one
+# request a second for half an hour.
+rule_files:
+  - ../33pol.yml
+
+evaluation_interval: 1m
+
+tests:
+  # Everything is refused, so no request reaches the router and there is no inference series at
+  # all. This is the case a plain sum() in the denominator silences.
+  - name: every request refused and no inference series
+    interval: 1m
+    input_series:
+      - series: 'gateway_rate_limit_rejections_total{reason="rate_limit:tenant"}'
+        values: '0+60x30'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: GatewayRateLimitRefusing
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: GatewayRateLimitRefusing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              reason: rate_limit:tenant
+            exp_annotations:
+              summary: Rate limits are refusing at least 10% of inference requests
+              description: >-
+                rate_limit:tenant accounts for 100% of all rate-limit decisions over the last 5
+                minutes. The reason names the scope that refused: `rate_limit:tenant` is a tenant
+                bucket, which every key of that tenant shares, so one busy key can be refusing all
+                the others. The series carries no caller label; the admin API names the keys. See
+                docs/runbooks/rate-limit-admin.md#refusals
+
+  # 5 refused for every 95 admitted: below the threshold.
+  - name: five percent refused stays quiet
+    interval: 1m
+    input_series:
+      - series: 'gateway_inference_requests_total{model="m",status="success"}'
+        values: '0+95x30'
+      - series: 'gateway_rate_limit_rejections_total{reason="rate_limit:tenant"}'
+        values: '0+5x30'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: GatewayRateLimitRefusing
+        exp_alerts: []
+
+  # Two limits each refuse 6%: neither is 10% alone, the gateway as a whole is at 12%, and the
+  # condition is the total. One alert per refusing reason.
+  - name: the threshold is judged on the total, labelled per reason
+    interval: 1m
+    input_series:
+      - series: 'gateway_inference_requests_total{model="m",status="success"}'
+        values: '0+88x30'
+      - series: 'gateway_rate_limit_rejections_total{reason="rate_limit:tenant"}'
+        values: '0+6x30'
+      - series: 'gateway_rate_limit_rejections_total{reason="rate_limit:model"}'
+        values: '0+6x30'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: GatewayRateLimitRefusing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              reason: rate_limit:tenant
+            exp_annotations:
+              summary: Rate limits are refusing at least 10% of inference requests
+              description: >-
+                rate_limit:tenant accounts for 6% of all rate-limit decisions over the last 5
+                minutes. The reason names the scope that refused: `rate_limit:tenant` is a tenant
+                bucket, which every key of that tenant shares, so one busy key can be refusing all
+                the others. The series carries no caller label; the admin API names the keys. See
+                docs/runbooks/rate-limit-admin.md#refusals
+          - exp_labels:
+              severity: warning
+              reason: rate_limit:model
+            exp_annotations:
+              summary: Rate limits are refusing at least 10% of inference requests
+              description: >-
+                rate_limit:model accounts for 6% of all rate-limit decisions over the last 5
+                minutes. The reason names the scope that refused: `rate_limit:tenant` is a tenant
+                bucket, which every key of that tenant shares, so one busy key can be refusing all
+                the others. The series carries no caller label; the admin API names the keys. See
+                docs/runbooks/rate-limit-admin.md#refusals
+
+  # All refused, but three decisions in five minutes is not a condition.
+  - name: too few decisions is not judged
+    interval: 1m
+    input_series:
+      - series: 'gateway_rate_limit_rejections_total{reason="rate_limit:tenant"}'
+        values: '0 1 1 1 1 1 2 2 2 2 2 3 3 3 3 3 4 4 4 4 4'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: GatewayRateLimitRefusing
+        exp_alerts: []
+
+  # The control-plane and failed-sign-in budgets have rules of their own and are not inference.
+  - name: control plane and failed sign-ins do not count
+    interval: 1m
+    input_series:
+      - series: 'gateway_inference_requests_total{model="m",status="success"}'
+        values: '0+10x30'
+      - series: 'gateway_rate_limit_rejections_total{reason="rate_limit:control_plane"}'
+        values: '0+60x30'
+      - series: 'gateway_rate_limit_rejections_total{reason="auth_failure"}'
+        values: '0+60x30'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: GatewayRateLimitRefusing
+        exp_alerts: []
+
+  # A stream-slot refusal is decided in the router, which also counts it as an inference request
+  # with status="error". 11 of 100 requests refused must read as 11% and fire; adding the refusals
+  # to the denominator a second time would make it 11 of 111, under the threshold.
+  - name: a stream slot refusal is not counted twice in the denominator
+    interval: 1m
+    input_series:
+      - series: 'gateway_inference_requests_total{model="m",status="success"}'
+        values: '0+89x30'
+      - series: 'gateway_inference_requests_total{model="m",status="error"}'
+        values: '0+11x30'
+      - series: 'gateway_rate_limit_rejections_total{reason="stream_concurrency:tenant"}'
+        values: '0+11x30'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: GatewayRateLimitRefusing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              reason: stream_concurrency:tenant
+            exp_annotations:
+              summary: Rate limits are refusing at least 10% of inference requests
+              description: >-
+                stream_concurrency:tenant accounts for 11% of all rate-limit decisions over the last 5
+                minutes. The reason names the scope that refused: `rate_limit:tenant` is a tenant
+                bucket, which every key of that tenant shares, so one busy key can be refusing all
+                the others. The series carries no caller label; the admin API names the keys. See
+                docs/runbooks/rate-limit-admin.md#refusals
