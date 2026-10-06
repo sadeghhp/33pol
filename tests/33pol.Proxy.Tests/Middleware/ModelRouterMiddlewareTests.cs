@@ -12,6 +12,7 @@ using Pol33.Core.Errors;
 using Pol33.Core.Forwarding;
 using Pol33.Core.Identity;
 using Pol33.Core.Models;
+using Pol33.Core.Observability;
 using Pol33.Core.Security;
 using System.Security.Claims;
 using Pol33.Core.RateLimiting;
@@ -431,7 +432,7 @@ public sealed class ModelRouterMiddlewareTests
         body.Should().Contain("insufficient_scope");
         // The refusal is counted like the other admission rejections so it reaches the Overview —
         // and stored, so the Overview count and the Errors tab agree on it.
-        requestTracker.Received(1).RecordRejectedRequest("m1", "insufficient_scope");
+        requestTracker.Received(1).RecordRejectedRequest("m1", "insufficient_scope", Arg.Any<MetricCaller>());
         errorRecorder.Received(1).Record(Arg.Is<GatewayErrorRecord>(r =>
             r.Outcome == "insufficient_scope" && r.ModelId == "m1" && r.StatusCode == StatusCodes.Status403Forbidden));
     }
@@ -498,7 +499,7 @@ public sealed class ModelRouterMiddlewareTests
 
             var scope = Substitute.For<IInferenceRequestScope>();
             var requestTracker = Substitute.For<IRequestTracker>();
-            requestTracker.BeginInferenceRequest(Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<string?>())
+            requestTracker.BeginInferenceRequest(Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<string?>(), Arg.Any<MetricCaller>())
                 .Returns(scope);
 
             var middleware = CreateMiddleware(registry: registry, forwarder: forwarder, requestTracker: requestTracker);
@@ -598,7 +599,7 @@ public sealed class ModelRouterMiddlewareTests
             });
 
         var requestTracker = Substitute.For<IRequestTracker>();
-        requestTracker.BeginInferenceRequest(Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<string?>())
+        requestTracker.BeginInferenceRequest(Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<string?>(), Arg.Any<MetricCaller>())
             .Returns(_ => Substitute.For<IInferenceRequestScope>());
 
         var middleware = CreateMiddleware(registry: registry, requestTracker: requestTracker);
@@ -609,7 +610,7 @@ public sealed class ModelRouterMiddlewareTests
 
         await middleware.InvokeAsync(context);
 
-        requestTracker.Received(1).BeginInferenceRequest("local-mock", false, Arg.Any<string?>());
+        requestTracker.Received(1).BeginInferenceRequest("local-mock", false, Arg.Any<string?>(), Arg.Any<MetricCaller>());
     }
 
     [Fact]
@@ -1300,7 +1301,7 @@ public sealed class ModelRouterMiddlewareTests
         await middleware.InvokeAsync(CreateContext(
             HttpMethods.Post, "/v1/chat/completions", """{"model":"m1"}"""));
 
-        tracker.Received(1).RecordRejectedRequest("m1", "backend_unhealthy");
+        tracker.Received(1).RecordRejectedRequest("m1", "backend_unhealthy", Arg.Any<MetricCaller>());
         recent.Received(1).Record(Arg.Is<RecentRequestEntry>(e =>
             e.ModelId == "m1" && e.StatusCode >= 400 && !e.IsInFlight));
     }
@@ -1328,7 +1329,7 @@ public sealed class ModelRouterMiddlewareTests
         await middleware.InvokeAsync(CreateContext(
             HttpMethods.Post, "/v1/chat/completions", """{"model":"m1"}"""));
 
-        tracker.Received(1).RecordRejectedRequest("m1", "circuit_open");
+        tracker.Received(1).RecordRejectedRequest("m1", "circuit_open", Arg.Any<MetricCaller>());
         recent.Received(1).Record(Arg.Any<RecentRequestEntry>());
     }
 
@@ -1354,7 +1355,7 @@ public sealed class ModelRouterMiddlewareTests
             await middleware.InvokeAsync(CreateContext(
                 HttpMethods.Post, "/v1/chat/completions", """{"model":"m1"}"""));
 
-            tracker.Received(1).RecordRejectedRequest("m1", "bulkhead_full");
+            tracker.Received(1).RecordRejectedRequest("m1", "bulkhead_full", Arg.Any<MetricCaller>());
             recent.Received(1).Record(Arg.Is<RecentRequestEntry>(e => e.StatusCode == 429));
         }
         finally
@@ -1410,7 +1411,7 @@ public sealed class ModelRouterMiddlewareTests
     private static IRequestTracker CreateTrackerReturning(IInferenceRequestScope scope)
     {
         var tracker = Substitute.For<IRequestTracker>();
-        tracker.BeginInferenceRequest(Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<string?>()).Returns(scope);
+        tracker.BeginInferenceRequest(Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<string?>(), Arg.Any<MetricCaller>()).Returns(scope);
         return tracker;
     }
 
@@ -1619,7 +1620,7 @@ public sealed class ModelRouterMiddlewareTests
             // Only the default gets the throwaway-scope stub: re-stubbing a caller-supplied tracker
             // would silently discard the scope a test set up to assert its outcome on.
             var defaultTracker = Substitute.For<IRequestTracker>();
-            defaultTracker.BeginInferenceRequest(Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<string?>())
+            defaultTracker.BeginInferenceRequest(Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<string?>(), Arg.Any<MetricCaller>())
                 .Returns(_ => Substitute.For<IInferenceRequestScope>());
             requestTracker = defaultTracker;
         }

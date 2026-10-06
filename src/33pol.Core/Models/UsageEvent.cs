@@ -36,6 +36,15 @@ public sealed class UsageEvent
     public string? ApiKeyId { get; init; }
 
     /// <summary>
+    /// Tenant slug and key label, carried only so the token series can name the caller. Billing
+    /// reads the ids above, never these.
+    /// </summary>
+    public string? TenantSlug { get; init; }
+
+    /// <inheritdoc cref="TenantSlug"/>
+    public string? ApiKeyLabel { get; init; }
+
+    /// <summary>
     /// The key this request's quota was checked under — the tenant id for authenticated traffic,
     /// the per-address anonymous partition (<c>anon:&lt;ip&gt;</c>) for keyless traffic.
     /// </summary>

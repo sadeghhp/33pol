@@ -45,13 +45,30 @@ Canonical definitions live in `GatewayMeters` (`33pol.Observability`) — that f
 
 **Label rules:** never label a metric with a raw API key or a full request id. `model` is the canonical model id; prefer tenant *slug* over uuid where a tenant dimension is added.
 
+### Caller labels
+
+The request, error, duration, token and rate-limit decision series name the caller with two labels:
+
+| Label | Value |
+|-------|-------|
+| `tenant` | The tenant slug. `anonymous` for keyless traffic, `unknown` for a tenant with no slug. |
+| `key` | The label the API key was issued with, trimmed and cut at 64 characters. `(unlabeled)` for a key without one, `(none)` for keyless traffic. |
+
+`key` is the label an operator typed. It is never the secret, its hash or its prefix. Two keys of one tenant with the same label, or both without one, are one series; `GET /admin/api/usage/keys` still tells them apart. A renamed key keeps its old label until its cached validation expires (`Gateway:Security:CacheTtlMinutes`), and the old series stays in the exposition until the gateway restarts.
+
+**The number of callers is bounded.** The first `RateLimiting:UsageReportMaxKeys` callers seen (default 500, the same bound the usage report holds its keys to) get series of their own. A caller that arrives after that is counted under `key="other"` — under its own `tenant` when that tenant is already known, otherwise under `tenant="other"` too — so totals and per-tenant sums stay right. Nobody is evicted to make room, because an exported series lives as long as the process does. Any series with `key="other"` means the bound is too low for this gateway.
+
+These labels put tenant slugs and key labels in the exposition, which is one more reason to leave `Gateway:Metrics:AllowAnonymous` off.
+
+Queries that aggregate (`sum by (model)`, `sum(rate(...))`) read the same as before. A query that selects one of these series without aggregating now returns one row per caller.
+
 ### Inference (RED)
 
 | Metric | Type | Labels |
 |--------|------|--------|
-| `gateway_inference_requests_total` | Counter | `model`, `status` (`success`/`error`) |
-| `gateway_inference_errors_total` | Counter | `model`, `code` (error catalog code, or `unknown`) |
-| `gateway_inference_duration_seconds` | Histogram | `model` |
+| `gateway_inference_requests_total` | Counter | `model`, `status` (`success`/`error`/`canceled`), `tenant`, `key` |
+| `gateway_inference_errors_total` | Counter | `model`, `code` (error catalog code, or `unknown`), `tenant`, `key` |
+| `gateway_inference_duration_seconds` | Histogram | `model`, `tenant`, `key` |
 | `gateway_time_to_first_token_seconds` | Histogram | `model` |
 | `gateway_active_streams` | UpDownCounter | `model` |
 | `gateway_active_requests` | UpDownCounter | `model` |
@@ -84,6 +101,7 @@ The error record says which deadline ran out without needing the outcome name: `
 | Metric | Type | Labels |
 |--------|------|--------|
 | `gateway_rate_limit_rejections_total` | Counter | `reason` |
+| `gateway_rate_limit_decisions_total` | Counter | `tenant`, `key`, `model`, `scope`, `control` (`rate`/`concurrency`), `outcome` (`admitted`/`refused`) |
 | `gateway_quota_rejections_total` | Counter | — |
 | `gateway_backend_health` | ObservableGauge | `model` |
 | `gateway_models_configured` | ObservableGauge | — (serving routes; 0 when nothing is configured) |
@@ -92,11 +110,22 @@ The error record says which deadline ran out without needing the outcome name: `
 | `gateway_bulkhead_rejections_total` | Counter | `model` |
 | `gateway_bulkhead_inflight` | UpDownCounter | `model` |
 
+`gateway_rate_limit_decisions_total` counts every decision of the inference limiter against the caller it was made for. A request that passes the rate stage is one `admitted`; a refusal is one `refused` with the `scope` that refused (`global`, `tenant`, `api_key`, `model`, `tenant_model`, `api_key_model`). An admission has `scope="none"`. A stream cap is checked after the rate stage, so a streaming request it refuses is counted twice: `admitted` with `control="rate"`, then `refused` with `control="concurrency"`. The two outcomes therefore sum to decisions, not to requests. A caller's refusal ratio:
+
+```promql
+sum by (tenant, key) (rate(gateway_rate_limit_decisions_total{outcome="refused"}[5m]))
+  / sum by (tenant, key) (rate(gateway_rate_limit_decisions_total[5m]))
+```
+
+`model` is `unknown` on a decision made before the request body is parsed. Tenant, key and global limits are decided first and gate the parse, so on a gateway with no model-scoped rule every decision except a stream-cap refusal has `model="unknown"`. Use the request series for traffic by model.
+
+`gateway_rate_limit_rejections_total` is unchanged and is still what `GatewayRateLimitRefusing` reads. It also counts the limiters with no caller to name: the control plane (`rate_limit:control_plane`), failed credentials (`auth_failure`) and the anonymous admission guard.
+
 ### Usage and billing pipeline
 
 | Metric | Type | Labels |
 |--------|------|--------|
-| `gateway_tokens_total` | Counter | `model`, `direction` (`input`/`output`/`total`) |
+| `gateway_tokens_total` | Counter | `model`, `direction` (`input`/`output`/`total`), `tenant`, `key` |
 | `gateway_usage_parse_failures_total` | Counter | `model` |
 | `gateway_usage_unsplit_total` | Counter | `model` |
 | `gateway_usage_estimated_total` | Counter | `model` |

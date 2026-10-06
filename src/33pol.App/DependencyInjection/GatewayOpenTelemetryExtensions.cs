@@ -30,6 +30,7 @@ public static class GatewayOpenTelemetryExtensions
                     new ExplicitBucketHistogramConfiguration
                     {
                         Boundaries = [0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 20, 30, 60, 120, 300, 600],
+                        CardinalityLimit = GatewayMeters.CallerLabelledCardinalityLimit,
                     })
                 .AddView(
                     "gateway_time_to_first_token_seconds",
@@ -37,6 +38,19 @@ public static class GatewayOpenTelemetryExtensions
                     {
                         Boundaries = [0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 20, 30, 60],
                     })
+                // The series that name a caller. The SDK holds a metric to 2,000 points unless told
+                // otherwise and folds everything past that into one overflow point, silently — which
+                // is the caller labels failing exactly when there are enough callers to need them.
+                // MetricCallerBudget is what actually bounds these; this only has to sit above it.
+                .AddView(instrument =>
+                    instrument.Meter.Name == GatewayMeters.MeterName &&
+                    instrument.Name != "gateway_inference_duration_seconds" &&
+                    GatewayMeters.CallerLabelledInstruments.Contains(instrument.Name)
+                        ? new MetricStreamConfiguration
+                        {
+                            CardinalityLimit = GatewayMeters.CallerLabelledCardinalityLimit,
+                        }
+                        : null)
                 .AddPrometheusExporter());
 
         return services;

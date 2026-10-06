@@ -5,7 +5,9 @@ using Microsoft.Extensions.Options;
 using Pol33.Core.Abstractions;
 using Pol33.Core.Configuration;
 using Pol33.Core.Errors;
+using Pol33.Core.Identity;
 using Pol33.Core.Models;
+using Pol33.Core.Observability;
 using Pol33.Core.RateLimiting;
 using Pol33.Core.Security;
 using Pol33.Proxy.Errors;
@@ -203,7 +205,7 @@ public sealed class RateLimitMiddleware
 
         RateLimitResponseHeaders.Write(context, tightest);
         RecordIdentityStage(identityPlan, RateLimitStageOutcome.Charged);
-        RecordAdmission(subject, modelId, tightest);
+        RecordAdmission(context, subject, modelId, tightest);
 
         // Answered here, after the debit, when the cached parse already says the router is going to
         // refuse this body: it saves the rest of the pipeline for a request that cannot be served.
@@ -516,6 +518,7 @@ public sealed class RateLimitMiddleware
             : "rate_limit:" + (scope?.ToLabel() ?? "tenant");
 
         _metrics.RecordRateLimitRejection(reason, subject.PartitionKey, modelId);
+        _metrics.RecordRateLimitDecision(CallerOf(context), modelId, scope, acquire.Control, admitted: false);
 
         // Only a limit this caller alone can exhaust says anything about how fast it is retrying. A
         // refusal from the global or model scope is the gateway being busy, and escalating this
@@ -556,6 +559,12 @@ public sealed class RateLimitMiddleware
             retryAfter).ConfigureAwait(false);
     }
 
+    private static MetricCaller CallerOf(HttpContext context) =>
+        MetricCaller.From(
+            context.Items.TryGetValue(TenantContextKeys.HttpContextItemKey, out var value)
+                ? value as TenantContext
+                : null);
+
     /// <summary>
     /// Records the admission for the usage report — but deliberately not for the governor.
     /// </summary>
@@ -567,10 +576,13 @@ public sealed class RateLimitMiddleware
     /// rejection. The router owns the governor's admitted signal because it is the last gate.
     /// </remarks>
     private void RecordAdmission(
+        HttpContext context,
         RateLimitSubject subject,
         string? modelId,
         RateLimitAcquireResult acquire)
     {
+        _metrics.RecordRateLimitDecision(CallerOf(context), modelId, scope: null, RateLimitControl.Rate, admitted: true);
+
         _usage?.Record(new RateLimitUsageEvent(
             subject.PartitionKey,
             subject.ApiKeyId,

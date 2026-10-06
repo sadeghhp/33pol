@@ -4,6 +4,22 @@ All notable changes to this project are documented here. Version tags follow [Se
 
 ## [Unreleased]
 
+### Observability — metrics name the caller
+
+- **`tenant` and `key` labels** on `gateway_inference_requests_total`,
+  `gateway_inference_errors_total`, `gateway_inference_duration_seconds` and `gateway_tokens_total`.
+  Prometheus could say a model was failing or slow but not for whom. `tenant` is the tenant slug
+  and `key` is the label the API key was issued with, never the secret or its prefix. Queries that
+  aggregate are unaffected; a query that selects one of these series without aggregating now
+  returns one row per caller.
+- **`gateway_rate_limit_decisions_total`** counts every decision of the inference limiter by
+  `tenant`, `key`, `model`, `scope`, `control` and `outcome`, so a refusal ratio can be read per
+  caller and per limit. `gateway_rate_limit_rejections_total` and the alert that reads it are
+  unchanged.
+- The number of callers with series of their own is bounded by
+  `RateLimiting:UsageReportMaxKeys` (default 500). Past it a new caller is counted under
+  `key="other"`. See `docs/observability.md#caller-labels`.
+
 ### Rate limits — refusals alert in Prometheus
 
 - **`GatewayRateLimitRefusing`.** The console's `rate_limit_refusing` item had no Prometheus rule, so

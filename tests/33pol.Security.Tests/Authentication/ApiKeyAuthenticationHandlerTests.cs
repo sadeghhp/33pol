@@ -12,6 +12,7 @@ using Pol33.Core.Security;
 using Pol33.Security.Authentication;
 using Pol33.Security.Errors;
 using Pol33.Security.Hosting;
+using Pol33.Security.Identity;
 
 namespace Pol33.Security.Tests.Authentication;
 
@@ -223,6 +224,27 @@ public sealed class ApiKeyAuthenticationHandlerTests
 
         result.Succeeded.Should().BeTrue();
         await validator.Received(1).ValidateAsync("sk-33pol-good", Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task HandleAuthenticateAsync_PublishesTheKeyLabelOnTheTenantContext()
+    {
+        var validator = Substitute.For<IApiKeyValidator>();
+        validator.ValidateAsync("sk-33pol-good", Arg.Any<CancellationToken>())
+            .Returns(ApiKeyValidationResult.Success(
+                Guid.NewGuid(), Guid.NewGuid(), "fanus", null, null, ApiKeyRole.Inference, "Fanus-MMT-Campaign"));
+        var handler = CreateHandler(out var authState, out _, validator);
+        authState.IsAuthenticationRequired = true;
+
+        var context = new DefaultHttpContext();
+        context.Request.Path = "/v1/chat/completions";
+        context.Request.Headers.Authorization = "Bearer sk-33pol-good";
+
+        await handler.InitializeAsync(new AuthenticationScheme(GatewayAuthSchemes.ApiKey, null, typeof(ApiKeyAuthenticationHandler)), context);
+        var result = await handler.AuthenticateAsync();
+
+        result.Succeeded.Should().BeTrue();
+        context.GetTenantContext()!.ApiKeyLabel.Should().Be("Fanus-MMT-Campaign");
     }
 
     /// <summary>

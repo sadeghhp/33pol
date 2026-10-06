@@ -6,6 +6,12 @@ public sealed class TenantContext
 
     public required string ApiKeyId { get; init; }
 
+    /// <summary>
+    /// The label the key was issued with, for the metrics that name a caller. Never the secret or
+    /// its prefix; null when the key has no label.
+    /// </summary>
+    public string? ApiKeyLabel { get; init; }
+
     public string? TenantSlug { get; init; }
 
     public string? PlanSlug { get; init; }

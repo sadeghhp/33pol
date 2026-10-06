@@ -1,3 +1,6 @@
+using Pol33.Core.Observability;
+using Pol33.Core.RateLimiting;
+
 namespace Pol33.Core.Abstractions;
 
 public interface IGatewayMetricsCollector
@@ -11,6 +14,29 @@ public interface IGatewayMetricsCollector
     /// <param name="tenantId">The rejected partition (tenant id, or <c>anon:&lt;ip&gt;</c>); null when unknown.</param>
     /// <param name="modelId">Known only for controls that run after routing (stream concurrency); null otherwise.</param>
     void RecordRateLimitRejection(string reason, string? tenantId, string? modelId) => RecordRateLimitRejection(reason);
+
+    /// <summary>
+    /// One decision of the inference rate limiter, attributed to the caller it was made for.
+    /// </summary>
+    /// <remarks>
+    /// Counted beside <see cref="RecordRateLimitRejection(string, string?, string?)"/>, not instead
+    /// of it: that series says which limit kind is refusing, this one says whom. A request that
+    /// passes the rate stage is one admitted decision; a stream cap refusing it afterwards adds a
+    /// refused one, so the two outcomes sum to decisions, not to requests.
+    /// </remarks>
+    /// <param name="modelId">
+    /// Null when the decision was made before the body was parsed — which is every identity-scope
+    /// decision on a gateway with no model-scoped rule.
+    /// </param>
+    /// <param name="scope">The scope that refused. Ignored on an admission.</param>
+    void RecordRateLimitDecision(
+        MetricCaller caller,
+        string? modelId,
+        RateLimitScope? scope,
+        RateLimitControl control,
+        bool admitted)
+    {
+    }
 
     void RecordQuotaRejection();
 
@@ -31,6 +57,10 @@ public interface IGatewayMetricsCollector
     void RecordModelResolve(string result, string? requestedModel) => RecordModelResolve(result);
 
     void RecordTokenUsage(string modelId, long promptTokens, long completionTokens);
+
+    /// <summary>As above, naming the caller the tokens were spent by.</summary>
+    void RecordTokenUsage(string modelId, long promptTokens, long completionTokens, MetricCaller caller) =>
+        RecordTokenUsage(modelId, promptTokens, completionTokens);
 
     void RecordUsageParseFailure(string modelId);
 

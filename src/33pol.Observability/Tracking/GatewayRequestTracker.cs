@@ -1,16 +1,29 @@
+using System.Diagnostics;
 using Pol33.Core.Abstractions;
 using Pol33.Core.Models.Overview;
+using Pol33.Core.Observability;
 using Pol33.Observability.Metrics;
 using Pol33.Observability.Runtime;
 
 namespace Pol33.Observability.Tracking;
 
-public sealed class GatewayRequestTracker(GatewayRuntimeState runtimeState) : IRequestTracker
+public sealed class GatewayRequestTracker(
+    GatewayRuntimeState runtimeState,
+    MetricCallerBudget? callers = null) : IRequestTracker
 {
+    private readonly MetricCallerBudget _callers = callers ?? new MetricCallerBudget();
+
     public IInferenceRequestScope BeginInferenceRequest(string modelId, bool isStreaming) =>
         BeginInferenceRequest(modelId, isStreaming, tenantId: null);
 
-    public IInferenceRequestScope BeginInferenceRequest(string modelId, bool isStreaming, string? tenantId)
+    public IInferenceRequestScope BeginInferenceRequest(string modelId, bool isStreaming, string? tenantId) =>
+        BeginInferenceRequest(modelId, isStreaming, tenantId, MetricCaller.Anonymous);
+
+    public IInferenceRequestScope BeginInferenceRequest(
+        string modelId,
+        bool isStreaming,
+        string? tenantId,
+        MetricCaller caller)
     {
         runtimeState.RecordRequestStart(modelId, isStreaming);
         GatewayMeters.ActiveRequests.Add(1, new KeyValuePair<string, object?>("model", modelId));
@@ -19,22 +32,48 @@ public sealed class GatewayRequestTracker(GatewayRuntimeState runtimeState) : IR
             GatewayMeters.ActiveStreams.Add(1, new KeyValuePair<string, object?>("model", modelId));
         }
 
-        return new InferenceScope(runtimeState, modelId, isStreaming, tenantId);
+        return new InferenceScope(runtimeState, modelId, isStreaming, tenantId, _callers.Resolve(caller));
     }
 
-    public void RecordRejectedRequest(string modelId, string errorCode)
+    public void RecordRejectedRequest(string modelId, string errorCode) =>
+        RecordRejectedRequest(modelId, errorCode, MetricCaller.Anonymous);
+
+    public void RecordRejectedRequest(string modelId, string errorCode, MetricCaller caller)
     {
         runtimeState.RecordRequestRejected(modelId, ToReason(errorCode));
 
-        GatewayMeters.InferenceRequests.Add(
-            1,
-            new KeyValuePair<string, object?>("model", modelId),
-            new KeyValuePair<string, object?>("status", "error"));
-        GatewayMeters.InferenceErrors.Add(
-            1,
-            new KeyValuePair<string, object?>("model", modelId),
-            new KeyValuePair<string, object?>("code", errorCode));
+        var resolved = _callers.Resolve(caller);
+        GatewayMeters.InferenceRequests.Add(1, RequestTags(modelId, "error", resolved));
+        GatewayMeters.InferenceErrors.Add(1, ErrorTags(modelId, errorCode, resolved));
     }
+
+    // The active-request and active-stream gauges stay on the model alone. They are up-down
+    // counters: a series per caller would be one that mostly reads zero.
+    private static TagList RequestTags(string modelId, string status, MetricCaller caller) =>
+        new()
+        {
+            { "model", modelId },
+            { "status", status },
+            { "tenant", caller.Tenant },
+            { "key", caller.Key },
+        };
+
+    private static TagList ErrorTags(string modelId, string code, MetricCaller caller) =>
+        new()
+        {
+            { "model", modelId },
+            { "code", code },
+            { "tenant", caller.Tenant },
+            { "key", caller.Key },
+        };
+
+    private static TagList DurationTags(string modelId, MetricCaller caller) =>
+        new()
+        {
+            { "model", modelId },
+            { "tenant", caller.Tenant },
+            { "key", caller.Key },
+        };
 
     /// <summary>
     /// Admission outcomes the router reports, as windowed reasons. Stream concurrency is null here
@@ -56,14 +95,21 @@ public sealed class GatewayRequestTracker(GatewayRuntimeState runtimeState) : IR
         private readonly string _modelId;
         private readonly bool _isStreaming;
         private readonly string? _tenantId;
+        private readonly MetricCaller _caller;
         private readonly long _startTimestamp;
         private bool _disposed;
         private bool? _success;
         private bool _canceled;
         private string? _errorCode;
 
-        public InferenceScope(GatewayRuntimeState runtimeState, string modelId, bool isStreaming, string? tenantId)
+        public InferenceScope(
+            GatewayRuntimeState runtimeState,
+            string modelId,
+            bool isStreaming,
+            string? tenantId,
+            MetricCaller caller)
         {
+            _caller = caller;
             _runtimeState = runtimeState;
             _modelId = modelId;
             _isStreaming = isStreaming;
@@ -99,13 +145,8 @@ public sealed class GatewayRequestTracker(GatewayRuntimeState runtimeState) : IR
             if (_canceled)
             {
                 _runtimeState.RecordRequestCanceled(_modelId, elapsed.TotalMilliseconds, _isStreaming, _tenantId);
-                GatewayMeters.InferenceRequests.Add(
-                    1,
-                    new KeyValuePair<string, object?>("model", _modelId),
-                    new KeyValuePair<string, object?>("status", "canceled"));
-                GatewayMeters.InferenceDuration.Record(
-                    elapsed.TotalSeconds,
-                    new KeyValuePair<string, object?>("model", _modelId));
+                GatewayMeters.InferenceRequests.Add(1, RequestTags(_modelId, "canceled", _caller));
+                GatewayMeters.InferenceDuration.Record(elapsed.TotalSeconds, DurationTags(_modelId, _caller));
                 GatewayMeters.ActiveRequests.Add(-1, new KeyValuePair<string, object?>("model", _modelId));
                 if (_isStreaming)
                 {
@@ -118,22 +159,14 @@ public sealed class GatewayRequestTracker(GatewayRuntimeState runtimeState) : IR
             _runtimeState.RecordRequestComplete(_modelId, success, elapsed.TotalMilliseconds, _isStreaming, _tenantId);
 
             var status = success ? "success" : "error";
-            GatewayMeters.InferenceRequests.Add(
-                1,
-                new KeyValuePair<string, object?>("model", _modelId),
-                new KeyValuePair<string, object?>("status", status));
+            GatewayMeters.InferenceRequests.Add(1, RequestTags(_modelId, status, _caller));
 
             if (!success)
             {
-                GatewayMeters.InferenceErrors.Add(
-                    1,
-                    new KeyValuePair<string, object?>("model", _modelId),
-                    new KeyValuePair<string, object?>("code", _errorCode ?? "unknown"));
+                GatewayMeters.InferenceErrors.Add(1, ErrorTags(_modelId, _errorCode ?? "unknown", _caller));
             }
 
-            GatewayMeters.InferenceDuration.Record(
-                elapsed.TotalSeconds,
-                new KeyValuePair<string, object?>("model", _modelId));
+            GatewayMeters.InferenceDuration.Record(elapsed.TotalSeconds, DurationTags(_modelId, _caller));
 
             GatewayMeters.ActiveRequests.Add(-1, new KeyValuePair<string, object?>("model", _modelId));
 
