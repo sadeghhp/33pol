@@ -1,0 +1,236 @@
+{
+  "baseUrl": "http://127.0.0.1:5080",
+  "at": "2026-10-05T09:49:14.395Z",
+  "idleWindowMs": 20000,
+  "cold": {
+    "loadMs": 562,
+    "transferredBytes": 195954,
+    "requests": 9,
+    "fromCache": 0,
+    "uncompressed": 4,
+    "resources": [
+      {
+        "url": "/admin/index.html",
+        "status": 200,
+        "bytes": 567,
+        "encoding": "br",
+        "cacheControl": "no-store, no-cache, must-revalidate"
+      },
+      {
+        "url": "/admin/vendor/fonts.css",
+        "status": 200,
+        "bytes": 660,
+        "encoding": "br",
+        "cacheControl": "no-store, no-cache, must-revalidate"
+      },
+      {
+        "url": "/admin/assets/index-D45v9ywn.css",
+        "status": 200,
+        "bytes": 30191,
+        "encoding": "br",
+        "cacheControl": "public, max-age=31536000, immutable"
+      },
+      {
+        "url": "/admin/vendor/fonts/IBMPlexSans-400.woff2",
+        "status": 200,
+        "bytes": 45712,
+        "encoding": "none",
+        "cacheControl": "public, max-age=31536000, immutable"
+      },
+      {
+        "url": "/admin/vendor/fonts/IBMPlexSans-500.woff2",
+        "status": 200,
+        "bytes": 45712,
+        "encoding": "none",
+        "cacheControl": "public, max-age=31536000, immutable"
+      },
+      {
+        "url": "/admin/assets/index-D5tfb8uZ.js",
+        "status": 200,
+        "bytes": 17699,
+        "encoding": "br",
+        "cacheControl": "public, max-age=31536000, immutable"
+      },
+      {
+        "url": "/admin/assets/ratelimits-6BzhuNYX.js",
+        "status": 200,
+        "bytes": 18417,
+        "encoding": "br",
+        "cacheControl": "public, max-age=31536000, immutable"
+      },
+      {
+        "url": "/admin/vendor/fonts/IBMPlexMono-400.woff2",
+        "status": 200,
+        "bytes": 14708,
+        "encoding": "none",
+        "cacheControl": "public, max-age=31536000, immutable"
+      },
+      {
+        "url": "/admin/vendor/fonts/SpaceGrotesk-700.woff2",
+        "status": 200,
+        "bytes": 22288,
+        "encoding": "none",
+        "cacheControl": "public, max-age=31536000, immutable"
+      }
+    ]
+  },
+  "navTiming": {
+    "domInteractive": 12,
+    "domContentLoaded": 37,
+    "load": 53
+  },
+  "authGate": {
+    "domNodes": 39,
+    "boundAttrs": 0,
+    "byKind": {},
+    "detailRowsMounted": 0,
+    "solidRoots": 0
+  },
+  "signInToFirstRowMs": 176,
+  "overview": {
+    "domNodes": 474,
+    "boundAttrs": 0,
+    "byKind": {},
+    "detailRowsMounted": 0,
+    "solidRoots": 1
+  },
+  "liveMode": "solid",
+  "idleOverview": {
+    "windowMs": 20000,
+    "taskS": 0.076,
+    "cpuPct": 0.4,
+    "scriptS": 0.01,
+    "layoutS": 0.002,
+    "recalcStyleS": 0,
+    "layoutCount": 4,
+    "recalcStyleCount": 0,
+    "nodes": 2245,
+    "jsEventListeners": 40,
+    "jsHeapUsedMB": 3.6,
+    "longTasks": {
+      "count": 0,
+      "maxMs": 0,
+      "all": []
+    }
+  },
+  "tabSwitchMs": {
+    "toLogs": 38,
+    "toKeys": 27,
+    "backToOverview": 56,
+    "toLogsAgain": 20
+  },
+  "logs": {
+    "domNodes": 144,
+    "boundAttrs": 0,
+    "byKind": {},
+    "detailRowsMounted": 0,
+    "solidRoots": 2,
+    "rowCount": 0
+  },
+  "idleLogs": {
+    "windowMs": 20000,
+    "taskS": 0.075,
+    "cpuPct": 0.4,
+    "scriptS": 0.003,
+    "layoutS": 0,
+    "recalcStyleS": 0,
+    "layoutCount": 0,
+    "recalcStyleCount": 0,
+    "nodes": 1919,
+    "jsEventListeners": 40,
+    "jsHeapUsedMB": 2.4
+  },
+  "warm": {
+    "loadMs": 2553,
+    "transferredBytes": 190247,
+    "requests": 12,
+    "fromCache": 4,
+    "uncompressed": 6,
+    "resources": [
+      {
+        "url": "/admin/index.html",
+        "status": 200,
+        "bytes": 567,
+        "encoding": "br",
+        "cacheControl": "no-store, no-cache, must-revalidate"
+      },
+      {
+        "url": "/admin/vendor/fonts/IBMPlexSans-400.woff2",
+        "status": 200,
+        "bytes": 45712,
+        "encoding": "none",
+        "cacheControl": "public, max-age=31536000, immutable"
+      },
+      {
+        "url": "/admin/vendor/fonts/IBMPlexSans-500.woff2",
+        "status": 200,
+        "bytes": 45712,
+        "encoding": "none",
+        "cacheControl": "public, max-age=31536000, immutable"
+      },
+      {
+        "url": "/admin/assets/index-D5tfb8uZ.js",
+        "status": 200,
+        "bytes": 0,
+        "encoding": "br",
+        "cacheControl": "public, max-age=31536000, immutable"
+      },
+      {
+        "url": "/admin/assets/ratelimits-6BzhuNYX.js",
+        "status": 200,
+        "bytes": 0,
+        "encoding": "br",
+        "cacheControl": "public, max-age=31536000, immutable"
+      },
+      {
+        "url": "/admin/assets/index-D45v9ywn.css",
+        "status": 200,
+        "bytes": 0,
+        "encoding": "br",
+        "cacheControl": "public, max-age=31536000, immutable"
+      },
+      {
+        "url": "/admin/vendor/fonts.css",
+        "status": 200,
+        "bytes": 660,
+        "encoding": "br",
+        "cacheControl": "no-store, no-cache, must-revalidate"
+      },
+      {
+        "url": "/admin/vendor/fonts/IBMPlexMono-400.woff2",
+        "status": 200,
+        "bytes": 14708,
+        "encoding": "none",
+        "cacheControl": "public, max-age=31536000, immutable"
+      },
+      {
+        "url": "/admin/vendor/fonts/IBMPlexMono-500.woff2",
+        "status": 200,
+        "bytes": 14888,
+        "encoding": "none",
+        "cacheControl": "public, max-age=31536000, immutable"
+      },
+      {
+        "url": "/admin/vendor/fonts/IBMPlexSans-600.woff2",
+        "status": 200,
+        "bytes": 45712,
+        "encoding": "none",
+        "cacheControl": "public, max-age=31536000, immutable"
+      },
+      {
+        "url": "/admin/vendor/fonts/SpaceGrotesk-700.woff2",
+        "status": 200,
+        "bytes": 22288,
+        "encoding": "none",
+        "cacheControl": "public, max-age=31536000, immutable"
+      },
+      {
+        "url": "/admin/assets/OverviewPage-BJupdHrW.js",
+        "status": 200,
+        "bytes": 0,
+        "encoding": "br",
+        "cacheControl": "public, max-age=31536000, immutable"
+      }
+    ]
+  }
+}

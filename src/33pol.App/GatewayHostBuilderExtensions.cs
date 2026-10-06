@@ -263,7 +263,8 @@ public static class GatewayHostBuilderExtensions
             return true;
         }
 
-        return HasVersionInFileName(value.AsSpan(value.LastIndexOf('/') + 1));
+        var fileName = value.AsSpan(value.LastIndexOf('/') + 1);
+        return HasVersionInFileName(fileName) || HasContentHashInFileName(fileName);
     }
 
     /// <summary>
@@ -293,6 +294,42 @@ public static class GatewayHostBuilderExtensions
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Vite content hashes: <c>index-CHbxSKRI.js</c>, <c>index-D45v9ywn.css</c>. A run of at least
+    /// eight base-36 chars (0-9, a-z, A-Z) after <c>-</c> and before the extension.
+    /// </summary>
+    private static bool HasContentHashInFileName(ReadOnlySpan<char> fileName)
+    {
+        var dot = fileName.LastIndexOf('.');
+        if (dot <= 0)
+        {
+            return false;
+        }
+
+        var dash = fileName[..dot].LastIndexOf('-');
+        if (dash <= 0)
+        {
+            return false;
+        }
+
+        var hashLen = dot - dash - 1;
+        if (hashLen < 8)
+        {
+            return false;
+        }
+
+        for (var i = dash + 1; i < dot; i++)
+        {
+            var c = fileName[i];
+            if (!char.IsAsciiLetterOrDigit(c))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /// <summary>

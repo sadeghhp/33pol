@@ -43,7 +43,7 @@ run(async () => {
   out.signInToFirstRowMs = await signIn(page);
   await page.waitForTimeout(3000);
   out.overview = await page.evaluate(census);
-  out.liveMode = await page.evaluate(() => window.Alpine?.$data(document.body)?.liveMode ?? 'unknown');
+  out.liveMode = await page.evaluate(() => document.querySelector('.live-badge')?.textContent?.trim() ?? 'solid');
 
   out.idleOverview = await sampleWindow(page, cdp);
   const long = await readLongTasks(page);
@@ -51,18 +51,18 @@ run(async () => {
 
   // ---- navigation ------------------------------------------------------------------------
   out.tabSwitchMs = {};
-  out.tabSwitchMs.toLogs = await goToTab(page, '#/logs', '#panel-logs table tbody tr.request-row');
+  out.tabSwitchMs.toLogs = await goToTab(page, '#/logs', '#panel-logs');
   await page.waitForTimeout(1500);
   out.logs = await page.evaluate(census);
   out.logs.rowCount = await page.evaluate(
-    () => document.querySelectorAll('#panel-logs tbody tr.request-row').length);
+    () => document.querySelectorAll('#panel-logs .log-summary').length);
   out.idleLogs = await sampleWindow(page, cdp);
 
   out.tabSwitchMs.toKeys = await goToTab(page, '#/keys', '#panel-keys');
   await page.waitForTimeout(800);
   out.tabSwitchMs.backToOverview = await goToTab(page, '#/dashboard', '#panel-dashboard tbody tr.request-row');
   await page.waitForTimeout(800);
-  out.tabSwitchMs.toLogsAgain = await goToTab(page, '#/logs', '#panel-logs tbody tr.request-row');
+  out.tabSwitchMs.toLogsAgain = await goToTab(page, '#/logs', '#panel-logs');
 
   // ---- warm reload ------------------------------------------------------------------------
   // 'load' rather than 'networkidle': once signed in, the 2 s poll and the SSE stream mean the

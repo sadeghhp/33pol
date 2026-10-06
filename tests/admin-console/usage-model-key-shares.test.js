@@ -13,7 +13,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const path = require('node:path');
 
-const ADMIN = path.join(__dirname, '../../src/33pol.App/wwwroot/admin');
+const ADMIN = path.join(__dirname, '../../src/33pol.Admin.Web/legacy');
 const SOURCE = path.join(ADMIN, 'admin-app.js');
 const HTML = fs.readFileSync(path.join(ADMIN, 'index.html'), 'utf8');
 

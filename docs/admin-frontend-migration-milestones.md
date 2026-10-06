@@ -10,17 +10,17 @@ milestone, each independently reviewable and revertible.
 |---|---|---|
 | M0 | Measurement harness | ✅ |
 | M1 | Asset delivery (cache split, compression, preload, backoff, logs page size) | ✅ |
-| M2 | Solid + Vite + TypeScript foundation | ⬜ |
-| M3 | API / domain extraction | ⬜ |
-| M4 | Realtime + data layer extraction | ⬜ |
-| M5 | Shared UI primitives | ⬜ |
-| M6 | Logs panel migration | ⬜ |
-| M7 | Overview panel migration | ⬜ |
-| M8–M13 | Errors · Keys · Routing · Usage · Settings · Rate limits | ⬜ |
-| M14 | Alpine removal | ⬜ |
-| M15 | CSS / dead-code cleanup | ⬜ |
+| M2 | Solid + Vite + TypeScript foundation | ✅ |
+| M3 | API / domain extraction | ✅ |
+| M4 | Realtime + data layer extraction | ✅ |
+| M5 | Shared UI primitives | ✅ |
+| M6 | Logs panel migration | 🔄 |
+| M7 | Overview panel migration | 🔄 |
+| M8–M13 | Errors · Keys · Routing · Usage · Settings · Rate limits | 🔄 |
+| M14 | Alpine removal (Solid shell) | ✅ |
+| M15 | CSS / dead-code cleanup | 🔄 |
 | M16 | CSP tightening (`style-src`) | ⬜ |
-| M17 | Final performance verification | ⬜ |
+| M17 | Final performance verification | 🔄 |
 
 ---
 

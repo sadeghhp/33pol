@@ -108,7 +108,7 @@ export const readLongTasks = page => page.evaluate(() => (window.__longTasks ?? 
 export async function signIn(page, { waitForFeed = true } = {}) {
   await page.fill('#gate-apiKey', API_KEY);
   const started = Date.now();
-  await page.click('button.action:has-text("Connect")');
+  await page.click('button:has-text("Connect")');
   if (waitForFeed) {
     await page.waitForSelector('#panel-dashboard tbody tr.request-row', { timeout: 20000 });
   } else {

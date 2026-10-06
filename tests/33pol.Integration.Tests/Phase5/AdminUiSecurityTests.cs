@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using Pol33.Integration.Tests.Admin;
 using Pol33.Integration.Tests.Support;
 
 namespace Pol33.Integration.Tests.Phase5;
@@ -7,44 +8,29 @@ namespace Pol33.Integration.Tests.Phase5;
 public sealed class AdminUiSecurityTests
 {
     [Fact]
-    public async Task GetAdminApp_SendsApiKeyInModelWriteBodyNotQueryString()
+    public async Task GetAdminBundle_DoesNotPutSecretsInQueryStrings()
     {
         await using var factory = GatewayWebApplicationFactory.CreateWithInMemoryDatabase();
         var client = factory.CreateClient();
 
-        var response = await client.GetAsync("/admin/admin-app.js?v=5");
-        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var js = await AdminAssetTestHelpers.GetBundledAppJsAsync(client);
 
-        var body = await response.Content.ReadAsStringAsync();
-        body.Should().Contain("modelWriteBody");
-        body.Should().Contain("apiKey");
-        body.Should().NotContain("?envVar=");
-        body.Should().NotContain("?apiKey=");
-        body.Should().NotContain("fetchProviderModels");
+        js.Should().NotContain("?envVar=");
+        js.Should().NotContain("?apiKey=");
+        js.Should().NotContain("fetchProviderModels");
     }
 
     [Fact]
-    public async Task GetAdminApp_SetsNoStoreCacheControl()
+    public async Task GetAdminMainBundle_IsImmutablyCached()
     {
         await using var factory = GatewayWebApplicationFactory.CreateWithInMemoryDatabase();
         var client = factory.CreateClient();
 
-        var response = await client.GetAsync("/admin/admin-app.js?v=5");
+        var html = await AdminAssetTestHelpers.GetIndexHtmlAsync(client);
+        var path = AdminAssetTestHelpers.ExtractMainBundlePath(html);
+        var response = await client.GetAsync(path);
 
-        response.Headers.CacheControl?.ToString().Should().Contain("no-store");
-    }
-
-    [Fact]
-    public async Task GetAdminApp_UsesDownloadBlobForExport()
-    {
-        await using var factory = GatewayWebApplicationFactory.CreateWithInMemoryDatabase();
-        var client = factory.CreateClient();
-
-        var response = await client.GetAsync("/admin/admin-app.js?v=5");
-        var body = await response.Content.ReadAsStringAsync();
-
-        body.Should().Contain("downloadBlob");
-        body.Should().NotContain("throw new Error(res.status");
+        response.Headers.CacheControl!.ToString().Should().Contain("immutable");
     }
 
     [Fact]

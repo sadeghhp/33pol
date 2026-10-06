@@ -1,6 +1,13 @@
 # Multi-stage build for 33pol gateway (Phase 1+).
 # Layer order: manifests → restore (cached when only .cs changes) → full src → publish.
 # Requires BuildKit (default in Docker 24+): NuGet package cache mount across builds.
+FROM node:20-alpine AS frontend
+WORKDIR /src
+COPY src/33pol.Admin.Web/package.json src/33pol.Admin.Web/package-lock.json src/33pol.Admin.Web/
+RUN cd src/33pol.Admin.Web && npm ci --ignore-scripts
+COPY src/33pol.Admin.Web/ src/33pol.Admin.Web/
+RUN cd src/33pol.Admin.Web && npm run build
+
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 ARG APP_VERSION=2.0.0
 ARG APP_ASSEMBLY_VERSION=2.0.0
@@ -28,9 +35,11 @@ RUN --mount=type=cache,target=/root/.nuget/packages \
     dotnet restore src/33pol.App/33pol.App.csproj
 
 COPY src/ src/
+COPY --from=frontend /src/src/33pol.App/wwwroot/admin/ src/33pol.App/wwwroot/admin/
 RUN --mount=type=cache,target=/root/.nuget/packages \
     dotnet publish src/33pol.App/33pol.App.csproj -c Release -o /app/publish \
-    /p:UseAppHost=false /p:Version=${APP_ASSEMBLY_VERSION} /p:InformationalVersion=${APP_VERSION} --no-restore
+    /p:UseAppHost=false /p:Version=${APP_ASSEMBLY_VERSION} /p:InformationalVersion=${APP_VERSION} \
+    /p:SkipFrontendBuild=true --no-restore
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS final
 WORKDIR /app

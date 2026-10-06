@@ -8,16 +8,8 @@ namespace Pol33.Integration.Tests.Admin;
 /// Delivery policy for the admin console: what may be cached, what must not be, and what may be
 /// compressed.
 /// </summary>
-/// <remarks>
-/// The console used to serve every asset <c>no-store</c> and uncompressed, so every visit re-fetched
-/// roughly 925 KB — 273 KB of it fonts that have never changed — without a single cache hit. These
-/// tests pin the two halves of the fix and, more importantly, the edges it must not cross: the
-/// bootstrap document must stay uncacheable, the live stream must stay uncompressed, and the
-/// security headers must survive on every branch.
-/// </remarks>
 public sealed class AdminAssetCachingTests
 {
-    private const string ImmutableAsset = "/admin/vendor/alpine-csp-3.14.9.min.js";
     private const string ImmutableFont = "/admin/vendor/fonts/IBMPlexSans-400.woff2";
     private const string AdminKey = "sk-33pol-integration-admin-key";
 
@@ -33,10 +25,6 @@ public sealed class AdminAssetCachingTests
         return await client.SendAsync(request);
     }
 
-    /// <summary>
-    /// The bootstrap document names every other asset, so caching it is what strands an operator on
-    /// a console that no longer matches the gateway.
-    /// </summary>
     [Fact]
     public async Task AdminIndex_IsNeverCached()
     {
@@ -51,32 +39,30 @@ public sealed class AdminAssetCachingTests
         cacheControl.Should().NotContain("immutable");
     }
 
-    /// <summary>
-    /// The hand-versioned <c>?v=N</c> assets stay uncacheable until content hashing arrives: a query
-    /// string is not part of the cache identity for every intermediary, so caching them for a year
-    /// would be caching the wrong thing.
-    /// </summary>
-    [Theory]
-    [InlineData("/admin/admin-app.js?v=37")]
-    [InlineData("/admin/admin.css?v=24")]
-    public async Task QueryVersionedAssets_AreNotYetImmutablyCached(string path)
+    [Fact]
+    public async Task ContentHashedAssets_AreImmutablyCacheable()
     {
         using var factory = GatewayWebApplicationFactory.Create();
         using var client = factory.CreateClient();
 
-        var response = await GetAsync(client, path);
+        var html = await AdminAssetTestHelpers.GetIndexHtmlAsync(client);
+        var jsPath = AdminAssetTestHelpers.ExtractMainBundlePath(html);
+        var cssPath = AdminAssetTestHelpers.ExtractMainCssPath(html);
 
-        response.StatusCode.Should().Be(HttpStatusCode.OK);
-        response.Headers.CacheControl!.ToString().Should().Contain("no-store");
+        foreach (var path in new[] { jsPath, cssPath })
+        {
+            var response = await GetAsync(client, path);
+            response.StatusCode.Should().Be(HttpStatusCode.OK);
+            var cacheControl = response.Headers.CacheControl!;
+            cacheControl.Public.Should().BeTrue();
+            cacheControl.MaxAge.Should().Be(TimeSpan.FromDays(365));
+            cacheControl.ToString().Should().Contain("immutable");
+            cacheControl.NoStore.Should().BeFalse();
+        }
     }
 
-    /// <summary>
-    /// Vendored assets carry their version in the filename, or are immutable by nature, so a new
-    /// build is always a new URL and a year is safe.
-    /// </summary>
     [Theory]
-    [InlineData(ImmutableAsset)]
-    [InlineData(ImmutableFont)]
+    [InlineData("/admin/vendor/fonts/IBMPlexSans-400.woff2")]
     [InlineData("/admin/vendor/fonts/IBMPlexMono-400.woff2")]
     public async Task VendoredAssets_AreImmutablyCacheable(string path)
     {
@@ -91,50 +77,47 @@ public sealed class AdminAssetCachingTests
         cacheControl.MaxAge.Should().Be(TimeSpan.FromDays(365));
         cacheControl.ToString().Should().Contain("immutable");
         cacheControl.NoStore.Should().BeFalse();
-        // Pragma would contradict Cache-Control for an HTTP/1.0 intermediary.
         response.Headers.Pragma.Should().BeEmpty();
     }
 
-    /// <summary>
-    /// <c>vendor/fonts.css</c> is the trap in the rule above: it sits beside the immutable faces but
-    /// is hand-maintained source versioned only by <c>?v=1</c>. Caching it for a year on the
-    /// strength of its directory would strand every operator whose browser had seen it the moment a
-    /// face was added, and the edit that caused it would look harmless.
-    /// </summary>
     [Fact]
     public async Task HandVersionedVendorCss_IsNotImmutablyCached()
     {
         using var factory = GatewayWebApplicationFactory.Create();
         using var client = factory.CreateClient();
 
-        var response = await GetAsync(client, "/admin/vendor/fonts.css?v=1");
+        var response = await GetAsync(client, "/admin/vendor/fonts.css");
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var cacheControl = response.Headers.CacheControl!.ToString();
         cacheControl.Should().Contain(
-            "no-store", "fonts.css is source, versioned by query string like every other ?v=N asset");
+            "no-store", "fonts.css is source and must not be cached immutably");
         cacheControl.Should().NotContain("immutable");
     }
 
-    [Theory]
-    [InlineData("/admin/admin.css?v=24")]
-    [InlineData("/admin/admin-app.js?v=37")]
-    [InlineData("/admin/index.html")]
-    public async Task AdminTextAssets_AreCompressed(string path)
+    [Fact]
+    public async Task AdminTextAssets_AreCompressed()
     {
         using var factory = GatewayWebApplicationFactory.Create();
         using var client = factory.CreateClient();
 
-        var response = await GetAsync(client, path, "br");
+        var html = await AdminAssetTestHelpers.GetIndexHtmlAsync(client);
+        var paths = new[]
+        {
+            AdminAssetTestHelpers.ExtractMainBundlePath(html),
+            AdminAssetTestHelpers.ExtractMainCssPath(html),
+            "/admin/index.html",
+        };
 
-        response.StatusCode.Should().Be(HttpStatusCode.OK);
-        response.Content.Headers.ContentEncoding.Should().Contain(
-            "br", $"{path} is text and should not travel uncompressed");
+        foreach (var path in paths)
+        {
+            var response = await GetAsync(client, path, "br");
+            response.StatusCode.Should().Be(HttpStatusCode.OK);
+            response.Content.Headers.ContentEncoding.Should().Contain(
+                "br", $"{path} is text and should not travel uncompressed");
+        }
     }
 
-    /// <summary>
-    /// woff2 is already compressed; a second pass spends CPU and returns nothing.
-    /// </summary>
     [Fact]
     public async Task Fonts_AreNotRecompressed()
     {
@@ -147,16 +130,6 @@ public sealed class AdminAssetCachingTests
         response.Content.Headers.ContentEncoding.Should().BeEmpty();
     }
 
-    /// <summary>
-    /// The guard on the one way enabling compression could break production.
-    /// </summary>
-    /// <remarks>
-    /// The admin Overview is pushed over SSE. A compressor sitting on that response holds frames in
-    /// its buffer instead of flushing them, so the stream would stall — and the console would either
-    /// go silent or quietly fall back to 2s polling, which looks like "the dashboard is a bit slow"
-    /// rather than a broken deploy. The response-compression middleware wraps endpoint responses as
-    /// well as static files, so this is not hypothetical.
-    /// </remarks>
     [Fact]
     public async Task LiveStream_IsNotCompressed()
     {
@@ -178,8 +151,6 @@ public sealed class AdminAssetCachingTests
         response.Content.Headers.ContentEncoding.Should().BeEmpty(
             "compressing text/event-stream buffers frames and stalls the live console");
 
-        // Headers alone would not catch a compressor that simply never flushes, so read far enough
-        // to prove a frame actually arrives.
         await using var stream = await response.Content.ReadAsStreamAsync(cts.Token);
         using var reader = new StreamReader(stream);
         var buffer = new char[256];
@@ -190,18 +161,6 @@ public sealed class AdminAssetCachingTests
             "event: update", "the first frame is the current summary");
     }
 
-    /// <summary>
-    /// Compression is scoped to <c>/admin</c>, and the scope is the point.
-    /// </summary>
-    /// <remarks>
-    /// The compressor has to sit ahead of the static-file handler to reach the console's assets, and
-    /// WebApplication runs the terminal endpoint middleware after everything registered there — so
-    /// registering it unscoped silently puts a compressor on the inference data path too. That is
-    /// CPU spent per response on a proxy whose overhead is a measured design constraint, for nothing:
-    /// an upstream that already compressed is passed through untouched, and a streamed token chunk
-    /// is far too small to compress. This test is the boundary; <c>/</c> is an unauthenticated JSON
-    /// endpoint outside <c>/admin</c> that the unscoped registration did compress.
-    /// </remarks>
     [Fact]
     public async Task NonAdminResponses_AreNotCompressed()
     {
@@ -217,27 +176,29 @@ public sealed class AdminAssetCachingTests
             + "own data path");
     }
 
-    /// <summary>
-    /// The cache policy branches; the security headers must not. A surface that keeps its CSP on one
-    /// kind of asset and loses it on another has lost it.
-    /// </summary>
-    [Theory]
-    [InlineData("/admin/index.html")]
-    [InlineData("/admin/admin-app.js?v=37")]
-    [InlineData(ImmutableAsset)]
-    [InlineData(ImmutableFont)]
-    public async Task AdminAssets_StillCarrySecurityHeaders(string path)
+    [Fact]
+    public async Task AdminAssets_StillCarrySecurityHeaders()
     {
         using var factory = GatewayWebApplicationFactory.Create();
         using var client = factory.CreateClient();
 
-        var response = await GetAsync(client, path);
+        var html = await AdminAssetTestHelpers.GetIndexHtmlAsync(client);
+        var paths = new[]
+        {
+            "/admin/index.html",
+            AdminAssetTestHelpers.ExtractMainBundlePath(html),
+            ImmutableFont,
+        };
 
-        response.StatusCode.Should().Be(HttpStatusCode.OK);
-        response.Headers.GetValues("Content-Security-Policy").Should()
-            .Contain(AdminSecurityHeaders.ContentSecurityPolicy);
-        response.Headers.GetValues("X-Content-Type-Options").Should().Contain("nosniff");
-        response.Headers.GetValues("X-Frame-Options").Should().Contain("DENY");
-        response.Headers.GetValues("Referrer-Policy").Should().Contain("no-referrer");
+        foreach (var path in paths)
+        {
+            var response = await GetAsync(client, path);
+            response.StatusCode.Should().Be(HttpStatusCode.OK);
+            response.Headers.GetValues("Content-Security-Policy").Should()
+                .Contain(AdminSecurityHeaders.ContentSecurityPolicy);
+            response.Headers.GetValues("X-Content-Type-Options").Should().Contain("nosniff");
+            response.Headers.GetValues("X-Frame-Options").Should().Contain("DENY");
+            response.Headers.GetValues("Referrer-Policy").Should().Contain("no-referrer");
+        }
     }
 }

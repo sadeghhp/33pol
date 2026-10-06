@@ -4,28 +4,28 @@ Browser-based operator surface for the 33pol gateway. It shares the same **admin
 
 ## Static assets
 
-Files under `src/33pol.App/wwwroot/admin/` (served at `/admin/`):
+**Source** lives in `src/33pol.Admin.Web/` (SolidJS + Vite + TypeScript). **Build output** is emitted
+to `src/33pol.App/wwwroot/admin/` (gitignored) and served at `/admin/`:
 
-| File | Role |
+| Path | Role |
 |------|------|
-| `index.html` | App shell, pages, drawers, dialogs |
-| `admin.css` | Design tokens, layout, components |
-| `admin-errors.js` | `AdminErrors.classifyError` — shared error taxonomy |
-| `admin-store.js` | `Alpine.store('admin')` — API client, loading scopes, toasts, connection |
-| `admin-app.js` | `adminApp()` — navigation, feature logic, and the CSP view layer |
-| `admin-icons.js` | `AdminIcons(name)` and `AdminIcons.map` — inline SVG set |
-| `vendor/alpine-csp-3.14.9.min.js` | Alpine.js 3.14.9, **CSP build**, self-hosted |
+| `index.html` | Minimal SPA shell (`div#root`); references hashed bundles |
+| `assets/index-*.js` | Main bundle (shell, auth, router, shared stores) |
+| `assets/index-*.css` | Styles (ported from legacy `admin.css`) |
+| `assets/*Page-*.js` | Lazy route chunks (Overview, Logs, Keys, …) |
+| `assets/ratelimits-*.js` | Lazy rate-limits editor chunk |
 | `vendor/fonts.css`, `vendor/fonts/` | Self-hosted IBM Plex / Space Grotesk |
 
-**Load order:** `admin.css` → `admin-icons.js` → `admin-errors.js` → `admin-store.js` → `admin-app.js` → Alpine (all deferred). Query `?v=N` on static assets busts caches after upgrades.
+Build: `cd src/33pol.Admin.Web && npm run build`. MSBuild runs this before publish unless
+`-p:SkipFrontendBuild=true`. Content-hashed JS/CSS are cached `immutable` for one year; `index.html`
+and `vendor/fonts.css` stay `no-store`.
 
-### Writing markup for the CSP build
+Legacy Alpine sources are kept under `src/33pol.Admin.Web/legacy/` for regression tests only.
 
-The console ships Alpine's **CSP-friendly build** so `/admin` can be served under `script-src 'self'`
-(see `AdminSecurityHeaders.cs`); the stock build compiles every directive with `new Function()` and
-needs `unsafe-eval`. That build's evaluator resolves a directive's value as a **property path and
-nothing else** — a function it finds there is invoked with the directive's own arguments (the event,
-for `x-on`), and nothing else is parsed. So in `index.html`:
+### CSP
+
+The console is a compiled SolidJS bundle under `script-src 'self'` (see `AdminSecurityHeaders.cs`).
+No inline scripts. The Alpine CSP markup rules below apply to **legacy** sources only:
 
 - no operators, ternaries, optional chaining, or calls with arguments — `x-text="formatNum(n)"`,
   `:class="{ active: tab === 'keys' }"` and `x-show="a && b"` all fail silently at runtime;

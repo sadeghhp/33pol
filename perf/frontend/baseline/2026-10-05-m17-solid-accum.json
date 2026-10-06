@@ -1,0 +1,162 @@
+{
+  "baseUrl": "http://127.0.0.1:5080",
+  "at": "2026-10-05T09:50:45.317Z",
+  "steps": [
+    {
+      "label": "1. auth gate",
+      "domNodes": 39,
+      "boundAttrs": 0,
+      "byKind": {},
+      "detailRowsMounted": 0,
+      "solidRoots": 0,
+      "listeners": 3,
+      "heapMB": 1.3,
+      "rows": {
+        "feed": 0,
+        "logs": 0,
+        "errors": 0
+      }
+    },
+    {
+      "label": "2. Overview only",
+      "domNodes": 474,
+      "boundAttrs": 0,
+      "byKind": {},
+      "detailRowsMounted": 0,
+      "solidRoots": 1,
+      "listeners": 40,
+      "heapMB": 3.1,
+      "rows": {
+        "feed": 25,
+        "logs": 0,
+        "errors": 0
+      }
+    },
+    {
+      "label": "3. Logs",
+      "domNodes": 144,
+      "boundAttrs": 0,
+      "byKind": {},
+      "detailRowsMounted": 0,
+      "solidRoots": 2,
+      "listeners": 42,
+      "heapMB": 3.3,
+      "rows": {
+        "feed": 0,
+        "logs": 0,
+        "errors": 0
+      }
+    },
+    {
+      "label": "4. Errors",
+      "domNodes": 145,
+      "boundAttrs": 0,
+      "byKind": {},
+      "detailRowsMounted": 0,
+      "solidRoots": 1,
+      "listeners": 43,
+      "heapMB": 3.5,
+      "rows": {
+        "feed": 0,
+        "logs": 0,
+        "errors": 0
+      }
+    },
+    {
+      "label": "5. Keys",
+      "domNodes": 153,
+      "boundAttrs": 0,
+      "byKind": {},
+      "detailRowsMounted": 0,
+      "solidRoots": 1,
+      "listeners": 44,
+      "heapMB": 3.7,
+      "rows": {
+        "feed": 0,
+        "logs": 0,
+        "errors": 0
+      }
+    },
+    {
+      "label": "6. Usage",
+      "domNodes": 157,
+      "boundAttrs": 0,
+      "byKind": {},
+      "detailRowsMounted": 0,
+      "solidRoots": 1,
+      "listeners": 44,
+      "heapMB": 3.8,
+      "rows": {
+        "feed": 0,
+        "logs": 0,
+        "errors": 0
+      }
+    },
+    {
+      "label": "7. Routing",
+      "domNodes": 154,
+      "boundAttrs": 0,
+      "byKind": {},
+      "detailRowsMounted": 0,
+      "solidRoots": 1,
+      "listeners": 44,
+      "heapMB": 4,
+      "rows": {
+        "feed": 0,
+        "logs": 0,
+        "errors": 0
+      }
+    },
+    {
+      "label": "8. Settings",
+      "domNodes": 140,
+      "boundAttrs": 0,
+      "byKind": {},
+      "detailRowsMounted": 0,
+      "solidRoots": 1,
+      "listeners": 44,
+      "heapMB": 4.1,
+      "rows": {
+        "feed": 0,
+        "logs": 0,
+        "errors": 0
+      }
+    },
+    {
+      "label": "9. back to Overview",
+      "domNodes": 484,
+      "boundAttrs": 0,
+      "byKind": {},
+      "detailRowsMounted": 0,
+      "solidRoots": 1,
+      "listeners": 47,
+      "heapMB": 3.4,
+      "rows": {
+        "feed": 25,
+        "logs": 0,
+        "errors": 0
+      }
+    }
+  ],
+  "summary": {
+    "authGateNodes": 39,
+    "authGateBoundAttrs": 0,
+    "peakNodes": 484,
+    "finalNodes": 484,
+    "growthFromGate": 445,
+    "monotonic": false
+  },
+  "idleAfterTour": {
+    "windowMs": 20000,
+    "taskS": 0.167,
+    "cpuPct": 0.8,
+    "scriptS": 0.01,
+    "layoutS": 0.003,
+    "recalcStyleS": 0,
+    "layoutCount": 4,
+    "recalcStyleCount": 0,
+    "nodes": 3027,
+    "jsEventListeners": 41,
+    "jsHeapUsedMB": 3.2
+  }
+}

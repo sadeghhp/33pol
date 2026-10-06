@@ -19,11 +19,16 @@
  */
 const test = require('node:test');
 const assert = require('node:assert');
+const fs = require('node:fs');
+const vm = require('node:vm');
 const path = require('node:path');
 
-global.window = {};
-require(path.join(__dirname, '../../src/33pol.App/wwwroot/admin/admin-errors.js'));
-const { classifyError } = global.window.AdminErrors;
+const context = { window: {} };
+vm.createContext(context);
+vm.runInContext(
+  fs.readFileSync(path.join(__dirname, '../../src/33pol.Admin.Web/legacy/admin-errors.js'), 'utf8'),
+  context);
+const { classifyError } = context.window.AdminErrors;
 
 const json = value => JSON.stringify(value);
 

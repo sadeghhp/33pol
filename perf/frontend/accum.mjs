@@ -33,8 +33,8 @@ run(async () => {
     const heapMB = +((perf.metrics.find(m => m.name === 'JSHeapUsedSize')?.value ?? 0) / 1048576).toFixed(1);
     const rows = await page.evaluate(() => ({
       feed: document.querySelectorAll('#panel-dashboard tbody tr.request-row').length,
-      logs: document.querySelectorAll('#panel-logs tbody tr.request-row').length,
-      errors: document.querySelectorAll('#panel-errors tbody tr.request-row').length,
+      logs: document.querySelectorAll('#panel-logs .log-summary').length,
+      errors: document.querySelectorAll('#panel-errors .error-summary, #panel-errors tbody tr').length,
     }));
     const step = { label, ...c, listeners, heapMB, rows };
     out.steps.push(step);

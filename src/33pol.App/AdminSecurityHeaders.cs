@@ -11,28 +11,18 @@ namespace Pol33.App;
 /// script, style, font and connection is restricted to 'self', which means a compromised or spoofed
 /// third-party origin has no way to execute in an admin session.
 ///
-/// <c>script-src</c> stays free of 'unsafe-eval' because the console ships Alpine's CSP-friendly
-/// build, which resolves directives as property paths rather than compiling them with
-/// <c>new Function()</c>. Its markup therefore has to stay expression-free — see docs/admin-ui.md
-/// and AdminAssetSecurityTests.AdminIndex_UsesOnlyExpressionsTheCspEvaluatorCanResolve.
+/// <c>script-src</c> stays free of 'unsafe-eval' because the console is a compiled SolidJS bundle
+/// with no inline scripts. See AdminSolidInvariantTests for SPA shell invariants.
 /// </remarks>
 internal static class AdminSecurityHeaders
 {
     /// <summary>
-    /// <c>style-src</c> allows 'unsafe-inline' and nothing else does.
+    /// <c>style-src 'self'</c> — the Solid bundle uses classes only; no inline styles in the SPA shell.
     /// </summary>
-    /// <remarks>
-    /// The console's markup uses inline <c>style</c> attributes for a handful of layout tweaks, and
-    /// Alpine's <c>x-show</c> toggles element visibility by writing <c>style="display:none"</c> at
-    /// runtime — which CSP treats as an inline style. Removing it requires either nonce-stamping
-    /// every attribute or replacing Alpine's visibility directives, neither of which is a safe
-    /// change to make alongside a security fix. Inline <em>script</em> remains fully blocked, which
-    /// is where the actual injection risk lies.
-    /// </remarks>
     public const string ContentSecurityPolicy =
         "default-src 'self'; " +
         "script-src 'self'; " +
-        "style-src 'self' 'unsafe-inline'; " +
+        "style-src 'self'; " +
         "img-src 'self' data:; " +
         "font-src 'self'; " +
         "connect-src 'self'; " +

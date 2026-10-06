@@ -18,7 +18,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const path = require('node:path');
 
-const SOURCE = path.join(__dirname, '../../src/33pol.App/wwwroot/admin/admin-app.js');
+const SOURCE = path.join(__dirname, '../../src/33pol.Admin.Web/legacy/admin-app.js');
 
 /** A fresh component, with only the globals admin-app.js touches while being defined. */
 function createApp() {
