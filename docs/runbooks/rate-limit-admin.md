@@ -339,6 +339,9 @@ What to change:
 
 - One key draining a shared tenant bucket: give that key an `api_key` rule below the tenant tier.
   Rules only tighten, so this bounds it without touching the others.
+  `scripts/rate-limit-cap-keys.py` does this for every key that has no rule yet: it prints the
+  cap each key would get beside what it sent recently, changes nothing until told to apply the
+  plan it wrote, and saves the current configuration as a rollback first.
 - The tenant has outgrown its tier: raise the tenant rule or move it to a larger plan.
 - A model ceiling is binding: raise it only if the backend has the room, which
   `gateway_bulkhead_queued` and the backend's own queue will tell you.

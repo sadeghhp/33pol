@@ -47,6 +47,9 @@ jobs:
           docker run --rm -v "${PWD}/deploy/prometheus/alerts:/alerts:ro" --entrypoint promtool \
             prom/prometheus:v2.55.1 test rules /alerts/tests/33pol-rate-limit_test.yml
 
+      - name: Test operator scripts
+        run: python3 -m unittest discover -s tests/scripts -p "test_*.py"
+
       - name: Dependency vulnerability audit
         run: |
           dotnet list 33pol.sln package --vulnerable --include-transitive 2>&1 | tee vulnerability-audit.txt
