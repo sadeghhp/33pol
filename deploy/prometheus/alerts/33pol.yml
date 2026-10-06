@@ -154,6 +154,29 @@ groups:
             `rate_limit:tenant` is a tenant bucket, which every key of that tenant shares, so one
             busy key can be refusing all the others. The series carries no caller label; the
             admin API names the keys. See docs/runbooks/rate-limit-admin.md#refusals
+      # The same condition judged per tenant, from the series that name the caller, and sent to
+      # that tenant's team: `team` is the tenant slug, which an Alertmanager route can claim, and an
+      # alert no route claims stays with the gateway owner. The share is of the tenant's own
+      # decisions, so one team storming into its bucket does not alert the team next to it. No
+      # `or vector(0)` here: a tenant with no decisions has nothing to be told, and a tenant refused
+      # on every request still has its refused series on both sides of the division.
+      - alert: GatewayTenantThrottled
+        expr: |
+          sum by (tenant) (rate(gateway_rate_limit_decisions_total{outcome="refused"}[5m]))
+            / sum by (tenant) (rate(gateway_rate_limit_decisions_total[5m]))
+            > 0.10
+          and
+            sum by (tenant) (increase(gateway_rate_limit_decisions_total[5m])) >= 20
+        for: 10m
+        labels:
+          severity: warning
+          team: '{{ $labels.tenant }}'
+        annotations:
+          summary: Tenant {{ $labels.tenant }} is being rate limited
+          description: >-
+            {{ $value | humanizePercentage }} of the rate-limit decisions for tenant
+            {{ $labels.tenant }} over the last 5 minutes were refusals.
+            See docs/runbooks/rate-limit-admin.md#tenant-throttled
       - alert: GatewayCredentialGuessing
         expr: sum(rate(gateway_rate_limit_rejections_total{reason="auth_failure"}[5m])) > 1
         for: 10m

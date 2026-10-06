@@ -255,6 +255,8 @@ The backoff table holds at most 20 000 partitions. Anonymous traffic partitions 
 
 Each row carries `requestsPerMinute` (observed load), `configuredRpm`, `effectiveRpm` and `utilization`. Both rpm columns are **sustained rates**, not bucket capacity — capacity is `rpm + burst`, and comparing an observed per-minute rate against it understates utilisation by the whole burst allowance. Utilization above 1 is normal for a row being refused: the numerator counts attempts, not admissions.
 
+Each row also carries `peakRequestsInOneMinute` and `peakMinuteUtc`: the most decisions the row saw in any one UTC calendar minute of the window, and when. `requestsPerMinute` is an average over the whole window, and a caller that sends in bursts sits far above it at its busiest. A cap has to clear the peak, so this is the number to hold a new `api_key` rule against: a bucket lets through about its `rpm` plus its `burst` in one minute. Like the other columns it counts attempts, so for a row that was being refused it includes the retries.
+
 A refusal from a concurrency cap carries no rate at all: it was decided against a slot count. Those decisions are counted in `concurrencyRejected` and in `violations`, and leave the rpm columns alone.
 
 The counters are **in-memory and bounded** — three hours of per-minute rings per tracked key, reset by a restart. That is deliberate: admission decisions arrive at request rate, and persisting one row per decision would put a write on the hot path and make the busiest partition the most expensive one to meter. Durable, long-horizon usage (tokens and cost per tenant and model, over months) already lives in the billing rollups; this answers the question those cannot.
@@ -264,11 +266,14 @@ The counters are **in-memory and bounded** — three hours of per-minute rings p
 | Metric | Type | Labels |
 |--------|------|--------|
 | `gateway_rate_limit_rejections_total` | counter | `reason` = `rate_limit:<scope>` / `stream_concurrency:<scope>` / `auth_failure` |
+| `gateway_rate_limit_decisions_total` | counter | `tenant`, `key`, `model`, `scope`, `control`, `outcome` |
+| `gateway_key_open_streams` | gauge | `tenant`, `key` |
+| `gateway_key_open_streams_peak` | gauge | `tenant`, `key` |
 | `gateway_rate_limit_adaptive_factor` | gauge | `model` |
 | `gateway_rate_limit_partitions` | gauge | `dimension` = `request` / `stream` / `ceiling` |
 | `gateway_rate_limit_backed_off_partitions` | gauge | — |
 
-Only `model` appears as a label. Tenant is bounded but large, and the anonymous partition key is unbounded — a per-partition time series is how a metrics backend is taken down. Per-tenant and per-key numbers live in the usage report, where the key set is explicitly capped.
+The caller appears as `tenant` (the slug) and `key` (the key's label), on a bounded number of callers: see [observability.md](../observability.md#caller-labels). The partition key never appears. For anonymous traffic it is a client address block, which is unbounded, and a per-partition time series is how a metrics backend is taken down.
 
 Worth alerting on:
 
@@ -352,6 +357,40 @@ What to change:
 
 `PUT /admin/api/rate-limits` replaces the whole configuration. Fetch it, change the one rule, and
 send it back with the version it was read at.
+
+<a id="tenant-throttled"></a>
+## Tenant throttled
+
+`GatewayTenantThrottled` fires for one tenant when more than 10% of its rate-limit decisions over 5
+minutes were refusals (20 decisions minimum, held 10 minutes). The share is of that tenant's own
+decisions, so one team storming into its bucket does not raise the alert for the team beside it.
+
+The alert carries the tenant slug twice, as `tenant` and as `team`. An Alertmanager route that
+matches `team` sends it to that tenant's team (`deploy/docker/config/alertmanager.teams.yml.example`);
+an alert no route claims goes to the gateway owner. On a gateway whose keys all sit in one tenant
+there is one `tenant` value, and this alert says the same as `GatewayRateLimitRefusing`.
+
+Which limit is refusing, and which of the tenant's keys it is refusing:
+
+```promql
+sum by (scope, control) (rate(gateway_rate_limit_decisions_total{tenant="<slug>",outcome="refused"}[5m]))
+sum by (key) (rate(gateway_rate_limit_decisions_total{tenant="<slug>",outcome="refused"}[5m]))
+sum by (key) (rate(gateway_rate_limit_decisions_total{tenant="<slug>"}[5m]))
+```
+
+Read the scope as under [Refusals](#refusals). The third query against the second separates the two
+cases a `tenant` scope hides: the key with most of the decisions is draining the bucket, and a key
+with a high refused share and few decisions is one it is starving.
+
+- `scope="tenant"` or `"tenant_model"`: the tenant's own allowance is spent. If one key is draining
+  it, give that key an `api_key` rule; if the keys are all modest, the tenant has outgrown its tier.
+- `scope="api_key"` or `"api_key_model"`: a rule written for one key is binding. Check whether
+  that client honours `Retry-After`: a refused share near 100% with a rising attempt rate is a
+  retry loop, not demand.
+- `scope="model"` or `"global"`: a capacity ceiling, shared with every other tenant. Expect the
+  alert for several tenants at once; it is the gateway owner's to act on, not the team's.
+- `control="concurrency"`: a stream cap. Compare the cap with
+  `gateway_key_open_streams_peak` for that tenant's keys before raising it.
 
 <a id="partition-ceiling"></a>
 ## Partition ceiling

@@ -39,6 +39,7 @@ public static class ObservabilityServiceCollectionExtensions
         services.AddSingleton<RateLimitUsageTracker>();
         services.AddSingleton<IRateLimitUsageTracker>(sp => sp.GetRequiredService<RateLimitUsageTracker>());
         services.AddSingleton<MetricCallerBudget>();
+        services.AddSingleton<CallerOpenStreams>();
         services.AddSingleton<GatewayMetricsCollector>();
         services.AddSingleton<IGatewayMetricsCollector>(sp => sp.GetRequiredService<GatewayMetricsCollector>());
         services.AddSingleton<IUsageQualityCounters>(sp => sp.GetRequiredService<GatewayMetricsCollector>());
@@ -73,6 +74,7 @@ public static class ObservabilityServiceCollectionExtensions
         services.AddHostedService<GatewayFinOpsMetricsExporter>();
         services.AddHostedService<GatewayCircuitBreakerMetricsExporter>();
         services.AddHostedService<GatewayRateLimitMetricsExporter>();
+        services.AddHostedService<GatewayCallerStreamsMetricsExporter>();
 
         return services;
     }

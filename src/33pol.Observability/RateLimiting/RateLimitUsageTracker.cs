@@ -875,7 +875,11 @@ public sealed class RateLimitUsageTracker : IRateLimitUsageTracker
                     sum.Requests - sum.Admitted,
                     (double)sum.Requests / windowMinutes,
                     ring.ConfiguredRpm,
-                    ring.EffectiveRpm));
+                    ring.EffectiveRpm)
+                {
+                    PeakRequestsInOneMinute = sum.Peak,
+                    PeakMinuteUtc = sum.Peak > 0 ? DateTimeOffset.FromUnixTimeSeconds(sum.PeakMinute * 60) : null,
+                });
             }
 
             rows.Sort(static (a, b) =>
@@ -956,9 +960,11 @@ public sealed class RateLimitUsageTracker : IRateLimitUsageTracker
                 }
             }
 
-            public (long Requests, long Admitted, long ConcurrencyRejected) Sum(long oldest, long newest)
+            public (long Requests, long Admitted, long ConcurrencyRejected, long Peak, long PeakMinute) Sum(
+                long oldest,
+                long newest)
             {
-                long requests = 0, admitted = 0, concurrencyRejected = 0;
+                long requests = 0, admitted = 0, concurrencyRejected = 0, peak = 0, peakMinute = 0;
                 lock (_sync)
                 {
                     for (var i = 0; i < WindowMinutes; i++)
@@ -968,11 +974,16 @@ public sealed class RateLimitUsageTracker : IRateLimitUsageTracker
                             requests += _requests[i];
                             admitted += _admitted[i];
                             concurrencyRejected += _concurrencyRejected[i];
+                            if (_requests[i] > peak)
+                            {
+                                peak = _requests[i];
+                                peakMinute = _minutes[i];
+                            }
                         }
                     }
                 }
 
-                return (requests, admitted, concurrencyRejected);
+                return (requests, admitted, concurrencyRejected, peak, peakMinute);
             }
         }
     }

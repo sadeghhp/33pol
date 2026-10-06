@@ -545,6 +545,68 @@ public sealed class RateLimitUsageTrackerLimitTests
         tracker.BuildSeries(3, 1, "auth_failure:*", false, Now).Should().NotBeNull("the protective rings always exist");
     }
 
+    // --- Peak minute per subject ----------------------------------------------------------------
+
+    /// <summary>
+    /// A key that sends 40 requests in one minute and almost nothing for the rest of the hour
+    /// averages under one a minute. A cap planned from that average refuses it at its next burst;
+    /// the peak is the number the cap has to clear.
+    /// </summary>
+    [Fact]
+    public void Report_GivesEachSubjectItsBusiestMinute()
+    {
+        var (tracker, time) = Create();
+        Admit(tracker, "acme");                       // 12:00
+        time.Advance(TimeSpan.FromMinutes(2));
+        for (var i = 0; i < 40; i++)
+        {
+            Admit(tracker, "acme");                   // 12:02
+        }
+
+        time.Advance(TimeSpan.FromMinutes(3));
+        Admit(tracker, "acme");                       // 12:05
+
+        var row = tracker.BuildReport(60, 25, time.GetUtcNow()).ByTenant.Single();
+
+        row.Requests.Should().Be(42);
+        row.RequestsPerMinute.Should().BeApproximately(0.7, 1e-9);
+        row.PeakRequestsInOneMinute.Should().Be(40);
+        // The start of the minute, not the moment inside it that Now sits at.
+        row.PeakMinuteUtc.Should().Be(new DateTimeOffset(2026, 9, 21, 12, 2, 0, TimeSpan.Zero));
+    }
+
+    /// <summary>The peak counts attempts, as the row's other columns do, so a refused retry storm shows.</summary>
+    [Fact]
+    public void Report_PeakCountsRefusedDecisionsToo()
+    {
+        var (tracker, time) = Create();
+        Admit(tracker, "acme");
+        Refuse(tracker, "acme", RateLimitControl.Rate);
+        Refuse(tracker, "acme", RateLimitControl.Rate);
+
+        tracker.BuildReport(60, 25, time.GetUtcNow()).ByTenant.Single().PeakRequestsInOneMinute.Should().Be(3);
+    }
+
+    /// <summary>A busy minute that has left the window asked for is not that window's peak.</summary>
+    [Fact]
+    public void Report_PeakIsTakenInsideTheWindowAskedFor()
+    {
+        var (tracker, time) = Create();
+        for (var i = 0; i < 40; i++)
+        {
+            Admit(tracker, "acme");                   // 12:00
+        }
+
+        time.Advance(TimeSpan.FromMinutes(10));
+        Admit(tracker, "acme");                       // 12:10
+        Admit(tracker, "acme");
+
+        var row = tracker.BuildReport(5, 25, time.GetUtcNow()).ByTenant.Single();
+
+        row.PeakRequestsInOneMinute.Should().Be(2);
+        row.PeakMinuteUtc.Should().Be(new DateTimeOffset(2026, 9, 21, 12, 10, 0, TimeSpan.Zero));
+    }
+
     // --- Helpers --------------------------------------------------------------------------------
 
     private static (RateLimitUsageTracker Tracker, MutableTimeProvider Time) Create(int maxKeys = 500)

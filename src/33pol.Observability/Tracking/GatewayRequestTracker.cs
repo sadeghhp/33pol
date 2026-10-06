@@ -9,9 +9,11 @@ namespace Pol33.Observability.Tracking;
 
 public sealed class GatewayRequestTracker(
     GatewayRuntimeState runtimeState,
-    MetricCallerBudget? callers = null) : IRequestTracker
+    MetricCallerBudget? callers = null,
+    CallerOpenStreams? openStreams = null) : IRequestTracker
 {
     private readonly MetricCallerBudget _callers = callers ?? new MetricCallerBudget();
+    private readonly CallerOpenStreams _openStreams = openStreams ?? new CallerOpenStreams();
 
     public IInferenceRequestScope BeginInferenceRequest(string modelId, bool isStreaming) =>
         BeginInferenceRequest(modelId, isStreaming, tenantId: null);
@@ -32,7 +34,15 @@ public sealed class GatewayRequestTracker(
             GatewayMeters.ActiveStreams.Add(1, new KeyValuePair<string, object?>("model", modelId));
         }
 
-        return new InferenceScope(runtimeState, modelId, isStreaming, tenantId, _callers.Resolve(caller));
+        var resolved = _callers.Resolve(caller);
+        CallerOpenStreams.Count? callerStreams = null;
+        if (isStreaming)
+        {
+            callerStreams = _openStreams.For(resolved);
+            callerStreams.StreamStarted();
+        }
+
+        return new InferenceScope(runtimeState, modelId, isStreaming, tenantId, resolved, callerStreams);
     }
 
     public void RecordRejectedRequest(string modelId, string errorCode) =>
@@ -47,8 +57,8 @@ public sealed class GatewayRequestTracker(
         GatewayMeters.InferenceErrors.Add(1, ErrorTags(modelId, errorCode, resolved));
     }
 
-    // The active-request and active-stream gauges stay on the model alone. They are up-down
-    // counters: a series per caller would be one that mostly reads zero.
+    // The active-request and active-stream gauges stay on the model alone. Open streams per caller
+    // are a gauge of their own, gateway_key_open_streams, kept by CallerOpenStreams.
     private static TagList RequestTags(string modelId, string status, MetricCaller caller) =>
         new()
         {
@@ -96,6 +106,7 @@ public sealed class GatewayRequestTracker(
         private readonly bool _isStreaming;
         private readonly string? _tenantId;
         private readonly MetricCaller _caller;
+        private readonly CallerOpenStreams.Count? _callerStreams;
         private readonly long _startTimestamp;
         private bool _disposed;
         private bool? _success;
@@ -107,9 +118,11 @@ public sealed class GatewayRequestTracker(
             string modelId,
             bool isStreaming,
             string? tenantId,
-            MetricCaller caller)
+            MetricCaller caller,
+            CallerOpenStreams.Count? callerStreams)
         {
             _caller = caller;
+            _callerStreams = callerStreams;
             _runtimeState = runtimeState;
             _modelId = modelId;
             _isStreaming = isStreaming;
@@ -139,6 +152,7 @@ public sealed class GatewayRequestTracker(
             }
 
             _disposed = true;
+            _callerStreams?.StreamEnded();
             var success = _success ?? true;
             var elapsed = System.Diagnostics.Stopwatch.GetElapsedTime(_startTimestamp);
 

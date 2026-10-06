@@ -196,29 +196,53 @@ def print_table(decisions: list[dict], usage: dict[str, dict], default: dict,
                 minutes: float = USAGE_MINUTES) -> None:
     print(f"default tier: {default.get('rpm')} rpm, {default.get('burst')} burst, "
           f"{default.get('maxConcurrentStreams')} streams")
-    print(f"observed columns cover the last {minutes:.0f} minutes, and are an average: "
-          "a key that bursts is busier at its peak than the rpm shown.")
+    print(f"observed columns cover the last {minutes:.0f} minutes. seen rpm is an average; "
+          "peak is the key's busiest calendar minute, blank on a gateway that does not report it.")
     if minutes < USAGE_MINUTES:
         print(f"The gateway restarted {minutes:.0f} minutes ago and its usage history restarted with it. "
               "That is too little to judge a cap by: plan again once it has run for a few hours.")
     print()
-    header = f"{'key':<34} {'action':<26} {'cap rpm':>7} {'burst':>5} {'streams':>7} {'seen rpm':>8} {'refused':>8}"
+    header = (f"{'key':<34} {'action':<26} {'cap rpm':>7} {'burst':>5} {'streams':>7} {'seen rpm':>8} "
+              f"{'peak':>6} {'refused':>8}")
     print(header)
     print("-" * len(header))
-    over = []
     for row in decisions:
         seen = usage.get(row["id"].lower(), {})
         seen_rpm = seen.get("requestsPerMinute")
+        peak = seen.get("peakRequestsInOneMinute")
         print(f"{str(row['label'])[:34]:<34} {row['action']:<26} {row['rpm']:>7} {row['burst']:>5} "
               f"{row['maxConcurrentStreams']:>7} "
-              f"{'' if seen_rpm is None else format(seen_rpm, '.1f'):>8} {seen.get('rejected', ''):>8}")
-        if row["action"] == "add" and seen_rpm is not None and seen_rpm > row["rpm"]:
-            over.append(row["label"])
+              f"{'' if seen_rpm is None else format(seen_rpm, '.1f'):>8} "
+              f"{'' if peak is None else peak:>6} {seen.get('rejected', ''):>8}")
     added = sum(1 for r in decisions if r["action"] == "add")
     print(f"\n{added} rule(s) to add, {len(decisions) - added} key(s) left as they are.")
+    over, over_at_peak = keys_over_cap(decisions, usage)
     if over:
         print("Already averaging above the proposed cap, so these would be refused more than now: "
               + ", ".join(map(str, over)))
+    if over_at_peak:
+        print("Busiest minute above the proposed cap and burst together, so these would be refused "
+              "at their peak: " + ", ".join(map(str, over_at_peak)))
+
+
+def keys_over_cap(decisions: list[dict], usage: dict[str, dict]) -> tuple[list, list]:
+    """Labels of keys a new cap would refuse: on average, and only at their busiest minute.
+
+    A bucket lets through its rate plus its burst in one minute, so that sum is what a peak is
+    held against. A key over on average is not listed a second time.
+    """
+    over, over_at_peak = [], []
+    for row in decisions:
+        if row["action"] != "add":
+            continue
+        seen = usage.get(row["id"].lower(), {})
+        seen_rpm = seen.get("requestsPerMinute")
+        peak = seen.get("peakRequestsInOneMinute")
+        if seen_rpm is not None and seen_rpm > row["rpm"]:
+            over.append(row["label"])
+        elif peak is not None and peak > row["rpm"] + row["burst"]:
+            over_at_peak.append(row["label"])
+    return over, over_at_peak
 
 
 def write_json(path: str, value: dict) -> None:

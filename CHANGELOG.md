@@ -4,6 +4,22 @@ All notable changes to this project are documented here. Version tags follow [Se
 
 ## [Unreleased]
 
+### Observability — per-key peaks and a per-tenant throttling alert
+
+- **`gateway_key_open_streams` and `gateway_key_open_streams_peak`**, labelled `tenant` and `key`:
+  the streaming responses a caller has open now, and the most it has had open at once since the
+  gateway started. Nothing recorded a key's stream peak before, so a per-key stream cap could only
+  be guessed, and a cap below the peak refuses traffic that is admitted today.
+- **`peakRequestsInOneMinute` and `peakMinuteUtc`** on every row of
+  `GET /admin/api/rate-limits/usage`. `requestsPerMinute` is an average over the window; the peak is
+  what a rate cap has to clear. `scripts/rate-limit-cap-keys.py` prints it and names the keys a
+  proposed cap would refuse at their busiest minute.
+- **`GatewayTenantThrottled`.** Fires for one tenant when more than 10% of its rate-limit decisions
+  over 5 minutes were refusals (at least 20 decisions, held 10 minutes). It carries the tenant slug
+  as `team`, so an Alertmanager route can deliver it to that tenant's team.
+  `GatewayRateLimitRefusing` is unchanged. Runbook:
+  `docs/runbooks/rate-limit-admin.md#tenant-throttled`.
+
 ### Observability — metrics name the caller
 
 - **`tenant` and `key` labels** on `gateway_inference_requests_total`,

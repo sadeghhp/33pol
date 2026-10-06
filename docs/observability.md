@@ -72,6 +72,8 @@ Queries that aggregate (`sum by (model)`, `sum(rate(...))`) read the same as bef
 | `gateway_time_to_first_token_seconds` | Histogram | `model` |
 | `gateway_active_streams` | UpDownCounter | `model` |
 | `gateway_active_requests` | UpDownCounter | `model` |
+| `gateway_key_open_streams` | ObservableGauge | `tenant`, `key` |
+| `gateway_key_open_streams_peak` | ObservableGauge | `tenant`, `key` |
 | `gateway_inference_route_total` | Counter | `model`, `route` (`chat`/`completions`/`embeddings`/`rerank`/`unknown`), `stream` |
 | `gateway_model_resolve_total` | Counter | `result` (`resolved`/`alias`/`not_found`) |
 | `gateway_forward_attempts_total` | Counter | `model`, `outcome` |
@@ -95,6 +97,16 @@ Kestrel's `MinResponseDataRate` (240 B/s after a 5 s grace, by default) usually 
 The error record says which deadline ran out without needing the outcome name: `responseBytesForwarded` is 0 for a first-byte failure and non-zero for a mid-stream stall, and `timeToFirstTokenMs` is null whenever no byte ever reached the client. Those, plus `streaming` and `upstreamBodySnippet`, are columns in the CSV export.
 
 `request_incomplete` is a request-body failure, recorded before routing, so it carries no model. Its message includes how many bytes arrived against how many the client declared, and over how long: "Unexpected end of request content" with a shortfall is a client (or intermediate proxy) that closed early; "data arriving too slowly" is Kestrel's minimum body data rate, `Gateway:Resilience:MinRequestBodyBytesPerSecond` after `MinRequestBodyDataRateGraceSeconds` (defaults 240 B/s and 5 s, the framework's), which a client that pauses mid-upload trips even when its throughput while sending is fine. Set the rate to 0 to disable the check.
+
+`gateway_key_open_streams` is the number of streaming responses a caller has open at the moment of the scrape. `gateway_key_open_streams_peak` is the most that caller has had open at once since the gateway started; it is updated on every stream start, so it also holds a burst that began and ended between two scrapes. Both follow the [caller labels](#caller-labels) and their bound, and a caller that has streamed once keeps its series at zero afterwards. Together they are what a per-key stream cap is set from: a cap below a key's normal peak refuses traffic that is admitted today.
+
+```promql
+# Highest sampled count per key over a day, beside the exact peak since the last restart.
+max by (tenant, key) (max_over_time(gateway_key_open_streams[1d]))
+max by (tenant, key) (gateway_key_open_streams_peak)
+```
+
+The peak resets with the process, so read it only after the gateway has been up through a normal busy period. The count is of streams the gateway is forwarding, whether or not a stream cap applies to them.
 
 ### Policy and resilience
 
@@ -213,6 +225,8 @@ After changing the JSON or datasource provisioning, restart Grafana: `docker com
 
 `GatewayDown` fires when Prometheus has had no successful scrape of the gateway for 2 minutes, including when it has never had one. It is the only gateway alert that can fire while the gateway is down, because every other rule reads series the gateway exports. `GatewayBackendScrapeDown` fires for a model server listed in `deploy/docker/config/prometheus-targets/` that has not answered for 5 minutes. Both live in `33pol-scrape.yml` and select by the compose stack's job names (`gateway`, `vllm`).
 
+`GatewayTenantThrottled` fires for one tenant when more than 10% of that tenant's rate-limit decisions over 5 minutes were refusals, with at least 20 decisions, held 10 minutes. It reads `gateway_rate_limit_decisions_total`, so it names the tenant, and it carries the tenant slug as a `team` label so an Alertmanager route can send it to that tenant's team; with no such route it goes to the gateway owner. `GatewayRateLimitRefusing` is kept beside it: it judges the gateway as a whole and names the limit, not the caller. While every key sits in one tenant the two fire together. See [the runbook](runbooks/rate-limit-admin.md#tenant-throttled).
+
 A rule that fires notifies nobody by itself. The compose observability profile runs Alertmanager beside Prometheus, with one receiver that needs a webhook URL before it delivers anything: see [deploy/docker/README.md](../deploy/docker/README.md#alert-delivery). The Helm chart ships a ServiceMonitor only; routing is the cluster Alertmanager's.
 
 Validate rules:
@@ -245,6 +259,7 @@ The admin Overview evaluates the same conditions in-process and lists them under
 | — | `backup_stale` / `backup_failed` | info / warning | no verified backup in 7 d / last attempt failed |
 | — | `key_expiring` / `key_idle` | info | keys expiring within 7 d / unused for 30 d |
 | `GatewayRateLimitRefusing` | `rate_limit_refusing` | warning | ≥ 10 % of rate-limit decisions refused over 5 m, ≥ 20 decisions, for 5 m |
+| `GatewayTenantThrottled` | — | warning | > 10 % of one tenant's rate-limit decisions refused over 5 m, ≥ 20 decisions, for 10 m |
 | `GatewayRateLimitPartitionsNearCeiling` | `rate_limit_partitions_near_ceiling` | warning | fuller partition table / ceiling (floored at 1) > 0.8, for 10 m — the rule's own expression |
 | — | `rate_limit_tracker_saturated` | info | the usage tracker dropped at least one decision (a dimension was full); while it lasts |
 | — | `rate_limit_adaptive_shedding` | info | adaptive load shedding holding at least one model below its configured rate; while it lasts |
