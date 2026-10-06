@@ -2,6 +2,7 @@ import { createSignal } from 'solid-js';
 import { reconcileSummary } from '../domain/reconcile';
 import type { ConnectionSource } from '../realtime/types';
 import { snapshot as connectionSnapshot } from './connectionWriter';
+import { recordVitals } from './vitalsHistory';
 
 const [summary, setSummary] = createSignal<Record<string, unknown> | null>(null);
 const [updatedAt, setUpdatedAt] = createSignal(0);
@@ -18,6 +19,7 @@ export function applySummaryFromSource(incoming: Record<string, unknown>, source
   if (changedPaths.length === 0 && prev) return;
   setSummary(value);
   setUpdatedAt(Date.now());
+  recordVitals(value);
 }
 
 export function clearSummary(): void {

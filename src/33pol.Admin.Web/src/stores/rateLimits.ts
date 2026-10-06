@@ -1,4 +1,16 @@
 import { createSignal } from 'solid-js';
+import {
+  blankWindow,
+  computeDirtyView,
+  diffRateLimits,
+  type RateLimitDirtyView,
+  type RateLimitDiffItem,
+  seriesBucketMinutes,
+  usageTake,
+  validatePlanSlug,
+  validateTierFields,
+  windowPayload,
+} from '../domain/rateLimitEdit';
 import { apiClient, handleApiError, pushToast } from './auth';
 
 export interface RateLimitTier {
@@ -171,7 +183,12 @@ export function rulePayload(row: RateLimitRule): RateLimitRule {
   };
 }
 
-export function buildRateLimitsPayload(source: RateLimitConfig | null | undefined): RateLimitsPayload {
+export type RateLimitsPayloadSource = Pick<
+  RateLimitConfig,
+  'enabled' | 'adaptiveEnabled' | 'default' | 'plans' | 'rules'
+>;
+
+export function buildRateLimitsPayload(source: RateLimitsPayloadSource | null | undefined): RateLimitsPayload {
   const cfg = source ?? {
     enabled: true,
     adaptiveEnabled: false,
@@ -298,13 +315,26 @@ export function useRateLimitsStore() {
     readOnlyReason,
     dirty: () => isRateLimitsDirty(saved(), draft()),
     locked: () => !!readOnlyReason() || saving(),
+    editable: () => !readOnlyReason() && !saving(),
+    workInProgress: rateLimitsWorkInProgress,
     load: (opts?: { force?: boolean }) => loadRateLimits(opts),
-    save: () => saveRateLimits(),
-    discard: () => discardRateLimitChanges(),
+    save: requestSaveRateLimits,
+    discard: () => {
+      discardRateLimitChanges();
+      setReviewOpen(false);
+      closeTierDrawer();
+      closeRuleDrawer();
+      queueScheduleRefresh();
+    },
     setEnabled: (value: boolean) => patchDraft((d) => { d.enabled = value; }),
     setAdaptiveEnabled: (value: boolean) => patchDraft((d) => { d.adaptiveEnabled = value; }),
     setDefaultTier: (field: keyof RateLimitTier, value: number) =>
       patchDraft((d) => { d.default = { ...d.default, [field]: value }; }),
+    setRuleEnabled: (identity: string, enabled: boolean) =>
+      patchDraft((d) => {
+        const rule = findDraftRule(d.rules, identity);
+        if (rule) rule.enabled = enabled;
+      }),
     setRuleField: (index: number, field: keyof RateLimitRule, value: string | number | boolean) =>
       patchDraft((d) => {
         if (index < 0 || index >= d.rules.length) return;
@@ -327,6 +357,14 @@ export function useRateLimitsStore() {
           },
         ];
       }),
+    removePlan: (slug: string) =>
+      patchDraft((d) => {
+        delete d.plans[slug];
+      }),
+    scheduleStatusFor: (scope: string, target: string) => {
+      const report = scheduleSaved();
+      return report?.rules.find((r) => r.identity === rateLimitRuleIdentity(scope, target)) ?? null;
+    },
   };
 }
 
@@ -354,6 +392,7 @@ export async function loadRateLimits(opts?: { force?: boolean }): Promise<void> 
         return;
       }
       applyLoaded(data, etag, false);
+      void loadRateLimitSchedule();
     } catch (e) {
       if (aborted) return;
       const err = e as { status?: number; message?: string };
@@ -413,11 +452,13 @@ export function discardRateLimitChanges(): void {
   if (!baseline) return;
   setDraft(cloneRateLimitsConfig(baseline));
   pushToast('Changes discarded.');
+  queueScheduleRefresh();
 }
 
 export function activateRateLimitsPage(): void {
   aborted = false;
   if (!draft() && !loading()) void loadRateLimits();
+  if (!usageReport() && !usageLoading()) void loadRateLimitUsage();
 }
 
 export function disposeRateLimitsPage(): void {
@@ -425,3 +466,870 @@ export function disposeRateLimitsPage(): void {
   fetchSeq += 1;
   fetchInFlight = null;
 }
+
+export interface AddRuleIntent {
+  scope: string;
+  target: string;
+}
+
+const [addRuleIntent, setAddRuleIntent] = createSignal<AddRuleIntent | null>(null);
+
+export function useAddRuleIntent() {
+  return { addRuleIntent, setAddRuleIntent };
+}
+
+export function queueAddRuleIntent(scope: string, target: string): void {
+  setAddRuleIntent({ scope, target });
+}
+
+// ---- usage & schedule API types ----
+
+export interface RateLimitUsageTotals {
+  requests?: number;
+  Requests?: number;
+  admitted?: number;
+  Admitted?: number;
+  rejected?: number;
+  Rejected?: number;
+  rateRejected?: number;
+  RateRejected?: number;
+  concurrencyRejected?: number;
+  ConcurrencyRejected?: number;
+  rejectionRate?: number;
+  RejectionRate?: number;
+}
+
+export interface RateLimitUsageRowDto {
+  key?: string;
+  Key?: string;
+  tenantId?: string | null;
+  TenantId?: string | null;
+  apiKeyId?: string | null;
+  ApiKeyId?: string | null;
+  modelId?: string | null;
+  ModelId?: string | null;
+  requests?: number;
+  Requests?: number;
+  admitted?: number;
+  Admitted?: number;
+  rejected?: number;
+  Rejected?: number;
+  requestsPerMinute?: number;
+  RequestsPerMinute?: number;
+  configuredRpm?: number;
+  ConfiguredRpm?: number;
+  effectiveRpm?: number;
+  EffectiveRpm?: number;
+  utilization?: number | null;
+  Utilization?: number | null;
+}
+
+export interface RateLimitViolationRowDto {
+  scope?: string;
+  Scope?: string;
+  key?: string;
+  Key?: string;
+  control?: string;
+  Control?: string;
+  hits?: number;
+  Hits?: number;
+}
+
+export interface RateLimitLimitUsageRowDto {
+  limitId?: string;
+  LimitId?: string;
+  scope?: string;
+  Scope?: string;
+  target?: string;
+  Target?: string;
+  evaluations?: number;
+  Evaluations?: number;
+  charged?: number;
+  Charged?: number;
+  refusedByRate?: number;
+  RefusedByRate?: number;
+  refusedByStreams?: number;
+  RefusedByStreams?: number;
+  peakUtilization?: number | null;
+  PeakUtilization?: number | null;
+  peakChargedInOneMinute?: number;
+  PeakChargedInOneMinute?: number;
+}
+
+export interface RateLimitUsageReportDto {
+  windowMinutes?: number;
+  WindowMinutes?: number;
+  generatedUtc?: string;
+  GeneratedUtc?: string;
+  totals?: RateLimitUsageTotals;
+  Totals?: RateLimitUsageTotals;
+  byTenantModel?: RateLimitUsageRowDto[];
+  ByTenantModel?: RateLimitUsageRowDto[];
+  byTenant?: RateLimitUsageRowDto[];
+  ByTenant?: RateLimitUsageRowDto[];
+  byModel?: RateLimitUsageRowDto[];
+  ByModel?: RateLimitUsageRowDto[];
+  byApiKey?: RateLimitUsageRowDto[];
+  ByApiKey?: RateLimitUsageRowDto[];
+  violations?: RateLimitViolationRowDto[];
+  Violations?: RateLimitViolationRowDto[];
+  limits?: RateLimitLimitUsageRowDto[];
+  Limits?: RateLimitLimitUsageRowDto[];
+  adaptive?: { enabled?: boolean; Enabled?: boolean; models?: unknown[]; Models?: unknown[] };
+  Adaptive?: { enabled?: boolean; Enabled?: boolean; models?: unknown[]; Models?: unknown[] };
+  store?: { requestPartitions?: number; RequestPartitions?: number; streamPartitions?: number; StreamPartitions?: number; maxPartitions?: number; MaxPartitions?: number };
+  Store?: { requestPartitions?: number; RequestPartitions?: number; streamPartitions?: number; StreamPartitions?: number; maxPartitions?: number; MaxPartitions?: number };
+  tracker?: { isSaturated?: boolean; IsSaturated?: boolean; trackingSinceUtc?: string | null; TrackingSinceUtc?: string | null };
+  Tracker?: { isSaturated?: boolean; IsSaturated?: boolean; trackingSinceUtc?: string | null; TrackingSinceUtc?: string | null };
+}
+
+export interface RateLimitUsagePointDto {
+  startUtc?: string;
+  StartUtc?: string;
+  covered?: boolean;
+  Covered?: boolean;
+  decisions?: number;
+  Decisions?: number;
+  admitted?: number;
+  Admitted?: number;
+  refusedByRate?: number;
+  RefusedByRate?: number;
+  refusedByStreams?: number;
+  RefusedByStreams?: number;
+}
+
+export interface RateLimitUsageSeriesDto {
+  bucketMinutes?: number;
+  BucketMinutes?: number;
+  trackingSinceUtc?: string | null;
+  TrackingSinceUtc?: string | null;
+  points?: RateLimitUsagePointDto[];
+  Points?: RateLimitUsagePointDto[];
+}
+
+export interface ScheduleRuleStatusDto {
+  scope?: string;
+  Scope?: string;
+  target?: string;
+  Target?: string;
+  effective?: { rpm?: number; Rpm?: number; burst?: number; Burst?: number; maxConcurrentStreams?: number; MaxConcurrentStreams?: number; suspended?: boolean; Suspended?: boolean };
+  Effective?: { rpm?: number; Rpm?: number; burst?: number; Burst?: number; maxConcurrentStreams?: number; MaxConcurrentStreams?: number; suspended?: boolean; Suspended?: boolean };
+  activeWindow?: string | null;
+  ActiveWindow?: string | null;
+  activeUntil?: string | null;
+  ActiveUntil?: string | null;
+}
+
+export interface RateLimitScheduleReportDto {
+  at?: string;
+  At?: string;
+  rules?: ScheduleRuleStatusDto[];
+  Rules?: ScheduleRuleStatusDto[];
+}
+
+export interface RateLimitWindowPreviewDto {
+  valid?: boolean;
+  Valid?: boolean;
+  error?: string | null;
+  Error?: string | null;
+  activeNow?: boolean;
+  ActiveNow?: boolean;
+  nextStartAt?: string | null;
+  NextStartAt?: string | null;
+  nextEndAt?: string | null;
+  NextEndAt?: string | null;
+  overlaps?: string[];
+  Overlaps?: string[];
+}
+
+function usageRowFromRaw(r: RateLimitUsageRowDto) {
+  return {
+    key: String(r.key ?? r.Key ?? ''),
+    tenantId: r.tenantId ?? r.TenantId ?? null,
+    apiKeyId: r.apiKeyId ?? r.ApiKeyId ?? null,
+    modelId: r.modelId ?? r.ModelId ?? null,
+    requests: Number(r.requests ?? r.Requests ?? 0),
+    admitted: Number(r.admitted ?? r.Admitted ?? 0),
+    rejected: Number(r.rejected ?? r.Rejected ?? 0),
+    requestsPerMinute: Number(r.requestsPerMinute ?? r.RequestsPerMinute ?? 0),
+    configuredRpm: Number(r.configuredRpm ?? r.ConfiguredRpm ?? 0),
+    effectiveRpm: Number(r.effectiveRpm ?? r.EffectiveRpm ?? 0),
+    utilization: r.utilization ?? r.Utilization ?? null,
+  };
+}
+
+export function normalizeUsageReport(data: RateLimitUsageReportDto | null | undefined) {
+  if (!data) return null;
+  const totalsRaw = data.totals ?? data.Totals ?? {};
+  const rows = (key: keyof RateLimitUsageReportDto, alt: keyof RateLimitUsageReportDto) =>
+    (Array.isArray(data[key]) ? data[key] : Array.isArray(data[alt]) ? data[alt] : []) as RateLimitUsageRowDto[];
+  return {
+    windowMinutes: Number(data.windowMinutes ?? data.WindowMinutes ?? 60),
+    generatedUtc: String(data.generatedUtc ?? data.GeneratedUtc ?? ''),
+    totals: {
+      requests: Number(totalsRaw.requests ?? totalsRaw.Requests ?? 0),
+      admitted: Number(totalsRaw.admitted ?? totalsRaw.Admitted ?? 0),
+      rejected: Number(totalsRaw.rejected ?? totalsRaw.Rejected ?? 0),
+      rejectionRate: Number(totalsRaw.rejectionRate ?? totalsRaw.RejectionRate ?? 0),
+    },
+    byTenantModel: rows('byTenantModel', 'ByTenantModel').map(usageRowFromRaw),
+    byTenant: rows('byTenant', 'ByTenant').map(usageRowFromRaw),
+    byModel: rows('byModel', 'ByModel').map(usageRowFromRaw),
+    byApiKey: rows('byApiKey', 'ByApiKey').map(usageRowFromRaw),
+    violations: ((Array.isArray(data.violations ?? data.Violations) ? (data.violations ?? data.Violations) : []) as RateLimitViolationRowDto[]).map((v) => {
+      const row = v as RateLimitViolationRowDto;
+      return {
+        scope: String(row.scope ?? row.Scope ?? ''),
+        key: String(row.key ?? row.Key ?? ''),
+        control: String(row.control ?? row.Control ?? ''),
+        hits: Number(row.hits ?? row.Hits ?? 0),
+      };
+    }),
+    limits: ((Array.isArray(data.limits ?? data.Limits) ? (data.limits ?? data.Limits) : []) as RateLimitLimitUsageRowDto[]).map((row) => {
+      return {
+        limitId: String(row.limitId ?? row.LimitId ?? '').toLowerCase(),
+        scope: String(row.scope ?? row.Scope ?? ''),
+        target: String(row.target ?? row.Target ?? ''),
+        evaluations: Number(row.evaluations ?? row.Evaluations ?? 0),
+        charged: Number(row.charged ?? row.Charged ?? 0),
+        refusedByRate: Number(row.refusedByRate ?? row.RefusedByRate ?? 0),
+        refusedByStreams: Number(row.refusedByStreams ?? row.RefusedByStreams ?? 0),
+        peakUtilization: row.peakUtilization ?? row.PeakUtilization ?? null,
+        peakChargedInOneMinute: Number(row.peakChargedInOneMinute ?? row.PeakChargedInOneMinute ?? 0),
+      };
+    }),
+    adaptiveEnabled: !!(data.adaptive?.enabled ?? data.Adaptive?.enabled ?? data.adaptive?.Enabled ?? data.Adaptive?.Enabled),
+    trackerSaturated: !!(data.tracker?.isSaturated ?? data.Tracker?.isSaturated ?? data.tracker?.IsSaturated ?? data.Tracker?.IsSaturated),
+    store: {
+      requestPartitions: Number(data.store?.requestPartitions ?? data.Store?.requestPartitions ?? data.store?.RequestPartitions ?? 0),
+      streamPartitions: Number(data.store?.streamPartitions ?? data.Store?.streamPartitions ?? data.store?.StreamPartitions ?? 0),
+      maxPartitions: Number(data.store?.maxPartitions ?? data.Store?.maxPartitions ?? data.store?.MaxPartitions ?? 0),
+    },
+  };
+}
+
+export function normalizeUsageSeries(data: RateLimitUsageSeriesDto | null | undefined) {
+  if (!data) return null;
+  const points = (Array.isArray(data.points ?? data.Points) ? (data.points ?? data.Points) : []) as RateLimitUsagePointDto[];
+  return {
+    bucketMinutes: Number(data.bucketMinutes ?? data.BucketMinutes ?? 1),
+    trackingSinceUtc: data.trackingSinceUtc ?? data.TrackingSinceUtc ?? null,
+    points: points.map((p) => ({
+      startUtc: String(p.startUtc ?? p.StartUtc ?? ''),
+      covered: (p.covered ?? p.Covered) !== false,
+      decisions: Number(p.decisions ?? p.Decisions ?? 0),
+      admitted: Number(p.admitted ?? p.Admitted ?? 0),
+      refusedByRate: Number(p.refusedByRate ?? p.RefusedByRate ?? 0),
+      refusedByStreams: Number(p.refusedByStreams ?? p.RefusedByStreams ?? 0),
+    })),
+  };
+}
+
+export function normalizeScheduleReport(data: RateLimitScheduleReportDto | null | undefined) {
+  if (!data) return null;
+  const rules = (Array.isArray(data.rules ?? data.Rules) ? (data.rules ?? data.Rules) : []) as ScheduleRuleStatusDto[];
+  return {
+    at: String(data.at ?? data.At ?? ''),
+    rules: rules.map((r) => ({
+      scope: String(r.scope ?? r.Scope ?? ''),
+      target: String(r.target ?? r.Target ?? ''),
+      identity: rateLimitRuleIdentity(String(r.scope ?? r.Scope ?? ''), String(r.target ?? r.Target ?? '')),
+      effective: r.effective ?? r.Effective ?? {},
+      activeWindow: r.activeWindow ?? r.ActiveWindow ?? null,
+      activeUntil: r.activeUntil ?? r.ActiveUntil ?? null,
+    })),
+  };
+}
+
+export function findDraftRule(rules: RateLimitRule[], identity: string): RateLimitRule | undefined {
+  return rules.find((r) => rateLimitRuleIdentity(r.scope, r.target) === identity);
+}
+
+export function ruleFormSnapshot(rule: Pick<RateLimitRule, 'rpm' | 'burst' | 'maxConcurrentStreams' | 'enabled' | 'schedule'>): string {
+  return JSON.stringify([
+    tierPayload(rule),
+    rule.enabled !== false,
+    rule.schedule || [],
+  ]);
+}
+
+export function undoRateLimitChange(
+  draft: RateLimitConfig,
+  saved: RateLimitConfig,
+  id: string,
+): RateLimitConfig {
+  const next = cloneRateLimitsConfig(draft);
+  if (id === 'enabled') next.enabled = saved.enabled;
+  else if (id === 'adaptive') next.adaptiveEnabled = saved.adaptiveEnabled;
+  else if (id === 'default') next.default = cloneRateLimitsConfig(saved.default);
+  else if (id.startsWith('plan:')) {
+    const slug = id.slice(5);
+    const plans = { ...(next.plans || {}) };
+    for (const k of Object.keys(plans)) {
+      if (k.toLowerCase() === slug.toLowerCase()) delete plans[k];
+    }
+    const stored = Object.keys(saved.plans || {}).find((k) => k.toLowerCase() === slug.toLowerCase());
+    if (stored) plans[stored] = cloneRateLimitsConfig(saved.plans[stored]);
+    next.plans = plans;
+  } else if (id.startsWith('rule:')) {
+    const identity = id.slice(5);
+    const stored = findDraftRule(saved.rules, identity);
+    const rules = next.rules.filter((r) => rateLimitRuleIdentity(r.scope, r.target) !== identity);
+    const at = next.rules.findIndex((r) => rateLimitRuleIdentity(r.scope, r.target) === identity);
+    if (stored) rules.splice(at >= 0 ? at : rules.length, 0, cloneRateLimitsConfig(stored));
+    next.rules = rules;
+  }
+  return next;
+}
+
+export function buildWindowPreviewBody(
+  rule: Pick<RateLimitRule, 'scope' | 'target' | 'rpm' | 'burst' | 'maxConcurrentStreams'>,
+  schedule: RateLimitWindow[],
+  candidate: RateLimitWindow,
+  editIndex: number,
+): { scope: string; target: string; rpm: number; burst: number; maxConcurrentStreams: number; windows: RateLimitWindow[]; candidate: string } {
+  const others = schedule.filter((_, i) => i !== editIndex);
+  return {
+    scope: rule.scope,
+    target: rule.target,
+    ...tierPayload(rule),
+    windows: [...others, candidate].map((w) => windowPayload(w)),
+    candidate: candidate.name,
+  };
+}
+
+// ---- extended store state ----
+
+export type RateLimitUsageTab = 'tenantModel' | 'tenant' | 'model' | 'key';
+
+export interface TierDrawerState {
+  kind: 'default' | 'plan';
+  slug: string;
+  originalSlug: string;
+  isNew: boolean;
+  rpm: number;
+  burst: number;
+  maxConcurrentStreams: number;
+}
+
+export interface RuleDrawerState {
+  identity: string;
+  scope: string;
+  target: string;
+  rpm: number;
+  burst: number;
+  maxConcurrentStreams: number;
+  enabled: boolean;
+  schedule: RateLimitWindow[];
+}
+
+const [usageReport, setUsageReport] = createSignal<ReturnType<typeof normalizeUsageReport>>(null);
+const [usageSeries, setUsageSeries] = createSignal<ReturnType<typeof normalizeUsageSeries>>(null);
+const [usageMinutes, setUsageMinutes] = createSignal(60);
+const [usageTab, setUsageTab] = createSignal<RateLimitUsageTab>('tenantModel');
+const [usageLoading, setUsageLoading] = createSignal(false);
+const [usageError, setUsageError] = createSignal('');
+const [usageStale, setUsageStale] = createSignal(false);
+const [usageUnavailable, setUsageUnavailable] = createSignal(false);
+const [usageLoadedAt, setUsageLoadedAt] = createSignal(0);
+
+const [scheduleSaved, setScheduleSaved] = createSignal<ReturnType<typeof normalizeScheduleReport>>(null);
+const [scheduleError, setScheduleError] = createSignal('');
+
+const [reviewOpen, setReviewOpen] = createSignal(false);
+const [tierDrawer, setTierDrawer] = createSignal<TierDrawerState | null>(null);
+const [tierDrawerOpen, setTierDrawerOpen] = createSignal(false);
+const [tierDrawerError, setTierDrawerError] = createSignal('');
+const [ruleDrawer, setRuleDrawer] = createSignal<RuleDrawerState | null>(null);
+const [ruleDrawerOpen, setRuleDrawerOpen] = createSignal(false);
+const [ruleDrawerError, setRuleDrawerError] = createSignal('');
+const [windowEditIndex, setWindowEditIndex] = createSignal(-1);
+const [windowForm, setWindowForm] = createSignal<RateLimitWindow | null>(null);
+const [windowOpen, setWindowOpen] = createSignal(false);
+const [windowError, setWindowError] = createSignal('');
+const [windowPreview, setWindowPreview] = createSignal<RateLimitWindowPreviewDto | null>(null);
+
+let usageSeq = 0;
+let seriesSeq = 0;
+let scheduleSeq = 0;
+let previewTimer: ReturnType<typeof setTimeout> | null = null;
+let previewSeq = 0;
+let scheduleRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+
+function queueScheduleRefresh(): void {
+  if (scheduleRefreshTimer) clearTimeout(scheduleRefreshTimer);
+  scheduleRefreshTimer = setTimeout(() => {
+    scheduleRefreshTimer = null;
+    void loadRateLimitSchedule();
+  }, 300);
+}
+
+function editable(): boolean {
+  return !readOnlyReason() && !saving();
+}
+
+export async function loadRateLimitUsage(): Promise<void> {
+  const seq = ++usageSeq;
+  setUsageLoading(true);
+  try {
+    const minutes = Number(usageMinutes()) || 60;
+    const take = usageTake((saved()?.rules || draft()?.rules || []).length);
+    const report = await apiClient.apiJson<RateLimitUsageReportDto>(
+      `/admin/api/rate-limits/usage?minutes=${minutes}&take=${take}`,
+    );
+    if (seq !== usageSeq) return;
+    setUsageReport(normalizeUsageReport(report));
+    setUsageError('');
+    setUsageStale(false);
+    setUsageUnavailable(false);
+    setUsageLoadedAt(Date.now());
+    void loadRateLimitUsageSeries();
+  } catch (e) {
+    if (seq !== usageSeq) return;
+    const err = e as { status?: number; message?: string };
+    setUsageUnavailable(err.status === 503);
+    setUsageStale(!!usageReport());
+    setUsageError(err.message || 'Could not load rate-limit activity.');
+  } finally {
+    if (seq === usageSeq) setUsageLoading(false);
+  }
+}
+
+export async function loadRateLimitUsageSeries(): Promise<void> {
+  const seq = ++seriesSeq;
+  try {
+    const minutes = Number(usageMinutes()) || 60;
+    const bucket = seriesBucketMinutes(minutes);
+    const series = await apiClient.apiJson<RateLimitUsageSeriesDto>(
+      `/admin/api/rate-limits/usage/timeseries?minutes=${minutes}&bucketMinutes=${bucket}`,
+    );
+    if (seq !== seriesSeq) return;
+    setUsageSeries(normalizeUsageSeries(series));
+  } catch {
+    if (seq !== seriesSeq) return;
+    setUsageSeries(null);
+  }
+}
+
+export async function loadRateLimitSchedule(): Promise<void> {
+  const seq = ++scheduleSeq;
+  setScheduleError('');
+  const from = new Date();
+  const to = new Date(from.getTime() + 7 * 86400000);
+  const query = `from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}&take=200`;
+  const dirty = isRateLimitsDirty(saved(), draft());
+  try {
+    const savedReq = apiClient.apiJson<RateLimitScheduleReportDto>(`/admin/api/rate-limits/schedule?${query}`);
+    const draftReq = dirty
+      ? apiClient.apiJson<RateLimitScheduleReportDto>('/admin/api/rate-limits/schedule/preview', {
+          method: 'POST',
+          body: JSON.stringify({
+            rules: buildRateLimitsPayload(draft()).rules,
+            from: from.toISOString(),
+            to: to.toISOString(),
+            take: 200,
+          }),
+        })
+      : savedReq;
+    const [savedRes, draftRes] = await Promise.allSettled([savedReq, draftReq]);
+    if (seq !== scheduleSeq) return;
+    if (savedRes.status === 'fulfilled') setScheduleSaved(normalizeScheduleReport(savedRes.value));
+    else {
+      setScheduleSaved(null);
+      setScheduleError(savedRes.reason?.message || 'Could not load the schedule.');
+    }
+    if (draftRes.status === 'rejected' && !scheduleError()) {
+      setScheduleError(draftRes.reason?.message || 'Could not load the schedule.');
+    }
+  } catch (e) {
+    if (seq !== scheduleSeq) return;
+    setScheduleError((e as Error).message || 'Could not load the schedule.');
+  }
+}
+
+export async function previewRateLimitWindow(
+  rule: RuleDrawerState,
+  schedule: RateLimitWindow[],
+  candidate: RateLimitWindow,
+  editIndex: number,
+): Promise<RateLimitWindowPreviewDto | null> {
+  const seq = ++previewSeq;
+  const body = buildWindowPreviewBody(rule, schedule, candidate, editIndex);
+  if (!candidate.name.trim()) {
+    setWindowPreview(null);
+    return null;
+  }
+  try {
+    const preview = await apiClient.apiJson<RateLimitWindowPreviewDto>('/admin/api/rate-limits/windows/preview', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+    if (seq !== previewSeq) return null;
+    setWindowPreview(preview);
+    return preview;
+  } catch (e) {
+    if (seq !== previewSeq) return null;
+    setWindowPreview(null);
+    setWindowError((e as Error).message || 'Could not check the window.');
+    return null;
+  }
+}
+
+export function queueWindowPreview(): void {
+  if (previewTimer) clearTimeout(previewTimer);
+  previewTimer = setTimeout(() => {
+    previewTimer = null;
+    const rule = ruleDrawer();
+    const form = windowForm();
+    if (!rule || !form || !windowOpen()) return;
+    void previewRateLimitWindow(rule, rule.schedule, form, windowEditIndex());
+  }, 250);
+}
+
+export function openTierDrawer(kind: 'default' | 'plan', slug = ''): void {
+  const cfg = draft();
+  if (!cfg) return;
+  if (!editable() && kind === 'plan' && !slug) return;
+  const tier =
+    kind === 'default'
+      ? cfg.default
+      : cfg.plans[slug] || { rpm: 60, burst: 10, maxConcurrentStreams: 5 };
+  setTierDrawer({
+    kind,
+    slug: slug || '',
+    originalSlug: slug || '',
+    isNew: kind === 'plan' && !slug,
+    rpm: tier.rpm,
+    burst: tier.burst,
+    maxConcurrentStreams: tier.maxConcurrentStreams,
+  });
+  setTierDrawerError('');
+  setTierDrawerOpen(true);
+}
+
+export function closeTierDrawer(): void {
+  setTierDrawerOpen(false);
+  setTierDrawer(null);
+}
+
+export function applyTierDrawer(): boolean {
+  const t = tierDrawer();
+  const cfg = draft();
+  if (!t || !cfg || !editable()) return false;
+  const err = validateTierFields(
+    { rpm: t.rpm, burst: t.burst, maxConcurrentStreams: t.maxConcurrentStreams },
+    { floorRpm: true },
+  );
+  if (err) {
+    setTierDrawerError(err);
+    return false;
+  }
+  if (t.kind === 'plan') {
+    const slugErr = validatePlanSlug(t.slug, cfg.plans, t.originalSlug);
+    if (slugErr) {
+      setTierDrawerError(slugErr);
+      return false;
+    }
+    patchDraft((d) => {
+      const slug = String(t.slug || '').trim();
+      if (t.originalSlug && t.originalSlug !== slug) delete d.plans[t.originalSlug];
+      d.plans[slug] = tierPayload(t);
+    });
+  } else {
+    patchDraft((d) => {
+      d.default = tierPayload(t);
+    });
+  }
+  closeTierDrawer();
+  queueScheduleRefresh();
+  return true;
+}
+
+export function removePlanFromDrawer(): void {
+  const t = tierDrawer();
+  if (!t?.originalSlug) return;
+  patchDraft((d) => {
+    delete d.plans[t.originalSlug];
+  });
+  closeTierDrawer();
+  queueScheduleRefresh();
+}
+
+export function openRuleDrawer(identity: string): void {
+  const cfg = draft();
+  if (!cfg) return;
+  const rule = findDraftRule(cfg.rules, identity);
+  if (!rule) return;
+  setRuleDrawer({
+    identity,
+    scope: rule.scope,
+    target: rule.target,
+    rpm: rule.rpm,
+    burst: rule.burst,
+    maxConcurrentStreams: rule.maxConcurrentStreams,
+    enabled: rule.enabled !== false,
+    schedule: cloneRateLimitsConfig(rule.schedule || []),
+  });
+  setRuleDrawerError('');
+  setWindowOpen(false);
+  setRuleDrawerOpen(true);
+  if (!usageReport()) void loadRateLimitUsage();
+}
+
+export function closeRuleDrawer(): void {
+  setRuleDrawerOpen(false);
+  setWindowOpen(false);
+  setRuleDrawer(null);
+}
+
+export function applyRuleDrawer(): boolean {
+  const form = ruleDrawer();
+  const cfg = draft();
+  if (!form || !cfg || !editable()) return false;
+  const err = validateTierFields(
+    { rpm: form.rpm, burst: form.burst, maxConcurrentStreams: form.maxConcurrentStreams },
+    { scope: form.scope },
+  );
+  if (err) {
+    setRuleDrawerError(err);
+    return false;
+  }
+  patchDraft((d) => {
+    const rule = findDraftRule(d.rules, form.identity);
+    if (!rule) return;
+    Object.assign(rule, tierPayload(form), {
+      enabled: form.enabled !== false,
+      schedule: cloneRateLimitsConfig(form.schedule),
+    });
+  });
+  closeRuleDrawer();
+  queueScheduleRefresh();
+  return true;
+}
+
+export function deleteRuleFromDrawer(): void {
+  const form = ruleDrawer();
+  if (!form) return;
+  patchDraft((d) => {
+    d.rules = d.rules.filter((r) => rateLimitRuleIdentity(r.scope, r.target) !== form.identity);
+  });
+  closeRuleDrawer();
+  queueScheduleRefresh();
+}
+
+export function openWindowEditor(index: number): void {
+  const rule = ruleDrawer();
+  if (!rule) return;
+  const existing = index >= 0 ? rule.schedule[index] : null;
+  setWindowEditIndex(existing ? index : -1);
+  setWindowForm(existing ? cloneRateLimitsConfig(existing) : blankWindow(rule));
+  setWindowError('');
+  setWindowPreview(null);
+  setWindowOpen(true);
+  queueWindowPreview();
+}
+
+export function closeWindowEditor(): void {
+  setWindowOpen(false);
+  setWindowForm(null);
+  setWindowPreview(null);
+}
+
+export function applyWindowEditor(): boolean {
+  const rule = ruleDrawer();
+  const form = windowForm();
+  if (!rule || !form) return false;
+  if (!form.name.trim()) {
+    setWindowError('Give the window a name.');
+    return false;
+  }
+  const payload = windowPayload(form);
+  const duplicate = rule.schedule.some(
+    (w, i) => i !== windowEditIndex() && w.name.toLowerCase() === payload.name.toLowerCase(),
+  );
+  if (duplicate) {
+    setWindowError('Another window on this rule already has that name.');
+    return false;
+  }
+  const nextSchedule = [...rule.schedule];
+  const idx = windowEditIndex();
+  if (idx >= 0) nextSchedule[idx] = payload;
+  else nextSchedule.push(payload);
+  setRuleDrawer({ ...rule, schedule: nextSchedule });
+  closeWindowEditor();
+  queueWindowPreview();
+  queueScheduleRefresh();
+  return true;
+}
+
+export function removeWindow(index: number): void {
+  const rule = ruleDrawer();
+  if (!rule) return;
+  setRuleDrawer({
+    ...rule,
+    schedule: rule.schedule.filter((_, i) => i !== index),
+  });
+  queueScheduleRefresh();
+}
+
+export function updateTierDrawerField(field: keyof RateLimitTier, value: number): void {
+  const t = tierDrawer();
+  if (!t) return;
+  setTierDrawer({ ...t, [field]: value });
+}
+
+export function updateTierDrawerSlug(slug: string): void {
+  const t = tierDrawer();
+  if (!t) return;
+  setTierDrawer({ ...t, slug });
+}
+
+export function updateRuleDrawerField(
+  field: keyof Pick<RuleDrawerState, 'rpm' | 'burst' | 'maxConcurrentStreams' | 'enabled' | 'target'>,
+  value: number | boolean | string,
+): void {
+  const r = ruleDrawer();
+  if (!r) return;
+  setRuleDrawer({ ...r, [field]: value } as RuleDrawerState);
+}
+
+export function updateWindowForm(patch: Partial<RateLimitWindow>): void {
+  const f = windowForm();
+  if (!f) return;
+  setWindowForm({ ...f, ...patch });
+  queueWindowPreview();
+}
+
+export function toggleWindowDay(day: string): void {
+  const f = windowForm();
+  if (!f) return;
+  const days = new Set(f.days || []);
+  if (days.has(day)) days.delete(day);
+  else days.add(day);
+  setWindowForm({ ...f, days: [...days] });
+  queueWindowPreview();
+}
+
+export function tierDrawerDirty(): boolean {
+  const t = tierDrawer();
+  const cfg = draft();
+  if (!tierDrawerOpen() || !t || !cfg) return false;
+  if (t.isNew) return true;
+  const source = t.kind === 'default' ? cfg.default : cfg.plans[t.originalSlug];
+  if (!source) return true;
+  if (String(t.slug || '') !== String(t.originalSlug || '')) return true;
+  return JSON.stringify(tierPayload(t)) !== JSON.stringify(tierPayload(source));
+}
+
+export function ruleDrawerDirty(): boolean {
+  const form = ruleDrawer();
+  const cfg = draft();
+  if (!ruleDrawerOpen() || !form || !cfg) return false;
+  const rule = findDraftRule(cfg.rules, form.identity);
+  if (!rule) return false;
+  return ruleFormSnapshot(form) !== ruleFormSnapshot(rule);
+}
+
+export function windowEditorDirty(): boolean {
+  if (!windowOpen() || !windowForm()) return false;
+  const blank = blankWindow(ruleDrawer() ?? undefined);
+  return JSON.stringify(windowForm()) !== JSON.stringify(blank);
+}
+
+export function rateLimitsWorkInProgress(): boolean {
+  return (
+    isRateLimitsDirty(saved(), draft()) ||
+    tierDrawerDirty() ||
+    ruleDrawerDirty() ||
+    windowEditorDirty()
+  );
+}
+
+export function dirtyView(): RateLimitDirtyView {
+  return computeDirtyView(saved(), draft(), isRateLimitsDirty(saved(), draft()));
+}
+
+export function undoDirtyChange(id: string): void {
+  const baseline = saved();
+  const current = draft();
+  if (!baseline || !current || !editable()) return;
+  setDraft(undoRateLimitChange(current, baseline, id));
+  if (!isRateLimitsDirty(saved(), draft())) setReviewOpen(false);
+  queueScheduleRefresh();
+}
+
+export async function requestSaveRateLimits(): Promise<void> {
+  const view = dirtyView();
+  if (!reviewOpen() && view.destructive > 0) {
+    setReviewOpen(true);
+    return;
+  }
+  await saveRateLimits();
+  setReviewOpen(false);
+}
+
+export function useRateLimitActivityStore() {
+  return {
+    usageReport,
+    usageSeries,
+    usageMinutes,
+    usageTab,
+    usageLoading,
+    usageError,
+    usageStale,
+    usageUnavailable,
+    usageLoadedAt,
+    setUsageMinutes: (m: number) => {
+      setUsageMinutes(m);
+      void loadRateLimitUsage();
+    },
+    setUsageTab,
+    loadUsage: loadRateLimitUsage,
+  };
+}
+
+export function useRateLimitDrawersStore() {
+  return {
+    tierDrawer,
+    tierDrawerOpen,
+    tierDrawerError,
+    ruleDrawer,
+    ruleDrawerOpen,
+    ruleDrawerError,
+    windowEditIndex,
+    windowForm,
+    windowOpen,
+    windowError,
+    windowPreview,
+    scheduleSaved,
+    scheduleError,
+    reviewOpen,
+    setReviewOpen,
+    openTierDrawer,
+    closeTierDrawer,
+    applyTierDrawer,
+    removePlanFromDrawer,
+    openRuleDrawer,
+    closeRuleDrawer,
+    applyRuleDrawer,
+    deleteRuleFromDrawer,
+    openWindowEditor,
+    closeWindowEditor,
+    applyWindowEditor,
+    removeWindow,
+    updateTierDrawerField,
+    updateTierDrawerSlug,
+    updateRuleDrawerField,
+    updateWindowForm,
+    toggleWindowDay,
+    tierDrawerDirty,
+    ruleDrawerDirty,
+    windowEditorDirty,
+    dirtyView,
+    undoDirtyChange,
+    requestSave: requestSaveRateLimits,
+    loadSchedule: loadRateLimitSchedule,
+  };
+}
+
+export { diffRateLimits, computeDirtyView, type RateLimitDiffItem, type RateLimitDirtyView };

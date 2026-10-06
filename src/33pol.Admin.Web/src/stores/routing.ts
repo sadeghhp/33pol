@@ -12,6 +12,8 @@ const [modelsFilter, setModelsFilter] = createSignal('');
 const [backendsFilter, setBackendsFilter] = createSignal('');
 const [debouncedModels, setDebouncedModels] = createSignal('');
 const [debouncedBackends, setDebouncedBackends] = createSignal('');
+const [modelsVersion, setModelsVersion] = createSignal(0);
+const [backendsVersion, setBackendsVersion] = createSignal(0);
 
 const debounceModels = debounceMs((q: string) => setDebouncedModels(q), 400);
 const debounceBackends = debounceMs((q: string) => setDebouncedBackends(q), 400);
@@ -70,16 +72,19 @@ export function isModelStopped(m: Record<string, unknown>): boolean {
 }
 
 function filteredModels(): Record<string, unknown>[] {
+  modelsVersion();
   return filterModels(normalizeList(modelsResource.snapshot().data), debouncedModels(), modelSort);
 }
 
 function filteredBackends(): Record<string, unknown>[] {
+  backendsVersion();
   return filterBackends(normalizeList(backendsResource.snapshot().data), debouncedBackends(), backendSort);
 }
 
 async function loadModels(opts?: { force?: boolean; background?: boolean }): Promise<void> {
   try {
     await modelsResource.load(opts);
+    setModelsVersion((v) => v + 1);
   } catch (e) {
     handleApiError(e, 'routing');
   }
@@ -88,6 +93,7 @@ async function loadModels(opts?: { force?: boolean; background?: boolean }): Pro
 async function loadBackends(opts?: { force?: boolean; background?: boolean }): Promise<void> {
   try {
     await backendsResource.load(opts);
+    setBackendsVersion((v) => v + 1);
   } catch (e) {
     handleApiError(e, 'routing');
   }

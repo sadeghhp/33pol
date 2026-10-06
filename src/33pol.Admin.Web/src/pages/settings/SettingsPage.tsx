@@ -1,21 +1,31 @@
-import { For, Show, createEffect, lazy, onCleanup, onMount } from 'solid-js';
+import { For, Show, createEffect, createSignal, lazy, onCleanup, onMount } from 'solid-js';
 import { useSearchParams } from '@solidjs/router';
-import { Button, Tabs } from '../../components/primitives';
+import { Button, Dialog, Tabs } from '../../components/primitives';
 import { IconActivity, IconCheckCircle, IconRefresh } from '../../components/icons';
 import { activateCorsPanel, disposeCorsPanel, loadCors, saveCors, useCorsStore } from '../../stores/cors';
-import { activateSettingsPage, disposeSettingsPage, useSettingsStore, type SettingsSubTab } from '../../stores/settings';
+import {
+  activateSettingsPage,
+  disposeSettingsPage,
+  reloadConfigFromDisk,
+  useSettingsStore,
+  type SettingsSubTab,
+} from '../../stores/settings';
+import { loadTenantGrants, saveTenantGrants, toggleModel, toggleRestricted, useTenantGrantsStore } from '../../stores/tenantGrants';
 
 const RateLimitsPage = lazy(() => import('../ratelimits/RateLimitsPage'));
 
 export default function SettingsPage() {
   const store = useSettingsStore();
   const cors = useCorsStore();
+  const tenant = useTenantGrantsStore();
   const [params] = useSearchParams();
+  const [reloadConfirm, setReloadConfirm] = createSignal(false);
+  const [reloadBusy, setReloadBusy] = createSignal(false);
 
   onMount(() => {
     activateSettingsPage();
     const sub = params.sub as SettingsSubTab | undefined;
-    if (sub === 'ratelimits' || sub === 'cors' || sub === 'observability' || sub === 'runtime') {
+    if (sub === 'ratelimits' || sub === 'cors' || sub === 'observability' || sub === 'runtime' || sub === 'access') {
       store.setSubTab(sub);
     }
   });
@@ -32,7 +42,20 @@ export default function SettingsPage() {
     store.setRateLimitsVisible(store.subTab() === 'ratelimits');
     if (store.subTab() === 'cors') activateCorsPanel();
     else disposeCorsPanel();
+    if (store.subTab() === 'access') void loadTenantGrants();
   });
+
+  const status = () => store.configStatus();
+
+  const runReload = async () => {
+    setReloadBusy(true);
+    try {
+      await reloadConfigFromDisk();
+      setReloadConfirm(false);
+    } finally {
+      setReloadBusy(false);
+    }
+  };
 
   return (
     <section class="page" id="panel-settings">
@@ -55,7 +78,60 @@ export default function SettingsPage() {
                 <Show when={store.phase() === 'loading'}>
                   <p class="loading-hint">Loading config status…</p>
                 </Show>
-                <pre class="config-dump">{JSON.stringify(store.configStatus(), null, 2)}</pre>
+                <Show when={status()}>
+                  {(s) => (
+                    <div class="config-summary">
+                      <p><strong>Models:</strong> {String(s().modelCount ?? (s().models as unknown[])?.length ?? '—')}</p>
+                      <p><strong>Hot reload:</strong> {s().hotReloadEnabled ? 'enabled' : 'disabled'}</p>
+                      <p><strong>Watch:</strong> {s().watchEnabled ? 'enabled' : 'disabled'}</p>
+                      <p><strong>Last reload:</strong> {String(s().lastReload ?? '—')}</p>
+                    </div>
+                  )}
+                </Show>
+                <div class="toolbar">
+                  <Button variant="ghost" size="sm" onClick={() => void store.load({ force: true })}>
+                    <span class="icon"><IconRefresh /></span> Refresh
+                  </Button>
+                  <Button size="sm" onClick={() => setReloadConfirm(true)}>Reload config from disk</Button>
+                </div>
+                <details>
+                  <summary>Raw config status</summary>
+                  <pre class="config-dump">{JSON.stringify(store.configStatus(), null, 2)}</pre>
+                </details>
+              </div>
+            ),
+          },
+          {
+            id: 'access',
+            label: 'Model access',
+            content: () => (
+              <div class="card">
+                <h3>Tenant model access</h3>
+                <p class="hint">Restrict which models this tenant may use. When unrestricted, all registry models are allowed.</p>
+                <Show when={tenant.loading()}><p class="loading-hint">Loading…</p></Show>
+                <Show when={!tenant.loading()}>
+                  <label class="checkbox-row">
+                    <input type="checkbox" checked={tenant.restricted()} onChange={(e) => toggleRestricted(e.currentTarget.checked)} />
+                    Restrict model access
+                  </label>
+                  <Show when={tenant.restricted()}>
+                    <For each={tenant.registryModels()}>
+                      {(m) => (
+                        <label class="checkbox-row">
+                          <input
+                            type="checkbox"
+                            checked={tenant.selected().includes(m.id)}
+                            onChange={() => toggleModel(m.id)}
+                          />
+                          {m.id}
+                        </label>
+                      )}
+                    </For>
+                  </Show>
+                  <Button onClick={() => void saveTenantGrants()} disabled={tenant.saving()}>
+                    {tenant.saving() ? 'Saving…' : 'Save tenant access'}
+                  </Button>
+                </Show>
               </div>
             ),
           },
@@ -139,6 +215,14 @@ export default function SettingsPage() {
           },
         ]}
       />
+
+      <Dialog open={reloadConfirm()} title="Reload config from disk?" onClose={() => setReloadConfirm(false)}>
+        <p>Reload models and configuration from disk? Running traffic may briefly see registry changes.</p>
+        <div class="modal-actions">
+          <Button variant="ghost" onClick={() => setReloadConfirm(false)}>Cancel</Button>
+          <Button onClick={runReload} disabled={reloadBusy()}>{reloadBusy() ? 'Reloading…' : 'Reload'}</Button>
+        </div>
+      </Dialog>
     </section>
   );
 }

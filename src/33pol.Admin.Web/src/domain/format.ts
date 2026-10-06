@@ -36,6 +36,27 @@ export function formatCost(value: unknown, currency?: string): string {
   }
 }
 
+export function formatMsParts(ms: unknown): { value: string; unit: string } {
+  const n = Number(ms);
+  if (!Number.isFinite(n) || n <= 0) return { value: '—', unit: '' };
+  if (n < 1000) return { value: String(Math.round(n)), unit: 'ms' };
+  if (n < 60000) return { value: (n / 1000).toFixed(n < 10000 ? 2 : 1), unit: 's' };
+  const m = Math.floor(n / 60000);
+  const sec = Math.round((n % 60000) / 1000);
+  return { value: `${m}m ${String(sec).padStart(2, '0')}`, unit: 's' };
+}
+
+export function formatMsShort(ms: unknown): string {
+  const { value, unit } = formatMsParts(ms);
+  return value === '—' ? value : `${value}${unit}`;
+}
+
+export function formatSharePct(v: unknown): string {
+  const n = Number(v) || 0;
+  if (n > 0 && n < 0.001) return '<0.1%';
+  return (n * 100).toFixed(n >= 0.1 ? 0 : 1) + '%';
+}
+
 export function formatDurationMs(ms: unknown): string {
   if (ms == null || !Number.isFinite(Number(ms))) return '—';
   const value = Number(ms);

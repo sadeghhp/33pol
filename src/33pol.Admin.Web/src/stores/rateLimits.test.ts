@@ -1,16 +1,22 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildRateLimitsPayload,
+  buildWindowPreviewBody,
   canonicalRateLimits,
   cloneRateLimitsConfig,
+  findDraftRule,
   ifMatchHeaders,
   isRateLimitsDirty,
   normalizeRateLimitsPayload,
+  normalizeUsageReport,
   parseEtagVersion,
   rateLimitRuleIdentity,
   resolveMatchVersion,
+  ruleFormSnapshot,
+  undoRateLimitChange,
   type RateLimitConfig,
 } from './rateLimits';
+import { usageTake } from '../domain/rateLimitEdit';
 
 const baseConfig = (): RateLimitConfig => ({
   version: 7,
@@ -161,6 +167,84 @@ describe('isRateLimitsDirty', () => {
     const draft = cloneRateLimitsConfig(saved);
     draft.rules.reverse();
     expect(isRateLimitsDirty(saved, draft)).toBe(false);
+  });
+});
+
+describe('findDraftRule', () => {
+  it('findsByIdentity', () => {
+    const cfg = baseConfig();
+    const hit = findDraftRule(cfg.rules, 'model:gpt-4');
+    expect(hit?.target).toBe('gpt-4');
+  });
+});
+
+describe('ruleFormSnapshot', () => {
+  it('changesWhenScheduleDiffers', () => {
+    const rule = baseConfig().rules[0];
+    const a = ruleFormSnapshot(rule);
+    const b = ruleFormSnapshot({ ...rule, schedule: [{ ...blankScheduleWindow() }] });
+    expect(a).not.toBe(b);
+  });
+});
+
+function blankScheduleWindow() {
+  return {
+    name: 'w',
+    kind: 'weekly',
+    rpm: 1,
+    burst: 0,
+    maxConcurrentStreams: 0,
+    suspend: false,
+    priority: null,
+    from: null,
+    until: null,
+    days: ['mon'],
+    start: '09:00',
+    end: '17:00',
+    timeZone: 'UTC',
+    validFrom: null,
+    validUntil: null,
+  };
+}
+
+describe('undoRateLimitChange', () => {
+  it('restoresRemovedPlan', () => {
+    const saved = baseConfig();
+    const draft = cloneRateLimitsConfig(saved);
+    delete draft.plans.standard;
+    const next = undoRateLimitChange(draft, saved, 'plan:standard');
+    expect(next.plans.standard.rpm).toBe(1200);
+  });
+});
+
+describe('buildWindowPreviewBody', () => {
+  it('includesCandidateWindow', () => {
+    const rule = baseConfig().rules[0];
+    const candidate = blankScheduleWindow();
+    const body = buildWindowPreviewBody(rule, [], candidate, -1);
+    expect(body.candidate).toBe('w');
+    expect(body.windows).toHaveLength(1);
+  });
+});
+
+describe('normalizeUsageReport', () => {
+  it('acceptsPascalCaseFields', () => {
+    const report = normalizeUsageReport({
+      WindowMinutes: 60,
+      Totals: { Requests: 10, Admitted: 8, Rejected: 2, RejectionRate: 0.2 },
+      Limits: [{ LimitId: 'model:gpt-4', Scope: 'model', Target: 'gpt-4', Charged: 5, RefusedByRate: 1 }],
+    });
+    expect(report?.windowMinutes).toBe(60);
+    expect(report?.totals.requests).toBe(10);
+    expect(report?.limits[0].limitId).toBe('model:gpt-4');
+  });
+});
+
+describe('usageTake', () => {
+  it('scalesWithRuleCount', () => {
+    expect(usageTake(5)).toBe(200);
+    expect(usageTake(500)).toBe(500);
+    expect(usageTake(2000)).toBe(1000);
   });
 });
 

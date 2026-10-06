@@ -1,8 +1,8 @@
 import { createSignal } from 'solid-js';
 import { createResource, RESOURCE_FRESH_MS } from '../realtime/resources';
-import { apiClient, handleApiError } from './auth';
+import { apiClient, handleApiError, pushToast } from './auth';
 
-export type SettingsSubTab = 'runtime' | 'ratelimits' | 'cors' | 'observability';
+export type SettingsSubTab = 'runtime' | 'access' | 'ratelimits' | 'cors' | 'observability';
 
 const [subTab, setSubTab] = createSignal<SettingsSubTab>('runtime');
 const [configStatus, setConfigStatus] = createSignal<Record<string, unknown> | null>(null);
@@ -45,4 +45,17 @@ export function activateSettingsPage(): void {
 export function disposeSettingsPage(): void {
   resource.abort();
   setRateLimitsVisible(false);
+}
+
+export async function reloadConfigFromDisk(): Promise<void> {
+  try {
+    const body = await apiClient.apiJson<{ message?: string; status?: string }>('/admin/api/config/reload', {
+      method: 'POST',
+    });
+    pushToast(body?.message || 'Config reloaded from disk.');
+    await loadSettings({ force: true });
+  } catch (e) {
+    handleApiError(e, 'settings');
+    throw e;
+  }
 }

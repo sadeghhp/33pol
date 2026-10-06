@@ -1,4 +1,4 @@
-import { For, Show, createEffect, createSignal, onMount } from 'solid-js';
+import { For, Show, createEffect, createSignal, onCleanup, onMount } from 'solid-js';
 import { useLocation, useNavigate } from '@solidjs/router';
 import { Alert, Button, ToastContainer } from '../components/primitives';
 import {
@@ -29,6 +29,7 @@ import {
   setVerifyConnection,
 } from '../stores/auth';
 import { setActiveTab, setErrorsAutoRefresh, setLogsAutoRefresh, useConnectionLifecycle, useConnectionSnapshot } from '../stores/connection';
+import { subscribeHealthPolling, useHealthSignals } from '../stores/health';
 import { useSummary } from '../stores/summary';
 import { liveBadgeView } from './liveBadge';
 import { formatNum } from '../domain/format';
@@ -53,6 +54,8 @@ export function Shell(props: { children: unknown }) {
   const [showChangeKey, setShowChangeKey] = createSignal(false);
   const [headerKey, setHeaderKey] = createSignal('');
   const [showKey, setShowKey] = createSignal(false);
+  const [appVersion, setAppVersion] = createSignal('');
+  const health = useHealthSignals();
 
   setVerifyConnection(verifyConnection);
   useConnectionLifecycle();
@@ -61,10 +64,21 @@ export function Shell(props: { children: unknown }) {
     const tab = tabFromPath(location.pathname);
     setActiveTab(tab);
     setLogsAutoRefresh(tab === 'logs');
-    setErrorsAutoRefresh(tab === 'errors');
+    if (tab !== 'errors') setErrorsAutoRefresh(false);
   });
 
-  onMount(() => applyTheme(theme()));
+  onMount(() => {
+    applyTheme(theme());
+    void fetch('/', { cache: 'no-store' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((body) => {
+        const version = body?.version;
+        if (typeof version === 'string' && version) setAppVersion(`v${version}`);
+      })
+      .catch(() => {});
+  });
+
+  onCleanup(subscribeHealthPolling());
 
   const setThemeMode = (mode: ThemeMode) => {
     setTheme(mode);
@@ -84,7 +98,10 @@ export function Shell(props: { children: unknown }) {
   const s = () => summary();
   const totalErrors = () => formatNum(s()?.totalErrors ?? 0);
   const activeRequests = () => formatNum(s()?.activeRequests ?? 0);
+  const activeStreams = () => formatNum(s()?.activeStreams ?? 0);
   const live = () => liveBadgeView(conn());
+  const healthLive = () => health.healthLive();
+  const healthReady = () => health.healthReady();
 
   return (
     <>
@@ -97,7 +114,12 @@ export function Shell(props: { children: unknown }) {
                 <span class="brand-mark"><span class="icon"><IconZap /></span></span>
                 <div>
                   <span class="brand-name">33pol</span>
-                  <span class="brand-sub">Gateway</span>
+                  <span class="brand-sub">
+                    Gateway
+                    <Show when={appVersion()}>
+                      <span class="brand-version"> {appVersion()}</span>
+                    </Show>
+                  </span>
                 </div>
               </div>
               <nav class="rail-nav" role="tablist" aria-label="Sections">
@@ -149,10 +171,28 @@ export function Shell(props: { children: unknown }) {
                 <Show when={conn().degraded && conn().status !== 'fail'}>
                   <span class="vital-chip is-warn">Session check failed</span>
                 </Show>
+                <Show when={healthLive() !== null}>
+                  <span class={`vital-chip ${healthLive() ? 'is-ok' : 'is-fail'}`}>
+                    <span class="pulse-dot" classList={{ live: healthLive() === true }} />
+                    {healthLive() ? 'Live' : 'Live down'}
+                  </span>
+                </Show>
+                <Show when={healthReady() !== null}>
+                  <span class={`vital-chip ${healthReady() ? 'is-ok' : 'is-fail'}`}>
+                    <span class="vc-label">Ready</span>
+                    <span class="vc-value">{healthReady() ? 'ok' : 'no'}</span>
+                  </span>
+                </Show>
                 <Show when={Number(s()?.activeRequests ?? 0) > 0}>
                   <span class="vital-chip is-live">
                     <span class="pulse-dot live" />
                     <span class="vc-value">{activeRequests()}</span> <span class="vc-label">in flight</span>
+                  </span>
+                </Show>
+                <Show when={Number(s()?.activeStreams ?? 0) > 0}>
+                  <span class="vital-chip is-live">
+                    <span class="pulse-dot live" />
+                    <span class="vc-value">{activeStreams()}</span> <span class="vc-label">streams</span>
                   </span>
                 </Show>
                 <Show when={Number(s()?.totalErrors ?? 0) > 0}>

@@ -1,12 +1,11 @@
 using System.Net;
-using System.Text.RegularExpressions;
+using System.Text.Json;
 using Pol33.Integration.Tests.Support;
 
 namespace Pol33.Integration.Tests.Admin;
 
 /// <summary>
-/// Rate-limit help content: bundled in the ratelimits chunk and/or copied to a standalone file by
-/// postbuild for CI check scripts.
+/// Rate-limit help content published as static JSON (runtime fetch) and JS (build/check scripts).
 /// </summary>
 public sealed class AdminConsoleRateLimitHelpTests
 {
@@ -26,45 +25,34 @@ public sealed class AdminConsoleRateLimitHelpTests
     }
 
     [Fact]
-    public async Task HelpModule_CarriesEveryScopeInBothLanguages()
+    public async Task HelpJson_IsPublishedForRuntimeFetch()
     {
         using var factory = GatewayWebApplicationFactory.Create();
         using var client = factory.CreateClient();
 
-        var js = await GetHelpContentAsync(client);
+        var json = await client.GetAsync("/admin/admin-rate-limit-help.json");
+        json.StatusCode.Should().Be(HttpStatusCode.OK, "help JSON must be emitted by postbuild");
+        var text = await json.Content.ReadAsStringAsync();
+        using var doc = JsonDocument.Parse(text);
 
-        js.Should().Contain("RateLimitHelp");
-        js.Should().Contain("{ id: 'en', label: 'EN', name: 'English', dir: 'ltr' }");
-        js.Should().Contain("{ id: 'fa', label: 'فا', name: 'فارسی', dir: 'rtl' }");
+        doc.RootElement.TryGetProperty("en", out _).Should().BeTrue();
+        doc.RootElement.TryGetProperty("fa", out _).Should().BeTrue();
 
         foreach (var scope in ScopeIds)
         {
-            Regex.Matches(js, $@"^\s+{Regex.Escape(scope)}: \{{$", RegexOptions.Multiline).Count
-                .Should().BeGreaterThanOrEqualTo(2, $"scope '{scope}' needs entries under both languages");
+            text.Should().Contain($"\"{scope}\"");
         }
     }
 
     [Fact]
-    public async Task HelpContent_ExplainsRefusalSemantics()
+    public async Task HelpJs_IsCopiedForCheckScripts()
     {
         using var factory = GatewayWebApplicationFactory.Create();
         using var client = factory.CreateClient();
 
-        var js = await GetHelpContentAsync(client);
-
-        js.Should().Contain("429");
-        js.Should().Contain("Retry-After");
-        js.Should().Contain("Nothing is queued or slowed");
-    }
-
-    private static async Task<string> GetHelpContentAsync(HttpClient client)
-    {
-        // Solid loads help at runtime from the standalone file copied by postbuild; the ratelimits
-        // chunk only references RateLimitHelp in fetch/parse code, not the full guide prose.
-        var standalone = await client.GetAsync("/admin/admin-rate-limit-help.js");
-        standalone.StatusCode.Should().Be(HttpStatusCode.OK, "help must be copied by postbuild");
-        var text = await standalone.Content.ReadAsStringAsync();
+        var response = await client.GetAsync("/admin/admin-rate-limit-help.js");
+        response.StatusCode.Should().Be(HttpStatusCode.OK, "help JS must be copied by postbuild");
+        var text = await response.Content.ReadAsStringAsync();
         text.Should().Contain("RateLimitHelp");
-        return text;
     }
 }

@@ -7,12 +7,14 @@
 //
 // Usage: node scripts/check-rate-limit-help.mjs   (exit code 1 on any mismatch)
 
-import { readFileSync } from 'node:fs';
+import fs, { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const file = path.join(here, '..', 'src', '33pol.App', 'wwwroot', 'admin', 'admin-rate-limit-help.js');
+const sourceFile = path.join(here, '..', 'src', '33pol.Admin.Web', 'src', 'content', 'admin-rate-limit-help.js');
+const builtFile = path.join(here, '..', 'src', '33pol.App', 'wwwroot', 'admin', 'admin-rate-limit-help.js');
+const file = fs.existsSync(sourceFile) ? sourceFile : builtFile;
 
 export function loadHelp() {
   const src = readFileSync(file, 'utf8');

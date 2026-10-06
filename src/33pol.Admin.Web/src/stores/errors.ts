@@ -2,14 +2,28 @@ import { createSignal } from 'solid-js';
 import { createStore } from 'solid-js/store';
 import { debounceMs } from '../domain/filters';
 import { createResource, RESOURCE_FRESH_MS } from '../realtime/resources';
+import { resetVitalsErrorCounters } from './vitalsHistory';
 import { apiClient, handleApiError, pushToast } from './auth';
 
 export interface ErrorGroup extends Record<string, unknown> {
   fingerprint?: string;
   code?: string;
+  level?: string;
   message?: string;
   count?: number;
   lastSeenUtc?: string;
+  firstSeenUtc?: string;
+  modelId?: string;
+  statusCode?: number;
+  errorCode?: string;
+  endpointMethod?: string;
+  endpointPath?: string;
+}
+
+export interface ErrorFacets {
+  models?: { value: string; count: number }[];
+  statusCodes?: { value: string; count: number }[];
+  errorCodes?: { value: string; count: number }[];
 }
 
 const [search, setSearch] = createSignal('');
@@ -17,13 +31,17 @@ const [debouncedSearch, setDebouncedSearch] = createSignal('');
 const [modelFilter, setModelFilter] = createSignal('');
 const [statusFilter, setStatusFilter] = createSignal('');
 const [codeFilter, setCodeFilter] = createSignal('');
+const [levelFilter, setLevelFilter] = createSignal('all');
 const [range, setRange] = createSignal('24h');
 const [autoRefresh, setAutoRefresh] = createSignal(true);
 const [byId, setById] = createStore<Record<string, ErrorGroup>>({});
 const [order, setOrder] = createSignal<string[]>([]);
 const [expandedId, setExpandedId] = createSignal<string | null>(null);
 const [occurrences, setOccurrences] = createStore<Record<string, Record<string, unknown>[]>>({});
+const [facets, setFacets] = createSignal<ErrorFacets | null>(null);
+const [facetsError, setFacetsError] = createSignal(false);
 const [active, setActive] = createSignal(false);
+const [groupsTotal, setGroupsTotal] = createSignal(0);
 
 const applyDebounced = debounceMs((q: string) => setDebouncedSearch(q), 400);
 
@@ -34,6 +52,8 @@ function rangeParams(extra?: Record<string, string>): URLSearchParams {
   if (modelFilter().trim()) params.set('modelId', modelFilter().trim());
   if (statusFilter().trim()) params.set('status', statusFilter().trim());
   if (codeFilter().trim()) params.set('code', codeFilter().trim());
+  const level = levelFilter();
+  if (level && level !== 'all') params.set('level', level);
   const r = range();
   if (r !== 'all') {
     const hours: Record<string, number> = { '1h': 1, '24h': 24, '7d': 168, '30d': 720 };
@@ -53,16 +73,35 @@ export function errorsQueryString(extra?: Record<string, string>): string {
   return `?${rangeParams(extra).toString()}`;
 }
 
-const resource = createResource<{ items?: ErrorGroup[] }>({
+function facetsQueryString(): string {
+  const params = new URLSearchParams();
+  const r = range();
+  if (r !== 'all') {
+    const hours: Record<string, number> = { '1h': 1, '24h': 24, '7d': 168, '30d': 720 };
+    const h = hours[r];
+    if (h) params.set('from', new Date(Date.now() - h * 3600000).toISOString());
+  }
+  const q = params.toString();
+  return q ? `?${q}` : '';
+}
+
+const resource = createResource<{ groups?: ErrorGroup[]; total?: number }>({
   freshMs: RESOURCE_FRESH_MS.errors,
   fetch: async (signal) => {
-    const data = await apiClient.apiJson<{ items?: ErrorGroup[] }>(
+    const data = await apiClient.apiJson<{ groups?: ErrorGroup[]; total?: number }>(
       `/admin/api/errors/groups?${rangeParams()}`,
       { signal },
     );
-    return data ?? { items: [] };
+    return data ?? { groups: [] };
   },
 });
+
+export function facetOptions(values: { value: string; count: number }[] | undefined) {
+  return (values ?? []).map((f) => ({
+    value: f.value,
+    label: `${f.value} (${Number(f.count).toLocaleString()})`,
+  }));
+}
 
 export function useErrorsStore() {
   return {
@@ -79,6 +118,8 @@ export function useErrorsStore() {
     setStatusFilter,
     codeFilter,
     setCodeFilter,
+    levelFilter,
+    setLevelFilter,
     autoRefresh,
     setAutoRefresh,
     byId,
@@ -86,13 +127,33 @@ export function useErrorsStore() {
     expandedId,
     setExpandedId,
     occurrences,
+    facets,
+    facetsError,
+    groupsTotal,
     phase: () => resource.snapshot().phase,
-    load: (opts?: { force?: boolean }) => loadErrors(opts),
+    load: (opts?: { force?: boolean; background?: boolean }) => loadErrors(opts),
+    loadFacets,
     loadOccurrences,
     exportErrors,
     clearErrors,
     setActive,
+    applyFilters,
   };
+}
+
+export async function loadFacets(): Promise<void> {
+  try {
+    const data = await apiClient.apiJson<ErrorFacets>(`/admin/api/errors/facets${facetsQueryString()}`);
+    setFacets(data);
+    setFacetsError(false);
+  } catch {
+    setFacets(null);
+    setFacetsError(true);
+  }
+}
+
+export function applyFilters(): void {
+  void loadErrors({ background: true });
 }
 
 export async function exportErrors(format: 'json' | 'csv'): Promise<void> {
@@ -114,6 +175,9 @@ export async function clearErrors(): Promise<void> {
     await apiClient.apiJson('/admin/api/errors?confirm=true', { method: 'DELETE' });
     setById({});
     setOrder([]);
+    setOccurrences({});
+    setGroupsTotal(0);
+    resetVitalsErrorCounters();
     pushToast('All recorded errors cleared.');
   } catch (e) {
     handleApiError(e, 'errors');
@@ -125,16 +189,17 @@ export async function loadErrors(opts?: { force?: boolean; background?: boolean 
   try {
     const data = await resource.load(opts);
     if (!data) return;
-    const items = data.items ?? [];
+    const groups = data.groups ?? [];
     const map: Record<string, ErrorGroup> = {};
     const ids: string[] = [];
-    for (const row of items) {
+    for (const row of groups) {
       const id = String(row.fingerprint ?? row.code ?? row.message);
       map[id] = row;
       ids.push(id);
     }
     setById(map);
     setOrder(ids);
+    setGroupsTotal(Number(data.total ?? groups.length));
   } catch (e) {
     handleApiError(e, 'errors');
   }
@@ -143,12 +208,14 @@ export async function loadErrors(opts?: { force?: boolean; background?: boolean 
 export async function loadOccurrences(fingerprint: string): Promise<void> {
   if (occurrences[fingerprint]) return;
   try {
-    const data = await apiClient.apiJson<{ items?: Record<string, unknown>[] }>(
-      `/admin/api/errors/groups/${encodeURIComponent(fingerprint)}/occurrences?limit=20`,
+    const params = rangeParams({ fingerprint, limit: '20', offset: '0' });
+    const data = await apiClient.apiJson<{ occurrences?: Record<string, unknown>[] }>(
+      `/admin/api/errors?${params}`,
     );
-    setOccurrences(fingerprint, data?.items ?? []);
+    setOccurrences(fingerprint, data?.occurrences ?? []);
   } catch (e) {
     handleApiError(e, 'errors');
+    setOccurrences(fingerprint, []);
   }
 }
 
@@ -164,6 +231,7 @@ export function disposeErrorsPage(): void {
 
 export function activateErrorsPage(): void {
   setActive(true);
+  void loadFacets();
   const snap = resource.snapshot();
   if (snap.phase === 'idle' || snap.phase === 'stale') void loadErrors({ background: snap.phase === 'stale' });
 }

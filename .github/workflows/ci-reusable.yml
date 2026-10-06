@@ -20,7 +20,7 @@ jobs:
           cache: npm
           cache-dependency-path: src/33pol.Admin.Web/package-lock.json
 
-      - name: Admin frontend — install, typecheck, test, build
+      - name: Admin frontend — install, typecheck, test, build, e2e
         working-directory: src/33pol.Admin.Web
         run: |
           npm ci --ignore-scripts
@@ -33,9 +33,6 @@ jobs:
 
       - name: Admin perf gates (M17 baseline)
         run: node build/check-admin-perf-gates.mjs
-
-      - name: Legacy admin-console VM tests (Alpine source regression)
-        run: node --test tests/admin-console/
 
   build-test:
     needs: frontend

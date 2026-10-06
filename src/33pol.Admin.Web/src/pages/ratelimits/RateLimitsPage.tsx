@@ -1,70 +1,74 @@
 import { For, Show, createEffect, createSignal, onCleanup, onMount } from 'solid-js';
 import { Button, Dialog, Field, Select } from '../../components/primitives';
-import { IconFileText, IconPlus, IconRefresh, IconX } from '../../components/icons';
+import { IconChevronRight, IconFileText, IconPlus, IconRefresh } from '../../components/icons';
+import {
+  fetchRateLimitHelp,
+  type RateLimitHelpLang,
+} from '../../domain/rateLimitHelp';
+import { formatEnforcingNow, scopeInfo, tierText } from '../../domain/rateLimitEdit';
+import { formatNum } from '../../domain/format';
 import {
   RATE_LIMIT_SCOPES,
   activateRateLimitsPage,
   disposeRateLimitsPage,
+  rateLimitRuleIdentity,
+  useAddRuleIntent,
+  useRateLimitActivityStore,
+  useRateLimitDrawersStore,
   useRateLimitsStore,
 } from '../../stores/rateLimits';
-
-interface HelpSection {
-  id: string;
-  title: string;
-  intro?: string;
-  items?: Array<{ term?: string; text?: string; example?: string }>;
-}
-
-interface RateLimitHelpLang {
-  ui?: { guide?: string; guideSub?: string; example?: string };
-  sections?: HelpSection[];
-}
-
-type RateLimitHelpRoot = Record<string, RateLimitHelpLang>;
-
-async function fetchRateLimitHelp(): Promise<RateLimitHelpLang | null> {
-  try {
-    const res = await fetch('/admin/admin-rate-limit-help.js');
-    if (!res.ok) return null;
-    const text = await res.text();
-    const sandbox: { RateLimitHelp?: RateLimitHelpRoot } = {};
-    // Help script assigns window.RateLimitHelp; run against a stub window.
-    const run = new Function('window', text);
-    run(sandbox);
-    return sandbox.RateLimitHelp?.en ?? null;
-  } catch {
-    return null;
-  }
-}
+import { RateLimitActivitySection } from './RateLimitActivitySection';
+import { RateLimitRuleDrawer } from './RateLimitRuleDrawer';
+import { RateLimitTierDrawer } from './RateLimitTierDrawer';
 
 export default function RateLimitsPage(props: { visible: boolean }) {
   const store = useRateLimitsStore();
+  const drawers = useRateLimitDrawersStore();
+  const activity = useRateLimitActivityStore();
+  const intent = useAddRuleIntent();
   const [helpOpen, setHelpOpen] = createSignal(false);
   const [helpContent, setHelpContent] = createSignal<RateLimitHelpLang | null>(null);
+  const [helpLang, setHelpLang] = createSignal<'en' | 'fa'>('en');
   const [helpLoading, setHelpLoading] = createSignal(false);
   const [newScope, setNewScope] = createSignal('model');
   const [newTarget, setNewTarget] = createSignal('');
   const [newRpm, setNewRpm] = createSignal('60');
   const [newBurst, setNewBurst] = createSignal('0');
 
+  const onBeforeUnload = (e: BeforeUnloadEvent) => {
+    if (!store.workInProgress()) return;
+    e.preventDefault();
+    e.returnValue = 'Rate-limit changes have not been saved yet.';
+  };
+
   onMount(() => {
+    window.addEventListener('beforeunload', onBeforeUnload);
     if (props.visible) activateRateLimitsPage();
   });
 
-  onCleanup(() => disposeRateLimitsPage());
+  onCleanup(() => {
+    window.removeEventListener('beforeunload', onBeforeUnload);
+    disposeRateLimitsPage();
+  });
 
   createEffect(() => {
     if (props.visible) {
       activateRateLimitsPage();
       void store.load();
+      const pending = intent.addRuleIntent();
+      if (pending) {
+        setNewScope(pending.scope);
+        setNewTarget(pending.target);
+        intent.setAddRuleIntent(null);
+      }
     }
   });
 
   createEffect(() => {
     if (!helpOpen()) return;
-    if (helpContent() || helpLoading()) return;
+    const lang = helpLang();
     setHelpLoading(true);
-    void fetchRateLimitHelp()
+    void fetchRateLimitHelp(lang)
       .then((content) => setHelpContent(content))
       .finally(() => setHelpLoading(false));
   });
@@ -88,8 +92,37 @@ export default function RateLimitsPage(props: { visible: boolean }) {
     setNewBurst('0');
   };
 
-  const scopeLabel = (scope: string) =>
-    RATE_LIMIT_SCOPES.find((s) => s.value === scope)?.label ?? scope;
+  const limitActivity = (identity: string) => {
+    const row = activity.usageReport()?.limits.find((l) => l.limitId === identity) ?? null;
+    if (!row) return { text: '—', sub: '' };
+    const refused = row.refusedByRate + row.refusedByStreams;
+    const sub =
+      row.peakUtilization != null
+        ? `peak ${Math.round(row.peakUtilization * 100)}%`
+        : '';
+    return {
+      text: `${formatNum(row.charged)} passed · ${formatNum(refused)} refused`,
+      sub,
+    };
+  };
+
+  const dirtyView = () => drawers.dirtyView();
+
+  const handleSave = () => {
+    void drawers.requestSave();
+  };
+
+  const planRows = () => {
+    const cfg = store.draft();
+    if (!cfg) return [];
+    const rows: Array<{ key: string; name: string; who: string; tier: typeof cfg.default; kind: 'default' | 'plan'; slug: string }> = [
+      { key: 'default', name: 'Default', who: 'Every tenant without a plan', tier: cfg.default, kind: 'default', slug: '' },
+    ];
+    for (const [slug, tier] of Object.entries(cfg.plans)) {
+      rows.push({ key: 'plan:' + slug, name: slug, who: 'Tenants on this plan', tier, kind: 'plan', slug });
+    }
+    return rows;
+  };
 
   return (
     <div class="rate-limits-panel rl-page">
@@ -128,7 +161,9 @@ export default function RateLimitsPage(props: { visible: boolean }) {
                 <span class="rl-switch-track" />
               </label>
               <div class="rl-status-text">
-                <div class="rl-status-title">{cfg().enabled ? 'Rate limits enforced' : 'Rate limits disabled'}</div>
+                <div class={`rl-status-title${cfg().enabled ? '' : ' off'}`}>
+                  {cfg().enabled ? 'Rate limits enforced' : 'Rate limits disabled'}
+                </div>
                 <div class="rl-status-sub">
                   <label class="rl-switch sm" title="Adapt model limits to load">
                     <input
@@ -154,54 +189,15 @@ export default function RateLimitsPage(props: { visible: boolean }) {
               </div>
             </div>
 
-            <div class="card" id="rl-default">
-              <span class="eyebrow">Default tier</span>
-              <h3>Default allowance</h3>
-              <p class="hint">Every tenant gets this tier unless a plan or rule overrides it.</p>
-              <div class="filter-row">
-                <Field label="RPM">
-                  <input
-                    type="number"
-                    min="1"
-                    value={cfg().default.rpm}
-                    disabled={store.locked()}
-                    onInput={(e) => store.setDefaultTier('rpm', readNumber(e.currentTarget.value, cfg().default.rpm))}
-                  />
-                </Field>
-                <Field label="Burst">
-                  <input
-                    type="number"
-                    min="0"
-                    value={cfg().default.burst}
-                    disabled={store.locked()}
-                    onInput={(e) => store.setDefaultTier('burst', readNumber(e.currentTarget.value, cfg().default.burst))}
-                  />
-                </Field>
-                <Field label="Streams" hint="0 means unlimited concurrent streams.">
-                  <input
-                    type="number"
-                    min="0"
-                    value={cfg().default.maxConcurrentStreams}
-                    disabled={store.locked()}
-                    onInput={(e) =>
-                      store.setDefaultTier(
-                        'maxConcurrentStreams',
-                        readNumber(e.currentTarget.value, cfg().default.maxConcurrentStreams),
-                      )}
-                  />
-                </Field>
-              </div>
-            </div>
-
             <div class="rl-section" id="rl-rules">
               <div class="rl-section-head">
                 <div>
                   <h3>Rules</h3>
-                  <p class="sub">Scoped limits on models, tenants, or keys. Every rule that applies must admit a request.</p>
+                  <p class="sub">Scoped limits on models, tenants, or keys. Open a rule to change it or schedule it.</p>
                 </div>
               </div>
 
-              <Show when={!store.locked()}>
+              <Show when={store.editable()}>
                 <div class="card rl-new-rule">
                   <h4 class="rl-h4">Add rule</h4>
                   <div class="filter-row">
@@ -240,67 +236,98 @@ export default function RateLimitsPage(props: { visible: boolean }) {
                 <table class="data-table rl-rules-table">
                   <thead>
                     <tr>
-                      <th>On</th>
-                      <th>Scope</th>
-                      <th>Target</th>
-                      <th>RPM</th>
-                      <th>Burst</th>
-                      <th>Actions</th>
+                      <th class="rl-col-on">On</th>
+                      <th class="rl-col-who">Who</th>
+                      <th class="rl-col-model">Model</th>
+                      <th class="rl-col-limit">Limit</th>
+                      <th class="rl-col-now" title="What production applies right now from the saved configuration.">
+                        Enforcing now
+                        <span class="rl-th-sub">saved configuration</span>
+                      </th>
+                      <th class="rl-col-traffic">Limit activity</th>
+                      <th class="rl-col-chev"><span class="sr-only">Open</span></th>
                     </tr>
                   </thead>
                   <tbody>
                     <For each={cfg().rules}>
-                      {(rule, index) => (
-                        <tr>
-                          <td>
-                            <label class="rl-switch sm">
-                              <input
-                                type="checkbox"
-                                role="switch"
-                                checked={rule.enabled}
-                                disabled={store.locked()}
-                                aria-label={`Enable rule ${rule.target}`}
-                                onChange={(e) => store.setRuleField(index(), 'enabled', e.currentTarget.checked)}
-                              />
-                              <span class="rl-switch-track" />
-                            </label>
-                          </td>
-                          <td>{scopeLabel(rule.scope)}</td>
-                          <td>
-                            <input
-                              type="text"
-                              value={rule.target}
-                              disabled={store.locked()}
-                              onInput={(e) => store.setRuleField(index(), 'target', e.currentTarget.value)}
-                            />
-                          </td>
-                          <td>
-                            <input
-                              type="number"
-                              min="0"
-                              value={rule.rpm}
-                              disabled={store.locked()}
-                              onInput={(e) => store.setRuleField(index(), 'rpm', readNumber(e.currentTarget.value, rule.rpm))}
-                            />
-                          </td>
-                          <td>
-                            <input
-                              type="number"
-                              min="0"
-                              value={rule.burst}
-                              disabled={store.locked()}
-                              onInput={(e) => store.setRuleField(index(), 'burst', readNumber(e.currentTarget.value, rule.burst))}
-                            />
-                          </td>
-                          <td class="row-actions">
-                            <Show when={!store.locked()}>
-                              <Button variant="ghost" size="sm" onClick={() => store.deleteRule(index())}>
-                                <span class="icon"><IconX /></span> Delete
-                              </Button>
-                            </Show>
-                          </td>
-                        </tr>
-                      )}
+                      {(rule) => {
+                        const identity = rateLimitRuleIdentity(rule.scope, rule.target);
+                        const info = scopeInfo(rule.scope);
+                        const enf = () =>
+                          formatEnforcingNow(store.scheduleStatusFor(rule.scope, rule.target), !!store.saved()?.enabled);
+                        const act = () => limitActivity(identity);
+                        const modelLabel =
+                          rule.scope.includes('model') && rule.target.includes('|')
+                            ? rule.target.split('|').slice(-1)[0]
+                            : rule.scope === 'model'
+                              ? rule.target
+                              : '—';
+                        return (
+                          <tr
+                            class={`rl-row${rule.enabled ? '' : ' off'}`}
+                            onClick={() => drawers.openRuleDrawer(identity)}
+                          >
+                            <td class="rl-col-on" onClick={(e) => e.stopPropagation()}>
+                              <label class="rl-switch sm">
+                                <input
+                                  type="checkbox"
+                                  role="switch"
+                                  checked={rule.enabled}
+                                  disabled={store.locked()}
+                                  aria-label={`Enable rule ${rule.target}`}
+                                  onChange={(e) => store.setRuleEnabled(identity, e.currentTarget.checked)}
+                                />
+                                <span class="rl-switch-track" />
+                              </label>
+                            </td>
+                            <td class="rl-col-who">
+                              <span class="rl-target">{info.singleton ? info.name : rule.target.split('|')[0]}</span>
+                              <span class="rl-scope">{info.short}</span>
+                            </td>
+                            <td class="rl-col-model">
+                              <span class="rl-model">{modelLabel}</span>
+                            </td>
+                            <td class="rl-col-limit">
+                              <span class="rl-limit-nums">
+                                <span><b>{formatNum(rule.rpm)}</b><i>rpm</i></span>
+                                <span><b>{formatNum(rule.burst)}</b><i>burst</i></span>
+                                <span>
+                                  <b>{rule.maxConcurrentStreams > 0 ? formatNum(rule.maxConcurrentStreams) : '∞'}</b>
+                                  <i>streams</i>
+                                </span>
+                              </span>
+                              <Show when={(rule.schedule || []).length > 0}>
+                                <span class="hint">{(rule.schedule || []).length} window(s)</span>
+                              </Show>
+                            </td>
+                            <td class="rl-col-now" title={enf().text}>
+                              <span class="rl-enf-text">{enf().text}</span>
+                              <For each={enf().tags}>
+                                {(tag) => <span class="tag accent">{tag}</span>}
+                              </For>
+                            </td>
+                            <td class="rl-col-traffic">
+                              <span>{act().text}</span>
+                              <Show when={act().sub}>
+                                <span class="rl-act-sub">{act().sub}</span>
+                              </Show>
+                            </td>
+                            <td class="rl-col-chev">
+                              <button
+                                type="button"
+                                class="icon-btn"
+                                aria-label="Open rule"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  drawers.openRuleDrawer(identity);
+                                }}
+                              >
+                                <span class="icon"><IconChevronRight /></span>
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      }}
                     </For>
                   </tbody>
                 </table>
@@ -310,24 +337,112 @@ export default function RateLimitsPage(props: { visible: boolean }) {
               </div>
             </div>
 
-            <Show when={store.dirty()}>
+            <RateLimitActivitySection />
+
+            <div class="rl-section" id="rl-baselines">
+              <div class="rl-section-head">
+                <div>
+                  <h3>Tenant tiers</h3>
+                  <p class="sub">What a tenant gets by plan. A tenant rule overrides its plan tier.</p>
+                </div>
+                <Show when={store.editable()}>
+                  <Button variant="ghost" size="sm" onClick={() => drawers.openTierDrawer('plan')}>
+                    <span class="icon"><IconPlus /></span> Add plan
+                  </Button>
+                </Show>
+              </div>
+              <div class="table-wrap">
+                <table class="data-table t-rl-tiers">
+                  <thead>
+                    <tr>
+                      <th>Tier</th>
+                      <th>Applies to</th>
+                      <th class="num">rpm</th>
+                      <th class="num">burst</th>
+                      <th class="num">streams</th>
+                      <th class="cell-actions"><span class="sr-only">Open</span></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <For each={planRows()}>
+                      {(row) => (
+                        <tr class="rl-base-row">
+                          <th scope="row" class="rl-base-name">{row.name}</th>
+                          <td>{row.who}</td>
+                          <td class="num">{formatNum(row.tier.rpm)}</td>
+                          <td class="num">{formatNum(row.tier.burst)}</td>
+                          <td class="num">
+                            {row.tier.maxConcurrentStreams > 0 ? formatNum(row.tier.maxConcurrentStreams) : '∞'}
+                          </td>
+                          <td class="cell-actions">
+                            <button
+                              type="button"
+                              class="icon-btn"
+                              aria-label={`Open ${row.name}`}
+                              onClick={() => drawers.openTierDrawer(row.kind, row.slug)}
+                            >
+                              <span class="icon"><IconChevronRight /></span>
+                            </button>
+                          </td>
+                        </tr>
+                      )}
+                    </For>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <Show when={dirtyView().show}>
               <div class="rl-savebar" role="region" aria-label="Unsaved rate-limit changes">
+                <Show when={drawers.reviewOpen()}>
+                  <div class="rl-review" id="rl-review">
+                    <ul class="rl-diff" aria-label="Unsaved changes">
+                      <For each={dirtyView().items}>
+                        {(item) => (
+                          <li class="rl-diff-item">
+                            <span class={item.kindCls}>{item.kind}</span>
+                            <span class="rl-diff-what">
+                              <b>{item.subject}</b>
+                              <Show when={item.change}>
+                                <span class="rl-diff-change">{item.change}</span>
+                              </Show>
+                            </span>
+                            <Show when={store.editable()}>
+                              <button type="button" class="rl-link rl-undo" onClick={() => drawers.undoDirtyChange(item.id)}>
+                                Undo
+                              </button>
+                            </Show>
+                          </li>
+                        )}
+                      </For>
+                    </ul>
+                  </div>
+                </Show>
                 <div class="rl-savebar-row">
                   <span class="rl-dot accent" aria-hidden="true" />
                   <div class="rl-savebar-text" role="status">
-                    <span>Unsaved changes</span>
-                    <small>Save to apply without a restart, or discard to revert.</small>
+                    <span>{dirtyView().countText}</span>
+                    <small>{dirtyView().detail}</small>
                   </div>
                   <span class="spacer" />
                   <Button variant="ghost" onClick={() => store.discard()} disabled={store.saving() || store.locked()}>
                     Discard
                   </Button>
                   <Button
+                    variant="ghost"
+                    onClick={() => drawers.setReviewOpen(!drawers.reviewOpen())}
+                    disabled={store.saving()}
+                    aria-expanded={drawers.reviewOpen()}
+                    aria-controls="rl-review"
+                  >
+                    {drawers.reviewOpen() ? 'Hide review' : 'Review changes'}
+                  </Button>
+                  <Button
                     class="rl-primary"
-                    onClick={() => void store.save()}
+                    onClick={handleSave}
                     disabled={store.locked() || store.saving() || !store.dirty()}
                   >
-                    {store.saving() ? 'Saving…' : 'Save'}
+                    {store.saving() ? 'Saving…' : dirtyView().saveLabel}
                   </Button>
                 </div>
               </div>
@@ -336,25 +451,36 @@ export default function RateLimitsPage(props: { visible: boolean }) {
         )}
       </Show>
 
+      <RateLimitTierDrawer />
+      <RateLimitRuleDrawer />
+
       <Dialog
         open={helpOpen()}
         title={helpContent()?.ui?.guide ?? 'Rate limits, explained'}
         onClose={() => setHelpOpen(false)}
       >
+        <div class="rl-help-toolbar">
+          <Button variant={helpLang() === 'en' ? 'primary' : 'ghost'} size="sm" onClick={() => setHelpLang('en')}>
+            EN
+          </Button>
+          <Button variant={helpLang() === 'fa' ? 'primary' : 'ghost'} size="sm" onClick={() => setHelpLang('fa')}>
+            FA
+          </Button>
+        </div>
         <Show when={helpLoading()}>
           <p class="loading-hint">Loading guide…</p>
         </Show>
         <Show when={!helpLoading() && !helpContent()}>
           <p class="hint">
             Could not load the in-console guide.{' '}
-            <a href="/admin/admin-rate-limit-help.js" target="_blank" rel="noopener noreferrer">
-              Open help script
+            <a href="/admin/admin-rate-limit-help.json" target="_blank" rel="noopener noreferrer">
+              Open help data
             </a>
           </p>
         </Show>
         <Show when={helpContent()}>
           {(help) => (
-            <div class="rl-help-body">
+            <div class={`rl-help-body${helpLang() === 'fa' ? ' rtl' : ''}`}>
               <p class="hint">{help().ui?.guideSub}</p>
               <nav class="rl-help-nav" aria-label="Guide contents">
                 <For each={help().sections ?? []}>

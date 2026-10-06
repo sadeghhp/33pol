@@ -5,28 +5,11 @@ using Pol33.Integration.Tests.Support;
 namespace Pol33.Integration.Tests.Admin;
 
 /// <summary>
-/// Rate-limit safety contracts preserved in the Solid bundle, CSS, and help content.
+/// Rate-limit safety contracts: server constants, CSS invariants, and bundle delivery.
+/// Help semantics and UI behaviour are covered by Vitest and Playwright E2E.
 /// </summary>
 public sealed class AdminConsoleRateLimitSafetyTests
 {
-    [Fact]
-    public async Task TheConsole_SaysWhatARefusalLooksLike()
-    {
-        using var factory = GatewayWebApplicationFactory.Create();
-        using var client = factory.CreateClient();
-
-        var ratelimits = await AdminAssetTestHelpers.GetRatelimitsChunkAsync(client);
-        ratelimits.Should().Contain("429");
-        ratelimits.Should().Contain("Retry-After");
-
-        var helpResponse = await client.GetAsync("/admin/admin-rate-limit-help.js");
-        if (helpResponse.IsSuccessStatusCode)
-        {
-            var help = await helpResponse.Content.ReadAsStringAsync();
-            help.Should().Contain("Nothing is queued or slowed");
-        }
-    }
-
     [Fact]
     public async Task ConsoleLimits_MirrorTheServerConstants()
     {
@@ -50,13 +33,15 @@ public sealed class AdminConsoleRateLimitSafetyTests
     }
 
     [Fact]
-    public async Task RateLimitsPage_LoadsRulesFromTheAdminApi()
+    public async Task RatelimitsChunk_IsPreloadedFromIndexHtml()
     {
         using var factory = GatewayWebApplicationFactory.Create();
         using var client = factory.CreateClient();
 
-        var ratelimits = await AdminAssetTestHelpers.GetRatelimitsChunkAsync(client);
+        var html = await AdminAssetTestHelpers.GetIndexHtmlAsync(client);
+        var path = AdminAssetTestHelpers.ExtractRatelimitsChunkPath(html);
+        var chunk = await AdminAssetTestHelpers.GetAssetTextAsync(client, path);
 
-        ratelimits.Should().Contain("/admin/api/rate-limits");
+        chunk.Length.Should().BeGreaterThan(1000, "ratelimits chunk must ship in the build output");
     }
 }

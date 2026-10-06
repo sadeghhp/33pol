@@ -6,11 +6,20 @@ const WALLBOARD_STALE_MS = 20000;
 
 const sharedClock = createClock();
 
+export interface RequestFilterState {
+  model?: string;
+  tenant?: string;
+  status?: string;
+  slowOnly?: boolean;
+  errorsOnly?: boolean;
+}
+
 export interface WallboardOptions {
   active: () => boolean;
   summaryUpdatedAt: () => number;
   connectionFailed: () => boolean;
   hasCriticalAttention: () => boolean;
+  requestFilters?: () => RequestFilterState;
   onExit?: () => void;
 }
 
@@ -35,6 +44,24 @@ export function useWallboard(options: WallboardOptions) {
     if (!at) return 'Waiting for first update…';
     const sec = Math.max(0, Math.floor((sharedClock.nowMs() - at) / 1000));
     return `Last update ${sec}s ago — data may no longer be current.`;
+  });
+
+  const hasWallboardFilters = createMemo(() => {
+    if (!options.active()) return false;
+    const f = options.requestFilters?.() ?? {};
+    return !!(f.model?.trim() || f.tenant?.trim() || f.status?.trim() || f.slowOnly || f.errorsOnly);
+  });
+
+  const wallboardFilterText = createMemo(() => {
+    if (!hasWallboardFilters()) return '';
+    const f = options.requestFilters?.() ?? {};
+    const parts: string[] = [];
+    if (f.model?.trim()) parts.push(`model ${f.model.trim()}`);
+    if (f.tenant?.trim()) parts.push(`tenant ${f.tenant.trim()}`);
+    if (f.status?.trim()) parts.push(`status ${f.status.trim()}`);
+    if (f.slowOnly) parts.push('slow only');
+    if (f.errorsOnly) parts.push('errors only');
+    return parts.length ? `Tail filtered · ${parts.join(' · ')}` : '';
   });
 
   function applyHtmlClasses() {
@@ -164,6 +191,8 @@ export function useWallboard(options: WallboardOptions) {
     stale,
     staleTitle,
     staleText,
+    hasWallboardFilters,
+    wallboardFilterText,
     exitWallboard,
     enterFullscreen,
   };

@@ -12,6 +12,24 @@ export interface NewKeyDraft {
   costCenter: string;
 }
 
+export interface KeyEditDraft {
+  id: string;
+  keyPrefix: string;
+  label: string;
+  assignee: string;
+  description: string;
+  costCenter: string;
+}
+
+export const DEFAULT_KEY_EDIT: KeyEditDraft = {
+  id: '',
+  keyPrefix: '',
+  label: '',
+  assignee: '',
+  description: '',
+  costCenter: '',
+};
+
 export const DEFAULT_NEW_KEY: NewKeyDraft = {
   role: 'Inference',
   label: '',
@@ -21,7 +39,8 @@ export const DEFAULT_NEW_KEY: NewKeyDraft = {
 };
 
 export const KEYS_RENDER_CAP = 50;
-const sort: SortSpec = { key: 'createdAt', dir: -1 };
+const [sortSpec, setSortSpec] = createSignal<SortSpec>({ key: 'createdAt', dir: -1 });
+const [selectedIds, setSelectedIds] = createSignal<Set<string>>(new Set());
 
 const [statusFilter, setStatusFilter] = createSignal<KeyStatusFilter>('active');
 const [textFilter, setTextFilter] = createSignal('');
@@ -49,13 +68,41 @@ export function useKeysStore() {
     totalMatches,
     capped,
     phase: () => resource.snapshot().phase,
+    sortSpec,
+    setSortSpec,
+    toggleSort,
+    selectedIds,
+    toggleSelected,
+    clearSelected,
     load: (opts?: { force?: boolean }) => loadKeys(opts),
     revokeKey,
+    bulkRevoke,
     archiveKey,
     unarchiveKey,
     deleteKey,
     createKey,
+    updateKey,
   };
+}
+
+export function toggleSort(key: string): void {
+  setSortSpec((prev) => {
+    if (prev.key === key) return { key, dir: (prev.dir === 1 ? -1 : 1) as SortSpec['dir'] };
+    return { key, dir: -1 };
+  });
+}
+
+export function toggleSelected(id: string): void {
+  setSelectedIds((prev) => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    return next;
+  });
+}
+
+export function clearSelected(): void {
+  setSelectedIds(new Set<string>());
 }
 
 function normalizeKey(row: Record<string, unknown>): Record<string, unknown> {
@@ -77,7 +124,7 @@ function allRows(): Record<string, unknown>[] {
 }
 
 function filteredRows(): Record<string, unknown>[] {
-  return filterKeys(allRows(), statusFilter(), debouncedText(), sort);
+  return filterKeys(allRows(), statusFilter(), debouncedText(), sortSpec());
 }
 
 function totalMatches(): number {
@@ -90,7 +137,43 @@ function capped(): Record<string, unknown>[] {
 
 export async function revokeKey(id: string): Promise<void> {
   try {
-    await apiClient.apiFetch(`/admin/api/keys/${id}/revoke`, { method: 'POST' });
+    await apiClient.apiFetch(`/admin/api/keys/${encodeURIComponent(id)}/revoke`, { method: 'POST' });
+    await loadKeys({ force: true });
+  } catch (e) {
+    handleApiError(e, 'keys');
+    throw e;
+  }
+}
+
+export async function bulkRevoke(ids: string[]): Promise<void> {
+  if (!ids.length) return;
+  try {
+    await apiClient.apiJson('/admin/api/keys/revoke', {
+      method: 'POST',
+      body: JSON.stringify({ keyIds: ids }),
+    });
+    pushToast(`${ids.length} key(s) revoked.`);
+    clearSelected();
+    await loadKeys({ force: true });
+  } catch (e) {
+    handleApiError(e, 'keys');
+    throw e;
+  }
+}
+
+export async function updateKey(draft: KeyEditDraft): Promise<void> {
+  if (!draft.id) return;
+  try {
+    await apiClient.apiJson(`/admin/api/keys/${encodeURIComponent(draft.id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        label: draft.label || null,
+        assignee: draft.assignee || null,
+        description: draft.description || null,
+        costCenter: draft.costCenter || null,
+      }),
+    });
+    pushToast('API key updated.');
     await loadKeys({ force: true });
   } catch (e) {
     handleApiError(e, 'keys');
