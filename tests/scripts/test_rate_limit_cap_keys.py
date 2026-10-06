@@ -52,6 +52,16 @@ class PlanCapsTests(unittest.TestCase):
 
         self.assertEqual(proposed["rules"], [])
 
+    def test_rate_only_caps_the_rate_and_leaves_streams_uncapped(self):
+        proposed, decisions = cap_keys.plan_caps(
+            config(), [{"id": "A"}], max_share=0.4, floor_rpm=5, rate_only=True)
+
+        self.assertEqual(
+            proposed["rules"],
+            [{"scope": "api_key", "target": "A", "rpm": 48, "burst": 6,
+              "maxConcurrentStreams": 0, "enabled": True}])
+        self.assertEqual(decisions[0]["maxConcurrentStreams"], 0)
+
     def test_unlimited_streams_stay_unlimited_and_a_small_share_still_allows_one(self):
         unlimited, _ = cap_keys.plan_caps(config(streams=0), [{"id": "A"}], max_share=0.4, floor_rpm=5)
         tiny, _ = cap_keys.plan_caps(config(streams=2), [{"id": "A"}], max_share=0.1, floor_rpm=5)

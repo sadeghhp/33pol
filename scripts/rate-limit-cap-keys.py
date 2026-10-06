@@ -24,7 +24,9 @@ in between. To undo it, apply the rollback file the plan step wrote, the same wa
 
 A cap is a share of the tenant tier: `--max-share 0.4` on a 120 rpm tier caps each key at 48 rpm.
 `--tier-rpm`, `--tier-burst` and `--tier-streams` change the default tier in the same plan, and the
-caps are then shares of the new numbers. Keys that already have an `api_key` rule, and revoked or
+caps are then shares of the new numbers. `--rate-only` leaves streams uncapped on the new rules:
+use it until each key's peak of open streams is known, because a stream cap set below a key's
+normal peak refuses traffic that is admitted today. Keys that already have an `api_key` rule, and revoked or
 archived keys, are left alone. Standard library only.
 """
 
@@ -45,7 +47,7 @@ MAX_RULES = 1000
 
 
 def plan_caps(config: dict, keys: list[dict], *, max_share: float, floor_rpm: int,
-              tier: dict | None = None) -> tuple[dict, list[dict]]:
+              tier: dict | None = None, rate_only: bool = False) -> tuple[dict, list[dict]]:
     """Return (proposed configuration, one row per key saying what was decided for it).
 
     Pure: no I/O, so the arithmetic can be tested without a gateway.
@@ -69,8 +71,9 @@ def plan_caps(config: dict, keys: list[dict], *, max_share: float, floor_rpm: in
         "rpm": max(floor_rpm, math.ceil(rpm * max_share)),
         # A burst is extra tokens above a rate, so it scales with the rate it sits on.
         "burst": math.ceil(burst * max_share),
-        # 0 streams means unlimited, and a share of unlimited is unlimited.
-        "maxConcurrentStreams": 0 if streams <= 0 else max(1, math.ceil(streams * max_share)),
+        # 0 streams means unlimited, and a share of unlimited is unlimited. A rule with 0 leaves
+        # the key on the tenant's stream cap, which is what it has without a rule.
+        "maxConcurrentStreams": 0 if rate_only or streams <= 0 else max(1, math.ceil(streams * max_share)),
     }
 
     rules = list(proposed.get("rules") or [])
@@ -199,7 +202,7 @@ def do_plan(gateway: Gateway, args: argparse.Namespace) -> int:
     keys = key_list(gateway.get("/admin/api/keys"))
     tier = {"rpm": args.tier_rpm, "burst": args.tier_burst, "maxConcurrentStreams": args.tier_streams}
     proposed, decisions = plan_caps(config, keys, max_share=args.max_share,
-                                    floor_rpm=args.floor_rpm, tier=tier)
+                                    floor_rpm=args.floor_rpm, tier=tier, rate_only=args.rate_only)
 
     print_table(decisions, usage_by_key(gateway), proposed["default"])
     version = config.get("version")
@@ -236,6 +239,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--tier-rpm", type=int, help="also set the default tier's rpm")
     parser.add_argument("--tier-burst", type=int, help="also set the default tier's burst")
     parser.add_argument("--tier-streams", type=int, help="also set the default tier's stream cap")
+    parser.add_argument("--rate-only", action="store_true",
+                        help="cap rpm and burst only; new rules leave streams uncapped")
     parser.add_argument("--out", default="rate-limit-plan.json")
     parser.add_argument("--rollback", default="rate-limit-rollback.json")
     parser.add_argument("--apply", metavar="PLAN", help="write this plan file to the gateway")
