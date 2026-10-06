@@ -263,7 +263,8 @@ public static class GatewayHostBuilderExtensions
             return true;
         }
 
-        return HasVersionInFileName(value.AsSpan(value.LastIndexOf('/') + 1));
+        var fileName = value.AsSpan(value.LastIndexOf('/') + 1);
+        return HasVersionInFileName(fileName) || AdminAssetFileNames.HasContentHash(fileName);
     }
 
     /// <summary>

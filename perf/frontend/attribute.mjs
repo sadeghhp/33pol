@@ -31,7 +31,7 @@ run(async () => {
 
   out.feedRows = await page.evaluate(
     () => document.querySelectorAll('#panel-dashboard tbody tr.request-row').length);
-  out.liveMode = await page.evaluate(() => window.Alpine?.$data(document.body)?.liveMode ?? 'unknown');
+  out.liveMode = await page.evaluate(() => document.querySelector('.live-badge')?.textContent?.trim() ?? 'solid');
   console.log(`\nfeed rows on screen: ${out.feedRows}   liveMode: ${out.liveMode}\n`);
 
   const a = await stage('A. everything running (as shipped)', 'baseline');

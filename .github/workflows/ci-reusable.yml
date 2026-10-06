@@ -8,7 +8,44 @@ permissions:
   contents: read
 
 jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: src/33pol.Admin.Web/package-lock.json
+
+      - name: Setup .NET (gateway E2E)
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Admin frontend — install, typecheck, test, build, e2e
+        working-directory: src/33pol.Admin.Web
+        env:
+          ADMIN_E2E_PORT: "5050"
+        run: |
+          npm ci --ignore-scripts
+          npm run typecheck
+          npm test
+          npm run build
+          node ../../scripts/check-rate-limit-help.mjs
+          node ../../build/check-admin-bundle-gates.mjs
+          dotnet restore ../../33pol.sln
+          npx playwright install chromium --with-deps
+          npm run test:e2e
+          npm audit --audit-level=high
+
+      - name: Admin perf gates (M17 baseline)
+        run: node build/check-admin-perf-gates.mjs
+
   build-test:
+    needs: frontend
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -18,11 +55,30 @@ jobs:
         with:
           dotnet-version: "10.0.x"
 
+      - name: Setup Node.js (frontend assets for dotnet build)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: src/33pol.Admin.Web/package-lock.json
+
+      - name: Build admin frontend
+        working-directory: src/33pol.Admin.Web
+        run: npm ci --ignore-scripts && npm run build
+
+      - name: Verify admin assets exist
+        run: node build/check-admin-assets.mjs
+
+      - name: Admin bundle and help gates
+        run: |
+          node scripts/check-rate-limit-help.mjs
+          node build/check-admin-bundle-gates.mjs
+
       - name: Restore
         run: dotnet restore 33pol.sln
 
       - name: Build
-        run: dotnet build 33pol.sln -c Release --no-restore
+        run: dotnet build 33pol.sln -c Release --no-restore -p:SkipFrontendBuild=true
 
       - name: Test with coverage
         run: >

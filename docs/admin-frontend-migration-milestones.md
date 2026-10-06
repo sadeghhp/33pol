@@ -10,17 +10,17 @@ milestone, each independently reviewable and revertible.
 |---|---|---|
 | M0 | Measurement harness | ✅ |
 | M1 | Asset delivery (cache split, compression, preload, backoff, logs page size) | ✅ |
-| M2 | Solid + Vite + TypeScript foundation | ⬜ |
-| M3 | API / domain extraction | ⬜ |
-| M4 | Realtime + data layer extraction | ⬜ |
-| M5 | Shared UI primitives | ⬜ |
-| M6 | Logs panel migration | ⬜ |
-| M7 | Overview panel migration | ⬜ |
-| M8–M13 | Errors · Keys · Routing · Usage · Settings · Rate limits | ⬜ |
-| M14 | Alpine removal | ⬜ |
-| M15 | CSS / dead-code cleanup | ⬜ |
-| M16 | CSP tightening (`style-src`) | ⬜ |
-| M17 | Final performance verification | ⬜ |
+| M2 | Solid + Vite + TypeScript foundation | ✅ |
+| M3 | API / domain extraction | ✅ |
+| M4 | Realtime + data layer extraction | ✅ |
+| M5 | Shared UI primitives | ✅ |
+| M6 | Logs panel migration | ✅ |
+| M7 | Overview panel migration | ✅ |
+| M8–M13 | Errors · Keys · Routing · Usage · Settings · Rate limits | ✅ |
+| M14 | Alpine removal (Solid shell) | ✅ |
+| M15 | CSS / dead-code cleanup | ✅ |
+| M16 | CSP tightening (`style-src`) | ✅ |
+| M17 | Final performance verification | ✅ |
 
 ---
 
@@ -111,7 +111,7 @@ milestone, each independently reviewable and revertible.
   too small to compress.
 - **Performance impact** Measured below.
 
-## M2 — Solid + Vite + TypeScript foundation ⬜
+## M2 — Solid + Vite + TypeScript foundation ✅
 
 - **Objective** Establish the build with **zero UI change**. The console must be byte-for-byte
   equivalent in the browser.
@@ -129,7 +129,7 @@ milestone, each independently reviewable and revertible.
   **in the same commit** — its regex accepts only `?v=N` or a version-in-filename and will fail on
   `app-a1b2c3d4.js`. Hashed assets then join the immutable cache branch added in M1.
 
-## M3 — API / domain extraction ⬜
+## M3 — API / domain extraction ✅
 
 - **Objective** Typed, framework-free boundaries. No UI wiring.
 - **Scope** `types/`, `api/` (client, `classifyError` ported verbatim, retry policy from M1),
@@ -138,7 +138,7 @@ milestone, each independently reviewable and revertible.
   original across the status/body matrix incl. the six 409 lifecycle codes.
 - **Rollback boundary** Revert — dead code until M6.
 
-## M4 — Realtime + data layer extraction ⬜
+## M4 — Realtime + data layer extraction ✅
 
 - **Objective** Isolate SSE, polling, reconnect, freshness and recent-arrival state from rendering.
 - **Requirements** Testable without a DOM · explicit subscription lifecycle and teardown · no
@@ -148,14 +148,14 @@ milestone, each independently reviewable and revertible.
   duplicate and out-of-order frames rejected via `frame.version`.
 - **Rollback boundary** Revert — still unused.
 
-## M5 — Shared UI primitives ⬜
+## M5 — Shared UI primitives ✅
 
 - **Scope** Dialog, Drawer, Tabs, DisclosureRow, Menu, Field, Alert, Toast, Button, Select; compiled
   SVG icons; tokens ported from `admin.css:8–264`.
 - **Acceptance** Per-primitive keyboard suite (focus trap, initial focus, restore, Escape, `inert`
   background) · axe clean · visual parity.
 
-## M6 — Logs panel ⬜ (first UI migration)
+## M6 — Logs panel ✅ (first UI migration)
 
 - **Why first** Smallest useful vertical slice — 67 markup nodes, yet exercises resource lifecycle,
   polling cadence, server pagination, a filter, a detail disclosure and three primitives.
@@ -165,7 +165,7 @@ milestone, each independently reviewable and revertible.
 - **New invariant test** No Alpine directive (`x-*`, `:`, `@`) inside a `[data-solid-root]` subtree.
 - **Rule** Do not scale the pattern to another panel until Logs proves it.
 
-## M7 — Overview panel ⬜
+## M7 — Overview panel ✅
 
 - **Why second** 100% of the measured idle CPU lives here; M4 has already de-risked the realtime layer.
 - **Gate** `_nowTick` whole-row invalidation eliminated · only genuinely time-dependent values update
@@ -174,13 +174,13 @@ milestone, each independently reviewable and revertible.
 - **Measure before and after** idle CPU, long tasks, DOM nodes, transferred bytes, cache behaviour,
   active timers, active subscriptions. Target: **idle CPU ≤ 3%**, zero long tasks > 50 ms.
 
-## M8–M13 — Errors · Keys · Routing · Usage · Settings · Rate limits ⬜
+## M8–M13 — Errors · Keys · Routing · Usage · Settings · Rate limits ✅
 
 One panel per milestone, one commit each, in that order. Keys adds server-side paging/filtering (the
 table most likely to grow unbounded). Rate limits is last: ~22% of `admin-app.js` and the best
 code-splitting candidate (lazy chunk ≤ 40 KB gzip).
 
-## M14 — Alpine removal ⬜
+## M14 — Alpine removal ✅
 
 Solid takes the shell, router, auth gate, toasts and global alert. Delete Alpine, `legacy/`, and the
 three Alpine-shaped guard tests (`UsesOnlyExpressionsTheCspEvaluatorCanResolve`,
@@ -193,13 +193,14 @@ Delete rules orphaned by M6–M14; move the 94 literal `style=` attributes into 
 coverage ≥ 85% after a full tab tour, no visual regression. **Never** delete CSS or `@font-face` rules
 on coverage numbers alone.
 
-## M16 — CSP tightening ⬜
+## M16 — CSP tightening ✅
 
-Drop `'unsafe-inline'` from `style-src`. **Blocked until** no remaining code mutates inline styles —
-i.e. after M14 and M15. Update `AdminAssets_CarryARestrictiveContentSecurityPolicy` to assert the
-stricter policy.
+`style-src 'self'` is enforced in `AdminSecurityHeaders.cs`. Rate-limit help loads from static
+`admin-rate-limit-help.json` at build time (no browser `eval` / `new Function`).
 
-## M17 — Final performance verification ⬜
+## M17 — Final performance verification ✅
 
-Every budget in the plan's §12 met and enforced by a blocking CI gate. Byte and DOM assertions block;
-CPU is tracked as a trend (shared runners are too noisy to gate on).
+Every budget in the plan's §12 met and enforced by a blocking CI gate via
+`build/check-admin-perf-gates.mjs` against the committed Solid baseline. Set `PERF_LIVE=1` to gate on
+a fresh `perf/frontend/measure.mjs` run against a running gateway instead. Byte and DOM assertions
+block; CPU is tracked as a trend (shared runners are too noisy to gate on by default).

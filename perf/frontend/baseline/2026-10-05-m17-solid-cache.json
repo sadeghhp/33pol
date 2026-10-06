@@ -1,0 +1,221 @@
+{
+  "baseUrl": "http://127.0.0.1:5080",
+  "at": "2026-10-05T09:50:44.541Z",
+  "visits": [
+    {
+      "label": "1. first visit (cold)",
+      "transferredBytes": 259027,
+      "requests": 12,
+      "fontBytes": 189020,
+      "servedFromCache": 0,
+      "resources": [
+        {
+          "url": "/admin/index.html",
+          "bytes": 567,
+          "cacheControl": "no-store, no-cache, must-revalidate"
+        },
+        {
+          "url": "/admin/assets/index-D45v9ywn.css",
+          "bytes": 30191,
+          "cacheControl": "public, max-age=31536000, immutable"
+        },
+        {
+          "url": "/admin/vendor/fonts.css",
+          "bytes": 660,
+          "cacheControl": "no-store, no-cache, must-revalidate"
+        },
+        {
+          "url": "/admin/vendor/fonts/IBMPlexSans-400.woff2",
+          "bytes": 45712,
+          "cacheControl": "public, max-age=31536000, immutable"
+        },
+        {
+          "url": "/admin/vendor/fonts/IBMPlexSans-500.woff2",
+          "bytes": 45712,
+          "cacheControl": "public, max-age=31536000, immutable"
+        },
+        {
+          "url": "/admin/assets/index-D5tfb8uZ.js",
+          "bytes": 17699,
+          "cacheControl": "public, max-age=31536000, immutable"
+        },
+        {
+          "url": "/admin/assets/ratelimits-6BzhuNYX.js",
+          "bytes": 18417,
+          "cacheControl": "public, max-age=31536000, immutable"
+        },
+        {
+          "url": "/admin/vendor/fonts/IBMPlexMono-400.woff2",
+          "bytes": 14708,
+          "cacheControl": "public, max-age=31536000, immutable"
+        },
+        {
+          "url": "/admin/vendor/fonts/SpaceGrotesk-700.woff2",
+          "bytes": 22288,
+          "cacheControl": "public, max-age=31536000, immutable"
+        },
+        {
+          "url": "/admin/assets/OverviewPage-BJupdHrW.js",
+          "bytes": 2473,
+          "cacheControl": "public, max-age=31536000, immutable"
+        },
+        {
+          "url": "/admin/vendor/fonts/IBMPlexSans-600.woff2",
+          "bytes": 45712,
+          "cacheControl": "public, max-age=31536000, immutable"
+        },
+        {
+          "url": "/admin/vendor/fonts/IBMPlexMono-500.woff2",
+          "bytes": 14888,
+          "cacheControl": "public, max-age=31536000, immutable"
+        }
+      ]
+    },
+    {
+      "label": "2. return visit",
+      "transferredBytes": 1227,
+      "requests": 12,
+      "fontBytes": 0,
+      "servedFromCache": 10,
+      "resources": [
+        {
+          "url": "/admin/index.html",
+          "bytes": 567,
+          "cacheControl": "no-store, no-cache, must-revalidate"
+        },
+        {
+          "url": "/admin/vendor/fonts.css",
+          "bytes": 660,
+          "cacheControl": "no-store, no-cache, must-revalidate"
+        },
+        {
+          "url": "/admin/assets/index-D45v9ywn.css",
+          "bytes": 0,
+          "cacheControl": "public, max-age=31536000, immutable"
+        },
+        {
+          "url": "/admin/vendor/fonts/IBMPlexSans-400.woff2",
+          "bytes": 0,
+          "cacheControl": "public, max-age=31536000, immutable"
+        },
+        {
+          "url": "/admin/vendor/fonts/IBMPlexSans-500.woff2",
+          "bytes": 0,
+          "cacheControl": "public, max-age=31536000, immutable"
+        },
+        {
+          "url": "/admin/assets/index-D5tfb8uZ.js",
+          "bytes": 0,
+          "cacheControl": "public, max-age=31536000, immutable"
+        },
+        {
+          "url": "/admin/assets/ratelimits-6BzhuNYX.js",
+          "bytes": 0,
+          "cacheControl": "public, max-age=31536000, immutable"
+        },
+        {
+          "url": "/admin/vendor/fonts/IBMPlexMono-400.woff2",
+          "bytes": 0,
+          "cacheControl": "public, max-age=31536000, immutable"
+        },
+        {
+          "url": "/admin/vendor/fonts/SpaceGrotesk-700.woff2",
+          "bytes": 0,
+          "cacheControl": "public, max-age=31536000, immutable"
+        },
+        {
+          "url": "/admin/vendor/fonts/IBMPlexSans-600.woff2",
+          "bytes": 0,
+          "cacheControl": "public, max-age=31536000, immutable"
+        },
+        {
+          "url": "/admin/assets/OverviewPage-BJupdHrW.js",
+          "bytes": 0,
+          "cacheControl": "public, max-age=31536000, immutable"
+        },
+        {
+          "url": "/admin/vendor/fonts/IBMPlexMono-500.woff2",
+          "bytes": 0,
+          "cacheControl": "public, max-age=31536000, immutable"
+        }
+      ]
+    },
+    {
+      "label": "3. return visit",
+      "transferredBytes": 1227,
+      "requests": 12,
+      "fontBytes": 0,
+      "servedFromCache": 10,
+      "resources": [
+        {
+          "url": "/admin/index.html",
+          "bytes": 567,
+          "cacheControl": "no-store, no-cache, must-revalidate"
+        },
+        {
+          "url": "/admin/vendor/fonts.css",
+          "bytes": 660,
+          "cacheControl": "no-store, no-cache, must-revalidate"
+        },
+        {
+          "url": "/admin/assets/index-D45v9ywn.css",
+          "bytes": 0,
+          "cacheControl": "public, max-age=31536000, immutable"
+        },
+        {
+          "url": "/admin/vendor/fonts/IBMPlexSans-400.woff2",
+          "bytes": 0,
+          "cacheControl": "public, max-age=31536000, immutable"
+        },
+        {
+          "url": "/admin/assets/index-D5tfb8uZ.js",
+          "bytes": 0,
+          "cacheControl": "public, max-age=31536000, immutable"
+        },
+        {
+          "url": "/admin/vendor/fonts/IBMPlexSans-500.woff2",
+          "bytes": 0,
+          "cacheControl": "public, max-age=31536000, immutable"
+        },
+        {
+          "url": "/admin/assets/ratelimits-6BzhuNYX.js",
+          "bytes": 0,
+          "cacheControl": "public, max-age=31536000, immutable"
+        },
+        {
+          "url": "/admin/vendor/fonts/IBMPlexMono-400.woff2",
+          "bytes": 0,
+          "cacheControl": "public, max-age=31536000, immutable"
+        },
+        {
+          "url": "/admin/vendor/fonts/SpaceGrotesk-700.woff2",
+          "bytes": 0,
+          "cacheControl": "public, max-age=31536000, immutable"
+        },
+        {
+          "url": "/admin/vendor/fonts/IBMPlexSans-600.woff2",
+          "bytes": 0,
+          "cacheControl": "public, max-age=31536000, immutable"
+        },
+        {
+          "url": "/admin/assets/OverviewPage-BJupdHrW.js",
+          "bytes": 0,
+          "cacheControl": "public, max-age=31536000, immutable"
+        },
+        {
+          "url": "/admin/vendor/fonts/IBMPlexMono-500.woff2",
+          "bytes": 0,
+          "cacheControl": "public, max-age=31536000, immutable"
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "coldBytes": 259027,
+    "warmBytes": 1227,
+    "savedBytes": 257800,
+    "savedPct": 99.5,
+    "fontsCachedOnReturn": true,
+    "returnVisitsStable": true
+  }
+}

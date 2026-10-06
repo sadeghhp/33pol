@@ -1,0 +1,25 @@
+{
+  "baseUrl": "http://127.0.0.1:5080",
+  "at": "2026-10-05T09:50:08.682Z",
+  "idleWindowMs": 20000,
+  "stages": [
+    {
+      "label": "A. everything running (as shipped)",
+      "note": "baseline",
+      "windowMs": 20000,
+      "taskS": 0.073,
+      "cpuPct": 0.4,
+      "scriptS": 0.01,
+      "layoutS": 0.002,
+      "recalcStyleS": 0,
+      "layoutCount": 4,
+      "recalcStyleCount": 0,
+      "nodes": 1376,
+      "jsEventListeners": 40,
+      "jsHeapUsedMB": 3.4
+    }
+  ],
+  "feedRows": 25,
+  "liveMode": "solid",
+  "tickTimerPresent": false
+}

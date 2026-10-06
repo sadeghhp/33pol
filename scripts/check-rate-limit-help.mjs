@@ -7,12 +7,14 @@
 //
 // Usage: node scripts/check-rate-limit-help.mjs   (exit code 1 on any mismatch)
 
-import { readFileSync } from 'node:fs';
+import fs, { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const file = path.join(here, '..', 'src', '33pol.App', 'wwwroot', 'admin', 'admin-rate-limit-help.js');
+const sourceFile = path.join(here, '..', 'src', '33pol.Admin.Web', 'src', 'content', 'admin-rate-limit-help.js');
+const builtFile = path.join(here, '..', 'src', '33pol.App', 'wwwroot', 'admin', 'admin-rate-limit-help.js');
+const file = fs.existsSync(sourceFile) ? sourceFile : builtFile;
 
 export function loadHelp() {
   const src = readFileSync(file, 'utf8');
@@ -22,7 +24,7 @@ export function loadHelp() {
   return sandbox.RateLimitHelp;
 }
 
-// The scope ids `rlScopeCatalog()` in admin-app.js hands the new-rule wizard.
+// Scope ids the rate-limits UI and new-rule wizard must document in both languages.
 export const SCOPE_IDS = ['model', 'tenant', 'api_key', 'global', 'tenant_model', 'api_key_model', 'anonymous', 'auth_failure'];
 
 // Inline explainer keys the markup binds through `rlHelpView.f.<key>`.

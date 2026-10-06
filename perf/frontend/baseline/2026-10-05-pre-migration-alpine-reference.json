@@ -1,0 +1,9 @@
+{
+  "note": "Pre-Solid migration baseline (Alpine). Measured 2026-09-13 on commit afeb6e0; see sibling files 2026-09-13-afeb6e0-pre-m1.json and 2026-09-13-m1-asset-delivery.json. Idle Overview CPU was 30–42% with 61–65 long tasks / 20s due to _nowTick global row rebuild.",
+  "referenceBaselines": [
+    "2026-09-13-afeb6e0-pre-m1.json",
+    "2026-09-13-m1-asset-delivery.json"
+  ],
+  "at": "2026-10-05T09:00:00.000Z",
+  "harness": "perf/frontend/measure.mjs"
+}

@@ -1,3 +1,6 @@
+# Admin frontend build output (source lives in src/33pol.Admin.Web/)
+src/33pol.App/wwwroot/admin/**
+
 # Build artifacts
 **/bin/**
 **/obj/**
@@ -61,6 +64,7 @@ trufflehog-stderr.txt
 deploy/docker/.deploy/
 errors/*
 verify-release-test.log
+src/33pol.Admin.Web/node_modules/
 
 # Python bytecode from the operator scripts and their tests
 __pycache__/

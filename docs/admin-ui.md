@@ -4,44 +4,30 @@ Browser-based operator surface for the 33pol gateway. It shares the same **admin
 
 ## Static assets
 
-Files under `src/33pol.App/wwwroot/admin/` (served at `/admin/`):
+**Source** lives in `src/33pol.Admin.Web/` (SolidJS + Vite + TypeScript). **Build output** is emitted
+to `src/33pol.App/wwwroot/admin/` (gitignored) and served at `/admin/`:
 
-| File | Role |
+| Path | Role |
 |------|------|
-| `index.html` | App shell, pages, drawers, dialogs |
-| `admin.css` | Design tokens, layout, components |
-| `admin-errors.js` | `AdminErrors.classifyError` — shared error taxonomy |
-| `admin-store.js` | `Alpine.store('admin')` — API client, loading scopes, toasts, connection |
-| `admin-app.js` | `adminApp()` — navigation, feature logic, and the CSP view layer |
-| `admin-icons.js` | `AdminIcons(name)` and `AdminIcons.map` — inline SVG set |
-| `vendor/alpine-csp-3.14.9.min.js` | Alpine.js 3.14.9, **CSP build**, self-hosted |
+| `index.html` | Minimal SPA shell (`div#root`); references hashed bundles |
+| `assets/index-*.js` | Main bundle (shell, auth, router, shared stores) |
+| `assets/index-*.css` | Styles (ported from legacy `admin.css`) |
+| `assets/*Page-*.js` | Lazy route chunks (Overview, Logs, Keys, …) |
+| `assets/ratelimits-*.js` | Lazy rate-limits editor chunk |
 | `vendor/fonts.css`, `vendor/fonts/` | Self-hosted IBM Plex / Space Grotesk |
 
-**Load order:** `admin.css` → `admin-icons.js` → `admin-errors.js` → `admin-store.js` → `admin-app.js` → Alpine (all deferred). Query `?v=N` on static assets busts caches after upgrades.
+Build: `cd src/33pol.Admin.Web && npm run build`. MSBuild runs this before publish unless
+`-p:SkipFrontendBuild=true`. Content-hashed JS/CSS are cached `immutable` for one year; `index.html`
+and `vendor/fonts.css` stay `no-store`.
 
-### Writing markup for the CSP build
+The admin console is **Solid-only**. Legacy Alpine sources and VM tests have been removed; behavioral
+regression is covered by Vitest (stores/domain) and Playwright E2E against a real gateway fixture.
 
-The console ships Alpine's **CSP-friendly build** so `/admin` can be served under `script-src 'self'`
-(see `AdminSecurityHeaders.cs`); the stock build compiles every directive with `new Function()` and
-needs `unsafe-eval`. That build's evaluator resolves a directive's value as a **property path and
-nothing else** — a function it finds there is invoked with the directive's own arguments (the event,
-for `x-on`), and nothing else is parsed. So in `index.html`:
+### CSP
 
-- no operators, ternaries, optional chaining, or calls with arguments — `x-text="formatNum(n)"`,
-  `:class="{ active: tab === 'keys' }"` and `x-show="a && b"` all fail silently at runtime;
-- every displayed value comes from a getter or a zero-argument method on `adminApp`
-  (`x-text="totalErrorsText"`, `x-html="icons.trash"`);
-- `x-model` needs a `{get, set}` pair, which `adminApp.mdl` supplies, shaped like the state it
-  writes: `x-model="mdl.editModel.url"`;
-- per-row values and actions are precomputed onto the row objects, so a template reaches
-  `copyText(id)` as `@click="r.copyId"`;
-- `x-for` clones only the template's **first** element — a row plus its detail panel must share one
-  root (the requests and logs tables wrap each pair in its own `<tbody>`);
-- x-bind writes attributes and supports only the `.camel` modifier in 3.14.9, so a property with no
-  attribute behind it needs a directive — hence `x-indeterminate` for the select-all checkbox.
-
-`AdminAssetSecurityTests.AdminIndex_UsesOnlyExpressionsTheCspEvaluatorCanResolve` enforces this, so a
-directive that the evaluator could not resolve fails the build instead of the operator's browser.
+The console is a compiled SolidJS bundle under `script-src 'self'` (see `AdminSecurityHeaders.cs`).
+Rate-limit help loads from static JSON (`admin-rate-limit-help.json`); no browser `eval`. Vendor
+assets are self-hosted fonts only (Alpine is not published).
 
 **Cache:** `/admin/*` static files are served with `Cache-Control: no-store`.
 
@@ -521,10 +507,25 @@ A gateway that has never routed a request shows a curl snippet (with **Copy curl
 - On a wallboard the Rate limits card shows only its title and three head figures.
 - Every changed asset URL carries a bumped `?v=`.
 
+## E2E tests (Playwright)
+
+Behavioral regression runs against a **real gateway** (not mocked API):
+
+```bash
+cd src/33pol.Admin.Web
+npm run build
+npm run test:e2e
+```
+
+The harness [`build/run-admin-e2e-gateway.sh`](../build/run-admin-e2e-gateway.sh) starts `33pol.App`
+with an in-memory database and bootstrap admin key `sk-33pol-integration-admin-key` (same as integration
+tests). CI runs this after `npm run build` in the frontend job.
+
+Help parity: `node scripts/check-rate-limit-help.mjs` (also in CI).
+
 ## Deferred (post-GA)
 
 - SSE live dashboard (`GET /admin/api/events/stream`, G-12)
-- Playwright E2E (G-20)
 
 ## Related
 
