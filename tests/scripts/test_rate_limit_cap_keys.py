@@ -22,6 +22,36 @@ def config(rules=None, rpm=120, burst=15, streams=30):
     }
 
 
+class ObservedMinutesTests(unittest.TestCase):
+    def test_a_tracker_older_than_the_window_covers_the_whole_window(self):
+        report = {"windowMinutes": 180, "generatedUtc": "2026-10-06T10:00:00.1234567+00:00",
+                  "tracker": {"trackingSinceUtc": "2026-10-04T11:54:00.5+00:00"}}
+
+        self.assertEqual(cap_keys.observed_minutes(report), 180)
+
+    def test_a_restart_inside_the_window_shortens_what_was_observed(self):
+        report = {"windowMinutes": 180, "generatedUtc": "2026-10-06T10:03:00.8859024+00:00",
+                  "tracker": {"trackingSinceUtc": "2026-10-06T09:53:00.5942808+00:00"}}
+
+        self.assertEqual(cap_keys.observed_minutes(report), 10)
+
+    def test_a_report_without_a_tracker_is_taken_at_its_window(self):
+        self.assertEqual(cap_keys.observed_minutes({"windowMinutes": 60}), 60)
+        self.assertEqual(cap_keys.observed_minutes({}), cap_keys.USAGE_MINUTES)
+
+    def test_rates_are_requests_over_the_minutes_observed(self):
+        class Restarted:
+            def call(self, method, path, body=None, if_match=None):
+                return 200, {"windowMinutes": 180, "generatedUtc": "2026-10-06T10:03:00+00:00",
+                             "tracker": {"trackingSinceUtc": "2026-10-06T09:53:00+00:00"},
+                             "byApiKey": [{"apiKeyId": "A", "requests": 70, "requestsPerMinute": 0.39}]}
+
+        usage, minutes = cap_keys.usage_by_key(Restarted())
+
+        self.assertEqual(minutes, 10)
+        self.assertEqual(usage["a"]["requestsPerMinute"], 7)
+
+
 class PlanCapsTests(unittest.TestCase):
     def test_a_key_without_a_rule_is_capped_at_its_share_of_the_tier(self):
         proposed, decisions = cap_keys.plan_caps(
