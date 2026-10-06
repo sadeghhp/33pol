@@ -109,6 +109,51 @@ groups:
             ceiling. The ratio is computed against the exported ceiling rather than a literal,
             so it tracks the configured value.
             See docs/runbooks/rate-limit-admin.md#partition-ceiling
+      # The in-app `rate_limit_refusing` item, as a rule: one alert per refusing limit kind while
+      # refusals are at least 10% of all decisions. Three things in the expression are deliberate.
+      # The denominator adds the refusals back, because a request refused by a rate limit never
+      # reaches the router and so is not in gateway_inference_requests_total — but only the
+      # `rate_limit:` ones, since a stream-slot refusal is decided in the router and is already
+      # counted there. `or vector(0)` on each half is what keeps the rule alive when one side has
+      # no series: a gateway refusing everything has no inference series at all, and a sum over
+      # nothing is no sample rather than 0, which would have silenced the alert in exactly the
+      # case it exists for. And the control-plane and failed-sign-in budgets are left out: they
+      # have their own rules below and are not inference decisions.
+      - alert: GatewayRateLimitRefusing
+        expr: |
+          sum by (reason) (rate(gateway_rate_limit_rejections_total{reason=~"(rate_limit|stream_concurrency):.+",reason!="rate_limit:control_plane"}[5m]))
+            / on() group_left()
+              (
+                (sum(rate(gateway_inference_requests_total[5m])) or vector(0))
+                + (sum(rate(gateway_rate_limit_rejections_total{reason=~"rate_limit:.+",reason!="rate_limit:control_plane"}[5m])) or vector(0))
+              )
+          and on()
+            (
+              sum(rate(gateway_rate_limit_rejections_total{reason=~"(rate_limit|stream_concurrency):.+",reason!="rate_limit:control_plane"}[5m]))
+                /
+                  (
+                    (sum(rate(gateway_inference_requests_total[5m])) or vector(0))
+                    + (sum(rate(gateway_rate_limit_rejections_total{reason=~"rate_limit:.+",reason!="rate_limit:control_plane"}[5m])) or vector(0))
+                  )
+              >= 0.10
+            )
+          and on()
+            (
+              (sum(increase(gateway_inference_requests_total[5m])) or vector(0))
+              + (sum(increase(gateway_rate_limit_rejections_total{reason=~"rate_limit:.+",reason!="rate_limit:control_plane"}[5m])) or vector(0))
+              >= 20
+            )
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Rate limits are refusing at least 10% of inference requests
+          description: >-
+            {{ $labels.reason }} accounts for {{ $value | humanizePercentage }} of all rate-limit
+            decisions over the last 5 minutes. The reason names the scope that refused:
+            `rate_limit:tenant` is a tenant bucket, which every key of that tenant shares, so one
+            busy key can be refusing all the others. The series carries no caller label; the
+            admin API names the keys. See docs/runbooks/rate-limit-admin.md#refusals
       - alert: GatewayCredentialGuessing
         expr: sum(rate(gateway_rate_limit_rejections_total{reason="auth_failure"}[5m])) > 1
         for: 10m

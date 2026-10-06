@@ -302,6 +302,52 @@ baseline, and opens the change list so the draft is reviewed against what somebo
 then goes through on the refreshed version, and Discard drops the draft instead. It never reloads over
 unsaved work.
 
+<a id="refusals"></a>
+## Refusals
+
+`GatewayRateLimitRefusing` fires when at least 10% of rate-limit decisions over 5 minutes were refused
+(20 decisions minimum, held 5 minutes). There is one alert per `reason`, and the reason names the
+scope that refused: `rate_limit:tenant`, `rate_limit:api_key`, `rate_limit:model`,
+`rate_limit:global`, or the same with `stream_concurrency:` for a stream cap.
+
+Read the reason first, because it says whose problem this is.
+
+- **`rate_limit:tenant`** — a tenant bucket is empty. Every key of a tenant draws on that one bucket,
+  so this is as often one busy key refusing its siblings as it is the tenant outgrowing its tier. A
+  gateway whose keys were all issued from the console has one tenant, and then this reason means the
+  whole deployment is sharing one allowance.
+- **`rate_limit:api_key`** or **`:api_key_model`** — one credential is over a rule written for it.
+  The limit is doing its job; the question is whether that client is retrying into it.
+- **`rate_limit:model`** or **`:global`** — the gateway is at a capacity ceiling. Nobody is
+  misbehaving; either the ceiling is too low or the backend is too small.
+
+The metric carries no caller label, so the admin API is what names the caller:
+
+```bash
+# Who is refused, and which limit refused them, over the last hour and the last five minutes.
+curl -s -H "Authorization: Bearer $ADMIN_KEY" "$GATEWAY/admin/api/overview/rate-limits"
+# The same by tenant, key and model, with observed rate against configured rate.
+curl -s -H "Authorization: Bearer $ADMIN_KEY" "$GATEWAY/admin/api/rate-limits/usage?minutes=60&take=25"
+```
+
+In the second answer compare `byApiKey`: a key whose `requestsPerMinute` is near or above the
+tenant's `configuredRpm` is the one draining the bucket, and a key with a high rejected count and a
+modest rate is one of the keys it is starving. Both read from the in-memory tracker, so they cover
+at most the last three hours and start empty after a restart.
+
+What to change:
+
+- One key draining a shared tenant bucket: give that key an `api_key` rule below the tenant tier.
+  Rules only tighten, so this bounds it without touching the others.
+- The tenant has outgrown its tier: raise the tenant rule or move it to a larger plan.
+- A model ceiling is binding: raise it only if the backend has the room, which
+  `gateway_bulkhead_queued` and the backend's own queue will tell you.
+- A client retrying into a limit it will not clear is ignoring `Retry-After`. Load-aware
+  enforcement (above) lengthens `Retry-After` for a caller that keeps coming back.
+
+`PUT /admin/api/rate-limits` replaces the whole configuration. Fetch it, change the one rule, and
+send it back with the version it was read at.
+
 <a id="partition-ceiling"></a>
 ## Partition ceiling
 
