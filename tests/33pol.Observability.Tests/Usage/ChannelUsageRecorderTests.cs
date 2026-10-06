@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using Pol33.Core.Abstractions;
 using Pol33.Core.Models;
+using Pol33.Core.Observability;
 using Pol33.Observability.Usage;
 
 namespace Pol33.Observability.Tests.Usage;
@@ -35,7 +36,33 @@ public sealed class ChannelUsageRecorderTests
         quota.Received(1).CommitUsage(
             "tenant-a", "gpt-4o", 15, "req-1", Arg.Any<DateTimeOffset?>());
         await persistence.Received(1).PersistAsync(Arg.Is<UsageEvent>(e => e.RequestId == "req-1"), Arg.Any<CancellationToken>());
-        metrics.Received(1).RecordTokenUsage("gpt-4o", 10, 5);
+        metrics.Received(1).RecordTokenUsage("gpt-4o", 10, 5, Arg.Any<MetricCaller>());
+    }
+
+    [Fact]
+    public void Enqueue_AttributesTheTokensToTheCaller()
+    {
+        var metrics = Substitute.For<IGatewayMetricsCollector>();
+        var recorder = new ChannelUsageRecorder(
+            Substitute.For<IQuotaService>(),
+            Substitute.For<IUsagePersistenceHandler>(),
+            metrics,
+            NullLogger<ChannelUsageRecorder>.Instance);
+
+        recorder.Enqueue(new UsageEvent
+        {
+            RequestId = "req-caller",
+            TenantId = "7b0a3a52-2f0c-4a4b-9a57-0d2d5f0c1e11",
+            TenantSlug = "fanus",
+            ApiKeyLabel = "Fanus-MMT-Campaign",
+            ModelId = "gpt-4o",
+            PromptTokens = 10,
+            CompletionTokens = 5,
+        });
+        recorder.Enqueue(new UsageEvent { RequestId = "req-anon", ModelId = "gpt-4o", PromptTokens = 3 });
+
+        metrics.Received(1).RecordTokenUsage("gpt-4o", 10, 5, new MetricCaller("fanus", "Fanus-MMT-Campaign"));
+        metrics.Received(1).RecordTokenUsage("gpt-4o", 3, 0, MetricCaller.Anonymous);
     }
 
     /// <summary>
@@ -232,7 +259,7 @@ public sealed class ChannelUsageRecorderTests
             Arg.Is<UsageEvent>(e => e.RequestId == $"req-{channelCapacity}"),
             Arg.Any<CancellationToken>());
         // Token metrics count only accepted events, so gateway_tokens_total cannot outrun billed usage.
-        metrics.Received(channelCapacity).RecordTokenUsage("m1", 1, 0);
+        metrics.Received(channelCapacity).RecordTokenUsage("m1", 1, 0, Arg.Any<MetricCaller>());
     }
 
     [Fact]

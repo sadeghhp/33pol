@@ -9,6 +9,7 @@ using Pol33.Core.Billing;
 using Pol33.Core.Configuration;
 using Pol33.Core.Errors;
 using Pol33.Core.Models;
+using Pol33.Core.Observability;
 using Pol33.Core.RateLimiting;
 using Pol33.Core.Security;
 using Pol33.Proxy.Errors;
@@ -338,7 +339,7 @@ public sealed class ModelRouterBudgetReservationTests
         authState.IsAuthenticationRequired.Returns(false);
 
         var requestTracker = Substitute.For<IRequestTracker>();
-        requestTracker.BeginInferenceRequest(Arg.Any<string>(), Arg.Any<bool>())
+        requestTracker.BeginInferenceRequest(Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<string?>(), Arg.Any<MetricCaller>())
             .Returns(_ => Substitute.For<IInferenceRequestScope>());
 
         var metrics = Substitute.For<IGatewayMetricsCollector>();

@@ -116,6 +116,7 @@ public sealed class ApiKeyAuthenticationHandler : AuthenticationHandler<Authenti
         {
             TenantId = result.TenantId!.Value.ToString(),
             ApiKeyId = result.ApiKeyId!.Value.ToString(),
+            ApiKeyLabel = result.ApiKeyLabel,
             TenantSlug = result.TenantSlug,
             PlanSlug = result.PlanSlug,
             CostCenter = result.CostCenter,

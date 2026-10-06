@@ -61,6 +61,25 @@ public sealed class ApiKeyValidatorTests
         result.CostCenter.Should().Be("key-cc");
     }
 
+    /// <summary>
+    /// The label rides on the validation result so the metrics that name a caller can read it
+    /// without a lookup per request.
+    /// </summary>
+    [Fact]
+    public async Task ValidateAsync_LabelledKey_ReturnsTheLabel()
+    {
+        await using var db = CreateDb();
+        var tenantId = await SeedTenantAsync(db);
+        const string secret = "sk-33pol-labelled-key-001";
+        await SeedKeyAsync(db, tenantId, secret, ApiKeyRole.Inference, label: "Fanus-MMT-Campaign");
+
+        var sut = CreateValidator(db);
+        var result = await sut.ValidateAsync(secret);
+
+        result.IsSuccess.Should().BeTrue();
+        result.ApiKeyLabel.Should().Be("Fanus-MMT-Campaign");
+    }
+
     [Fact]
     public async Task ValidateAsync_KeyWithoutCostCenter_FallsBackToTenant()
     {
@@ -397,7 +416,8 @@ public sealed class ApiKeyValidatorTests
         bool revoked = false,
         DateTimeOffset? expiresAt = null,
         string? keyCostCenter = null,
-        string? storedPrefix = null)
+        string? storedPrefix = null,
+        string? label = null)
     {
         var keyId = Guid.NewGuid();
         db.ApiKeys.Add(new Pol33.Persistence.Entities.ApiKeyEntity
@@ -408,6 +428,7 @@ public sealed class ApiKeyValidatorTests
             KeyPrefix = storedPrefix ?? ApiKeyHashing.CreatePrefix(secret),
             Role = role,
             CostCenter = keyCostCenter,
+            Label = label,
             CreatedAt = DateTimeOffset.UtcNow,
             RevokedAt = revoked ? DateTimeOffset.UtcNow : null,
             ExpiresAt = expiresAt,

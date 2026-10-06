@@ -358,6 +358,60 @@ public sealed class AdminScopedRateLimitEndpointTests
         response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
     }
 
+    /// <summary>
+    /// The whole path a caller label travels: stored on the key, read at validation, carried on the
+    /// request, and written on the series a scrape returns. This is what lets an alert say which
+    /// team is refused rather than only that the model limit is refusing.
+    /// </summary>
+    [Fact]
+    public async Task ARefusedRequest_IsExportedUnderItsTenantAndKeyLabel()
+    {
+        var handler = new MockUpstreamHandler();
+        await using var factory = CreateFactory(handler);
+        await GatewayWebApplicationFactory.EnsureAuthReadyAsync(factory);
+        var admin = CreateAuthenticatedClient(factory, AdminKey);
+
+        var put = await admin.PutAsJsonAsync(
+            "/admin/api/rate-limits",
+            new
+            {
+                enabled = true,
+                @default = new { rpm = 10_000, burst = 0, maxConcurrentStreams = 100 },
+                plans = new Dictionary<string, object>(),
+                rules = new[]
+                {
+                    new { scope = "model", target = "local-mock", rpm = 1, burst = 0, maxConcurrentStreams = 0 },
+                },
+            });
+        put.EnsureSuccessStatusCode();
+
+        const string label = "Caller-Label-Export";
+        var client = await CreateInferenceClientAsync(factory, admin, label);
+
+        (await PostChatAsync(client)).StatusCode.Should().BeOneOf(HttpStatusCode.OK, HttpStatusCode.BadGateway);
+        (await PostChatAsync(client)).StatusCode.Should().Be(HttpStatusCode.TooManyRequests);
+
+        var metrics = (await admin.GetStringAsync("/metrics")).Split('\n');
+
+        metrics.Should().Contain(
+            line => line.StartsWith("gateway_rate_limit_decisions_total{") &&
+                    line.Contains("tenant=\"default\"") &&
+                    line.Contains($"key=\"{label}\"") &&
+                    line.Contains("model=\"local-mock\"") &&
+                    line.Contains("scope=\"model\"") &&
+                    line.Contains("outcome=\"refused\""),
+            "the refusal has to name the caller and the limit that refused");
+        metrics.Should().Contain(
+            line => line.StartsWith("gateway_rate_limit_decisions_total{") &&
+                    line.Contains($"key=\"{label}\"") &&
+                    line.Contains("outcome=\"admitted\""));
+        metrics.Should().Contain(
+            line => line.StartsWith("gateway_inference_requests_total{") &&
+                    line.Contains("tenant=\"default\"") &&
+                    line.Contains($"key=\"{label}\""),
+            "the admitted request is attributed to the same caller");
+    }
+
     private static async Task<HttpResponseMessage> PostChatAsync(HttpClient client)
     {
         var body = JsonSerializer.Serialize(new
@@ -371,9 +425,10 @@ public sealed class AdminScopedRateLimitEndpointTests
 
     private static async Task<HttpClient> CreateInferenceClientAsync(
         WebApplicationFactory<Program> factory,
-        HttpClient admin)
+        HttpClient admin,
+        string? label = null)
     {
-        var createKey = await admin.PostAsJsonAsync("/admin/api/keys", new { role = "Inference" });
+        var createKey = await admin.PostAsJsonAsync("/admin/api/keys", new { role = "Inference", label });
         createKey.EnsureSuccessStatusCode();
         using var created = JsonDocument.Parse(await createKey.Content.ReadAsStringAsync());
         var keyId = created.RootElement.GetProperty("id").GetGuid();

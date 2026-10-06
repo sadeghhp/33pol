@@ -1,3 +1,5 @@
+using Pol33.Core.Observability;
+
 namespace Pol33.Core.Abstractions;
 
 public interface IRequestTracker
@@ -15,6 +17,17 @@ public interface IRequestTracker
         BeginInferenceRequest(modelId, isStreaming);
 
     /// <summary>
+    /// As above, also naming the caller on the request, error and duration series. The default
+    /// keeps older implementations working.
+    /// </summary>
+    IInferenceRequestScope BeginInferenceRequest(
+        string modelId,
+        bool isStreaming,
+        string? tenantId,
+        MetricCaller caller) =>
+        BeginInferenceRequest(modelId, isStreaming, tenantId);
+
+    /// <summary>
     /// Records a request the gateway answered with an error before it ever reached the upstream —
     /// an unhealthy backend, an open circuit, a full bulkhead or an exhausted stream slot.
     /// </summary>
@@ -25,4 +38,8 @@ public interface IRequestTracker
     /// admission takes microseconds and would drag the mean toward zero.
     /// </remarks>
     void RecordRejectedRequest(string modelId, string errorCode);
+
+    /// <inheritdoc cref="RecordRejectedRequest(string, string)"/>
+    void RecordRejectedRequest(string modelId, string errorCode, MetricCaller caller) =>
+        RecordRejectedRequest(modelId, errorCode);
 }

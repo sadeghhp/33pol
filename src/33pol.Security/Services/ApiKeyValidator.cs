@@ -113,7 +113,8 @@ public sealed class ApiKeyValidator : IApiKeyValidator
             tenant.Slug,
             tenant.PlanSlug,
             effectiveCostCenter,
-            record.Role);
+            record.Role,
+            record.Label);
 
         // A positive entry must not outlive the key: cap the TTL at the remaining lifetime so a key
         // expiring inside the cache window stops authenticating on time rather than up to

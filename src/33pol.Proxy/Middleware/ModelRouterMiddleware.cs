@@ -10,6 +10,7 @@ using Pol33.Core.Forwarding;
 using Pol33.Core.Errors;
 using Pol33.Core.Models;
 using Pol33.Core.Identity;
+using Pol33.Core.Observability;
 using Pol33.Core.RateLimiting;
 using Pol33.Core.Security;
 using Pol33.Core.Usage;
@@ -314,6 +315,12 @@ public sealed class ModelRouterMiddleware
                         "stream_concurrency:" + scopeLabel,
                         ratePartitionKey,
                         modelConfig.Id);
+                    _metricsCollector.RecordRateLimitDecision(
+                        CallerOf(context),
+                        modelConfig.Id,
+                        streamAcquire.Scope,
+                        RateLimitControl.Concurrency,
+                        admitted: false);
                     // Zero rpm on purpose, not a missing value: this decision came from a slot
                     // count, and a slot count is not a per-minute rate. Passing streamAcquire.Limit
                     // here wrote MaxConcurrentStreams into the report's rpm columns, and because a
@@ -378,7 +385,11 @@ public sealed class ModelRouterMiddleware
                                 scopeTenantValue is TenantContext scopeTenant
                 ? scopeTenant.TenantId
                 : null;
-            inferenceScope = _requestTracker.BeginInferenceRequest(modelConfig.Id, requestInfo.Stream, scopeTenantId);
+            inferenceScope = _requestTracker.BeginInferenceRequest(
+                modelConfig.Id,
+                requestInfo.Stream,
+                scopeTenantId,
+                CallerOf(context));
 
             var requestId = ResolveRequestId(context);
 
@@ -873,9 +884,15 @@ public sealed class ModelRouterMiddleware
         await context.WriteGatewayErrorAsync(error, context.RequestAborted, retryAfterSeconds)
             .ConfigureAwait(false);
 
-        _requestTracker.RecordRejectedRequest(modelId, outcome);
+        _requestTracker.RecordRejectedRequest(modelId, outcome, CallerOf(context));
         RecordRecentRequest(context, modelId, started, isStreaming, success: false, outcome: outcome);
     }
+
+    private static MetricCaller CallerOf(HttpContext context) =>
+        MetricCaller.From(
+            context.Items.TryGetValue(TenantContextKeys.HttpContextItemKey, out var value)
+                ? value as TenantContext
+                : null);
 
     /// <summary>
     /// Publishes the request to the live feed the moment forwarding begins, and retires the entry on

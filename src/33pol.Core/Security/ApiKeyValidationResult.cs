@@ -43,7 +43,8 @@ public sealed record ApiKeyValidationResult(
     string? TenantSlug = null,
     string? PlanSlug = null,
     string? CostCenter = null,
-    Pol33.Core.Identity.ApiKeyRole? Role = null)
+    Pol33.Core.Identity.ApiKeyRole? Role = null,
+    string? ApiKeyLabel = null)
 {
     public static ApiKeyValidationResult Success(
         Guid tenantId,
@@ -51,8 +52,9 @@ public sealed record ApiKeyValidationResult(
         string tenantSlug,
         string? planSlug,
         string? costCenter,
-        Pol33.Core.Identity.ApiKeyRole role) =>
-        new(true, null, tenantId, apiKeyId, tenantSlug, planSlug, costCenter, role);
+        Pol33.Core.Identity.ApiKeyRole role,
+        string? apiKeyLabel = null) =>
+        new(true, null, tenantId, apiKeyId, tenantSlug, planSlug, costCenter, role, apiKeyLabel);
 
     public static ApiKeyValidationResult Fail(ApiKeyValidationFailure failure) =>
         new(false, failure);

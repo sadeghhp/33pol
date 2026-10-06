@@ -38,6 +38,7 @@ public static class ObservabilityServiceCollectionExtensions
         services.AddSingleton(sp => new PolicyPressureTracker(sp.GetRequiredService<TimeProvider>()));
         services.AddSingleton<RateLimitUsageTracker>();
         services.AddSingleton<IRateLimitUsageTracker>(sp => sp.GetRequiredService<RateLimitUsageTracker>());
+        services.AddSingleton<MetricCallerBudget>();
         services.AddSingleton<GatewayMetricsCollector>();
         services.AddSingleton<IGatewayMetricsCollector>(sp => sp.GetRequiredService<GatewayMetricsCollector>());
         services.AddSingleton<IUsageQualityCounters>(sp => sp.GetRequiredService<GatewayMetricsCollector>());

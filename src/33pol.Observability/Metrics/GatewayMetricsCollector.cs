@@ -1,13 +1,27 @@
+using System.Diagnostics;
 using Pol33.Core.Abstractions;
 using Pol33.Core.Billing;
 using Pol33.Core.Models.Overview;
+using Pol33.Core.Observability;
+using Pol33.Core.RateLimiting;
 using Pol33.Observability.Policy;
 using Pol33.Observability.Runtime;
 
 namespace Pol33.Observability.Metrics;
 
-public sealed class GatewayMetricsCollector(GatewayRuntimeState runtimeState, PolicyPressureTracker? policy = null) : IGatewayMetricsCollector, IUsageQualityCounters
+public sealed class GatewayMetricsCollector(
+    GatewayRuntimeState runtimeState,
+    PolicyPressureTracker? policy = null,
+    MetricCallerBudget? callers = null) : IGatewayMetricsCollector, IUsageQualityCounters
 {
+    /// <summary>The <c>model</c> value for a decision made before the request body was parsed.</summary>
+    public const string UnknownModel = "unknown";
+
+    /// <summary>The <c>scope</c> value on an admission: no scope refused.</summary>
+    public const string NoScope = "none";
+
+    private readonly MetricCallerBudget _callers = callers ?? new MetricCallerBudget();
+
     private long _parseFailures;
     private long _estimatedUsage;
     private long _unsplitUsage;
@@ -33,6 +47,27 @@ public sealed class GatewayMetricsCollector(GatewayRuntimeState runtimeState, Po
         GatewayMeters.RateLimitRejections.Add(
             1,
             new KeyValuePair<string, object?>("reason", reason));
+    }
+
+    public void RecordRateLimitDecision(
+        MetricCaller caller,
+        string? modelId,
+        RateLimitScope? scope,
+        RateLimitControl control,
+        bool admitted)
+    {
+        var resolved = _callers.Resolve(caller);
+        GatewayMeters.RateLimitDecisions.Add(
+            1,
+            new TagList
+            {
+                { "tenant", resolved.Tenant },
+                { "key", resolved.Key },
+                { "model", string.IsNullOrWhiteSpace(modelId) ? UnknownModel : modelId },
+                { "scope", admitted ? NoScope : scope?.ToLabel() ?? RateLimitScopeNames.Tenant },
+                { "control", control == RateLimitControl.Concurrency ? "concurrency" : "rate" },
+                { "outcome", admitted ? "admitted" : "refused" },
+            });
     }
 
     public void RecordQuotaRejection() => RecordQuotaRejection(tenantId: null, modelId: null);
@@ -72,7 +107,10 @@ public sealed class GatewayMetricsCollector(GatewayRuntimeState runtimeState, Po
     }
 
     public void RecordTokenUsage(string modelId, long promptTokens, long completionTokens) =>
-        GatewayTokenMetricsRecorder.Record(modelId, promptTokens, completionTokens);
+        RecordTokenUsage(modelId, promptTokens, completionTokens, MetricCaller.Anonymous);
+
+    public void RecordTokenUsage(string modelId, long promptTokens, long completionTokens, MetricCaller caller) =>
+        GatewayTokenMetricsRecorder.Record(modelId, promptTokens, completionTokens, _callers.Resolve(caller));
 
     public void RecordUsageParseFailure(string modelId)
     {

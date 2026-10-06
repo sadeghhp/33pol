@@ -6,6 +6,24 @@ public static class GatewayMeters
 {
     public const string MeterName = "Pol33.Gateway";
 
+    /// <summary>
+    /// The series that carry <c>tenant</c> and <c>key</c>. Listed so the exporter can raise their
+    /// cardinality limit together: the SDK default of 2,000 points per metric is fewer than fifty
+    /// keys across fourteen models and three statuses, and past it the SDK folds new series into
+    /// one overflow point without a word.
+    /// </summary>
+    public static readonly IReadOnlyList<string> CallerLabelledInstruments =
+    [
+        "gateway_inference_requests_total",
+        "gateway_inference_errors_total",
+        "gateway_inference_duration_seconds",
+        "gateway_tokens_total",
+        "gateway_rate_limit_decisions_total",
+    ];
+
+    /// <summary>Points each of <see cref="CallerLabelledInstruments"/> may hold.</summary>
+    public const int CallerLabelledCardinalityLimit = 10_000;
+
     public static readonly Meter Meter = new(MeterName, "1.0.0");
 
     public static readonly Counter<long> InferenceRequests =
@@ -29,6 +47,14 @@ public static class GatewayMeters
 
     public static readonly Counter<long> RateLimitRejections =
         Meter.CreateCounter<long>("gateway_rate_limit_rejections_total");
+
+    /// <summary>
+    /// Every decision of the inference rate limiter, by caller. Labels are tenant slug, key label,
+    /// model, scope, control and outcome. <see cref="RateLimitRejections"/> stays as it is: it also
+    /// counts the control-plane and failed-credential limiters, which have no caller to name.
+    /// </summary>
+    public static readonly Counter<long> RateLimitDecisions =
+        Meter.CreateCounter<long>("gateway_rate_limit_decisions_total");
 
     public static readonly Counter<long> QuotaRejections =
         Meter.CreateCounter<long>("gateway_quota_rejections_total");

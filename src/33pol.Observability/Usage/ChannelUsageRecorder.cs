@@ -3,6 +3,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Pol33.Core.Abstractions;
 using Pol33.Core.Models;
+using Pol33.Core.Observability;
 using Pol33.Observability.Metrics;
 using Pol33.Observability.Runtime;
 
@@ -75,7 +76,10 @@ public sealed class ChannelUsageRecorder : IUsageRecorder, IHostedService, IUsag
             _metricsCollector.RecordTokenUsage(
                 usageEvent.ModelId,
                 usageEvent.PromptTokens,
-                usageEvent.CompletionTokens);
+                usageEvent.CompletionTokens,
+                usageEvent.TenantId is null
+                    ? MetricCaller.Anonymous
+                    : MetricCaller.From(usageEvent.TenantSlug, usageEvent.ApiKeyLabel));
             return true;
         }
 
