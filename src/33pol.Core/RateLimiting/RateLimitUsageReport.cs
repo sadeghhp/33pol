@@ -250,6 +250,17 @@ public sealed record RateLimitUsageRow(
     int EffectiveRpm)
 {
     /// <summary>
+    /// The most decisions in any one UTC calendar minute of the window. Attempts, like
+    /// <see cref="Requests"/>: for a row that was being refused it includes the retries. This is the
+    /// number a cap has to clear, where <see cref="RequestsPerMinute"/> is an average that a bursty
+    /// caller sits far above at its busiest.
+    /// </summary>
+    public long PeakRequestsInOneMinute { get; init; }
+
+    /// <summary>Start of that minute; null when the row has no decisions.</summary>
+    public DateTimeOffset? PeakMinuteUtc { get; init; }
+
+    /// <summary>
     /// Observed rate as a share of the limit in force, in <c>[0, 1+]</c>. Null when the row has no
     /// single governing limit. Above 1 is normal and expected for a row that is being refused: the
     /// numerator counts attempts, not admissions.

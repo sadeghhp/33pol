@@ -2,7 +2,8 @@
 # ALERTMANAGER_CONFIG=./config/alertmanager.local.yml in .env.
 #
 # A rule sends an alert to a team by carrying a `team` label. An alert no route claims stays with
-# gateway-owner, so a new rule is never silently dropped.
+# gateway-owner, so a new rule is never silently dropped. GatewayTenantThrottled sets `team` to the
+# tenant slug, so a route here is named after the team's tenant.
 
 route:
   receiver: gateway-owner

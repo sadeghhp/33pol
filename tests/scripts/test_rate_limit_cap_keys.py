@@ -51,6 +51,27 @@ class ObservedMinutesTests(unittest.TestCase):
         self.assertEqual(minutes, 10)
         self.assertEqual(usage["a"]["requestsPerMinute"], 7)
 
+    def test_a_key_is_held_against_its_busiest_minute_as_well_as_its_average(self):
+        decisions = [
+            {"id": "A", "label": "steady", "action": "add", "rpm": 48, "burst": 6},
+            {"id": "B", "label": "bursty", "action": "add", "rpm": 48, "burst": 6},
+            {"id": "C", "label": "over", "action": "add", "rpm": 48, "burst": 6},
+            {"id": "D", "label": "has-a-rule", "action": "keep", "rpm": 48, "burst": 6},
+            {"id": "E", "label": "older-gateway", "action": "add", "rpm": 48, "burst": 6},
+        ]
+        usage = {
+            "a": {"requestsPerMinute": 10, "peakRequestsInOneMinute": 54},
+            "b": {"requestsPerMinute": 2, "peakRequestsInOneMinute": 55},
+            "c": {"requestsPerMinute": 60, "peakRequestsInOneMinute": 90},
+            "d": {"requestsPerMinute": 60, "peakRequestsInOneMinute": 90},
+            "e": {"requestsPerMinute": 10},
+        }
+
+        over, over_at_peak = cap_keys.keys_over_cap(decisions, usage)
+
+        self.assertEqual(over, ["over"])
+        self.assertEqual(over_at_peak, ["bursty"])
+
 
 class PlanCapsTests(unittest.TestCase):
     def test_a_key_without_a_rule_is_capped_at_its_share_of_the_tier(self):

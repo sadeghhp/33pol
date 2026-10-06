@@ -1,0 +1,109 @@
+# promtool test rules deploy/prometheus/alerts/tests/33pol-tenant-throttled_test.yml
+#
+# Counters are written as `start+step x n` at a one-minute interval, so `+140x30` is 140 decisions
+# a minute for half an hour.
+rule_files:
+  - ../33pol.yml
+
+evaluation_interval: 1m
+
+tests:
+  # The 2026-09-29 pattern with a tenant per team: one team's key storms into its own tenant bucket
+  # while another team carries on. The storming team is told; the other is not.
+  - name: one tenant storming alerts that tenant and nobody else
+    interval: 1m
+    input_series:
+      - series: 'gateway_rate_limit_decisions_total{tenant="fanus",key="Fanus-MMT-Campaign",model="unknown",scope="none",control="rate",outcome="admitted"}'
+        values: '0+140x30'
+      - series: 'gateway_rate_limit_decisions_total{tenant="fanus",key="Fanus-MMT-Campaign",model="unknown",scope="tenant",control="rate",outcome="refused"}'
+        values: '0+60x30'
+      - series: 'gateway_rate_limit_decisions_total{tenant="easy",key="easy-prod-main",model="unknown",scope="none",control="rate",outcome="admitted"}'
+        values: '0+30x30'
+    alert_rule_test:
+      # Held for 10 minutes: not yet.
+      - eval_time: 9m
+        alertname: GatewayTenantThrottled
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: GatewayTenantThrottled
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              tenant: fanus
+              team: fanus
+            exp_annotations:
+              summary: Tenant fanus is being rate limited
+              description: >-
+                30% of the rate-limit decisions for tenant fanus over the last 5 minutes were
+                refusals. See docs/runbooks/rate-limit-admin.md#tenant-throttled
+
+  # The share is the tenant's, summed over its keys and over every limit that refused: two keys
+  # refused 6% of the tenant's decisions each are one tenant at 12%.
+  - name: refusals are summed over the keys and limits of a tenant
+    interval: 1m
+    input_series:
+      - series: 'gateway_rate_limit_decisions_total{tenant="fanus",key="a",model="unknown",scope="none",control="rate",outcome="admitted"}'
+        values: '0+44x30'
+      - series: 'gateway_rate_limit_decisions_total{tenant="fanus",key="b",model="unknown",scope="none",control="rate",outcome="admitted"}'
+        values: '0+44x30'
+      - series: 'gateway_rate_limit_decisions_total{tenant="fanus",key="a",model="unknown",scope="api_key",control="rate",outcome="refused"}'
+        values: '0+6x30'
+      - series: 'gateway_rate_limit_decisions_total{tenant="fanus",key="b",model="m",scope="tenant",control="concurrency",outcome="refused"}'
+        values: '0+6x30'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: GatewayTenantThrottled
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              tenant: fanus
+              team: fanus
+            exp_annotations:
+              summary: Tenant fanus is being rate limited
+              description: >-
+                12% of the rate-limit decisions for tenant fanus over the last 5 minutes were
+                refusals. See docs/runbooks/rate-limit-admin.md#tenant-throttled
+
+  # 5 refused for every 95 admitted: below the threshold.
+  - name: five percent refused stays quiet
+    interval: 1m
+    input_series:
+      - series: 'gateway_rate_limit_decisions_total{tenant="fanus",key="a",model="unknown",scope="none",control="rate",outcome="admitted"}'
+        values: '0+95x30'
+      - series: 'gateway_rate_limit_decisions_total{tenant="fanus",key="a",model="unknown",scope="tenant",control="rate",outcome="refused"}'
+        values: '0+5x30'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: GatewayTenantThrottled
+        exp_alerts: []
+
+  # Every decision refused, but about one a minute is not a condition.
+  - name: too few decisions is not judged
+    interval: 1m
+    input_series:
+      - series: 'gateway_rate_limit_decisions_total{tenant="fanus",key="a",model="unknown",scope="tenant",control="rate",outcome="refused"}'
+        values: '0+1x30'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: GatewayTenantThrottled
+        exp_alerts: []
+
+  # A tenant with nothing but refusals has no admitted series at all, and still alerts.
+  - name: a tenant refused on every request
+    interval: 1m
+    input_series:
+      - series: 'gateway_rate_limit_decisions_total{tenant="fanus",key="a",model="unknown",scope="tenant",control="rate",outcome="refused"}'
+        values: '0+60x30'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: GatewayTenantThrottled
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              tenant: fanus
+              team: fanus
+            exp_annotations:
+              summary: Tenant fanus is being rate limited
+              description: >-
+                100% of the rate-limit decisions for tenant fanus over the last 5 minutes were
+                refusals. See docs/runbooks/rate-limit-admin.md#tenant-throttled
