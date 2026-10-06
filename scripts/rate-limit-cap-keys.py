@@ -24,7 +24,9 @@ in between. To undo it, apply the rollback file the plan step wrote, the same wa
 
 A cap is a share of the tenant tier: `--max-share 0.4` on a 120 rpm tier caps each key at 48 rpm.
 `--tier-rpm`, `--tier-burst` and `--tier-streams` change the default tier in the same plan, and the
-caps are then shares of the new numbers. Keys that already have an `api_key` rule, and revoked or
+caps are then shares of the new numbers. `--rate-only` leaves streams uncapped on the new rules:
+use it until each key's peak of open streams is known, because a stream cap set below a key's
+normal peak refuses traffic that is admitted today. Keys that already have an `api_key` rule, and revoked or
 archived keys, are left alone. Standard library only.
 """
 
@@ -32,6 +34,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import datetime
 import json
 import math
 import os
@@ -45,7 +48,7 @@ MAX_RULES = 1000
 
 
 def plan_caps(config: dict, keys: list[dict], *, max_share: float, floor_rpm: int,
-              tier: dict | None = None) -> tuple[dict, list[dict]]:
+              tier: dict | None = None, rate_only: bool = False) -> tuple[dict, list[dict]]:
     """Return (proposed configuration, one row per key saying what was decided for it).
 
     Pure: no I/O, so the arithmetic can be tested without a gateway.
@@ -69,8 +72,9 @@ def plan_caps(config: dict, keys: list[dict], *, max_share: float, floor_rpm: in
         "rpm": max(floor_rpm, math.ceil(rpm * max_share)),
         # A burst is extra tokens above a rate, so it scales with the rate it sits on.
         "burst": math.ceil(burst * max_share),
-        # 0 streams means unlimited, and a share of unlimited is unlimited.
-        "maxConcurrentStreams": 0 if streams <= 0 else max(1, math.ceil(streams * max_share)),
+        # 0 streams means unlimited, and a share of unlimited is unlimited. A rule with 0 leaves
+        # the key on the tenant's stream cap, which is what it has without a rule.
+        "maxConcurrentStreams": 0 if rate_only or streams <= 0 else max(1, math.ceil(streams * max_share)),
     }
 
     rules = list(proposed.get("rules") or [])
@@ -151,24 +155,53 @@ def key_list(answer: dict | list) -> list[dict]:
     raise SystemExit("GET /admin/api/keys answered a shape this script does not know")
 
 
-def usage_by_key(gateway: Gateway) -> dict[str, dict]:
-    """Observed traffic per key id. Empty when the tracker is off; the plan does not depend on it."""
+def observed_minutes(report: dict) -> float:
+    """How many minutes of traffic a usage report really holds.
+
+    The tracker lives in the gateway's memory and starts empty at every restart, while the report
+    divides by the window that was asked for. Just after a restart that understates every rate.
+    """
+    window = float(report.get("windowMinutes") or USAGE_MINUTES)
+    try:
+        since = datetime.datetime.fromisoformat(
+            str(report["tracker"]["trackingSinceUtc"]).replace("Z", "+00:00")[:19] + "+00:00")
+        now = datetime.datetime.fromisoformat(
+            str(report["generatedUtc"]).replace("Z", "+00:00")[:19] + "+00:00")
+    except (KeyError, TypeError, ValueError):
+        return window
+    return max(1.0, min(window, (now - since).total_seconds() / 60))
+
+
+def usage_by_key(gateway: Gateway) -> tuple[dict[str, dict], float]:
+    """Observed traffic per key id, and the minutes it covers.
+
+    Empty when the tracker is off; the plan does not depend on it.
+    """
     status, body = gateway.call("GET", f"/admin/api/rate-limits/usage?minutes={USAGE_MINUTES}&take=500")
     if status != 200 or not isinstance(body, dict):
-        return {}
+        return {}, float(USAGE_MINUTES)
+    minutes = observed_minutes(body)
     rows = {}
     for row in body.get("byApiKey") or []:
         key_id = str(row.get("apiKeyId") or row.get("key") or "").lower()
         if key_id:
+            # Requests over the minutes actually tracked, not over the window asked for.
+            if row.get("requests") is not None:
+                row = {**row, "requestsPerMinute": row["requests"] / minutes}
             rows[key_id] = row
-    return rows
+    return rows, minutes
 
 
-def print_table(decisions: list[dict], usage: dict[str, dict], default: dict) -> None:
+def print_table(decisions: list[dict], usage: dict[str, dict], default: dict,
+                minutes: float = USAGE_MINUTES) -> None:
     print(f"default tier: {default.get('rpm')} rpm, {default.get('burst')} burst, "
           f"{default.get('maxConcurrentStreams')} streams")
-    print(f"observed columns cover the last {USAGE_MINUTES} minutes at most, and are an average: "
-          "a key that bursts is busier at its peak than the rpm shown.\n")
+    print(f"observed columns cover the last {minutes:.0f} minutes, and are an average: "
+          "a key that bursts is busier at its peak than the rpm shown.")
+    if minutes < USAGE_MINUTES:
+        print(f"The gateway restarted {minutes:.0f} minutes ago and its usage history restarted with it. "
+              "That is too little to judge a cap by: plan again once it has run for a few hours.")
+    print()
     header = f"{'key':<34} {'action':<26} {'cap rpm':>7} {'burst':>5} {'streams':>7} {'seen rpm':>8} {'refused':>8}"
     print(header)
     print("-" * len(header))
@@ -199,9 +232,10 @@ def do_plan(gateway: Gateway, args: argparse.Namespace) -> int:
     keys = key_list(gateway.get("/admin/api/keys"))
     tier = {"rpm": args.tier_rpm, "burst": args.tier_burst, "maxConcurrentStreams": args.tier_streams}
     proposed, decisions = plan_caps(config, keys, max_share=args.max_share,
-                                    floor_rpm=args.floor_rpm, tier=tier)
+                                    floor_rpm=args.floor_rpm, tier=tier, rate_only=args.rate_only)
 
-    print_table(decisions, usage_by_key(gateway), proposed["default"])
+    usage, minutes = usage_by_key(gateway)
+    print_table(decisions, usage, proposed["default"], minutes)
     version = config.get("version")
     write_json(args.rollback, {"basedOnVersion": None, "config": put_body(config)})
     write_json(args.out, {"basedOnVersion": version, "config": put_body(proposed)})
@@ -236,6 +270,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--tier-rpm", type=int, help="also set the default tier's rpm")
     parser.add_argument("--tier-burst", type=int, help="also set the default tier's burst")
     parser.add_argument("--tier-streams", type=int, help="also set the default tier's stream cap")
+    parser.add_argument("--rate-only", action="store_true",
+                        help="cap rpm and burst only; new rules leave streams uncapped")
     parser.add_argument("--out", default="rate-limit-plan.json")
     parser.add_argument("--rollback", default="rate-limit-rollback.json")
     parser.add_argument("--apply", metavar="PLAN", help="write this plan file to the gateway")

@@ -107,6 +107,8 @@ services:
     volumes:
       - ./config/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ../prometheus/alerts:/etc/prometheus/alerts:ro
+      # Backend scrape targets (vllm*.yml); a directory, so files can be added without a restart.
+      - ./config/prometheus-targets:/etc/prometheus/targets:ro
       - prometheus-data:/prometheus
     # The gateway scrape token is mounted at /run/secrets/gateway_metrics_scrape_token and referenced
     # by prometheus.yml (authorization.credentials_file).
@@ -119,6 +121,27 @@ services:
     depends_on:
       gateway:
         condition: service_healthy
+      # Starting Prometheus brings Alertmanager with it: rules that fire with nowhere to send
+      # them are the failure this pairing exists to prevent.
+      alertmanager:
+        condition: service_started
+
+  alertmanager:
+    profiles: ["observability", "full"]
+    image: prom/alertmanager:v0.27.0
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+    volumes:
+      # ALERTMANAGER_CONFIG points at an operator's own copy (team routes, non-webhook receivers).
+      - ${ALERTMANAGER_CONFIG:-./config/alertmanager.yml}:/etc/alertmanager/alertmanager.yml:ro
+      # One <receiver>.url file per webhook receiver; read on each notification.
+      - ./config/alertmanager-receivers:/etc/alertmanager/receivers:ro
+      - alertmanager-data:/alertmanager
+    ports:
+      # Loopback by default: Alertmanager has no auth, and its API can silence every alert.
+      - "${ALERTMANAGER_BIND:-127.0.0.1}:${ALERTMANAGER_PORT:-9093}:9093"
 
   grafana:
     profiles: ["observability", "full"]
@@ -144,6 +167,7 @@ services:
 volumes:
   gateway-data:
   prometheus-data:
+  alertmanager-data:
   grafana-data:
 
 secrets:

@@ -103,12 +103,18 @@ curl -s http://127.0.0.1:8080/health/live
 
 ## Observability on the GPU host
 
-For Prometheus and Grafana without a mock upstream, use **gpu-observability**:
+For Prometheus, Alertmanager and Grafana without a mock upstream, use **gpu-observability**:
 
 ```bash
 # In .env: COMPOSE_PROFILES=observability
 ./scripts/install-33pol.sh install --yes --profile gpu-observability
 ```
+
+Three things are not done by the installer, and the stack is only half useful without them. Each is a file under `deploy/docker/config/`; see [deploy/docker/README.md](../deploy/docker/README.md#alert-delivery).
+
+1. **Give alerts somewhere to go.** Write the gateway owner's webhook URL to `alertmanager-receivers/gateway-owner.url`, then send the test alert from that README and see it arrive.
+2. **Scrape the model servers.** List them in `prometheus-targets/vllm.yml`. Their queue and running-request series are the only measure of how much each model can serve.
+3. **Keep a probe outside the host.** This Prometheus runs on the machine it watches, so when the host goes down, so does `GatewayDown`. Something off the host has to request `/health/ready`.
 
 For mock upstream plus observability (local demo only), use **full-stack**:
 

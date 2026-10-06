@@ -5,6 +5,12 @@ global:
 rule_files:
   - /etc/prometheus/alerts/*.yml
 
+# Rules are only evaluated here; Alertmanager is what notifies (config/alertmanager.yml).
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
 scrape_configs:
   - job_name: prometheus
     static_configs:
@@ -20,3 +26,10 @@ scrape_configs:
       credentials_file: /run/secrets/gateway_metrics_scrape_token
     static_configs:
       - targets: ["gateway:8080"]
+
+  # Model servers behind the gateway, listed in config/prometheus-targets/vllm*.yml (see the
+  # .example there). No file means no targets, and the job is simply empty.
+  - job_name: vllm
+    file_sd_configs:
+      - files: ["/etc/prometheus/targets/vllm*.yml"]
+        refresh_interval: 1m

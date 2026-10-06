@@ -16,6 +16,25 @@ All notable changes to this project are documented here. Version tags follow [Se
   `api_key` rule for each key without one, as a share of the tenant tier, and applies it only on
   request, conditionally on the version it planned from.
 
+### Observability — alerts are delivered, and the model servers are scraped
+
+- **Alertmanager in the `observability` and `full` profiles.** The stack evaluated alert rules and
+  sent the result nowhere. Prometheus now hands firing alerts to an Alertmanager that starts with
+  it. Every alert goes to one receiver, `gateway-owner`, whose webhook URL is a one-line file,
+  `deploy/docker/config/alertmanager-receivers/gateway-owner.url`. **Until that file exists nothing
+  is delivered.** `ALERTMANAGER_CONFIG` points at your own config for a route per team
+  (`alertmanager.teams.yml.example`). Published on loopback, port 9093.
+- **A `vllm` scrape job** reads model servers from `deploy/docker/config/prometheus-targets/vllm*.yml`
+  without a restart. With no file the job is empty.
+- **`GatewayDown`** (no successful scrape for 2 minutes, or none ever) and
+  **`GatewayBackendScrapeDown`** (a listed model server silent for 5 minutes), in
+  `33pol-scrape.yml` with `promtool` tests. CI also loads the Prometheus and Alertmanager
+  configuration the stack mounts.
+- **`rate-limit-cap-keys.py --rate-only`** caps rpm and burst and leaves streams uncapped, for a
+  gateway where no key's peak of open streams is known yet.
+- `.env.example` and the runbook say how to turn on the deployment-level switch for load-aware
+  enforcement. The console switch does nothing without it.
+
 ## [2.1.0] — 2026-09-28
 
 ### Usage & cost — filter by model, see each key's share

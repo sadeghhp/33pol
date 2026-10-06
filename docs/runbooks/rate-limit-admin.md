@@ -213,6 +213,8 @@ Raise `InMemoryMaxPartitions` if you legitimately serve more than 50 000 distinc
 
 Off by default. Two switches turn it on, and both must agree: `RateLimiting:Adaptive:Enabled` in `appsettings.json` ("was this deployment built to adapt") and `adaptiveEnabled` in the admin API ("should it be adapting right now"). The second is the one you can reach at three in the morning without a restart.
 
+The console sets only the second switch, so a deployment can look switched on and be adapting nothing. On a compose deployment the first is `RateLimiting__Adaptive__Enabled=true` in `.env`, followed by recreating the gateway; that restart empties every bucket, so pick a quiet moment. To check both from outside: `GET /admin/api/rate-limits/usage` reports what the governor is doing, and a caller refused more than `BackoffAfterConsecutiveRejections` times in a row sees `Retry-After` climb above a second.
+
 It moves two levers, and neither can block a caller outright:
 
 **Model factor.** While a model is saturated, its per-model rules are scaled down. Saturation is read from the model's own bulkhead — in-flight against its ceiling, and queue occupancy — and from its circuit breaker; an open breaker counts as fully saturated whatever the occupancy says. The factor moves by additive-increase / multiplicative-decrease with a hold band between the watermarks, so it converges rather than oscillating. It is clamped to `[MinFactor, 1.0]`: **adaptation can only ever enforce more strictly than you configured. There is no path by which it raises a limit.**

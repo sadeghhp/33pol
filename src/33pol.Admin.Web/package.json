@@ -18,14 +18,18 @@
     "solid-js": "^1.9.5"
   },
   "devDependencies": {
-    "@solidjs/testing-library": "^0.8.10",
     "@playwright/test": "^1.51.0",
+    "@solidjs/testing-library": "^0.8.10",
     "@types/node": "^22.13.10",
     "jsdom": "^26.0.0",
     "typescript": "^5.7.3",
     "vite": "^6.2.2",
     "vite-plugin-solid": "^2.11.6",
-    "vitest": "^3.0.5"
+    "vitest": "^4.1.11"
+  },
+  "overrides": {
+    "seroval": "^1.6.3",
+    "seroval-plugins": "^1.6.3"
   },
   "engines": {
     "node": ">=20"

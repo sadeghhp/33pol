@@ -182,10 +182,15 @@ After changing the JSON or datasource provisioning, restart Grafana: `docker com
 
 `GatewayBudgetHardStop` fires when a hard-stop budget's spend ratio reaches 1. `GatewayUnpricedModels` fires when a registered model has had no rate card for an hour. Expiring and idle keys stay on the cost dashboard; they are info in the console and are not paged.
 
+`GatewayDown` fires when Prometheus has had no successful scrape of the gateway for 2 minutes, including when it has never had one. It is the only gateway alert that can fire while the gateway is down, because every other rule reads series the gateway exports. `GatewayBackendScrapeDown` fires for a model server listed in `deploy/docker/config/prometheus-targets/` that has not answered for 5 minutes. Both live in `33pol-scrape.yml` and select by the compose stack's job names (`gateway`, `vllm`).
+
+A rule that fires notifies nobody by itself. The compose observability profile runs Alertmanager beside Prometheus, with one receiver that needs a webhook URL before it delivers anything: see [deploy/docker/README.md](../deploy/docker/README.md#alert-delivery). The Helm chart ships a ServiceMonitor only; routing is the cluster Alertmanager's.
+
 Validate rules:
 
 ```bash
-promtool check rules deploy/prometheus/alerts/33pol.yml
+promtool check rules deploy/prometheus/alerts/33pol.yml deploy/prometheus/alerts/33pol-scrape.yml
+promtool test rules deploy/prometheus/alerts/tests/*_test.yml
 ```
 
 ### In-app Attention list
