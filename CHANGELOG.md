@@ -4,6 +4,18 @@ All notable changes to this project are documented here. Version tags follow [Se
 
 ## [Unreleased]
 
+### Rate limits — refusals alert in Prometheus
+
+- **`GatewayRateLimitRefusing`.** The console's `rate_limit_refusing` item had no Prometheus rule, so
+  a gateway refusing most of its traffic alerted nobody who did not have the console open. The rule
+  fires on the same numbers (10% of decisions over 5 minutes, at least 20 decisions, held 5 minutes),
+  one alert per refusing limit kind. Runbook: `docs/runbooks/rate-limit-admin.md#refusals`.
+- Alert rules now have `promtool test rules` cases under `deploy/prometheus/alerts/tests/`, run in CI.
+- **`scripts/rate-limit-cap-keys.py`.** Every key of a tenant shares the tenant's bucket, so on a
+  gateway with one tenant the busiest key decides who else is refused. The script plans an
+  `api_key` rule for each key without one, as a share of the tenant tier, and applies it only on
+  request, conditionally on the version it planned from.
+
 ## [2.1.0] — 2026-09-28
 
 ### Usage & cost — filter by model, see each key's share

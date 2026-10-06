@@ -421,6 +421,38 @@ public sealed class AttentionEvaluatorTests
             .Should().Be(defaults.RateLimitPartitionsNearCeilingForSeconds);
     }
 
+    /// <summary>
+    /// The refusal share has a Prometheus rule too, and its three numbers must be the in-app defaults:
+    /// the share, the minimum number of decisions, and the hold. Both fire at the threshold rather
+    /// than above it.
+    /// </summary>
+    [Fact]
+    public void RateLimitRefusing_MatchesThePrometheusRule()
+    {
+        var yaml = File.ReadAllText(Path.Combine(FindRepoRoot(), "deploy", "prometheus", "alerts", "33pol.yml"));
+        var start = yaml.IndexOf("- alert: GatewayRateLimitRefusing", StringComparison.Ordinal);
+        start.Should().BeGreaterThanOrEqualTo(0);
+        var next = yaml.IndexOf("- alert:", start + 1, StringComparison.Ordinal);
+        var rule = next < 0 ? yaml[start..] : yaml[start..next];
+
+        // The only two lines that are a bare comparison: the share, then the minimum volume.
+        var comparisons = System.Text.RegularExpressions.Regex.Matches(
+            rule,
+            @"^[ \t]*>=[ \t]*([0-9.]+)[ \t]*\r?$",
+            System.Text.RegularExpressions.RegexOptions.Multiline);
+        var hold = System.Text.RegularExpressions.Regex.Match(rule, @"for:\s*(\d+)m");
+        comparisons.Should().HaveCount(2);
+        hold.Success.Should().BeTrue();
+
+        var defaults = new OverviewAttentionOptions();
+        double.Parse(comparisons[0].Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture)
+            .Should().Be(defaults.RateLimitRefusalShareWarn);
+        int.Parse(comparisons[1].Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture)
+            .Should().Be(defaults.RateLimitRefusalMinDecisions);
+        (int.Parse(hold.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture) * 60)
+            .Should().Be(defaults.RateLimitRefusalForSeconds);
+    }
+
     [Fact]
     public void RateLimits_AbsentSection_RaisesNothing()
     {

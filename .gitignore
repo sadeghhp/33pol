@@ -57,3 +57,7 @@ trufflehog-stderr.txt
 deploy/docker/.deploy/
 errors/*
 verify-release-test.log
+
+# Python bytecode from the operator scripts and their tests
+__pycache__/
+*.pyc

@@ -61,7 +61,11 @@ public sealed class OverviewAttentionOptions
 
     public int BackupStaleAfterDays { get; set; } = 7;
 
-    /// <summary>Share of rate-limit decisions refused over the last 5 minutes that raises a warning (0.10 = 10%).</summary>
+    /// <summary>
+    /// Share of rate-limit decisions refused over the last 5 minutes that raises a warning (0.10 = 10%).
+    /// This, the minimum below and the hold must match the Prometheus rule
+    /// <c>GatewayRateLimitRefusing</c> (a test holds them together).
+    /// </summary>
     public double RateLimitRefusalShareWarn { get; set; } = 0.10;
 
     /// <summary>Minimum rate-limit decisions in the 5-minute window before the refusal share is judged at all.</summary>
