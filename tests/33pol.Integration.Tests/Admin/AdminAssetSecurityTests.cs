@@ -58,6 +58,17 @@ public sealed class AdminAssetSecurityTests
         (await response.Content.ReadAsByteArrayAsync()).Length.Should().BeGreaterThan(0);
     }
 
+    [Fact]
+    public async Task LegacyAlpineBundle_IsNotPublished()
+    {
+        using var factory = GatewayWebApplicationFactory.Create();
+        using var client = factory.CreateClient();
+
+        var response = await client.GetAsync("/admin/vendor/alpine-csp-3.14.9.min.js");
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
     /// <summary>
     /// Every asset the page actually references must resolve locally — otherwise the console breaks
     /// in an air-gapped deployment even though no external URL appears in the markup.

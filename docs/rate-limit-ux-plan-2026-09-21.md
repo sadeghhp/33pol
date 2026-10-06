@@ -193,9 +193,9 @@ Singletons (`*` target): `global`, `anonymous`, `auth_failure`. Error messages n
 | Sparklines | `sparkLine/sparkFill` APP:1278-1303 (generic over a numeric array) |
 
 ### 3.6 Tests that pin this page
-- `tests/admin-console/rate-limit-*.test.js` (node `vm` harness; drive getters/methods **and**
-  regex-match `index.html`): `drawers`, `rule-list`, `activity`, `client-validation`, `save-state`,
-  `protective-warning`, plus help tests.
+- `src/33pol.Admin.Web/src/stores/rateLimits.test.ts`, `domain/rateLimitEdit.test.ts`, and Playwright
+  gateway E2E (`e2e/gateway-rate-limits.spec.ts`, `e2e/rate-limits-*.spec.ts`): drawers, rule-list,
+  activity, client-validation, save-state, protective-warning, plus help tests.
 - `tests/33pol.Integration.Tests/Admin/AdminConsoleRateLimitSafetyTests.cs`,
   `AdminConsoleRateLimitHelpTests.cs` (fetch static assets, `Should().Contain` literals).
 - `scripts/check-rate-limit-help.mjs` (EN/FA key parity).
@@ -930,7 +930,7 @@ Backend items B1–B6 are independent tracks; F14 and F15 ship with B3 and B4.
 
 **[P0] Header and "disabled" notice read the saved enforcement state**
 - Problem: title/notice bound to `rlDraft.enabled` (F1).
-- Files: APP `rlStatusView`, `rateLimitsDisabled`; HTML:1813, 1839; `tests/admin-console/rate-limit-save-state.test.js`.
+- Files: `RateLimitsPage` status view, `rateLimitsDisabled`; `src/stores/rateLimits.test.ts`.
 - Change: add `rateLimitsSavedDisabled`; title/notice use saved; add pending `.tag.accent`.
 - Dependency: Frontend-only.
 - Acceptance: draft toggle does not change title text; pending tag appears; after save title flips.
@@ -1132,8 +1132,8 @@ Frontend-only and existing-API items were implemented the same day; backend item
 
 Verified in chromium (stub API) at 1440, 1280, 1024, 768 and 400 px: no horizontal overflow, review
 opens inside the viewport above the buttons, draft/production distinction, conflict list, stale
-state, drawer production bar. Tests: `node --test tests/admin-console/` and the
-`AdminConsole*` / `AdminRateLimit*` integration tests.
+state, drawer production bar. Tests: Vitest rate-limit store/domain tests, Playwright gateway E2E,
+and the `AdminConsole*` / `AdminRateLimit*` integration tests.
 
 ### 20.1 Second pass (2026-09-21, same working tree)
 

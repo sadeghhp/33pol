@@ -207,6 +207,14 @@ function blankScheduleWindow() {
   };
 }
 
+describe('queueAddRuleIntent', () => {
+  it('storesScopeAndTargetForRateLimitsPage', async () => {
+    const { queueAddRuleIntent, useAddRuleIntent } = await import('./rateLimits');
+    queueAddRuleIntent('api_key', 'key-abc');
+    expect(useAddRuleIntent().addRuleIntent()).toEqual({ scope: 'api_key', target: 'key-abc' });
+  });
+});
+
 describe('undoRateLimitChange', () => {
   it('restoresRemovedPlan', () => {
     const saved = baseConfig();

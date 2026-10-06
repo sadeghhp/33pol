@@ -24,8 +24,15 @@ function copyDir(src, dest) {
   }
 }
 
-// Self-hosted fonts and standalone help source (check scripts use this path).
-copyDir(vendor, path.join(out, 'vendor'));
+// Self-hosted fonts only (no Alpine or other legacy JS).
+const vendorOut = path.join(out, 'vendor');
+fs.mkdirSync(vendorOut, { recursive: true });
+const fontsCss = path.join(vendor, 'fonts.css');
+if (fs.existsSync(fontsCss)) {
+  fs.copyFileSync(fontsCss, path.join(vendorOut, 'fonts.css'));
+}
+copyDir(path.join(vendor, 'fonts'), path.join(vendorOut, 'fonts'));
+
 const helpSrc = path.join(content, 'admin-rate-limit-help.js');
 if (fs.existsSync(helpSrc)) {
   fs.copyFileSync(helpSrc, path.join(out, 'admin-rate-limit-help.js'));

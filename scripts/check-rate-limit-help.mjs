@@ -24,7 +24,7 @@ export function loadHelp() {
   return sandbox.RateLimitHelp;
 }
 
-// The scope ids `rlScopeCatalog()` in admin-app.js hands the new-rule wizard.
+// Scope ids the rate-limits UI and new-rule wizard must document in both languages.
 export const SCOPE_IDS = ['model', 'tenant', 'api_key', 'global', 'tenant_model', 'api_key_model', 'anonymous', 'auth_failure'];
 
 // Inline explainer keys the markup binds through `rlHelpView.f.<key>`.

@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text.RegularExpressions;
+using Pol33.App;
 
 namespace Pol33.Integration.Tests.Admin;
 
@@ -16,10 +17,6 @@ internal static class AdminAssetTestHelpers
     private static readonly Regex RatelimitsChunkPath = new(
         @"<link[^>]+rel=""modulepreload""[^>]+href=""(?<path>/admin/assets/ratelimits-[^""]+\.js)""",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-
-    private static readonly Regex ContentHashPattern = new(
-        @"-[A-Za-z0-9_]{8,}\.(js|css)$",
-        RegexOptions.CultureInvariant);
 
     private static readonly Regex VendorVersionPattern = new(
         @"-\d+\.\d+\.\d+(\.min)?\.(js|css)$",
@@ -116,8 +113,11 @@ internal static class AdminAssetTestHelpers
         return "/admin/" + reference.TrimStart('/');
     }
 
-    public static bool HasContentHashInFileName(string url) =>
-        ContentHashPattern.IsMatch(Path.GetFileName(url.Split('?', 2)[0]));
+    public static bool HasContentHashInFileName(string url)
+    {
+        var fileName = Path.GetFileName(url.Split('?', 2)[0]);
+        return AdminAssetFileNames.HasContentHash(fileName);
+    }
 
     public static bool HasVendorVersionInFileName(string url) =>
         VendorVersionPattern.IsMatch(Path.GetFileName(url.Split('?', 2)[0]));

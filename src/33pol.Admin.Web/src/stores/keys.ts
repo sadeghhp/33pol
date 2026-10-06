@@ -1,4 +1,5 @@
 import { createSignal } from 'solid-js';
+import { createStore } from 'solid-js/store';
 import { filterKeys, type KeyStatusFilter, debounceMs } from '../domain/filters';
 import type { SortSpec } from '../domain/sort';
 import { createResource, RESOURCE_FRESH_MS } from '../realtime/resources';
@@ -46,12 +47,22 @@ const [statusFilter, setStatusFilter] = createSignal<KeyStatusFilter>('active');
 const [textFilter, setTextFilter] = createSignal('');
 const [debouncedText, setDebouncedText] = createSignal('');
 const applyDebounced = debounceMs((q: string) => setDebouncedText(q), 400);
+const [byId, setById] = createStore<Record<string, Record<string, unknown>>>({});
+const [order, setOrder] = createSignal<string[]>([]);
+
+export function normalizeKeysListResponse(data: unknown): Record<string, unknown>[] {
+  if (Array.isArray(data)) return data;
+  if (data && typeof data === 'object' && Array.isArray((data as { items?: unknown }).items)) {
+    return (data as { items: Record<string, unknown>[] }).items;
+  }
+  return [];
+}
 
 const resource = createResource<{ items?: Record<string, unknown>[] }>({
   freshMs: RESOURCE_FRESH_MS.keys,
   fetch: async (signal) => {
-    const data = await apiClient.apiJson<{ items?: Record<string, unknown>[] }>('/admin/api/keys', { signal });
-    return data ?? { items: [] };
+    const data = await apiClient.apiJson<unknown>('/admin/api/keys', { signal });
+    return { items: normalizeKeysListResponse(data) };
   },
 });
 
@@ -119,8 +130,23 @@ function normalizeKey(row: Record<string, unknown>): Record<string, unknown> {
   };
 }
 
+function syncKeysFromItems(items: Record<string, unknown>[]): void {
+  const map: Record<string, Record<string, unknown>> = {};
+  const ids: string[] = [];
+  for (const row of items.map(normalizeKey)) {
+    const id = String(row.id ?? '');
+    if (!id) continue;
+    map[id] = row;
+    ids.push(id);
+  }
+  setById(map);
+  setOrder(ids);
+}
+
 function allRows(): Record<string, unknown>[] {
-  return (resource.snapshot().data?.items ?? []).map(normalizeKey);
+  return order()
+    .map((id) => byId[id])
+    .filter(Boolean);
 }
 
 function filteredRows(): Record<string, unknown>[] {
@@ -239,7 +265,9 @@ export async function createKey(draft: NewKeyDraft): Promise<string> {
 
 export async function loadKeys(opts?: { force?: boolean; background?: boolean }): Promise<void> {
   try {
-    await resource.load(opts);
+    const data = await resource.load(opts);
+    if (!data) return;
+    syncKeysFromItems(data.items ?? []);
   } catch (e) {
     handleApiError(e, 'keys');
   }

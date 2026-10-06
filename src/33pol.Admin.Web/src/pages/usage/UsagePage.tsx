@@ -3,6 +3,7 @@ import { useSearchParams } from '@solidjs/router';
 import { Button, Field, Select } from '../../components/primitives';
 import { formatCost, formatNum, formatSharePct, formatTime } from '../../domain/format';
 import { apiClient } from '../../stores/auth';
+import { normalizeKeysListResponse } from '../../stores/keys';
 import {
   activateUsagePage,
   applyHashUsageParams,
@@ -21,9 +22,9 @@ export default function UsagePage() {
     applyHashUsageParams(params);
     activateUsagePage();
     try {
-      const keys = await apiClient.apiJson<{ items?: Record<string, unknown>[] }>('/admin/api/keys');
+      const keys = await apiClient.apiJson<unknown>('/admin/api/keys');
       setKeyOptions(
-        (keys?.items ?? []).map((k) => ({
+        normalizeKeysListResponse(keys).map((k) => ({
           value: String(k.id ?? ''),
           label: String(k.label || k.keyPrefix || k.id || 'key'),
         })),

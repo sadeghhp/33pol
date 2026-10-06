@@ -1,9 +1,26 @@
 import { describe, expect, it } from 'vitest';
-import { KEYS_RENDER_CAP } from './keys';
+import { KEYS_RENDER_CAP, normalizeKeysListResponse } from './keys';
 
 describe('keys store constants', () => {
   it('renderCap_isFifty', () => {
     expect(KEYS_RENDER_CAP).toBe(50);
+  });
+});
+
+describe('normalizeKeysListResponse', () => {
+  it('acceptsBareArrayFromGateway', () => {
+    const rows = [{ id: '1', label: 'a' }];
+    expect(normalizeKeysListResponse(rows)).toEqual(rows);
+  });
+
+  it('acceptsItemsWrapper', () => {
+    const rows = [{ id: '2', label: 'b' }];
+    expect(normalizeKeysListResponse({ items: rows })).toEqual(rows);
+  });
+
+  it('returnsEmptyForUnexpectedShape', () => {
+    expect(normalizeKeysListResponse(null)).toEqual([]);
+    expect(normalizeKeysListResponse({})).toEqual([]);
   });
 });
 

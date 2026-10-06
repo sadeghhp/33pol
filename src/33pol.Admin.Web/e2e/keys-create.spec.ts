@@ -1,8 +1,7 @@
 import { expect, test } from '@playwright/test';
-import { installAdminApiMocks, openPrimaryTab, signInThroughGate } from './fixtures/admin-api';
+import { openPrimaryTab, signInThroughGate } from './fixtures/gateway-auth';
 
 test.beforeEach(async ({ page }) => {
-  await installAdminApiMocks(page);
   await signInThroughGate(page);
   await openPrimaryTab(page, 'Keys', '#panel-keys');
 });
@@ -16,7 +15,7 @@ test('creates a key and shows the one-time secret', async ({ page }) => {
   await page.getByRole('dialog').getByRole('button', { name: 'Create key' }).click();
 
   await expect(page.getByText(/copy now/i)).toBeVisible();
-  await expect(page.getByText('sk-new-secret-shown-once')).toBeVisible();
+  await expect(page.locator('.secret-display')).toContainText(/^sk-/);
 
   await page.getByLabel(/saved this secret/i).check();
   await page.keyboard.press('Escape');
@@ -27,6 +26,4 @@ test('offers archived and revoked status filters', async ({ page }) => {
   const statusSelect = page.locator('#panel-keys .filter-row select').first();
   await expect(statusSelect.locator('option[value="archived"]')).toHaveText('Archived');
   await expect(statusSelect.locator('option[value="revoked"]')).toHaveText('Revoked');
-  await statusSelect.selectOption('all');
-  await expect(page.getByText('sk-live')).toBeVisible();
 });

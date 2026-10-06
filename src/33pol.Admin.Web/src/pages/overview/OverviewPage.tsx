@@ -1,6 +1,20 @@
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import { useNavigate, useSearchParams } from '@solidjs/router';
+import { ActivityCard } from '../../components/overview/ActivityCard';
+import { ControlPlaneCard } from '../../components/overview/ControlPlaneCard';
+import { FinOpsCard } from '../../components/overview/FinOpsCard';
+import { PolicyCard } from '../../components/overview/PolicyCard';
+import { RateLimitsGlanceCard } from '../../components/overview/RateLimitsGlanceCard';
+import { TenantsCard } from '../../components/overview/TenantsCard';
 import { Button, Field, Select } from '../../components/primitives';
+import {
+  parseActivity,
+  parseControlPlane,
+  parseFinOps,
+  parsePolicy,
+  parseRateLimitsGlance,
+  parseTenants,
+} from '../../domain/overviewCards';
 import { Sparkline } from '../../components/Sparkline';
 import {
   IconAlertTriangle,
@@ -416,49 +430,31 @@ export default function OverviewPage() {
 
       <Show when={showOverviewBody()}>
         <div class="overview-cards wb-hide">
-          <div class="card glance-card">
-            <h3>FinOps</h3>
-            <Show when={sections.sectionErrors.finops}>
-              <p class="hint error-text">{sections.sectionErrors.finops}</p>
-            </Show>
-            <p>{String(sections.finops()?.summary ?? sections.finops()?.message ?? '—')}</p>
-          </div>
-          <div class="card glance-card">
-            <h3>Policy</h3>
-            <Show when={sections.sectionErrors.policy}>
-              <p class="hint error-text">{sections.sectionErrors.policy}</p>
-            </Show>
-            <p>{String(sections.policy()?.summary ?? sections.policy()?.message ?? '—')}</p>
-          </div>
-          <div class="card glance-card">
-            <h3>Control plane</h3>
-            <Show when={sections.sectionErrors.controlPlane}>
-              <p class="hint error-text">{sections.sectionErrors.controlPlane}</p>
-            </Show>
-            <p>{String(sections.controlPlane()?.summary ?? sections.controlPlane()?.message ?? '—')}</p>
-          </div>
-          <div class="card glance-card">
-            <h3>Activity</h3>
-            <Show when={sections.sectionErrors.activity}>
-              <p class="hint error-text">{sections.sectionErrors.activity}</p>
-            </Show>
-            <p>{String(sections.activity()?.summary ?? sections.activity()?.message ?? '—')}</p>
-          </div>
-          <div class="card glance-card">
-            <h3>Tenants</h3>
-            <Show when={sections.sectionErrors.tenants}>
-              <p class="hint error-text">{sections.sectionErrors.tenants}</p>
-            </Show>
-            <p>{String(sections.tenants()?.summary ?? sections.tenants()?.message ?? '—')}</p>
-          </div>
-          <div class="card rate-limits-card">
-            <h3>Rate limits</h3>
-            <Show when={sections.sectionErrors.rateLimits}>
-              <p class="hint error-text">{sections.sectionErrors.rateLimits}</p>
-            </Show>
-            <p>{String(sections.rateLimits()?.title ?? sections.rateLimits()?.message ?? '—')}</p>
-            <Button variant="ghost" size="sm" onClick={() => navigate('/settings')}>Open settings</Button>
-          </div>
+          <FinOpsCard
+            data={parseFinOps(sections.finops() as Record<string, unknown> | null)}
+            error={sections.sectionErrors.finops}
+          />
+          <PolicyCard
+            data={parsePolicy(sections.policy() as Record<string, unknown> | null)}
+            error={sections.sectionErrors.policy}
+          />
+          <ControlPlaneCard
+            data={parseControlPlane(sections.controlPlane() as Record<string, unknown> | null)}
+            error={sections.sectionErrors.controlPlane}
+          />
+          <ActivityCard
+            data={parseActivity(sections.activity() as Record<string, unknown> | null)}
+            error={sections.sectionErrors.activity}
+          />
+          <TenantsCard
+            data={parseTenants(sections.tenants() as Record<string, unknown> | null)}
+            error={sections.sectionErrors.tenants}
+          />
+          <RateLimitsGlanceCard
+            data={parseRateLimitsGlance(sections.rateLimits() as Record<string, unknown> | null)}
+            error={sections.sectionErrors.rateLimits}
+            onOpen={() => navigate('/settings?sub=ratelimits')}
+          />
         </div>
 
         <div class="card">

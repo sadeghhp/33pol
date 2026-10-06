@@ -208,7 +208,7 @@ export async function installAdminApiMocks(page: Page): Promise<void> {
     }
 
     if (pathname === '/admin/api/tenant/model-grants') {
-      await fulfillJson(route, { restricted: false, modelIds: [] });
+      await fulfillJson(route, { modelIds: [], usesDefaultAccess: true });
       return;
     }
 
